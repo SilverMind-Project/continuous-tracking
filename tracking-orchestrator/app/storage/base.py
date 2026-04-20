@@ -21,14 +21,14 @@ from ..domain import (
     PersonActivity,
     StreamAssignment,
     StreamConfig,
-    Tracklet,
     TrackingEvent,
+    Tracklet,
 )
-
 
 # ---------------------------------------------------------------------------
 # Protocols
 # ---------------------------------------------------------------------------
+
 
 class TrackingRepository(ABC):
     """Persist tracking events, detections, tracklets, and identity data."""
@@ -163,6 +163,7 @@ class AssignmentRepository(ABC):
 # In-memory implementations (for testing / dev)
 # ---------------------------------------------------------------------------
 
+
 class InMemoryTrackingRepository(TrackingRepository):
     """In-memory store for tracking data. Used in tests and dev mode."""
 
@@ -224,7 +225,6 @@ class InMemoryTrackingRepository(TrackingRepository):
 
 
 class InMemoryGalleryRepository(GalleryRepository):
-
     def __init__(self) -> None:
         self._entries: dict[str, GalleryEntry] = {}
 
@@ -248,7 +248,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         def _cosine_sim(a: list[float], b: list[float]) -> float:
             if len(a) != len(b):
                 return 0.0
-            dot = sum(x * y for x, y in zip(a, b))
+            dot = sum(x * y for x, y in zip(a, b, strict=True))
             norm_a = math.sqrt(sum(x * x for x in a))
             norm_b = math.sqrt(sum(x * x for x in b))
             if norm_a == 0 or norm_b == 0:
@@ -262,7 +262,6 @@ class InMemoryGalleryRepository(GalleryRepository):
 
 
 class InMemorySettingsRepository(SettingsRepository):
-
     def __init__(self) -> None:
         self._cameras: dict[str, CameraConfig] = {}
         self._streams: dict[str, StreamConfig] = {}
@@ -287,7 +286,6 @@ class InMemorySettingsRepository(SettingsRepository):
 
 
 class InMemoryActivityRepository(ActivityRepository):
-
     def __init__(self) -> None:
         self._activities: dict[str, PersonActivity] = {}
 
@@ -320,7 +318,6 @@ class InMemoryActivityRepository(ActivityRepository):
 
 
 class InMemoryAssignmentRepository(AssignmentRepository):
-
     def __init__(self) -> None:
         self._assignments: dict[str, StreamAssignment] = {}
 

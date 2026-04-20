@@ -31,6 +31,13 @@ triton = [
     "tritonclient[all]>=2.51.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["py.typed"]
+migrations = ["*.sql"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100

@@ -4,13 +4,14 @@ Mirrors the cognitive-companion pattern: create_app() returns the app,
 lifespan manages service lifecycle.
 """
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Startup: initialize DB connections, Redis, load camera configs
     yield
     # Shutdown: drain queues, close connections
@@ -24,7 +25,7 @@ def create_app() -> FastAPI:
     )
 
     @app.get("/health")
-    async def health():
+    async def health() -> dict[str, str]:
         return {"status": "ok", "service": "tracking-orchestrator", "version": "0.1.0"}
 
     return app

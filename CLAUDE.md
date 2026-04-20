@@ -56,6 +56,28 @@ The design defines 10 milestones (M1-M10) spanning 16+ weeks. Never implement ou
 - **Error taxonomy**: Standardized `ErrorCode` enum, no stack traces over the wire.
 - **CI gates**: ruff, mypy, import-linter, pytest (unit + testcontainers), go test -race, buf lint, docker build, helm template, replay suite, Playwright E2E.
 
+## Quality Gate (Automated Checks)
+
+All Python code must pass the full quality gate before committing. Run locally before every PR:
+
+```bash
+make check        # Python: ruff check + ruff format + mypy + pytest
+make all-check    # Python + Go + proto (full repo gate)
+```
+
+Pre-commit hooks mirror the CI checks (ruff, mypy, golangci-lint, buf). Install with:
+```bash
+pre-commit install
+```
+
+**Rule: never write code that fails the quality gate.** Every new feature, fix, or test must be verified with `make check` (Python-only) or `make all-check` (full repo) before committing. The CI pipeline runs the same checks — local runs are the fast feedback loop.
+
+**Always use the Python venv inside the project folder** (`tracking-orchestrator/.venv/`). Never rely on global system Python for running code, tests, linting, or type-checking. The Makefile targets (`make check`, `make lint`, `make test`, `make mypy`) and CI all use the project-local venv.
+
+For the tracking-orchestrator specifically:
+- All repository methods are async — tests must be `async def` with `await`
+- Domain types are frozen dataclasses; Pydantic models only at boundaries
+
 ## Current Progress
 
 **M1 (Protobuf contracts, repository interfaces, docker-compose, CI) — COMPLETE.**

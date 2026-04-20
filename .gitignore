@@ -1,0 +1,57 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+*.db
+*.sqlite3
+data/
+node_modules/
+frontend/dist/
+.DS_Store
+*.log
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+kubernetes/local/
+.vscode/
+
+# Compiled Object files, Alias and Private Window files
+*.a
+*.o
+*.so
+
+# Folders
+_obj
+_test
+
+# Architecture independent compiled package files
+*.6
+*.8
+*.5
+
+# Executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built by 'go test -c'
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the slash if you want to ignore all 'vendor' folders)
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Common binary output directory (if you use a 'bin' folder for builds)
+bin/

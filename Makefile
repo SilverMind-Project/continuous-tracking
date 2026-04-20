@@ -1,4 +1,4 @@
-.PHONY: help proto proto-gen docker-up docker-down docker-build lint format test
+.PHONY: help proto proto-gen docker-up docker-down docker-build lint format test check all-check mypy go-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -16,32 +16,41 @@ docker-build: ## Build all service images
 	docker compose build
 
 # -----------------------------------------------------------------------
-# Python (tracking-orchestrator)
+# Python (tracking-orchestrator) — uses uv via project venv
 # -----------------------------------------------------------------------
-PYTHON := uv run
 
 lint: ## Lint Python code
-	$(PYTHON) -m ruff check tracking-orchestrator
+	cd tracking-orchestrator && uv run ruff check ..
 
 format: ## Format Python code
-	$(PYTHON) -m ruff format tracking-orchestrator
+	cd tracking-orchestrator && uv run ruff format ..
 
 test: ## Run Python tests
-	$(PYTHON) -m pytest tracking-orchestrator/tests -v
+	cd tracking-orchestrator && uv run pytest tests -v
 
 mypy: ## Type-check Python code
-	$(PYTHON) -m mypy tracking-orchestrator/app
+	cd tracking-orchestrator && uv run mypy app
+
+check: ## Run full Python quality gate (lint + format + typecheck + tests)
+	cd tracking-orchestrator && uv run ruff check ..
+	cd tracking-orchestrator && uv run ruff format --check ..
+	cd tracking-orchestrator && uv run mypy app
+	cd tracking-orchestrator && uv run pytest tests -v
+
+all-check: check go-check proto-lint ## Run full repo quality gate (Python + Go + proto)
 
 # -----------------------------------------------------------------------
 # Go (rtsp-ingress)
 # -----------------------------------------------------------------------
-.PHONY: go-lint go-test go-build
+
+go-check: ## Run full Go quality gate (lint + vet + test + build)
+	cd rtsp-ingress && make check
 
 go-lint: ## Lint Go code (golangci-lint)
 	cd rtsp-ingress && golangci-lint run ./...
 
-go-test: ## Run Go tests
-	cd rtsp-ingress && go test ./...
+go-test: ## Run Go tests with race detector
+	cd rtsp-ingress && go test -race ./...
 
 go-build: ## Build Go binary
 	cd rtsp-ingress && go build -o /dev/null ./cmd/server

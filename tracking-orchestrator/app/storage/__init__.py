@@ -14,14 +14,14 @@ from .base import (
 )
 
 __all__ = [
-    "TrackingRepository",
-    "GalleryRepository",
-    "SettingsRepository",
     "ActivityRepository",
     "AssignmentRepository",
-    "InMemoryTrackingRepository",
-    "InMemoryGalleryRepository",
-    "InMemorySettingsRepository",
+    "GalleryRepository",
     "InMemoryActivityRepository",
     "InMemoryAssignmentRepository",
+    "InMemoryGalleryRepository",
+    "InMemorySettingsRepository",
+    "InMemoryTrackingRepository",
+    "SettingsRepository",
+    "TrackingRepository",
 ]
