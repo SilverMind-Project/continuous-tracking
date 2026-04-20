@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install tracking-orchestrator
+        run: uv pip install --system --compile-bytecode -e "tracking-orchestrator[dev]"
+      - name: Ruff check
+        run: uv run ruff check tracking-orchestrator
+      - name: Ruff format
+        run: uv run ruff format --check tracking-orchestrator
+      - name: MyPy
+        run: uv run mypy tracking-orchestrator/app
+
+  python-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg17
+        env:
+          POSTGRES_USER: cts
+          POSTGRES_PASSWORD: cts
+          POSTGRES_DB: continuous_tracking
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install tracking-orchestrator
+        run: uv pip install --system --compile-bytecode -e "tracking-orchestrator[dev]"
+      - name: Run migrations
+        run: psql -h localhost -U cts -d continuous_tracking -f tracking-orchestrator/migrations/0001_init.sql
+        env:
+          PGPASSWORD: cts
+      - name: Run tests
+        run: uv run pytest tracking-orchestrator/tests -v
+
+  go-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: rtsp-ingress
+
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Run Go tests
+        working-directory: rtsp-ingress
+        run: go test ./...
+
+  proto-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          version: "1.50.0"
+      - name: buf lint
+        uses: bufbuild/buf-lint-action@v1
+        with:
+          input: proto

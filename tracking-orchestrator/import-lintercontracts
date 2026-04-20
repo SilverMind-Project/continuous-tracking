@@ -1,0 +1,16 @@
+# Import lint contracts for tracking-orchestrator
+# Enforced via import-linter (pip install import-linter)
+#
+# Rule: core → domain → storage → services (upward deps only)
+
+[importlint]
+contract:
+    type: layers
+    layers:
+        - app.services
+        - app.storage
+        - app.domain
+        - app.core
+
+[importlint:]
+ignore_comments: true

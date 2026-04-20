@@ -1,0 +1,34 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^tracking-orchestrator/
+      - id: ruff-format
+        files: ^tracking-orchestrator/
+
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v1.63.4
+    hooks:
+      - id: golangci-lint
+        args: [--config, rtsp-ingress/.golangci.yaml]
+        files: ^rtsp-ingress/
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.0
+    hooks:
+      - id: mypy
+        files: ^tracking-orchestrator/
+        additional_dependencies:
+          - pydantic>=2.10.0
+          - fastapi>=0.115.0
+          - types-pyyaml>=6.0.0
+
+  - repo: https://github.com/bufbuild/buf
+    rev: v1.50.0
+    hooks:
+      - id: buf-format
+        files: ^proto/
+      - id: buf-lint
+        files: ^proto/

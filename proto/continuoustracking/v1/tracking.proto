@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package continuoustracking.v1;
+
+option go_package = "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1";
+
+// TrackingEvent is the core message produced by the tracking-orchestrator
+// after processing a frame. It carries the Bayesian identity posterior,
+// spatial coordinates, and temporal metadata.
+message TrackingEvent {
+  // Identity of the camera stream (matches RTSP ingress config).
+  string camera_id = 1;
+
+  // Wall-clock time when the event was committed (not when frame arrived).
+  // Used as the authoritative timestamp for ordering.
+  fixed64 event_time_unix_ns = 2;
+
+  // Frame-level metadata.
+  FrameRef frame_ref = 3;
+
+  // One entry per detected person in the frame.
+  repeated Detection detections = 4;
+
+  // Identity resolution: for each global track that was matched to a known
+  // person, the posterior probability distribution over candidates.
+  repeated IdentityRevision identity_revisions = 5;
+}
+
+// FrameRef points to a frame stored in MinIO without duplicating pixel data.
+message FrameRef {
+  // MinIO object key for the original frame.
+  string minio_key = 1;
+
+  // Frame resolution.
+  int32 width = 2;
+  int32 height = 3;
+
+  // Frame index within the camera stream (monotonically increasing).
+  int64 frame_index = 4;
+
+  // Capture time from the RTSP source (pre-NTP correction).
+  fixed64 capture_time_unix_ns = 5;
+}
+
+// Detection represents one person detected in a single frame.
+message Detection {
+  // Unique per-frame identifier for this detection bounding box.
+  string detection_id = 1;
+
+  // Bounding box in pixel coordinates (top-left origin).
+  BoundingBox bbox = 2;
+
+  // Embedding vector from the ReID model (L2-normalized, float32).
+  // Dimensionality depends on the model (e.g., 512 for ResNet50).
+  repeated float embedding = 3;
+
+  // Confidence score from the detection model (0.0 to 1.0).
+  float confidence = 4;
+
+  // Tracklet this detection belongs to (assigned by tracking logic).
+  string tracklet_id = 5;
+
+  // Global track ID if already resolved to a known person.
+  // Empty until the first match is made.
+  string global_track_id = 6;
+
+  // Floor point (x, y) in millimeters relative to the camera's calibrated
+  // coordinate system. Origin is the camera's ground intersection point.
+  FloorPoint floor_point = 7;
+}
+
+// BoundingBox in pixel coordinates: top-left origin, width/height positive.
+message BoundingBox {
+  int32 x_min = 1;
+  int32 y_min = 2;
+  int32 x_max = 3;
+  int32 y_max = 4;
+}
+
+// FloorPoint is a 2D point on the ground plane, in millimeters.
+message FloorPoint {
+  // X coordinate in mm from camera origin.
+  int64 x_mm = 1;
+  // Y coordinate in mm from camera origin.
+  int64 y_mm = 2;
+  // Whether the point was computed (true) or is a projection (false).
+  bool calibrated = 3;
+}
+
+// IdentityRevision captures the Bayesian posterior update for a single
+// global track at a given event time.
+message IdentityRevision {
+  // The global track being updated.
+  string global_track_id = 1;
+
+  // Probability distribution over candidate identities.
+  repeated IdentityCandidate candidates = 2;
+
+  // The MAP (maximum a posteriori) estimate.
+  string map_identity_id = 3;
+
+  // Entropy of the posterior (measure of uncertainty, in nats).
+  // Lower = more certain. Used by the dementia layer for confidence gating.
+  float posterior_entropy = 4;
+
+  // When this revision was computed.
+  fixed64 revision_time_unix_ns = 5;
+}
+
+// IdentityCandidate is one candidate identity with its posterior probability.
+message IdentityCandidate {
+  // The identity's gallery entry ID.
+  string identity_id = 1;
+
+  // Display name for the identity.
+  string display_name = 2;
+
+  // Posterior probability P(identity | observations).
+  float probability = 3;
+}

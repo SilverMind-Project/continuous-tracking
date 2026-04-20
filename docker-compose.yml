@@ -1,0 +1,162 @@
+# Continuous Tracking System — local development environment
+# Services: TimescaleDB, Redis, MinIO, Triton, tracking-orchestrator, no-op rtsp-ingress
+version: "3.9"
+
+services:
+  # -----------------------------------------------------------------------
+  # TimescaleDB (Postgres + hypertimescale)
+  # -----------------------------------------------------------------------
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: cts-timescaledb
+    environment:
+      POSTGRES_USER: cts
+      POSTGRES_PASSWORD: cts
+      POSTGRES_DB: continuous_tracking
+    ports:
+      - "5432:5432"
+    volumes:
+      - tsdata:/var/lib/postgresql/data
+      - ./tracking-orchestrator/migrations:/docker-entrypoint-initdb.d/001-init
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cts -d continuous_tracking"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # -----------------------------------------------------------------------
+  # Redis (Streams transport)
+  # -----------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: cts-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # -----------------------------------------------------------------------
+  # MinIO (object storage for frames)
+  # -----------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: cts-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------------------------
+  # Triton Inference Server (GPU model serving)
+  # Placeholder — no actual models loaded in M1.
+  # In M4+, populate triton-models/ and mount as a volume.
+  # -----------------------------------------------------------------------
+  triton:
+    image: nvcr.io/nvidia/tritonserver:24.04-py3
+    container_name: cts-triton
+    command: >
+      tritonserver
+      --model-repository=/models
+      --exit-on-error=false
+      --load-model=nonexistent
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
+    volumes:
+      - ./triton-models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "tritonserver", "model-server", "models", "--name", "nonexistent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    profiles:
+      - gpu
+
+  # -----------------------------------------------------------------------
+  # Tracking Orchestrator (Python — ML pipeline)
+  # -----------------------------------------------------------------------
+  tracking-orchestrator:
+    build:
+      context: ./tracking-orchestrator
+      dockerfile: Dockerfile
+    container_name: cts-orchestrator
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cts:cts@timescaledb:5432/continuous_tracking
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_USE_SSL: "false"
+      TRITON_ENDPOINT: triton:8001
+      CTS_ENABLED: "true"
+    ports:
+      - "8081:8081"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./tracking-orchestrator:/app
+    profiles:
+      - app
+
+  # -----------------------------------------------------------------------
+  # RTSP Ingress (Go — RTSP frame capture, no-op for M1)
+  # Placeholder service that does not actually connect to RTSP sources.
+  # In M3+, this will be wired to real cameras.
+  # -----------------------------------------------------------------------
+  rtsp-ingress:
+    build:
+      context: ./rtsp-ingress
+      dockerfile: Dockerfile
+    container_name: cts-rtsp-ingress
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_USE_SSL: "false"
+      CTS_ENABLED: "true"
+    ports:
+      - "8082:8082"
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./rtsp-ingress:/app
+    profiles:
+      - app
+
+volumes:
+  tsdata:
+  redisdata:
+  miniodata:
