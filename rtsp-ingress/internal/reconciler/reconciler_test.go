@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -72,7 +73,15 @@ func (s *noOpSupervisor) Reconcile([]config.CameraConfig) {}
 func TestNewReconciler(t *testing.T) {
 	log := zap.NewNop()
 
-	r := New("http://example.com", "api-key", "ALL", 60, &noOpSupervisor{}, log)
+	r := New(
+		"http://example.com",
+		"api-key",
+		"ALL",
+		60*time.Second,
+		config.CameraDefaults{FrameIntervalMs: 500, MotionThreshold: 0.02, ReconnectBackoffSeconds: 2},
+		&noOpSupervisor{},
+		log,
+	)
 	if r == nil {
 		t.Fatal("expected non-nil reconciler")
 	}
@@ -81,5 +90,29 @@ func TestNewReconciler(t *testing.T) {
 	}
 	if r.ccAPIKey != "api-key" {
 		t.Errorf("api key: got %q", r.ccAPIKey)
+	}
+}
+
+func TestFilterHashModShard(t *testing.T) {
+	cameras := makeCameras("cam1", "cam2", "cam3", "cam4", "cam5", "cam6", "cam7", "cam8", "cam9", "cam10")
+	left := (&Reconciler{assigned: "hash_mod/2/0"}).filterByShard(cameras)
+	right := (&Reconciler{assigned: "hash_mod/2/1"}).filterByShard(cameras)
+
+	if len(left)+len(right) != len(cameras) {
+		t.Fatalf("partition did not cover all cameras: %d + %d != %d", len(left), len(right), len(cameras))
+	}
+
+	seen := make(map[string]bool, len(cameras))
+	for _, cam := range left {
+		seen[cam.ID] = true
+	}
+	for _, cam := range right {
+		if seen[cam.ID] {
+			t.Fatalf("camera %q appeared in both shards", cam.ID)
+		}
+		seen[cam.ID] = true
+	}
+	if len(seen) != len(cameras) {
+		t.Fatalf("expected %d unique cameras, got %d", len(cameras), len(seen))
 	}
 }

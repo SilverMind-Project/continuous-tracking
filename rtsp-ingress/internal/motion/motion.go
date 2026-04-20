@@ -10,7 +10,7 @@ import (
 
 // Gate compares consecutive frames and reports whether significant motion
 // was detected. The first call always returns false (no motion) to establish
-// a baseline. Resolution changes reset the baseline.
+// a baseline.
 type Gate struct {
 	threshold float64
 	prevGray  *image.Gray
@@ -47,6 +47,8 @@ func (g *Gate) IsStatic(img image.Image) bool {
 	pb := g.prevGray.Bounds()
 	minX, minY := b.Min.X, b.Min.Y
 	maxX, maxY := b.Max.X, b.Max.Y
+	// Frames are always downsampled to a fixed 320x180 working size, but we
+	// keep the overlap guard in place for defensive bounds safety.
 	if pb.Max.X < maxX {
 		maxX = pb.Max.X
 	}
@@ -58,6 +60,10 @@ func (g *Gate) IsStatic(img image.Image) bool {
 			sum += absDelta(curGray.GrayAt(x, y).Y, g.prevGray.GrayAt(x, y).Y)
 			count++
 		}
+	}
+	if count == 0 {
+		g.prevGray = curGray
+		return false
 	}
 
 	meanDelta := sum / float64(count) / 255.0

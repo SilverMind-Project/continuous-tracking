@@ -1,15 +1,9 @@
-"""Domain types for the continuous tracking system.
-
-All types are frozen dataclasses to enforce immutability within the core.
-They should never be serialized to or deserialized from directly at
-boundaries — use Pydantic models at the edges.
-"""
+"""Domain types for the continuous tracking system."""
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
 
 # ---------------------------------------------------------------------------
@@ -22,6 +16,12 @@ TrackletId = str
 GlobalTrackId = str
 IdentityId = str
 StreamId = str
+TrackingEventId = str
+RevisionId = str
+GalleryEntryId = str
+ActivityId = str
+CorrectionId = str
+PrivacyZoneId = str
 
 
 # ---------------------------------------------------------------------------
@@ -68,53 +68,88 @@ class FloorPoint:
 class Detection:
     """One person detected in a single frame."""
 
-    detection_id: DetectionId = field(default_factory=lambda: DetectionId(uuid.uuid4()))
-    camera_id: CameraId = ""
-    bbox: BoundingBox = field(default_factory=lambda: BoundingBox(0, 0, 0, 0))
-    embedding: list[float] = field(default_factory=list)
+    detection_id: DetectionId
+    camera_id: CameraId
+    bbox: BoundingBox
+    embedding: list[float]
+    capture_time: datetime
+    event_time: datetime
     confidence: float = 1.0
     tracklet_id: TrackletId = ""
     global_track_id: GlobalTrackId = ""
     floor_point: FloorPoint = field(default_factory=lambda: FloorPoint(0, 0))
-    capture_time: datetime = field(default_factory=lambda: datetime.now(UTC))
-    event_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 # ---------------------------------------------------------------------------
-# Tracklet / GlobalTrack
+# Frame / TrackingEvent
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class Tracklet:
-    """A tracklet is a short-lived trajectory within a single camera view.
-    It may span multiple frames but is broken by occlusion, exit, etc.
-    """
+class FrameRef:
+    """Reference to a frame stored in object storage."""
 
-    tracklet_id: TrackletId = field(default_factory=lambda: TrackletId(uuid.uuid4()))
-    camera_id: CameraId = ""
-    detection_ids: list[DetectionId] = field(default_factory=list)
-    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    minio_key: str
+    width: int
+    height: int
+    frame_index: int
+    capture_time: datetime
+
+
+@dataclass(frozen=True)
+class TrackingEvent:
+    """The domain-level output of processing one frame."""
+
+    event_id: TrackingEventId
+    camera_id: CameraId
+    event_time: datetime
+    frame_index: int
+    frame_ref: FrameRef
+    detections: list[Detection] = field(default_factory=list)
+    identity_revisions: list[IdentityRevision] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Tracklet / GlobalTrack / Trajectory
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TrajectoryPoint:
+    """A point in a tracked trajectory."""
+
+    camera_id: CameraId
+    observed_at: datetime
+    floor_point: FloorPoint
+    frame_index: int
+
+
+@dataclass(frozen=True)
+class Tracklet:
+    """A short-lived trajectory within a single camera view."""
+
+    tracklet_id: TrackletId
+    camera_id: CameraId
+    detection_ids: list[DetectionId]
+    started_at: datetime
     ended_at: datetime | None = None
     state: Literal["active", "terminated"] = "active"
 
 
 @dataclass(frozen=True)
 class GlobalTrack:
-    """A global track persists across cameras and time.
-    It is the entity that identity resolution operates on.
-    """
+    """A global track persists across cameras and time."""
 
-    global_track_id: GlobalTrackId = field(default_factory=lambda: GlobalTrackId(uuid.uuid4()))
-    camera_ids: list[CameraId] = field(default_factory=list)
-    tracklet_ids: list[TrackletId] = field(default_factory=list)
-    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    last_seen_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    global_track_id: GlobalTrackId
+    camera_ids: list[CameraId]
+    tracklet_ids: list[TrackletId]
+    started_at: datetime
+    last_seen_at: datetime
     state: Literal["active", "closed"] = "active"
 
 
 # ---------------------------------------------------------------------------
-# Identity
+# Identity / Gallery
 # ---------------------------------------------------------------------------
 
 
@@ -135,42 +170,60 @@ class IdentityCandidate:
 class IdentityRevision:
     """Bayesian posterior update for a global track at a point in time."""
 
+    revision_id: RevisionId
     global_track_id: GlobalTrackId
     candidates: list[IdentityCandidate]
     map_identity_id: IdentityId
     posterior_entropy: float
-    revision_time: datetime = field(default_factory=lambda: datetime.now(UTC))
+    revision_time: datetime
 
 
 @dataclass(frozen=True)
-class GalleryEntry:
-    """A known person's gallery record (enrolled identity)."""
+class Identity:
+    """The opaque per-person identity record."""
 
-    identity_id: IdentityId = field(default_factory=lambda: IdentityId(uuid.uuid4()))
-    display_name: str = ""
-    embedding: list[float] = field(default_factory=list)
+    identity_id: IdentityId
+    display_name: str
+    enrolled_at: datetime
     metadata: dict[str, Any] = field(default_factory=dict)
-    enrolled_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     is_active: bool = True
 
 
-# ---------------------------------------------------------------------------
-# TrackingEvent (domain-level, the result of frame processing)
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class GalleryEmbedding:
+    """One embedding row in an identity's gallery."""
+
+    gallery_entry_id: GalleryEntryId
+    identity_id: IdentityId
+    embedding: list[float]
+    seen_at: datetime
+    quality: float = 1.0
+    origin_tracklet_id: TrackletId = ""
+    face_confirmed: bool = False
 
 
 @dataclass(frozen=True)
-class TrackingEvent:
-    """The domain-level output of processing one frame.
-    Mirrors the protobuf message but with Python types.
-    """
+class IdentityCorrection:
+    """Manual identity correction or merge decision."""
 
-    event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    camera_id: CameraId = ""
-    event_time: datetime = field(default_factory=lambda: datetime.now(UTC))
-    frame_index: int = 0
-    detections: list[Detection] = field(default_factory=list)
-    identity_revisions: list[IdentityRevision] = field(default_factory=list)
+    correction_id: CorrectionId
+    global_track_id: GlobalTrackId
+    from_identity_id: IdentityId
+    to_identity_id: IdentityId
+    corrected_at: datetime
+    corrected_by: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class PrivacyZone:
+    """Operator-defined privacy mask for a camera."""
+
+    zone_id: PrivacyZoneId
+    camera_id: CameraId
+    name: str
+    polygon: list[tuple[int, int]]
+    enabled: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -185,14 +238,14 @@ class CameraConfig:
     camera_id: CameraId
     name: str = ""
     rtsp_url: str = ""
-    location: str = ""  # e.g. "hallway-east"
+    location: str = ""
     floor_plan: dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
 
 
 @dataclass(frozen=True)
 class StreamConfig:
-    """Configuration for a logical processing stream (derived from a camera)."""
+    """Configuration for a logical processing stream."""
 
     stream_id: StreamId
     camera_id: CameraId
@@ -228,18 +281,24 @@ ActivityType = Literal[
     "fall_detected",
     "area_entered",
     "area_exited",
+    "pacing",
+    "sundowning",
+    "bathroom_anomaly",
+    "stillness",
+    "nighttime_movement",
+    "absence",
 ]
 
 
 @dataclass(frozen=True)
 class PersonActivity:
-    """A dementia-relevant activity record, written by the activity layer."""
+    """A dementia-relevant activity record."""
 
-    activity_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    identity_id: IdentityId = ""
-    camera_id: CameraId = ""
-    activity_type: ActivityType = "entry"
-    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    activity_id: ActivityId
+    identity_id: IdentityId
+    camera_id: CameraId
+    activity_type: ActivityType
+    occurred_at: datetime
     metadata: dict[str, Any] = field(default_factory=dict)
     confidence: float = 1.0
-    related_event_id: str = ""
+    related_event_id: TrackingEventId = ""

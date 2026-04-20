@@ -12,26 +12,34 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
           activate-environment: true
       - name: Install tracking-orchestrator
         working-directory: tracking-orchestrator
-        run: uv sync --extra dev
+        run: uv sync --frozen --extra dev
+      - name: Assert venv-only invocation
+        working-directory: tracking-orchestrator
+        run: |
+          test -x .venv/bin/python
+          .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
       - name: Ruff check
         working-directory: tracking-orchestrator
-        run: uv run ruff check ..
+        run: .venv/bin/ruff check .
       - name: Ruff format
         working-directory: tracking-orchestrator
-        run: uv run ruff format --check ..
+        run: .venv/bin/ruff format --check .
       - name: MyPy
         working-directory: tracking-orchestrator
-        run: uv run mypy app
+        run: .venv/bin/mypy --config-file pyproject.toml app
+      - name: import-linter
+        working-directory: tracking-orchestrator
+        run: .venv/bin/lint-imports
 
   python-test:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: timescale/timescaledb:latest-pg17
+        image: timescale/timescaledb-ha:pg17
         env:
           POSTGRES_USER: cts
           POSTGRES_PASSWORD: cts
@@ -51,18 +59,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
           activate-environment: true
       - name: Install tracking-orchestrator
         working-directory: tracking-orchestrator
-        run: uv sync --extra dev
+        run: uv sync --frozen --extra dev
+      - name: Assert venv-only invocation
+        working-directory: tracking-orchestrator
+        run: |
+          test -x .venv/bin/python
+          .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
       - name: Run migrations
         run: psql -h localhost -U cts -d continuous_tracking -f tracking-orchestrator/migrations/0001_init.sql
         env:
           PGPASSWORD: cts
       - name: Run tests
         working-directory: tracking-orchestrator
-        run: uv run pytest tests -v
+        run: .venv/bin/pytest tests -v
 
   go-lint:
     runs-on: ubuntu-latest
@@ -70,7 +83,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.24.5"
+      - name: Pin GOTOOLCHAIN
+        run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
@@ -82,7 +97,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.24.5"
+      - name: Pin GOTOOLCHAIN
+        run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
       - name: Run Go quality gate
         working-directory: rtsp-ingress
         run: make check
@@ -95,6 +112,15 @@ jobs:
         with:
           version: "1.50.0"
       - name: buf lint
-        uses: bufbuild/buf-lint-action@v1
+        working-directory: proto
+        run: buf lint
+      - name: buf generate drift check
+        working-directory: proto
+        run: |
+          buf generate
+          git diff --exit-code
+      - name: buf breaking
+        uses: bufbuild/buf-breaking-action@v1
         with:
           input: proto
+          against: "https://github.com/${{ github.repository }}.git#branch=main,subdir=proto"

@@ -20,13 +20,23 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/config"
+	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/decode"
 	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/media"
+	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/metrics"
 	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/reconciler"
 	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/rtsp"
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid config: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Structured logger.
 	logger, err := zap.NewProduction()
@@ -34,7 +44,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to create logger: %v\n", err)
 		os.Exit(1)
 	}
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
 	sugar := logger.Sugar()
 	sugar.Infow("rtsp-ingress starting",
@@ -67,18 +77,30 @@ func main() {
 	var readyMu sync.Mutex
 
 	// Media publisher (MinIO + Redis).
-	publisher := media.New(minioClient, cfg.MinIO.Bucket, redisClient, "frames.ready", 100000, 85)
+	publisher := media.New(
+		minioClient,
+		cfg.MinIO.Bucket,
+		redisClient,
+		cfg.Redis.Stream,
+		cfg.Redis.MaxLenApprox,
+		cfg.MinIO.JPEGQuality,
+	)
+	if err := publisher.EnsureBucket(ctx); err != nil {
+		logger.Fatal("minio ensure bucket", zap.Error(err))
+	}
+
+	decoderFactory := decode.NewFactory(cfg.Decode.Preferred, cfg.Decode.FFmpegBinary)
 
 	// Supervisor manages RTSP workers.
-	supervisor := newSupervisor(publisher, logger)
+	supervisor := newSupervisor(ctx, publisher, decoderFactory, cfg.MinIO.JPEGQuality, logger)
 
 	// Reconciler fetches camera configs from Cognitive Companion.
-	assigned := os.Getenv("ASSIGNED_CAMERAS")
 	rec := reconciler.New(
 		cfg.Cognitive.BaseURL,
 		cfg.Cognitive.APIKey,
-		assigned,
-		60*time.Second,
+		cfg.AssignedCameras,
+		cfg.Cognitive.ReconcileInterval,
+		cfg.CameraDefaults,
 		supervisor,
 		logger,
 	)
@@ -118,14 +140,21 @@ func main() {
 
 	// Mark ready once reconciler succeeds and backends are reachable.
 	go func() {
-		time.Sleep(5 * time.Second)
-		cameras := rec.LastCameras()
-		if len(cameras) > 0 {
-			if minioClient.IsOnline() && redisClient.Ping(ctx).Err() == nil {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				cameras := rec.LastCameras()
+				if len(cameras) == 0 {
+					cameras = cfg.Cameras
+				}
+				isReady := len(cameras) > 0 && minioClient.IsOnline() && redisClient.Ping(ctx).Err() == nil
 				readyMu.Lock()
-				ready = true
+				ready = isReady
 				readyMu.Unlock()
-				logger.Info("service ready")
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
@@ -145,28 +174,43 @@ func main() {
 		sugar.Errorw("server shutdown error", "error", err)
 	}
 
-	supervisor.Stop()
+	supervisor.Stop(cfg.Server.ShutdownTimeout)
 	sugar.Info("rtsp-ingress stopped")
 }
 
 // newSupervisor creates a Supervisor that manages RTSP workers.
-func newSupervisor(pub *media.Publisher, log *zap.Logger) *supervisor {
+func newSupervisor(
+	parent context.Context,
+	pub *media.Publisher,
+	decoderFactory decode.Factory,
+	jpegQuality int,
+	log *zap.Logger,
+) *supervisor {
 	return &supervisor{
-		publisher: pub,
-		log:       log,
+		parent:         parent,
+		workers:        make(map[string]*workerHandle),
+		publisher:      pub,
+		decoderFactory: decoderFactory,
+		jpegQuality:    jpegQuality,
+		log:            log,
 	}
 }
 
 // supervisor manages a set of RTSP workers keyed by camera ID.
 type supervisor struct {
-	mu        sync.Mutex
-	workers   map[string]*workerHandle
-	publisher *media.Publisher
-	log       *zap.Logger
+	mu             sync.Mutex
+	wg             sync.WaitGroup
+	parent         context.Context
+	workers        map[string]*workerHandle
+	publisher      *media.Publisher
+	decoderFactory decode.Factory
+	jpegQuality    int
+	log            *zap.Logger
 }
 
 type workerHandle struct {
 	cancel context.CancelFunc
+	camera config.CameraConfig
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +251,8 @@ func (s *supervisor) Reconcile(cameras []config.CameraConfig) {
 
 	// Stop removed or disabled cameras.
 	for id, h := range s.workers {
-		if _, keep := want[id]; !keep {
+		next, keep := want[id]
+		if !keep || next != h.camera {
 			s.log.Info("stopping_worker", zap.String("camera_id", id))
 			h.cancel()
 			delete(s.workers, id)
@@ -219,22 +264,44 @@ func (s *supervisor) Reconcile(cameras []config.CameraConfig) {
 	for id, cam := range want {
 		if _, ok := s.workers[id]; !ok {
 			s.log.Info("starting_worker", zap.String("camera_id", id))
-			ctx, cancel := context.WithCancel(context.Background())
-			h := &workerHandle{cancel: cancel}
+			ctx, cancel := context.WithCancel(s.parent)
+			h := &workerHandle{cancel: cancel, camera: cam}
 			s.workers[id] = h
+			s.wg.Add(1)
+			metrics.ActiveWorkers.Inc()
 			go func(c config.CameraConfig) {
-				w := rtsp.NewWorker(c, s.publisher, s.log.With(zap.String("camera_id", c.ID)))
+				defer s.wg.Done()
+				defer metrics.ActiveWorkers.Dec()
+				w := rtsp.NewWorker(
+					c,
+					s.decoderFactory,
+					s.publisher,
+					s.jpegQuality,
+					s.log.With(zap.String("camera_id", c.ID)),
+				)
 				w.Run(ctx)
 			}(cam)
 		}
 	}
 }
 
-func (s *supervisor) Stop() {
+func (s *supervisor) Stop(timeout time.Duration) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, h := range s.workers {
 		h.cancel()
 	}
 	s.workers = make(map[string]*workerHandle)
+	s.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.wg.Wait()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		s.log.Warn("worker_shutdown_timeout", zap.Duration("timeout", timeout))
+	}
 }

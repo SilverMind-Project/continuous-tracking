@@ -1,56 +1,89 @@
-.PHONY: help proto proto-gen docker-up docker-down docker-build lint format test check all-check mypy go-check
+PY_VENV := tracking-orchestrator/.venv
+PY_BIN := $(PY_VENV)/bin
+PYTHON := $(PY_BIN)/python
+UV := uv
+GO_ENV := . $(CURDIR)/scripts/go-env.sh &&
+GO := $(GO_ENV) go
+
+.PHONY: help venv venv-check proto proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check all-check go-install go-env-check go-tools go-lint go-test go-build go-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-proto: ## Generate protobuf code (Go + Python)
-	cd proto && buf generate
+venv: ## Create or sync the project venv at tracking-orchestrator/.venv
+	cd tracking-orchestrator && $(UV) sync --frozen --extra dev
 
-docker-up: ## Start all services (docker-compose)
+venv-check: ## Fail if VIRTUAL_ENV is not the project venv
+	@sh scripts/require-venv.sh
+
+proto: go-env-check ## Generate protobuf code
+	cd proto && $(GO_ENV) buf generate
+
+proto-lint: go-env-check ## Lint proto files
+	cd proto && $(GO_ENV) buf lint
+
+infra-up: ## Start infrastructure services
 	docker compose up --wait -d
+
+app-up: ## Start infrastructure and app services
+	docker compose --profile app up --wait -d --build
+
+docker-up: infra-up ## Alias for infra-up
 
 docker-down: ## Stop all services
 	docker compose down -v
 
 docker-build: ## Build all service images
-	docker compose build
+	docker compose --profile app build
 
-# -----------------------------------------------------------------------
-# Python (tracking-orchestrator) — uses uv via project venv
-# -----------------------------------------------------------------------
+lint: venv ## Lint Python code
+	$(PY_BIN)/ruff check tracking-orchestrator
 
-lint: ## Lint Python code
-	cd tracking-orchestrator && uv run ruff check ..
+format: venv ## Format Python code
+	$(PY_BIN)/ruff format tracking-orchestrator
 
-format: ## Format Python code
-	cd tracking-orchestrator && uv run ruff format ..
+format-check: venv ## Check Python formatting
+	$(PY_BIN)/ruff format --check tracking-orchestrator
 
-test: ## Run Python tests
-	cd tracking-orchestrator && uv run pytest tests -v
+test: venv ## Run Python tests
+	cd tracking-orchestrator && ../$(PY_BIN)/pytest tests -v
 
-mypy: ## Type-check Python code
-	cd tracking-orchestrator && uv run mypy app
+mypy: venv ## Type-check Python code
+	$(PY_BIN)/mypy --config-file tracking-orchestrator/pyproject.toml tracking-orchestrator/app
 
-check: ## Run full Python quality gate (lint + format + typecheck + tests)
-	cd tracking-orchestrator && uv run ruff check ..
-	cd tracking-orchestrator && uv run ruff format --check ..
-	cd tracking-orchestrator && uv run mypy app
-	cd tracking-orchestrator && uv run pytest tests -v
+import-lint: venv ## Enforce import layering
+	cd tracking-orchestrator && ../$(PY_BIN)/lint-imports
 
-all-check: check go-check proto-lint ## Run full repo quality gate (Python + Go + proto)
+check: venv ## Run the Python quality gate
+	$(MAKE) lint
+	$(MAKE) format-check
+	$(MAKE) mypy
+	$(MAKE) import-lint
+	$(MAKE) test
 
-# -----------------------------------------------------------------------
-# Go (rtsp-ingress)
-# -----------------------------------------------------------------------
+all-check: check go-check proto-lint ## Run the full repo quality gate
 
-go-check: ## Run full Go quality gate (lint + vet + test + build)
-	cd rtsp-ingress && make check
+go-install: ## Install the pinned Go toolchain into ./tools
+	@sh scripts/install-go.sh
 
-go-lint: ## Lint Go code (golangci-lint)
-	cd rtsp-ingress && golangci-lint run ./...
+go-env-check: ## Verify the project-pinned Go toolchain is active
+	@$(GO_ENV) go version | grep -q "$$(awk '/^golang / {print $$2}' .tool-versions)" || (echo "go version mismatch. Run 'make go-install'." >&2; exit 1)
 
-go-test: ## Run Go tests with race detector
-	cd rtsp-ingress && go test -race ./...
+go-tools: go-env-check ## Install Go-based developer tools into ./tools/go-bin
+	@$(GO_ENV) go install github.com/bufbuild/buf/cmd/buf@v1.50.0
+	@$(GO_ENV) go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.63.4
+	@$(GO_ENV) go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
 
-go-build: ## Build Go binary
-	cd rtsp-ingress && go build -o /dev/null ./cmd/server
+go-lint: go-env-check ## Lint Go code
+	cd rtsp-ingress && $(GO_ENV) golangci-lint run ./...
+
+go-test: go-env-check ## Run Go tests with race detector
+	cd rtsp-ingress && $(GO) test -race -cover ./...
+
+go-build: go-env-check ## Build the Go binary
+	cd rtsp-ingress && $(GO) build -o /dev/null ./cmd/server
+
+go-check: go-env-check ## Run the Go quality gate
+	$(MAKE) go-lint
+	$(MAKE) go-test
+	$(MAKE) go-build

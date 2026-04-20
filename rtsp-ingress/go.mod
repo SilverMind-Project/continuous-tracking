@@ -1,17 +1,20 @@
 module github.com/khoofia/continuous-tracking/rtsp-ingress
 
-go 1.25
+go 1.24.0
+
+toolchain go1.24.5
 
 require (
 	github.com/bluenviron/gortsplib/v4 v4.10.6
 	github.com/khoofia/continuous-tracking/proto v0.0.0-00010101000000-000000000000
-	github.com/minio/minio-go/v7 v7.0.100
+	github.com/minio/minio-go/v7 v7.0.98
 	github.com/pion/rtp v1.10.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0
 	go.uber.org/zap v1.27.1
 	golang.org/x/image v0.24.0
 	google.golang.org/protobuf v1.36.11
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -47,4 +50,4 @@ require (
 	golang.org/x/text v0.32.0 // indirect
 )
 
-replace github.com/khoofia/continuous-tracking/proto => /home/sriram/code/nanai/continuous-tracking/proto
+replace github.com/khoofia/continuous-tracking/proto => ../proto

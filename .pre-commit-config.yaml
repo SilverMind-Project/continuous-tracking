@@ -15,15 +15,26 @@ repos:
         args: [--config, rtsp-ingress/.golangci.yaml]
         files: ^rtsp-ingress/
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.14.0
+  - repo: local
     hooks:
       - id: mypy
-        files: ^tracking-orchestrator/
-        additional_dependencies:
-          - pydantic>=2.10.0
-          - fastapi>=0.115.0
-          - types-pyyaml>=6.0.0
+        name: mypy (project venv)
+        entry: tracking-orchestrator/.venv/bin/mypy
+        language: system
+        files: ^tracking-orchestrator/.*\.py$
+        args: ["--config-file", "tracking-orchestrator/pyproject.toml", "tracking-orchestrator/app"]
+      - id: venv-guard
+        name: assert-no-system-pip
+        entry: sh scripts/block-stray-python.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: go-guard
+        name: assert-no-raw-go
+        entry: sh scripts/block-stray-go.sh
+        language: system
+        pass_filenames: false
+        always_run: true
 
   - repo: https://github.com/bufbuild/buf
     rev: v1.50.0

@@ -1,33 +1,26 @@
-"""Repository protocols and in-memory implementations.
-
-This module defines the storage abstraction layer (repository pattern)
-that decouples domain logic from persistence. The protocols define
-what the domain layer needs; the implementations handle the details.
-
-Layering rule: domain → storage (never the reverse).
-"""
+"""Repository protocols and in-memory implementations."""
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from datetime import datetime
 
 from ..domain import (
     CameraConfig,
     Detection,
-    GalleryEntry,
+    GalleryEmbedding,
     GlobalTrack,
+    Identity,
+    IdentityCorrection,
     IdentityRevision,
     PersonActivity,
+    PrivacyZone,
     StreamAssignment,
     StreamConfig,
     TrackingEvent,
     Tracklet,
 )
-
-# ---------------------------------------------------------------------------
-# Protocols
-# ---------------------------------------------------------------------------
 
 
 class TrackingRepository(ABC):
@@ -42,7 +35,7 @@ class TrackingRepository(ABC):
         """Retrieve a tracking event by ID."""
 
     @abstractmethod
-    async def save_detections(self, detections: list[Detection]) -> None:
+    async def save_detections(self, event_id: str, detections: list[Detection]) -> None:
         """Bulk store detections for a single frame."""
 
     @abstractmethod
@@ -69,26 +62,42 @@ class TrackingRepository(ABC):
     async def list_identity_revisions(
         self, global_track_id: str, after: datetime | None = None
     ) -> list[IdentityRevision]:
-        """List identity revisions for a track, optionally filtered by time."""
+        """List identity revisions for a track."""
 
 
 class GalleryRepository(ABC):
-    """Persist gallery entries (known persons) and their embeddings."""
+    """Persist identities and their gallery embeddings."""
 
     @abstractmethod
-    async def upsert_gallery_entry(self, entry: GalleryEntry) -> str:
-        """Store or update a gallery entry. Returns the identity ID."""
+    async def upsert_identity(self, identity: Identity) -> str:
+        """Store or update an identity. Returns the identity ID."""
 
     @abstractmethod
-    async def get_gallery_entry(self, identity_id: str) -> GalleryEntry | None:
-        """Retrieve a gallery entry by ID."""
+    async def get_identity(self, identity_id: str) -> Identity | None:
+        """Retrieve an identity by ID."""
 
     @abstractmethod
-    async def list_gallery_entries(self, active_only: bool = True) -> list[GalleryEntry]:
-        """List all gallery entries."""
+    async def list_identities(self, active_only: bool = True) -> list[Identity]:
+        """List all identities."""
 
     @abstractmethod
-    async def search_similar(self, embedding: list[float], limit: int = 10) -> list[GalleryEntry]:
+    async def upsert_gallery_entry(self, entry: GalleryEmbedding) -> str:
+        """Store or update a gallery embedding. Returns the identity ID."""
+
+    @abstractmethod
+    async def get_gallery_entry(self, gallery_entry_id: str) -> GalleryEmbedding | None:
+        """Retrieve a gallery embedding row by ID."""
+
+    @abstractmethod
+    async def list_gallery_entries(
+        self, identity_id: str | None = None, active_only: bool = True
+    ) -> list[GalleryEmbedding]:
+        """List gallery embeddings."""
+
+    @abstractmethod
+    async def search_similar(
+        self, embedding: list[float], limit: int = 10
+    ) -> list[GalleryEmbedding]:
         """Nearest-neighbor search over gallery embeddings."""
 
 
@@ -159,13 +168,34 @@ class AssignmentRepository(ABC):
         """List all stream assignments."""
 
 
-# ---------------------------------------------------------------------------
-# In-memory implementations (for testing / dev)
-# ---------------------------------------------------------------------------
+class CorrectionRepository(ABC):
+    """Persist manual identity corrections."""
+
+    @abstractmethod
+    async def save_correction(self, correction: IdentityCorrection) -> None:
+        """Store a correction."""
+
+    @abstractmethod
+    async def list_corrections(
+        self, global_track_id: str | None = None
+    ) -> list[IdentityCorrection]:
+        """List corrections."""
+
+
+class PrivacyRepository(ABC):
+    """Persist privacy zones."""
+
+    @abstractmethod
+    async def save_privacy_zone(self, zone: PrivacyZone) -> None:
+        """Store a privacy zone."""
+
+    @abstractmethod
+    async def list_privacy_zones(self, camera_id: str | None = None) -> list[PrivacyZone]:
+        """List privacy zones."""
 
 
 class InMemoryTrackingRepository(TrackingRepository):
-    """In-memory store for tracking data. Used in tests and dev mode."""
+    """In-memory store for tracking data."""
 
     def __init__(self) -> None:
         self._events: dict[str, TrackingEvent] = {}
@@ -181,14 +211,31 @@ class InMemoryTrackingRepository(TrackingRepository):
     async def get_tracking_event(self, event_id: str) -> TrackingEvent | None:
         return self._events.get(event_id)
 
-    async def save_detections(self, detections: list[Detection]) -> None:
-        if not detections:
-            return
-        key = detections[0].detection_id  # group by frame-level key
-        self._detections[key] = detections
+    async def save_detections(self, event_id: str, detections: list[Detection]) -> None:
+        self._detections[event_id] = detections
 
     async def save_tracklet(self, tracklet: Tracklet) -> None:
-        self._tracklets[tracklet.tracklet_id] = tracklet
+        existing = self._tracklets.get(tracklet.tracklet_id)
+        if existing is None:
+            self._tracklets[tracklet.tracklet_id] = tracklet
+            return
+
+        ended_at = existing.ended_at
+        if tracklet.ended_at is not None:
+            ended_at = tracklet.ended_at if ended_at is None else max(ended_at, tracklet.ended_at)
+
+        state = existing.state
+        if existing.state == "active" and tracklet.state == "terminated":
+            state = "terminated"
+
+        self._tracklets[tracklet.tracklet_id] = Tracklet(
+            tracklet_id=tracklet.tracklet_id,
+            camera_id=tracklet.camera_id,
+            detection_ids=list(dict.fromkeys(existing.detection_ids + tracklet.detection_ids)),
+            started_at=min(existing.started_at, tracklet.started_at),
+            ended_at=ended_at,
+            state=state,
+        )
 
     async def get_tracklet(self, tracklet_id: str) -> Tracklet | None:
         return self._tracklets.get(tracklet_id)
@@ -197,17 +244,16 @@ class InMemoryTrackingRepository(TrackingRepository):
         existing = self._global_tracks.get(track.global_track_id)
         if existing is None:
             self._global_tracks[track.global_track_id] = track
-        else:
-            # Merge: append new camera/tracklet IDs
-            merged = GlobalTrack(
-                global_track_id=track.global_track_id,
-                camera_ids=list(dict.fromkeys(existing.camera_ids + track.camera_ids)),
-                tracklet_ids=list(dict.fromkeys(existing.tracklet_ids + track.tracklet_ids)),
-                started_at=existing.started_at,
-                last_seen_at=max(existing.last_seen_at, track.last_seen_at),
-                state=track.state,
-            )
-            self._global_tracks[track.global_track_id] = merged
+            return
+
+        self._global_tracks[track.global_track_id] = GlobalTrack(
+            global_track_id=track.global_track_id,
+            camera_ids=list(dict.fromkeys(existing.camera_ids + track.camera_ids)),
+            tracklet_ids=list(dict.fromkeys(existing.tracklet_ids + track.tracklet_ids)),
+            started_at=min(existing.started_at, track.started_at),
+            last_seen_at=max(existing.last_seen_at, track.last_seen_at),
+            state=track.state,
+        )
 
     async def get_global_track(self, global_track_id: str) -> GlobalTrack | None:
         return self._global_tracks.get(global_track_id)
@@ -220,45 +266,56 @@ class InMemoryTrackingRepository(TrackingRepository):
     ) -> list[IdentityRevision]:
         revisions = self._revisions.get(global_track_id, [])
         if after is not None:
-            revisions = [r for r in revisions if r.revision_time >= after]
+            revisions = [revision for revision in revisions if revision.revision_time >= after]
         return revisions
 
 
 class InMemoryGalleryRepository(GalleryRepository):
     def __init__(self) -> None:
-        self._entries: dict[str, GalleryEntry] = {}
+        self._identities: dict[str, Identity] = {}
+        self._entries: dict[str, GalleryEmbedding] = {}
 
-    async def upsert_gallery_entry(self, entry: GalleryEntry) -> str:
-        self._entries[entry.identity_id] = entry
+    async def upsert_identity(self, identity: Identity) -> str:
+        self._identities[identity.identity_id] = identity
+        return identity.identity_id
+
+    async def get_identity(self, identity_id: str) -> Identity | None:
+        return self._identities.get(identity_id)
+
+    async def list_identities(self, active_only: bool = True) -> list[Identity]:
+        identities = list(self._identities.values())
+        if active_only:
+            identities = [identity for identity in identities if identity.is_active]
+        return identities
+
+    async def upsert_gallery_entry(self, entry: GalleryEmbedding) -> str:
+        self._entries[entry.gallery_entry_id] = entry
         return entry.identity_id
 
-    async def get_gallery_entry(self, identity_id: str) -> GalleryEntry | None:
-        return self._entries.get(identity_id)
+    async def get_gallery_entry(self, gallery_entry_id: str) -> GalleryEmbedding | None:
+        return self._entries.get(gallery_entry_id)
 
-    async def list_gallery_entries(self, active_only: bool = True) -> list[GalleryEntry]:
+    async def list_gallery_entries(
+        self, identity_id: str | None = None, active_only: bool = True
+    ) -> list[GalleryEmbedding]:
         entries = list(self._entries.values())
+        if identity_id is not None:
+            entries = [entry for entry in entries if entry.identity_id == identity_id]
         if active_only:
-            entries = [e for e in entries if e.is_active]
+            active_ids = {
+                identity.identity_id for identity in await self.list_identities(active_only=True)
+            }
+            entries = [entry for entry in entries if entry.identity_id in active_ids]
         return entries
 
-    async def search_similar(self, embedding: list[float], limit: int = 10) -> list[GalleryEntry]:
-        # Naive linear scan — replace with pgvector ANN in Postgres impl.
-        import math
-
-        def _cosine_sim(a: list[float], b: list[float]) -> float:
-            if len(a) != len(b):
-                return 0.0
-            dot = sum(x * y for x, y in zip(a, b, strict=True))
-            norm_a = math.sqrt(sum(x * x for x in a))
-            norm_b = math.sqrt(sum(x * x for x in b))
-            if norm_a == 0 or norm_b == 0:
-                return 0.0
-            return dot / (norm_a * norm_b)
-
+    async def search_similar(
+        self, embedding: list[float], limit: int = 10
+    ) -> list[GalleryEmbedding]:
+        # Intentional O(n): this in-memory implementation favors clarity over ANN performance.
         entries = await self.list_gallery_entries()
-        scored = [(e, _cosine_sim(embedding, e.embedding)) for e in entries]
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return [e for e, _ in scored[:limit]]
+        scored = [(entry, _cosine_sim(embedding, entry.embedding)) for entry in entries]
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return [entry for entry, _ in scored[:limit]]
 
 
 class InMemorySettingsRepository(SettingsRepository):
@@ -306,14 +363,14 @@ class InMemoryActivityRepository(ActivityRepository):
     ) -> list[PersonActivity]:
         results = list(self._activities.values())
         if identity_id:
-            results = [a for a in results if a.identity_id == identity_id]
+            results = [activity for activity in results if activity.identity_id == identity_id]
         if activity_type:
-            results = [a for a in results if a.activity_type == activity_type]
+            results = [activity for activity in results if activity.activity_type == activity_type]
         if after:
-            results = [a for a in results if a.timestamp >= after]
+            results = [activity for activity in results if activity.occurred_at >= after]
         if before:
-            results = [a for a in results if a.timestamp <= before]
-        results.sort(key=lambda a: a.timestamp, reverse=True)
+            results = [activity for activity in results if activity.occurred_at <= before]
+        results.sort(key=lambda activity: activity.occurred_at, reverse=True)
         return results[:limit]
 
 
@@ -329,3 +386,48 @@ class InMemoryAssignmentRepository(AssignmentRepository):
 
     async def list_assignments(self) -> list[StreamAssignment]:
         return list(self._assignments.values())
+
+
+class InMemoryCorrectionRepository(CorrectionRepository):
+    def __init__(self) -> None:
+        self._corrections: dict[str, IdentityCorrection] = {}
+
+    async def save_correction(self, correction: IdentityCorrection) -> None:
+        self._corrections[correction.correction_id] = correction
+
+    async def list_corrections(
+        self, global_track_id: str | None = None
+    ) -> list[IdentityCorrection]:
+        corrections = list(self._corrections.values())
+        if global_track_id is not None:
+            corrections = [
+                correction
+                for correction in corrections
+                if correction.global_track_id == global_track_id
+            ]
+        return corrections
+
+
+class InMemoryPrivacyRepository(PrivacyRepository):
+    def __init__(self) -> None:
+        self._zones: dict[str, PrivacyZone] = {}
+
+    async def save_privacy_zone(self, zone: PrivacyZone) -> None:
+        self._zones[zone.zone_id] = zone
+
+    async def list_privacy_zones(self, camera_id: str | None = None) -> list[PrivacyZone]:
+        zones = list(self._zones.values())
+        if camera_id is not None:
+            zones = [zone for zone in zones if zone.camera_id == camera_id]
+        return zones
+
+
+def _cosine_sim(a: list[float], b: list[float]) -> float:
+    if len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)

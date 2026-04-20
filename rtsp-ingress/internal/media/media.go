@@ -5,9 +5,11 @@ package media
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
+	"math"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -15,7 +17,10 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1"
+	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/metrics"
 )
+
+var ErrNoImageData = errors.New("no image data provided")
 
 // Publisher implements the rtsp.FramePublisher interface: it encodes JPEG,
 // uploads to MinIO, and publishes FrameReady to Redis Streams.
@@ -25,73 +30,104 @@ type Publisher struct {
 	redis  *redis.Client
 	stream string
 	maxlen int64
-	quality int
 }
 
 // New creates a new Publisher with the given MinIO client, bucket, Redis
 // client, stream name, approximate MAXLEN trim, and JPEG quality (1-100).
 func New(minioClient *minio.Client, bucket string, redisClient *redis.Client, stream string, maxlen int64, quality int) *Publisher {
+	_ = quality
 	return &Publisher{
-		minio:   minioClient,
-		bucket:  bucket,
-		redis:   redisClient,
-		stream:  stream,
-		maxlen:  maxlen,
-		quality: quality,
+		minio:  minioClient,
+		bucket: bucket,
+		redis:  redisClient,
+		stream: stream,
+		maxlen: maxlen,
 	}
 }
 
-// Publish encodes the image as JPEG (if provided), uploads to MinIO, updates
-// the FrameReady message with the object key, and XADDs to Redis Streams.
-//
-// Key format: frames/{camera_id}/{YYYY/MM/DD/HH}/{frame_index}-{timestamp}.jpg
-func (p *Publisher) Publish(ctx context.Context, meta *pb.FrameReady, jpegIn []byte) error {
-	var buf *bytes.Buffer
-
-	// Encode JPEG if raw image provided, otherwise use caller-provided bytes.
-	if jpegIn == nil {
-		// This case shouldn't happen in practice (rtsp worker always has img),
-		// but handle it gracefully.
-		return fmt.Errorf("no image data provided")
+// EnsureBucket creates the target bucket if it does not exist.
+func (p *Publisher) EnsureBucket(ctx context.Context) error {
+	exists, err := p.minio.BucketExists(ctx, p.bucket)
+	if err != nil {
+		return fmt.Errorf("bucket exists: %w", err)
 	}
-	buf = bytes.NewBuffer(jpegIn)
+	if exists {
+		return nil
+	}
 
-	// Upload to MinIO.
-	now := time.Now().UTC()
+	err = p.minio.MakeBucket(ctx, p.bucket, minio.MakeBucketOptions{})
+	if err == nil {
+		return nil
+	}
+	resp := minio.ToErrorResponse(err)
+	if resp.Code == "BucketAlreadyOwnedByYou" || resp.Code == "BucketAlreadyExists" {
+		return nil
+	}
+	return fmt.Errorf("make bucket: %w", err)
+}
+
+// Publish uploads to MinIO, updates the FrameReady message with the object key,
+// and XADDs the metadata to Redis Streams.
+//
+// Key format: frames/{camera_id}/{YYYY/MM/DD/HH}/{frame_index}-{capture_time}.jpg
+func (p *Publisher) Publish(ctx context.Context, meta *pb.FrameReady, jpegIn []byte) error {
+	if jpegIn == nil {
+		metrics.PublishErrorsTotal.WithLabelValues(meta.GetCameraId(), "input").Inc()
+		return ErrNoImageData
+	}
+
+	captureTimeNS := meta.CaptureTimeUnixNs
+	if captureTimeNS == 0 || captureTimeNS > math.MaxInt64 {
+		//nolint:gosec // Current wall-clock nanoseconds are non-negative here.
+		captureTimeNS = uint64(time.Now().UnixNano())
+	}
+	//nolint:gosec // captureTimeNS is bounded to MaxInt64 above.
+	captureTime := time.Unix(0, int64(captureTimeNS)).UTC()
+	if meta.CaptureTimeUnixNs == 0 {
+		captureTime = time.Now().UTC()
+	}
 	key := fmt.Sprintf("frames/%s/%s/%020d-%d.jpg",
 		meta.CameraId,
-		now.Format("2006/01/02/15"),
+		captureTime.Format("2006/01/02/15"),
 		meta.FrameIndex,
-		now.UnixNano(),
+		meta.CaptureTimeUnixNs,
 	)
 
-	_, err := p.minio.PutObject(ctx, p.bucket, key, bytes.NewReader(buf.Bytes()), int64(buf.Len()), minio.PutObjectOptions{
-		ContentType: "image/jpeg",
-		UserMetadata: map[string]string{
-			"camera-id": meta.CameraId,
-			"captured":  now.Format(time.RFC3339Nano),
-		},
-	})
-	if err != nil {
+	if err := retry(ctx, 3, func() error {
+		_, err := p.minio.PutObject(ctx, p.bucket, key, bytes.NewReader(jpegIn), int64(len(jpegIn)), minio.PutObjectOptions{
+			ContentType: "image/jpeg",
+			UserMetadata: map[string]string{
+				"camera-id": meta.CameraId,
+				"captured":  captureTime.Format(time.RFC3339Nano),
+			},
+		})
+		return err
+	}); err != nil {
+		metrics.PublishErrorsTotal.WithLabelValues(meta.GetCameraId(), "minio").Inc()
 		return fmt.Errorf("minio put: %w", err)
 	}
 	meta.MinioKey = key
 
-	// Publish to Redis Streams.
 	payload, err := proto.Marshal(meta)
 	if err != nil {
+		metrics.PublishErrorsTotal.WithLabelValues(meta.GetCameraId(), "marshal").Inc()
 		return fmt.Errorf("proto marshal: %w", err)
 	}
 
-	err = p.redis.XAdd(ctx, &redis.XAddArgs{
-		Stream: p.stream,
-		MaxLen: p.maxlen,
-		Approx: true,
-		Values: map[string]any{"frame": string(payload)},
-	}).Err()
-	if err != nil {
+	if err := retry(ctx, 3, func() error {
+		return p.redis.XAdd(ctx, &redis.XAddArgs{
+			Stream: p.stream,
+			MaxLen: p.maxlen,
+			Approx: true,
+			Values: map[string]any{"frame": payload},
+		}).Err()
+	}); err != nil {
+		metrics.PublishErrorsTotal.WithLabelValues(meta.GetCameraId(), "redis").Inc()
 		return fmt.Errorf("redis xadd: %w", err)
 	}
+
+	metrics.FramesPublishedTotal.WithLabelValues(meta.GetCameraId()).Inc()
+	metrics.FramePayloadBytes.WithLabelValues(meta.GetCameraId()).Observe(float64(len(jpegIn)))
 	return nil
 }
 
@@ -102,4 +138,25 @@ func EncodeJPEG(img image.Image, quality int) (*bytes.Buffer, error) {
 		return nil, fmt.Errorf("jpeg encode: %w", err)
 	}
 	return buf, nil
+}
+
+func retry(ctx context.Context, attempts int, fn func() error) error {
+	var err error
+	backoff := 100 * time.Millisecond
+	for i := 0; i < attempts; i++ {
+		err = fn()
+		if err == nil {
+			return nil
+		}
+		if i == attempts-1 {
+			break
+		}
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		backoff *= 2
+	}
+	return err
 }

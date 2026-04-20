@@ -3,12 +3,16 @@
 from .base import (
     ActivityRepository,
     AssignmentRepository,
+    CorrectionRepository,
     GalleryRepository,
     InMemoryActivityRepository,
     InMemoryAssignmentRepository,
+    InMemoryCorrectionRepository,
     InMemoryGalleryRepository,
+    InMemoryPrivacyRepository,
     InMemorySettingsRepository,
     InMemoryTrackingRepository,
+    PrivacyRepository,
     SettingsRepository,
     TrackingRepository,
 )
@@ -16,12 +20,16 @@ from .base import (
 __all__ = [
     "ActivityRepository",
     "AssignmentRepository",
+    "CorrectionRepository",
     "GalleryRepository",
     "InMemoryActivityRepository",
     "InMemoryAssignmentRepository",
+    "InMemoryCorrectionRepository",
     "InMemoryGalleryRepository",
+    "InMemoryPrivacyRepository",
     "InMemorySettingsRepository",
     "InMemoryTrackingRepository",
+    "PrivacyRepository",
     "SettingsRepository",
     "TrackingRepository",
 ]

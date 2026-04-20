@@ -1,13 +1,12 @@
 # Continuous Tracking System — local development environment
-# Services: TimescaleDB, Redis, MinIO, Triton, tracking-orchestrator, no-op rtsp-ingress
-version: "3.9"
+# Services: TimescaleDB, Redis, MinIO, tracking-orchestrator, rtsp-ingress
 
 services:
   # -----------------------------------------------------------------------
   # TimescaleDB (Postgres + hypertimescale)
   # -----------------------------------------------------------------------
   timescaledb:
-    image: timescale/timescaledb:latest-pg17
+    image: timescale/timescaledb-ha:pg17
     container_name: cts-timescaledb
     environment:
       POSTGRES_USER: cts
@@ -64,8 +63,8 @@ services:
 
   # -----------------------------------------------------------------------
   # Triton Inference Server (GPU model serving)
-  # Placeholder — no actual models loaded in M1.
-  # In M4+, populate triton-models/ and mount as a volume.
+  # Reserved for M3+. Kept behind an explicit profile so normal local
+  # development does not try to start a noisy placeholder.
   # -----------------------------------------------------------------------
   triton:
     image: nvcr.io/nvidia/tritonserver:24.04-py3
@@ -114,7 +113,7 @@ services:
       TRITON_ENDPOINT: triton:8001
       CTS_ENABLED: "true"
     ports:
-      - "8081:8081"
+      - "8300:8300"
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -122,8 +121,11 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-    volumes:
-      - ./tracking-orchestrator:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8300/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     profiles:
       - app
 
@@ -134,25 +136,32 @@ services:
   # -----------------------------------------------------------------------
   rtsp-ingress:
     build:
-      context: ./rtsp-ingress
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: rtsp-ingress/Dockerfile
     container_name: cts-rtsp-ingress
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_ADDRESS: redis:6379
+      REDIS_DB: "0"
+      REDIS_STREAM: frames.ready
+      REDIS_MAXLEN_APPROX: "100000"
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
       MINIO_USE_SSL: "false"
-      CTS_ENABLED: "true"
+      MINIO_BUCKET: cts-frames
+      CAMERAS_JSON: "[]"
     ports:
-      - "8082:8082"
+      - "8090:8090"
     depends_on:
       redis:
         condition: service_healthy
       minio:
         condition: service_healthy
-    volumes:
-      - ./rtsp-ingress:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     profiles:
       - app
 

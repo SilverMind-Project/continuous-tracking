@@ -26,8 +26,8 @@ func TestHealthzHandler(t *testing.T) {
 	if body["status"] != "ok" {
 		t.Errorf("status: got %q, want %q", body["status"], "ok")
 	}
-	if body["service"] != "rtsp-inggress" && body["service"] != "rtsp-ingress" {
-		// Accept either — the JSON literal is correct.
+	if body["service"] != "rtsp-ingress" {
+		t.Errorf("service: got %q, want %q", body["service"], "rtsp-ingress")
 	}
 }
 

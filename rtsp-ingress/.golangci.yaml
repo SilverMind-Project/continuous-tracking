@@ -3,12 +3,26 @@ run:
 
 linters:
   enable:
+    - bodyclose
     - errcheck
+    - errorlint
+    - gofmt
+    - goimports
+    - gosec
     - gosimple
     - govet
     - ineffassign
+    - noctx
+    - revive
+    - rowserrcheck
     - staticcheck
     - unused
+
+linters-settings:
+  revive:
+    rules:
+      - name: var-naming
+        disabled: true
 
 issues:
   exclude-use-default: false

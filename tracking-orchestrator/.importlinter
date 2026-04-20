@@ -1,0 +1,9 @@
+[importlinter]
+root_package = app
+
+[importlinter:contract:layers]
+name = Domain-Storage layers
+type = layers
+layers =
+    app.storage
+    app.domain

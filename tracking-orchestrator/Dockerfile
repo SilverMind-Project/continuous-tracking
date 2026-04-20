@@ -1,17 +1,18 @@
-FROM python:3.12-slim AS base
+FROM python:3.12-slim
 WORKDIR /app
 
-FROM base AS builder
-RUN pip install --no-cache-dir pip uv
-COPY pyproject.toml ./
-RUN uv pip install --system --compile-bytecode -e ".[dev]"
+ENV UV_LINK_MODE=copy
+ENV UV_COMPILE_BYTECODE=1
 
-FROM base
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     curl && \
     rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+RUN pip install --no-cache-dir uv
+
 COPY . .
-EXPOSE 8081
-CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8081"]
+RUN uv sync --frozen
+
+USER 65532:65532
+EXPOSE 8300
+CMD ["/app/.venv/bin/uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8300"]

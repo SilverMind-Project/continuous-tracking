@@ -51,7 +51,7 @@ message Detection {
   BoundingBox bbox = 2;
 
   // Embedding vector from the ReID model (L2-normalized, float32).
-  // Dimensionality depends on the model (e.g., 512 for ResNet50).
+  // The canonical production model is SOLIDER-REID with 768 dimensions.
   repeated float embedding = 3;
 
   // Confidence score from the detection model (0.0 to 1.0).

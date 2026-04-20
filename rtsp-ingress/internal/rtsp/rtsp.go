@@ -2,23 +2,23 @@
 package rtsp
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	"image/jpeg"
+	"math"
 	"sync/atomic"
 	"time"
 
 	"github.com/bluenviron/gortsplib/v4"
 	"github.com/bluenviron/gortsplib/v4/pkg/base"
-	"github.com/bluenviron/gortsplib/v4/pkg/description"
 	"github.com/bluenviron/gortsplib/v4/pkg/format"
 	"github.com/pion/rtp"
 	"go.uber.org/zap"
 
 	pb "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1"
 	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/config"
+	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/decode"
+	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/media"
+	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/metrics"
 	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/motion"
 )
 
@@ -32,26 +32,37 @@ type FramePublisher interface {
 // motion, and publishing keyframes via the FramePublisher.
 type Worker struct {
 	camera         config.CameraConfig
+	decoderFactory decode.Factory
 	publisher      FramePublisher
+	jpegQuality    int
 	log            *zap.Logger
 	seq            atomic.Uint64
 }
 
 // NewWorker creates a new Worker for the given camera config.
-func NewWorker(cam config.CameraConfig, pub FramePublisher, log *zap.Logger) *Worker {
+func NewWorker(
+	cam config.CameraConfig,
+	decoderFactory decode.Factory,
+	pub FramePublisher,
+	jpegQuality int,
+	log *zap.Logger,
+) *Worker {
 	return &Worker{
-		camera:  cam,
-		publisher: pub,
-		log:     log,
+		camera:         cam,
+		decoderFactory: decoderFactory,
+		publisher:      pub,
+		jpegQuality:    jpegQuality,
+		log:            log,
 	}
 }
 
 // Run starts the RTSP session loop with exponential backoff on reconnect.
 func (w *Worker) Run(ctx context.Context) {
-	backoff := time.Duration(w.camera.ReconnectBackoffSeconds * float64(time.Second))
+	backoff := w.initialBackoff()
 	for ctx.Err() == nil {
 		err := w.session(ctx)
 		if err != nil && ctx.Err() == nil {
+			metrics.RTSPReconnectsTotal.WithLabelValues(w.camera.ID).Inc()
 			w.log.Warn("rtsp_session_ended",
 				zap.String("camera_id", w.camera.ID),
 				zap.Error(err),
@@ -65,12 +76,15 @@ func (w *Worker) Run(ctx context.Context) {
 			backoff = min(backoff*2, 60*time.Second)
 			continue
 		}
-		backoff = time.Duration(w.camera.ReconnectBackoffSeconds * float64(time.Second))
+		backoff = w.initialBackoff()
 	}
 }
 
 func (w *Worker) session(ctx context.Context) error {
-	client := &gortsplib.Client{}
+	client := &gortsplib.Client{
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
 
 	u, err := base.ParseURL(w.camera.RTSPURL)
 	if err != nil {
@@ -88,12 +102,18 @@ func (w *Worker) session(ctx context.Context) error {
 	}
 
 	var h264 *format.H264
-	media := desc.FindFormat(h264)
-	if media == nil {
+	rtspMedia := desc.FindFormat(&h264)
+	if rtspMedia == nil {
 		return fmt.Errorf("camera %s: no H264 track", w.camera.ID)
 	}
 
-	if _, err := client.Setup(desc.BaseURL, media, 0, 0); err != nil {
+	decoder, err := w.decoderFactory(h264)
+	if err != nil {
+		return fmt.Errorf("decoder init: %w", err)
+	}
+	defer func() { _ = decoder.Close() }()
+
+	if _, err := client.Setup(desc.BaseURL, rtspMedia, 0, 0); err != nil {
 		return fmt.Errorf("setup: %w", err)
 	}
 
@@ -101,9 +121,11 @@ func (w *Worker) session(ctx context.Context) error {
 	interval := time.Duration(w.camera.FrameIntervalMs) * time.Millisecond
 	last := time.Time{}
 
-	client.OnPacketRTP(media, h264, func(pkt *rtp.Packet) {
-		img, derr := decodeRTPToImage(pkt, media, h264)
+	// gortsplib invokes RTP callbacks serially for a given stream.
+	client.OnPacketRTP(rtspMedia, h264, func(pkt *rtp.Packet) {
+		img, derr := decoder.DecodePacket(pkt)
 		if derr != nil {
+			metrics.DecodeErrorsTotal.WithLabelValues(w.camera.ID).Inc()
 			return
 		}
 		if img == nil {
@@ -112,30 +134,45 @@ func (w *Worker) session(ctx context.Context) error {
 
 		now := time.Now().UTC()
 		if !last.IsZero() && now.Sub(last) < interval {
+			metrics.FramesFilteredTotal.WithLabelValues(w.camera.ID, "interval").Inc()
 			return
 		}
 		last = now
 
 		if gate.IsStatic(img) {
+			metrics.FramesFilteredTotal.WithLabelValues(w.camera.ID, "motion").Inc()
 			return
 		}
 
-		// Encode to JPEG.
-		jpegBuf := bytes.NewBuffer(make([]byte, 0, 128*1024))
-		if err := jpeg.Encode(jpegBuf, img, &jpeg.Options{Quality: 85}); err != nil {
+		jpegBuf, err := media.EncodeJPEG(img, w.jpegQuality)
+		if err != nil {
 			return
 		}
 
 		seq := w.seq.Add(1) - 1
 		captureTime := now.UnixNano()
+		if captureTime < 0 {
+			return
+		}
+		width := img.Bounds().Dx()
+		height := img.Bounds().Dy()
+		if seq > math.MaxInt64 || width > math.MaxInt32 || height > math.MaxInt32 {
+			return
+		}
+		//nolint:gosec // Bounds are checked immediately above.
+		frameIndex := int64(seq)
+		//nolint:gosec // Bounds are checked immediately above.
+		frameWidth := int32(width)
+		//nolint:gosec // Bounds are checked immediately above.
+		frameHeight := int32(height)
 
 		meta := &pb.FrameReady{
 			CameraId:           w.camera.ID,
-			FrameIndex:         int64(seq),
+			FrameIndex:         frameIndex,
 			CaptureTimeUnixNs:  uint64(captureTime),
-			ReceivedTimeUnixNs: uint64(now.UnixNano()),
-			Width:              int32(img.Bounds().Dx()),
-			Height:             int32(img.Bounds().Dy()),
+			ReceivedTimeUnixNs: uint64(captureTime),
+			Width:              frameWidth,
+			Height:             frameHeight,
 			SampleFps:          0,
 		}
 
@@ -156,13 +193,10 @@ func (w *Worker) session(ctx context.Context) error {
 	return nil
 }
 
-// decodeRTPToImage is a minimal H.264 NALU assembler that reassembles complete
-// frames from RTP packets. In production this feeds packets into a decoder
-// (software or NVDEC). This stub returns nil (no frame).
-func decodeRTPToImage(pkt *rtp.Packet, media *description.Media, h264 *format.H264) (image.Image, error) {
-	_ = pkt
-	_ = media
-	_ = h264
-	// TODO M2: Implement H.264 decoder integration.
-	return nil, nil
+func (w *Worker) initialBackoff() time.Duration {
+	backoff := time.Duration(w.camera.ReconnectBackoffSeconds * float64(time.Second))
+	if backoff <= 0 {
+		return 2 * time.Second
+	}
+	return backoff
 }

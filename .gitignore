@@ -18,6 +18,15 @@ frontend/dist/
 .mypy_cache/
 kubernetes/local/
 .vscode/
+tools/go-*/
+tools/go-bin/
+tools/go-mod-cache/
+tools/go-build-cache/
+tracking-orchestrator/.venv/
+tracking-orchestrator/.ruff_cache/
+tracking-orchestrator/.mypy_cache/
+tracking-orchestrator/.pytest_cache/
+tracking-orchestrator/*.egg-info/
 
 # Compiled Object files, Alias and Private Window files
 *.a

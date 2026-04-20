@@ -1,9 +1,9 @@
 version: v2
 modules:
-  - path: continuoustracking/v1
+  - path: .
 lint:
   use:
     - STANDARD
 breaking:
   use:
-    - WIRE_PROTO3
+    - WIRE

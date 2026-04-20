@@ -1,0 +1,35 @@
+server:
+  health_addr: ":8090"
+  shutdown_grace_s: 15
+
+assigned_cameras: ALL
+
+decode:
+  preferred: software
+  nvdec_device: 0
+  software_threads: 2
+  ffmpeg_binary: ffmpeg
+
+minio:
+  endpoint: minio:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  bucket: cts-frames
+  secure: false
+  jpeg_quality: 85
+
+redis:
+  addr: redis:6379
+  db: 0
+  stream: frames.ready
+  maxlen_approx: 100000
+
+cognitive_companion:
+  base_url: http://cognitive-companion:8000
+  api_key: ""
+  reconcile_interval_s: 60
+
+defaults:
+  frame_interval_ms: 500
+  motion_threshold: 0.02
+  reconnect_backoff_s: 2.0
