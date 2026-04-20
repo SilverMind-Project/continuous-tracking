@@ -65,3 +65,4 @@ go.work.sum
 # Common binary output directory (if you use a 'bin' folder for builds)
 bin/
 .claude/settings.local.json
+.qwen/*

@@ -28,8 +28,10 @@ _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 def _preprocess(crop: npt.NDArray[np.uint8]) -> npt.NDArray[np.float32]:
     """Resize crop to 256x128, ImageNet-normalise, return CHW float32."""
     h, w = crop.shape[:2]
-    row_idx = np.floor(np.arange(_CROP_H) * h / _CROP_H).astype(np.intp)
-    col_idx = np.floor(np.arange(_CROP_W) * w / _CROP_W).astype(np.intp)
+    scale_h = h / _CROP_H
+    scale_w = w / _CROP_W
+    row_idx = np.floor(np.arange(_CROP_H) * scale_h).astype(np.intp)
+    col_idx = np.floor(np.arange(_CROP_W) * scale_w).astype(np.intp)
     resized = crop[row_idx[:, None], col_idx[None, :]]  # (_CROP_H, _CROP_W, 3)
 
     chw = np.transpose(resized.astype(np.float32) / 255.0, (2, 0, 1))  # CHW

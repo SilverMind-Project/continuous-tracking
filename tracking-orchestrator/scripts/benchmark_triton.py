@@ -10,7 +10,7 @@ Usage:
     uv run --extra triton tracking-orchestrator/scripts/benchmark_triton.py \\
         --url localhost:8001 --warmup 20 --iters 200
 
-Exit code 1 if person-detector p99 at batch 8 exceeds the 12 ms DoD target.
+Exit code 1 if any model exceeds its batch-8 p99 DoD target.
 
 Performance targets (phase-0 section 0.31):
     person-detector  batch=8  p99 <= 12 ms  (RTX 4060-class GPU)
@@ -163,6 +163,8 @@ def _check_dod(results: list[LatencyStats]) -> bool:
     """Return True if all DoD latency gates pass."""
     gates: dict[tuple[str, int], float] = {
         ("person-detector", 8): 12.0,
+        ("reid-solider", 8): 8.0,
+        ("pose-rtmpose", 8): 8.0,
     }
     passed = True
     for (model, batch), limit in gates.items():

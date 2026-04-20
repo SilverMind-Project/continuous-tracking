@@ -118,6 +118,25 @@ def test_reid_preprocess_shape() -> None:
     assert out.dtype == np.float32
 
 
+def test_reid_preprocess_samples_full_crop() -> None:
+    """Regression: the resize must sample from the entire source crop, not
+    collapse to a single row/column of the top-left pixel (the M3 bug)."""
+    from app.inference.reid_embedder import _preprocess as reid_preprocess
+
+    # Create a crop with a clear gradient — bottom-right corner is bright.
+    crop = np.zeros((300, 150, 3), dtype=np.uint8)
+    crop[:, :, 0] = np.arange(300, dtype=np.uint8)[:, None]  # R: top-to-bottom gradient
+    crop[:, :, 1] = np.arange(150, dtype=np.uint8)[None, :]  # G: left-to-right gradient
+
+    out = reid_preprocess(crop)  # (3, 256, 128)
+
+    # If the resize samples the full crop, the output must have non-zero
+    # variance in every channel.  A collapsed resize (bug) would produce
+    # near-zero variance because all rows/cols map to index 0.
+    assert out[0, :, :].std() > 0.5, "Red channel has near-zero std — resize collapsed"
+    assert out[1, :, :].std() > 0.5, "Green channel has near-zero std — resize collapsed"
+
+
 def test_pose_preprocess_shape() -> None:
     crop = _make_crop(300, 150)
     tensor, _px, _py, _scale = _preprocess(crop)
