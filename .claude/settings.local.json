@@ -8,7 +8,24 @@
       "Bash(go vet *)",
       "Bash(golangci-lint run *)",
       "Bash(make check *)",
-      "Bash(go test *)"
+      "Bash(go test *)",
+      "Bash(/tmp/buf generate *)",
+      "Bash(protoc --version)",
+      "Read(//tmp/**)",
+      "Bash(curl -sSL -o protoc.zip \"https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-aarch_64.zip\")",
+      "Bash(unzip -o protoc.zip -d /usr/local)",
+      "Bash(unzip -o protoc.zip -d ~/.local)",
+      "Bash(go env *)",
+      "Read(//home/sriram/go/bin/**)",
+      "Read(//home/sriram/.local/bin/**)",
+      "Bash(export PATH=\"$HOME/.local/go/bin:$PATH\")",
+      "Bash(go mod *)",
+      "Bash(go download *)",
+      "Bash(go clean *)",
+      "Bash(go list *)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(go build *)",
+      "Bash(go doc *)"
     ]
   }
 }

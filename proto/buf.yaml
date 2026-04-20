@@ -1,7 +1,6 @@
 version: v2
 modules:
   - path: continuoustracking/v1
-    name: github.com/khoofia/continuous-tracking/proto/continuoustracking/v1
 lint:
   use:
     - STANDARD

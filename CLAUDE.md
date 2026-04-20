@@ -98,11 +98,11 @@ Implemented files:
 - `Makefile` — lint, format, test, docker, proto commands
 - `cognitive-companion/config/settings.yaml` — `cts.enabled: false` feature flag
 
-**M2–M10 — Not yet started.** See Implementation Playbook above for milestone scope.
+**M2 — Implemented.** `rtsp-ingress/` Go service with full source code and 26 unit tests across 7 packages (config, motion, media, reconciler, rtsp, streams, cmd/server). All tests pass. See `rtsp-ingress/` for implementation details.
 
 ## When Working with This Repo
 
-- **M1 is implemented.** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, and `proto/`.
+- **M1 and M2 are implemented.** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, and `proto/`.
 - **Always reference phase-0 first.** It supersedes phases 1-5 where they conflict.
 - **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
 - **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.
