@@ -1,0 +1,332 @@
+"""Unit tests for the app.inference module.
+
+All Triton calls are replaced with an AsyncMockClient so no GPU or
+tritonclient installation is required — these tests run under `make check`.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+import numpy as np
+import numpy.typing as npt
+import pytest
+
+from app.inference.detector import PersonDetector, _decode_output, _nms, _resize_letterbox
+from app.inference.pose import PoseEstimator, _decode_simcc, _preprocess
+from app.inference.reid_embedder import ReidEmbedder
+from app.inference.schemas import (
+    COCO_KEYPOINTS,
+    EMBEDDING_DIM,
+    NUM_KEYPOINTS,
+    DetectionBox,
+    Keypoint,
+    PoseResult,
+)
+from app.inference.triton_client import TritonClientProtocol
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+class _MockTritonClient:
+    """Minimal TritonClientProtocol implementation backed by AsyncMock."""
+
+    def __init__(self, return_values: dict[str, npt.NDArray[np.float32]]) -> None:
+        self._returns = return_values
+        self.infer = AsyncMock(return_value=return_values)
+        self.is_model_ready = AsyncMock(return_value=True)
+
+
+def _make_image(h: int = 120, w: int = 160) -> npt.NDArray[np.uint8]:
+    return np.random.default_rng(0).integers(0, 255, (h, w, 3), dtype=np.uint8)
+
+
+def _make_crop(h: int = 80, w: int = 60) -> npt.NDArray[np.uint8]:
+    return np.random.default_rng(1).integers(0, 255, (h, w, 3), dtype=np.uint8)
+
+
+# ---------------------------------------------------------------------------
+# TritonClientProtocol structural check
+# ---------------------------------------------------------------------------
+
+
+def test_mock_client_satisfies_protocol() -> None:
+    client = _MockTritonClient({})
+    assert isinstance(client, TritonClientProtocol)
+
+
+# ---------------------------------------------------------------------------
+# schemas
+# ---------------------------------------------------------------------------
+
+
+def test_detection_box_area() -> None:
+    b = DetectionBox(x1=0.1, y1=0.2, x2=0.5, y2=0.8, confidence=0.9)
+    assert abs(b.area - 0.24) < 1e-6
+
+
+def test_pose_result_requires_17_keypoints() -> None:
+    kpts = tuple(Keypoint(0.5, 0.5, 0.9) for _ in range(17))
+    pr = PoseResult(keypoints=kpts)
+    assert len(pr.keypoints) == NUM_KEYPOINTS
+
+
+def test_pose_result_wrong_count_raises() -> None:
+    kpts = tuple(Keypoint(0.5, 0.5, 0.9) for _ in range(5))
+    with pytest.raises(ValueError, match="17 keypoints"):
+        PoseResult(keypoints=kpts)
+
+
+def test_pose_result_get_by_name() -> None:
+    kpts = tuple(Keypoint(float(i) * 0.05, float(i) * 0.03, 0.8) for i in range(17))
+    pr = PoseResult(keypoints=kpts)
+    nose = pr.get("nose")
+    assert nose == kpts[0]
+
+
+def test_coco_keypoints_count() -> None:
+    assert len(COCO_KEYPOINTS) == NUM_KEYPOINTS
+
+
+# ---------------------------------------------------------------------------
+# Preprocessing
+# ---------------------------------------------------------------------------
+
+
+def test_resize_letterbox_square_output() -> None:
+    img = _make_image(480, 640)
+    tensor, _px, _py, _scale = _resize_letterbox(img, 640)
+    assert tensor.shape == (3, 640, 640)
+    assert tensor.dtype == np.float32
+
+
+def test_resize_letterbox_values_in_range() -> None:
+    img = _make_image(100, 200)
+    tensor, *_ = _resize_letterbox(img, 640)
+    assert float(tensor.min()) >= 0.0
+    assert float(tensor.max()) <= 1.0
+
+
+def test_reid_preprocess_shape() -> None:
+    from app.inference.reid_embedder import _preprocess as reid_preprocess
+
+    crop = _make_crop(300, 150)
+    out = reid_preprocess(crop)
+    assert out.shape == (3, 256, 128)
+    assert out.dtype == np.float32
+
+
+def test_pose_preprocess_shape() -> None:
+    crop = _make_crop(300, 150)
+    tensor, _px, _py, _scale = _preprocess(crop)
+    assert tensor.shape == (3, 256, 192)
+    assert tensor.dtype == np.float32
+
+
+# ---------------------------------------------------------------------------
+# NMS
+# ---------------------------------------------------------------------------
+
+
+def test_nms_single_box() -> None:
+    boxes = np.array([[0.1, 0.1, 0.5, 0.5]], dtype=np.float32)
+    scores = np.array([0.9], dtype=np.float32)
+    kept = _nms(boxes, scores, iou_threshold=0.5)
+    assert kept == [0]
+
+
+def test_nms_suppresses_duplicate() -> None:
+    boxes = np.array([[0.0, 0.0, 0.5, 0.5], [0.01, 0.01, 0.51, 0.51]], dtype=np.float32)
+    scores = np.array([0.9, 0.8], dtype=np.float32)
+    kept = _nms(boxes, scores, iou_threshold=0.5)
+    assert len(kept) == 1
+    assert kept[0] == 0
+
+
+def test_nms_keeps_non_overlapping() -> None:
+    boxes = np.array([[0.0, 0.0, 0.2, 0.2], [0.5, 0.5, 0.9, 0.9]], dtype=np.float32)
+    scores = np.array([0.9, 0.8], dtype=np.float32)
+    kept = _nms(boxes, scores, iou_threshold=0.5)
+    assert len(kept) == 2
+
+
+def test_nms_empty() -> None:
+    boxes = np.zeros((0, 4), dtype=np.float32)
+    scores = np.zeros(0, dtype=np.float32)
+    kept = _nms(boxes, scores, iou_threshold=0.5)
+    assert kept == []
+
+
+# ---------------------------------------------------------------------------
+# YOLO decode
+# ---------------------------------------------------------------------------
+
+
+def _make_yolo_output(
+    batch: int,
+    cx: float = 320.0,
+    cy: float = 240.0,
+    bw: float = 100.0,
+    bh: float = 150.0,
+    conf: float = 0.9,
+) -> npt.NDArray[np.float32]:
+    """Construct a fake YOLO output0 tensor [batch, 84, 8400] with one detection."""
+    out = np.zeros((batch, 84, 8400), dtype=np.float32)
+    # Place detection at anchor 0; class 0 (person)
+    out[:, 0, 0] = cx
+    out[:, 1, 0] = cy
+    out[:, 2, 0] = bw
+    out[:, 3, 0] = bh
+    out[:, 4, 0] = conf  # person class score
+    return out
+
+
+def test_decode_output_finds_person() -> None:
+    raw = _make_yolo_output(1)[0]  # single sample (84, 8400)
+    boxes = _decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=80, scale=1.0)
+    assert len(boxes) == 1
+    b = boxes[0]
+    assert 0.0 <= b.x1 <= b.x2 <= 1.0
+    assert 0.0 <= b.y1 <= b.y2 <= 1.0
+    assert b.confidence >= 0.25
+
+
+def test_decode_output_empty_on_low_confidence() -> None:
+    raw = np.zeros((84, 8400), dtype=np.float32)
+    raw[4, 0] = 0.1  # below threshold
+    boxes = _decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=0, scale=1.0)
+    assert boxes == []
+
+
+# ---------------------------------------------------------------------------
+# PersonDetector (mocked Triton)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_detector_returns_boxes() -> None:
+    raw = _make_yolo_output(1)
+    client = _MockTritonClient({"output0": raw})
+    detector = PersonDetector(client)
+    img = _make_image()
+    boxes = await detector.detect(img)
+    assert isinstance(boxes, list)
+    client.infer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_detector_batch() -> None:
+    raw = _make_yolo_output(3)
+    client = _MockTritonClient({"output0": raw})
+    detector = PersonDetector(client)
+    imgs = [_make_image() for _ in range(3)]
+    results = await detector.detect_batch(imgs)
+    assert len(results) == 3
+    client.infer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_detector_empty_batch() -> None:
+    client = _MockTritonClient({})
+    detector = PersonDetector(client)
+    results = await detector.detect_batch([])
+    assert results == []
+    client.infer.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# ReidEmbedder (mocked Triton)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_embedder_returns_correct_shape() -> None:
+    fake_emb = np.random.rand(2, EMBEDDING_DIM).astype(np.float32)
+    client = _MockTritonClient({"output": fake_emb})
+    embedder = ReidEmbedder(client)
+    crops = [_make_crop(), _make_crop()]
+    result = await embedder.embed_batch(crops)
+    assert len(result) == 2
+    assert result[0].shape == (EMBEDDING_DIM,)
+
+
+@pytest.mark.asyncio
+async def test_embedder_wrong_dim_raises() -> None:
+    bad_emb = np.random.rand(1, 512).astype(np.float32)  # wrong dim
+    client = _MockTritonClient({"output": bad_emb})
+    embedder = ReidEmbedder(client)
+    with pytest.raises(ValueError, match="768"):
+        await embedder.embed(_make_crop())
+
+
+@pytest.mark.asyncio
+async def test_embedder_empty_batch() -> None:
+    client = _MockTritonClient({})
+    embedder = ReidEmbedder(client)
+    assert await embedder.embed_batch([]) == []
+
+
+# ---------------------------------------------------------------------------
+# PoseEstimator (mocked Triton)
+# ---------------------------------------------------------------------------
+
+
+def _make_simcc_output(batch: int) -> dict[str, npt.NDArray[np.float32]]:
+    rng = np.random.default_rng(2)
+    sx = rng.random((batch, 17, 384)).astype(np.float32)
+    sy = rng.random((batch, 17, 512)).astype(np.float32)
+    return {"simcc_x": sx, "simcc_y": sy}
+
+
+@pytest.mark.asyncio
+async def test_pose_returns_17_keypoints() -> None:
+    client = _MockTritonClient(_make_simcc_output(1))
+    estimator = PoseEstimator(client)
+    result = await estimator.infer(_make_crop())
+    assert len(result.keypoints) == 17
+    for kp in result.keypoints:
+        assert 0.0 <= kp.x <= 1.0
+        assert 0.0 <= kp.y <= 1.0
+        assert 0.0 <= kp.score <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_pose_batch() -> None:
+    client = _MockTritonClient(_make_simcc_output(3))
+    estimator = PoseEstimator(client)
+    crops = [_make_crop() for _ in range(3)]
+    results = await estimator.infer_batch(crops)
+    assert len(results) == 3
+
+
+@pytest.mark.asyncio
+async def test_pose_empty_batch() -> None:
+    client = _MockTritonClient({})
+    estimator = PoseEstimator(client)
+    assert await estimator.infer_batch([]) == []
+
+
+# ---------------------------------------------------------------------------
+# SimCC decode
+# ---------------------------------------------------------------------------
+
+
+def test_decode_simcc_coords_in_range() -> None:
+    rng = np.random.default_rng(7)
+    sx = rng.random((17, 384)).astype(np.float32)
+    sy = rng.random((17, 512)).astype(np.float32)
+    result = _decode_simcc(sx, sy, orig_h=200, orig_w=100, pad_x=16, pad_y=0, scale=0.96)
+    for kp in result.keypoints:
+        assert 0.0 <= kp.x <= 1.0
+        assert 0.0 <= kp.y <= 1.0
+        assert 0.0 <= kp.score <= 1.0
+
+
+def test_decode_simcc_score_is_bounded() -> None:
+    sx = np.ones((17, 384), dtype=np.float32)
+    sy = np.ones((17, 512), dtype=np.float32)
+    result = _decode_simcc(sx, sy, orig_h=100, orig_w=80, pad_x=16, pad_y=0, scale=1.0)
+    for kp in result.keypoints:
+        assert kp.score <= 1.0

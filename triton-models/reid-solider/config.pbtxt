@@ -1,0 +1,53 @@
+# SOLIDER-REID 768-dim body re-identification model — ONNX Runtime backend.
+#
+# Source: https://github.com/tinyvision/SOLIDER-REID (CVPR 2023)
+# Backbone: Swin-Tiny with semantic controller; 768-dim L2-normalised output.
+#
+# Export command (run from the SOLIDER-REID repo root):
+#   python export_onnx.py \
+#     --config_file configs/MSMT17/swin_tiny.yml \
+#     --pretrain_path /path/to/solider_swin_tiny.pth \
+#     --output_path triton-models/reid-solider/1/model.onnx
+#
+# Tensor names set via input_names/output_names in torch.onnx.export.
+# Verify after export:
+#   python -c "import onnx; m=onnx.load('1/model.onnx'); \
+#     print([i.name for i in m.graph.input], [o.name for o in m.graph.output])"
+#
+# Input size 256×128: standard ReID crop (H×W). Crops should be normalised
+# with ImageNet mean/std before inference.
+#
+# For Intel Arc: convert via OpenVINO mo:
+#   mo --input_model 1/model.onnx --output_dir 1/ --input_shape "[1,3,256,128]"
+#   Then change platform to "openvino".
+
+name: "reid-solider"
+platform: "onnxruntime_onnx"
+max_batch_size: 16
+
+dynamic_batching {
+  max_queue_delay_microseconds: 5000
+}
+
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [3, 256, 128]
+  }
+]
+
+output [
+  {
+    name: "output"
+    data_type: TYPE_FP32
+    dims: [768]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

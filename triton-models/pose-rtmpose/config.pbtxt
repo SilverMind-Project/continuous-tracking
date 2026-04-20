@@ -1,0 +1,64 @@
+# RTMPose-m 2D pose estimator — ONNX Runtime backend.
+#
+# Source: https://github.com/open-mmlab/mmpose (RTMPose-m, COCO 17 keypoints)
+# Input size: 256 (H) × 192 (W). SimCC head with simcc_split_ratio=2.0.
+#
+# Export command (requires mmdeploy + mmpose installed):
+#   python tools/deploy/torch2onnx.py \
+#     configs/mmpose/pose-detection_onnxruntime_static.py \
+#     configs/body_2d_keypoint/rtmpose/coco/rtmpose-m_8xb256-420e_coco-256x192.py \
+#     /path/to/rtmpose-m_simcc-aic-coco.pth \
+#     demo/resources/human-pose.jpg \
+#     --work-dir triton-models/pose-rtmpose/1/
+#   mv triton-models/pose-rtmpose/1/end2end.onnx triton-models/pose-rtmpose/1/model.onnx
+#
+# SimCC output bins (per keypoint):
+#   simcc_x: 192 * 2 = 384 x-axis bins
+#   simcc_y: 256 * 2 = 512 y-axis bins
+# Argmax over bins → keypoint pixel coordinate; divide by simcc_split_ratio (2.0).
+#
+# Verify tensor names after export:
+#   python -c "import onnx; m=onnx.load('1/model.onnx'); \
+#     print([i.name for i in m.graph.input], [o.name for o in m.graph.output])"
+#
+# COCO 17 keypoints (by index):
+#   0 nose, 1 left_eye, 2 right_eye, 3 left_ear, 4 right_ear,
+#   5 left_shoulder, 6 right_shoulder, 7 left_elbow, 8 right_elbow,
+#   9 left_wrist, 10 right_wrist, 11 left_hip, 12 right_hip,
+#   13 left_knee, 14 right_knee, 15 left_ankle, 16 right_ankle
+
+name: "pose-rtmpose"
+platform: "onnxruntime_onnx"
+max_batch_size: 16
+
+dynamic_batching {
+  max_queue_delay_microseconds: 5000
+}
+
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [3, 256, 192]
+  }
+]
+
+output [
+  {
+    name: "simcc_x"
+    data_type: TYPE_FP32
+    dims: [17, 384]
+  }
+  {
+    name: "simcc_y"
+    data_type: TYPE_FP32
+    dims: [17, 512]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

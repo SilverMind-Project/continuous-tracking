@@ -100,9 +100,24 @@ Implemented files:
 
 **M2 — Implemented.** `rtsp-ingress/` Go service with full source code and 26 unit tests across 7 packages (config, motion, media, reconciler, rtsp, streams, cmd/server). All tests pass. See `rtsp-ingress/` for implementation details.
 
+**M3 — Implemented.** Triton model repository + inference client module. Implemented files:
+
+- `triton-models/person-detector/config.pbtxt` — YOLO11m TensorRT config (input: `images` [3,640,640], output: `output0` [84,8400], dynamic batching, `max_batch_size: 16`)
+- `triton-models/reid-solider/config.pbtxt` — SOLIDER-REID ONNX config (input: `input` [3,256,128], output: `output` [768])
+- `triton-models/pose-rtmpose/config.pbtxt` — RTMPose-m ONNX config (input: `input` [3,256,192], outputs: `simcc_x` [17,384], `simcc_y` [17,512])
+- `triton-models/{person-detector,reid-solider,pose-rtmpose}/1/.gitkeep` — placeholders for model binaries (generated with export scripts)
+- `triton-models/scripts/{export_yolo,export_reid,export_pose}.py` — model export scripts
+- `triton-models/README.md` — materialisation and verification instructions
+- `tracking-orchestrator/app/inference/{__init__,schemas,triton_client,detector,reid_embedder,pose}.py` — async Triton gRPC client + typed wrappers; `TritonClientProtocol` allows mock injection in tests
+- `tracking-orchestrator/scripts/benchmark_triton.py` — p50/p99 sweep at batch [1,4,8,16] with DoD gate check (person-detector p99 ≤ 12ms at batch 8)
+- `tracking-orchestrator/notebooks/model_demo.ipynb` — end-to-end demo (JPEG → DetectionBox / Embedding / PoseResult) per model
+- `tracking-orchestrator/tests/test_inference.py` — 27 unit tests (mocked Triton, no GPU required); all pass under `make check`
+
+**Outstanding DoD gate**: `tritonserver` loading all three models (`curl :8000/v2/models/ready`) and benchmark p99 ≤ 12ms at batch 8 require materialised `.plan`/`.onnx` files (run export scripts on the target GPU). The code scaffolding is complete and verified.
+
 ## When Working with This Repo
 
-- **M1 and M2 are implemented.** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, and `proto/`.
+- **M1, M2, and M3 are implemented.** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, and `triton-models/`.
 - **Always reference phase-0 first.** It supersedes phases 1-5 where they conflict.
 - **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
 - **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.

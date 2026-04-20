@@ -2,8 +2,9 @@
 root_package = app
 
 [importlinter:contract:layers]
-name = Domain-Storage layers
+name = Core layers
 type = layers
 layers =
     app.storage
+    app.inference
     app.domain
