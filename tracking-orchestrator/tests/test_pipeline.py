@@ -43,11 +43,14 @@ class TestPipelineSkeleton:
     @pytest.mark.asyncio
     async def test_initialize_without_detector(self, pipeline: FrameProcessingPipeline) -> None:
         """Initialize should create repo and tracklet manager without a detector."""
-        with patch(
-            "app.pipeline.frame_pipeline.RedisStreamsTransport",
-        ) as mock_transport_cls:
+        with (
+            patch("app.pipeline.frame_pipeline.RedisStreamsTransport") as mock_transport_cls,
+            patch("app.pipeline.frame_pipeline.RevisionPublisher") as mock_rev_cls,
+        ):
             mock_transport = AsyncMock()
             mock_transport_cls.return_value = mock_transport
+            mock_rev = AsyncMock()
+            mock_rev_cls.return_value = mock_rev
 
             await pipeline.initialize()
 
@@ -58,11 +61,14 @@ class TestPipelineSkeleton:
     @pytest.mark.asyncio
     async def test_skeleton_frame_processed(self, pipeline: FrameProcessingPipeline) -> None:
         """In skeleton mode, a frame should produce a zero-detection event."""
-        with patch(
-            "app.pipeline.frame_pipeline.RedisStreamsTransport",
-        ) as mock_transport_cls:
+        with (
+            patch("app.pipeline.frame_pipeline.RedisStreamsTransport") as mock_transport_cls,
+            patch("app.pipeline.frame_pipeline.RevisionPublisher") as mock_rev_cls,
+        ):
             mock_transport = AsyncMock()
             mock_transport_cls.return_value = mock_transport
+            mock_rev = AsyncMock()
+            mock_rev_cls.return_value = mock_rev
 
             await pipeline.initialize()
             assert pipeline._transport is not None
@@ -91,11 +97,14 @@ class TestPipelineSkeleton:
 
     @pytest.mark.asyncio
     async def test_stop_without_start(self, pipeline: FrameProcessingPipeline) -> None:
-        with patch(
-            "app.pipeline.frame_pipeline.RedisStreamsTransport",
-        ) as mock_transport_cls:
+        with (
+            patch("app.pipeline.frame_pipeline.RedisStreamsTransport") as mock_transport_cls,
+            patch("app.pipeline.frame_pipeline.RevisionPublisher") as mock_rev_cls,
+        ):
             mock_transport = AsyncMock()
             mock_transport_cls.return_value = mock_transport
+            mock_rev = AsyncMock()
+            mock_rev_cls.return_value = mock_rev
 
             await pipeline.initialize()
             # Should not raise

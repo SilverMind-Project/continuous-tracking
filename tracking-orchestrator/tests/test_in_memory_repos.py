@@ -181,6 +181,7 @@ async def test_identity_revision(tracking_repo: InMemoryTrackingRepository) -> N
     rev = IdentityRevision(
         revision_id="revision-1",
         global_track_id="gt1",
+        tracklet_ids=["t1"],
         candidates=[IdentityCandidate("i1", "Alice", 0.8)],
         map_identity_id="i1",
         posterior_entropy=0.5,

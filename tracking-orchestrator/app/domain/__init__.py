@@ -254,10 +254,7 @@ class PosteriorDist:
             return ("UNKNOWN", 0.0), 0.0
         sorted_probs = sorted(self.distribution.items(), key=lambda x: x[1], reverse=True)
         top_id, top_prob = sorted_probs[0]
-        if len(sorted_probs) > 1:
-            margin = top_prob - sorted_probs[1][1]
-        else:
-            margin = 1.0  # Only one candidate, infinite margin
+        margin = top_prob - sorted_probs[1][1] if len(sorted_probs) > 1 else 1.0
         return (top_id, top_prob), margin
 
     def entropy(self) -> float:
@@ -268,9 +265,8 @@ class PosteriorDist:
         if not self.distribution:
             return 0.0
         import math
-        return -sum(
-            p * math.log2(p) for p in self.distribution.values() if p > 0
-        )
+
+        return -sum(p * math.log2(p) for p in self.distribution.values() if p > 0)
 
     def has_identity(self, identity_id: IdentityId) -> bool:
         return identity_id in self.distribution

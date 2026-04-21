@@ -120,20 +120,22 @@ class CrossCameraAssociator:
 
         # ---- Step 2: Build candidate pairs ----
         # Only consider tracklets not yet assigned to a GlobalTrack.
-        unassigned = [
-            t for t in open_tracklets if t.tracklet_id not in existing_gt_map
-        ]
+        unassigned = [t for t in open_tracklets if t.tracklet_id not in existing_gt_map]
 
         # Build candidate pairs from unassigned tracklets.
         candidate_scores: list[TrackletPairScore] = []
         seen_pairs: set[tuple[str, str]] = set()
 
         for i, ta in enumerate(unassigned):
-            for tb in unassigned[i + 1:]:
+            for tb in unassigned[i + 1 :]:
                 if ta.camera_id == tb.camera_id:
                     continue
 
-                pair_key = tuple(sorted([ta.tracklet_id, tb.tracklet_id]))
+                pair_key: tuple[str, str] = (
+                    (ta.tracklet_id, tb.tracklet_id)
+                    if ta.tracklet_id <= tb.tracklet_id
+                    else (tb.tracklet_id, ta.tracklet_id)
+                )
                 if pair_key in seen_pairs:
                     continue
                 seen_pairs.add(pair_key)
@@ -155,7 +157,10 @@ class CrossCameraAssociator:
         assignment_map: dict[TrackletId, str] = {}
 
         for pair in candidate_scores:
-            if pair.tracklet_a_id in assigned_tracklets and pair.tracklet_b_id in assigned_tracklets:
+            if (
+                pair.tracklet_a_id in assigned_tracklets
+                and pair.tracklet_b_id in assigned_tracklets
+            ):
                 continue
 
             if pair.tracklet_a_id in existing_gt_map or pair.tracklet_b_id in existing_gt_map:
@@ -175,7 +180,9 @@ class CrossCameraAssociator:
                         if pair.tracklet_a_id not in existing_gt_map
                         else pair.camera_b
                     ]
-                    existing_gt = next((gt for gt in active_gts if gt.global_track_id == gt_id), None)
+                    existing_gt = next(
+                        (gt for gt in active_gts if gt.global_track_id == gt_id), None
+                    )
                     if existing_gt:
                         merged = await self._repo.merge_tracklets(
                             tracklet_ids=new_tids,
@@ -260,15 +267,17 @@ class CrossCameraAssociator:
         # ---- Step 5: Update last_seen_at for all existing GlobalTracks ----
         updated_gts: list[GlobalTrack] = []
         for gt in active_gts:
-            updated_gts.append(GlobalTrack(
-                global_track_id=gt.global_track_id,
-                camera_ids=gt.camera_ids,
-                tracklet_ids=gt.tracklet_ids,
-                started_at=gt.started_at,
-                last_seen_at=captured_at,
-                current_identity_id=gt.current_identity_id,
-                state="active",
-            ))
+            updated_gts.append(
+                GlobalTrack(
+                    global_track_id=gt.global_track_id,
+                    camera_ids=gt.camera_ids,
+                    tracklet_ids=gt.tracklet_ids,
+                    started_at=gt.started_at,
+                    last_seen_at=captured_at,
+                    current_identity_id=gt.current_identity_id,
+                    state="active",
+                )
+            )
 
         return updated_gts
 
@@ -294,9 +303,7 @@ class CrossCameraAssociator:
         appearance_sim = self._approximate_gallery_similarity(ta, tb)
 
         # Combined score
-        combined = self._config.alpha * appearance_sim + (
-            1 - self._config.alpha
-        ) * geo_score
+        combined = self._config.alpha * appearance_sim + (1 - self._config.alpha) * geo_score
 
         return TrackletPairScore(
             tracklet_a_id=ta.tracklet_id,
@@ -308,9 +315,7 @@ class CrossCameraAssociator:
             combined_score=combined,
         )
 
-    def _approximate_gallery_similarity(
-        self, ta: Tracklet, tb: Tracklet
-    ) -> float:
+    def _approximate_gallery_similarity(self, ta: Tracklet, tb: Tracklet) -> float:
         """Approximate gallery similarity between two tracklets.
 
         In production, this queries the GalleryRepository for cross-tracklet

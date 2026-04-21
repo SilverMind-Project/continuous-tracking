@@ -15,6 +15,7 @@ from structlog import get_logger
 from ...domain import (
     Detection,
     GlobalTrack,
+    IdentityCandidate,
     IdentityRevision,
     TrackingEvent,
     Tracklet,
@@ -85,13 +86,16 @@ _SQL_GET_GLOBAL_TRACK = """
 
 _SQL_SAVE_IDENTITY_REVISION = """
     INSERT INTO identity_revisions (revision_id, revision_time, global_track_id,
-                                    candidates, map_identity_id, posterior_entropy)
-    VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+                                    tracklet_ids, candidates, map_identity_id,
+                                    posterior_entropy, previous_identity_id,
+                                    new_identity_id, reason, evidence)
+    VALUES ($1, $2, $3, $4::uuid[], $5::jsonb, $6, $7, $8, $9, $10, $11::jsonb)
 """
 
 _SQL_LIST_IDENTITY_REVISIONS = """
-    SELECT revision_id, revision_time, global_track_id, candidates,
-           map_identity_id, posterior_entropy
+    SELECT revision_id, revision_time, global_track_id, tracklet_ids, candidates,
+           map_identity_id, posterior_entropy, previous_identity_id,
+           new_identity_id, reason
     FROM identity_revisions
     WHERE global_track_id = $1
     ORDER BY revision_time DESC
@@ -260,15 +264,21 @@ class PostgresTrackingRepository(TrackingRepository):
                 for c in revision.candidates
             ]
         )
+        evidence_json = json.dumps(revision.evidence or {})
         async with self._pool.acquire() as conn:
             await conn.execute(
                 _SQL_SAVE_IDENTITY_REVISION,
                 revision.revision_id,
                 revision.revision_time,
                 revision.global_track_id,
+                list(revision.tracklet_ids),
                 candidates_json,
                 revision.map_identity_id,
                 revision.posterior_entropy,
+                revision.previous_identity_id,
+                revision.new_identity_id,
+                revision.reason,
+                evidence_json,
             )
 
     async def list_identity_revisions(
@@ -291,15 +301,11 @@ class PostgresTrackingRepository(TrackingRepository):
         for row in rows:
             candidates_data = json.loads(row["candidates"])
             candidates = [
-                type(
-                    "IdentityCandidate",
-                    (),
-                    {
-                        "identity_id": c["identity_id"],
-                        "display_name": c["display_name"],
-                        "probability": c["probability"],
-                    },
-                )()
+                IdentityCandidate(
+                    identity_id=c["identity_id"],
+                    display_name=c["display_name"],
+                    probability=c["probability"],
+                )
                 for c in candidates_data
             ]
 
@@ -308,9 +314,13 @@ class PostgresTrackingRepository(TrackingRepository):
                     revision_id=row["revision_id"],
                     revision_time=row["revision_time"],
                     global_track_id=row["global_track_id"],
+                    tracklet_ids=list(row["tracklet_ids"]) if row["tracklet_ids"] else [],
                     candidates=candidates,
                     map_identity_id=row["map_identity_id"],
                     posterior_entropy=row["posterior_entropy"],
+                    previous_identity_id=row["previous_identity_id"],
+                    new_identity_id=row["new_identity_id"],
+                    reason=row["reason"] or "",
                 )
             )
         return revisions

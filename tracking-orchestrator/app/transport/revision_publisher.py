@@ -130,11 +130,13 @@ class RevisionPublisher:
             "revision_time": revision.revision_time.isoformat(),
         }
 
-        message_id = await self._redis.xadd(
-            self._stream,
-            payload,  # type: ignore[arg-type]
-            maxlen=self._maxlen,
-            approximate=True,
+        message_id = str(
+            await self._redis.xadd(
+                self._stream,
+                payload,  # type: ignore[arg-type]
+                maxlen=self._maxlen,
+                approximate=True,
+            )
         )
 
         logger.info(
@@ -195,4 +197,4 @@ class RevisionPublisher:
             count=len(revisions),
             message_ids=results,
         )
-        return results
+        return [str(r) for r in results]

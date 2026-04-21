@@ -336,7 +336,9 @@ class FrameProcessingPipeline:
             detection_count = 0
 
         # ---- M5: Cross-camera association ----
-        active_tracklets = self._tracklet_manager.get_active_tracklets() if self._tracklet_manager else []
+        active_tracklets = (
+            self._tracklet_manager.get_active_tracklets() if self._tracklet_manager else []
+        )
         active_global_tracks: list[GlobalTrack] = []
         face_anchors: list[FaceAnchor] = []
         new_revisions: list[IdentityRevision] = []
@@ -359,12 +361,13 @@ class FrameProcessingPipeline:
             )
 
             # Apply decisions: update GlobalTrack identity assignments.
-            for decision in outcome.decisions:
-                if decision.identity_id is not None or decision.revises_previous:
-                    await self._global_track_repo.assign_identity(
-                        global_track_id=decision.global_track_id,
-                        identity_id=decision.identity_id,
-                    )
+            if self._global_track_repo:
+                for decision in outcome.decisions:
+                    if decision.identity_id is not None or decision.revises_previous:
+                        await self._global_track_repo.assign_identity(
+                            global_track_id=decision.global_track_id,
+                            identity_id=decision.identity_id,
+                        )
 
             # Collect revisions to emit.
             new_revisions = list(outcome.revisions)
@@ -372,8 +375,9 @@ class FrameProcessingPipeline:
         # Step 7: Persist identity revisions.
         if new_revisions and self._revision_publisher:
             await self._revision_publisher.publish_many(new_revisions)
-            for rev in new_revisions:
-                await self._repo.save_identity_revision(revision=rev)
+            if self._repo:
+                for rev in new_revisions:
+                    await self._repo.save_identity_revision(revision=rev)
 
         # Step 8: Publish tracking event
         assert self._transport is not None

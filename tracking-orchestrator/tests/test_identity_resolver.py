@@ -128,10 +128,11 @@ def _make_face_anchor(
 def _make_resolver(
     identities: list[Identity] | None = None,
     config: ResolverConfig | None = None,
+    gallery_repo: InMemoryGalleryRepository | None = None,
 ) -> IdentityResolver:
     return IdentityResolver(
         tracking_repo=InMemoryTrackingRepository(),
-        gallery_repo=InMemoryGalleryRepository(),
+        gallery_repo=gallery_repo or InMemoryGalleryRepository(),
         global_track_repo=InMemoryGlobalTrackRepository(),
         identities=identities or [],
         config=config or ResolverConfig(),
@@ -288,7 +289,7 @@ class TestIdentityResolver:
         decision = outcome.decisions[0]
         # Prior alone favors grandma but may not meet commit_prob=0.85.
         # The top identity should still be grandma.
-        top_id, top_prob = decision.posterior.top_identity()
+        top_id, _ = decision.posterior.top_identity()
         assert top_id == "grandma"
         # With no face/ReID evidence, commit_prob is not met -> UNKNOWN.
         assert decision.identity_id is None
@@ -348,6 +349,132 @@ class TestIdentityResolver:
         decision_ids = {d.global_track_id for d in outcome.decisions}
         assert decision_ids == {"gt-1", "gt-2"}
 
+    @pytest.mark.asyncio
+    async def test_resolve_produces_revision_on_identity_change(
+        self,
+    ) -> None:
+        """A revision should be emitted when identity actually changes."""
+        identities = [
+            _make_identity("grandma", "Grandma"),
+            _make_identity("dad", "Dad"),
+        ]
+        resolver = _make_resolver(
+            identities=identities,
+            config=ResolverConfig(commit_prob=0.5),
+        )
+
+        # First: assign grandma via face anchor
+        face_anchor = FaceAnchor(
+            person_id="grandma",
+            confidence=0.9,
+            quality=0.8,
+            tracklet_id="t1",
+        )
+        gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
+
+        outcome1 = await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[face_anchor],
+            captured_at=datetime.now(UTC),
+        )
+        assert len(outcome1.decisions) == 1
+        assert outcome1.decisions[0].identity_id == "grandma"
+        assert len(outcome1.revisions) == 1
+
+        # Simulate pipeline applying the decision to the GT
+        gt = _make_gt(global_track_id="gt-1", current_identity_id="grandma")
+
+        # Second: assign dad via face anchor -> should produce revision
+        face_anchor2 = FaceAnchor(
+            person_id="dad",
+            confidence=0.9,
+            quality=0.8,
+            tracklet_id="t1",
+        )
+
+        outcome2 = await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[face_anchor2],
+            captured_at=datetime.now(UTC),
+        )
+        assert outcome2.decisions[0].identity_id == "dad"
+        assert outcome2.decisions[0].revises_previous is True
+        assert len(outcome2.revisions) == 1
+        rev = outcome2.revisions[0]
+        assert rev.previous_identity_id == "grandma"
+        assert rev.new_identity_id == "dad"
+
+    @pytest.mark.asyncio
+    async def test_resolve_from_gallery(self) -> None:
+        """ReID gallery search should contribute to posterior and commit."""
+        from app.domain import GalleryEmbedding
+
+        identities = [_make_identity("alice", "Alice")]
+        gallery_repo = InMemoryGalleryRepository()
+        await gallery_repo.upsert_identity(identities[0])
+        await gallery_repo.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id="ge-1",
+                identity_id="alice",
+                embedding=[0.5] * 768,  # matches placeholder [0.0]*768 (cosine sim = 0)
+                seen_at=datetime.now(UTC),
+            )
+        )
+
+        resolver = _make_resolver(
+            identities=identities,
+            gallery_repo=gallery_repo,
+            config=ResolverConfig(commit_prob=0.65, prior_weight=0.3),
+        )
+
+        gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
+
+        outcome = await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[],
+            captured_at=datetime.now(UTC),
+        )
+        assert len(outcome.decisions) == 1
+        assert outcome.decisions[0].identity_id == "alice"
+
+    @pytest.mark.asyncio
+    async def test_resolve_rate_limiting(self) -> None:
+        """Revisions should be rate-limited per global track."""
+        identities = [_make_identity("alice", "Alice")]
+        resolver = _make_resolver(
+            identities=identities,
+            config=ResolverConfig(
+                commit_prob=0.5,
+                max_revisions_per_gt_per_minute=1,
+            ),
+        )
+
+        # First commit should produce a revision
+        face_anchor = FaceAnchor(
+            person_id="alice",
+            confidence=0.9,
+            quality=0.8,
+            tracklet_id="t1",
+        )
+        gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
+
+        t1 = datetime.now(UTC)
+        outcome1 = await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[face_anchor],
+            captured_at=t1,
+        )
+        assert len(outcome1.revisions) == 1
+
+        # Second commit within the same minute should be rate-limited
+        t2 = t1
+        outcome2 = await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[face_anchor],
+            captured_at=t2,
+        )
+        assert len(outcome2.revisions) == 0  # rate-limited
+
 
 class TestResolveOutcome:
     """Test the ResolveOutcome container."""
@@ -359,11 +486,13 @@ class TestResolveOutcome:
 
     def test_outcome_with_decisions(self) -> None:
         outcome = ResolveOutcome()
-        outcome.decisions.append(IdentityDecision(
-            global_track_id="gt-1",
-            identity_id="grandma",
-            posterior=PosteriorDist({"grandma": 0.9, "UNKNOWN": 0.1}),
-            revises_previous=True,
-        ))
+        outcome.decisions.append(
+            IdentityDecision(
+                global_track_id="gt-1",
+                identity_id="grandma",
+                posterior=PosteriorDist({"grandma": 0.9, "UNKNOWN": 0.1}),
+                revises_previous=True,
+            )
+        )
         assert len(outcome.decisions) == 1
         assert outcome.decisions[0].identity_id == "grandma"

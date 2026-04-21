@@ -155,9 +155,7 @@ class IdentityResolver:
 
             decision = self._commit(gt, posterior, face_likelihood, reid_likelihood, captured_at)
             if decision.revises_previous:
-                revision = self._build_revision(
-                    gt, decision, captured_at
-                )
+                revision = self._build_revision(gt, decision, captured_at)
                 if revision is not None:
                     outcome.revisions.append(revision)
 
@@ -169,9 +167,7 @@ class IdentityResolver:
     # Prior construction
     # ------------------------------------------------------------------
 
-    def _build_prior(
-        self, gt: GlobalTrack, captured_at: datetime
-    ) -> PosteriorDist:
+    def _build_prior(self, gt: GlobalTrack, captured_at: datetime) -> PosteriorDist:
         """Build the temporal prior from the previous identity assignment.
 
         The prior is a mixture of:
@@ -205,9 +201,7 @@ class IdentityResolver:
     # Face anchor likelihood
     # ------------------------------------------------------------------
 
-    def _from_face_anchors(
-        self, gt: GlobalTrack, face_anchors: list[FaceAnchor]
-    ) -> PosteriorDist:
+    def _from_face_anchors(self, gt: GlobalTrack, face_anchors: list[FaceAnchor]) -> PosteriorDist:
         """Build likelihood from face anchors associated with this GlobalTrack.
 
         Face anchors are the strongest evidence. A face anchor is associated
@@ -219,9 +213,7 @@ class IdentityResolver:
         gt_tracklet_ids = set(gt.tracklet_ids)
 
         # Find face anchors whose tracklet belongs to this GlobalTrack.
-        relevant_anchors = [
-            fa for fa in face_anchors if fa.tracklet_id in gt_tracklet_ids
-        ]
+        relevant_anchors = [fa for fa in face_anchors if fa.tracklet_id in gt_tracklet_ids]
 
         if not relevant_anchors:
             # No face evidence: return uniform (identity-neutral).
@@ -244,7 +236,8 @@ class IdentityResolver:
             if candidates:
                 per_id = remainder / (len(candidates) + 1)
                 for cid in candidates:
-                    likelihood[cid] = per_id
+                    if cid != best.person_id:
+                        likelihood[cid] = per_id
                 likelihood["UNKNOWN"] = per_id
             else:
                 likelihood["UNKNOWN"] = remainder
@@ -332,7 +325,7 @@ class IdentityResolver:
     ) -> PosteriorDist:
         """Combine prior, face likelihood, and ReID likelihood.
 
-        Posterior ∝ prior × face_likelihood × reid_likelihood
+        Posterior = prior * face_likelihood * reid_likelihood
 
         If any source is empty (no evidence), it is treated as a
         near-zero weight so it does not overpower the prior.
@@ -393,8 +386,7 @@ class IdentityResolver:
         # a new assignment.  Face anchors and ReID gallery hits are
         # the evidence that justifies an assignment or reassignment.
         has_evidence = (
-            top_id in face_likelihood.distribution
-            or top_id in reid_likelihood.distribution
+            top_id in face_likelihood.distribution or top_id in reid_likelihood.distribution
         )
 
         # Apply commit rule.
@@ -417,7 +409,10 @@ class IdentityResolver:
             elif new_id is None:
                 reason = f"demoted_to_unknown: {top_id} (p={top_prob:.3f}, margin={margin:.3f})"
             else:
-                reason = f"identity_change: {prev_id} -> {new_id} (p={top_prob:.3f}, margin={margin:.3f})"
+                reason = (
+                    f"identity_change: {prev_id} -> {new_id} "
+                    f"(p={top_prob:.3f}, margin={margin:.3f})"
+                )
 
         return IdentityDecision(
             global_track_id=gt.global_track_id,
@@ -474,11 +469,14 @@ class IdentityResolver:
         candidates = [
             IdentityCandidate(
                 identity_id=ident_id,
-                display_name=self._identities.get(ident_id, Identity(
-                    identity_id=ident_id,
-                    display_name=ident_id,
-                    enrolled_at=now,
-                )).display_name,
+                display_name=self._identities.get(
+                    ident_id,
+                    Identity(
+                        identity_id=ident_id,
+                        display_name=ident_id,
+                        enrolled_at=now,
+                    ),
+                ).display_name,
                 probability=prob,
             )
             for ident_id, prob in sorted(

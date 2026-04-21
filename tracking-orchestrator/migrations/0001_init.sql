@@ -131,12 +131,17 @@ CREATE INDEX idx_global_tracks_state ON global_tracks(state) WHERE state = 'acti
 -- Identity revisions: Bayesian posterior updates
 -- ---------------------------------------------------------------------------
 CREATE TABLE identity_revisions (
-    revision_id        UUID NOT NULL DEFAULT gen_random_uuid(),
-    revision_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    global_track_id    UUID NOT NULL REFERENCES global_tracks(global_track_id) ON DELETE CASCADE,
-    candidates         JSONB NOT NULL DEFAULT '[]',
-    map_identity_id    UUID,
-    posterior_entropy  REAL NOT NULL,
+    revision_id            UUID NOT NULL DEFAULT gen_random_uuid(),
+    revision_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    global_track_id        UUID NOT NULL REFERENCES global_tracks(global_track_id) ON DELETE CASCADE,
+    tracklet_ids           UUID[] NOT NULL DEFAULT '{}',
+    candidates             JSONB NOT NULL DEFAULT '[]',
+    map_identity_id        UUID,
+    posterior_entropy      REAL NOT NULL,
+    previous_identity_id   UUID,
+    new_identity_id        UUID,
+    reason                 TEXT NOT NULL DEFAULT '',
+    evidence               JSONB NOT NULL DEFAULT '{}',
     PRIMARY KEY (revision_id, revision_time)
 );
 

@@ -142,18 +142,19 @@ class TestCrossCameraAssociator:
     ) -> None:
         """A new tracklet on an adjacent camera should extend an existing GlobalTrack."""
         # Create an initial GlobalTrack with t1 on cam_a.
-        t1 = _make_tracklet("t1", "cam_a")
-        await global_track_repo.save(GlobalTrack(
-            global_track_id="gt-1",
-            camera_ids=["cam_a"],
-            tracklet_ids=["t1"],
-            started_at=datetime.now(UTC),
-            last_seen_at=datetime.now(UTC),
-        ))
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-1",
+                camera_ids=["cam_a"],
+                tracklet_ids=["t1"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+            )
+        )
 
         # Add a new tracklet on cam_b.
         t2 = _make_tracklet("t2", "cam_b")
-        result = await assoc.associate([t2], captured_at=datetime.now(UTC))
+        await assoc.associate([t2], captured_at=datetime.now(UTC))
 
         # The existing GlobalTrack should be extended.
         gt = await global_track_repo.get("gt-1")
@@ -169,17 +170,19 @@ class TestCrossCameraAssociator:
     ) -> None:
         """Closed GlobalTracks should not be extended."""
         # Create a closed GlobalTrack.
-        await global_track_repo.save(GlobalTrack(
-            global_track_id="gt-closed",
-            camera_ids=["cam_a"],
-            tracklet_ids=["t1"],
-            started_at=datetime.now(UTC),
-            last_seen_at=datetime.now(UTC),
-            state="closed",
-        ))
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-closed",
+                camera_ids=["cam_a"],
+                tracklet_ids=["t1"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+                state="closed",
+            )
+        )
 
         t2 = _make_tracklet("t2", "cam_a")
-        result = await assoc.associate([t2], captured_at=datetime.now(UTC))
+        await assoc.associate([t2], captured_at=datetime.now(UTC))
 
         # The closed track should not be in the result.
         gt = await global_track_repo.get("gt-closed")

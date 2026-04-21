@@ -62,9 +62,7 @@ class CameraAdjacency:
     def remove_camera(self, camera_id: CameraId) -> None:
         """Remove all edges involving a camera."""
         self._edges.pop(camera_id, None)
-        self._overlaps = {
-            s for s in self._overlaps if camera_id not in s
-        }
+        self._overlaps = {s for s in self._overlaps if camera_id not in s}
         # Remove edges pointing to this camera
         for camera_id_key in list(self._edges):
             self._edges[camera_id_key] = [
@@ -120,10 +118,7 @@ class CameraAdjacency:
 
     def get_neighbors(self, camera_id: CameraId) -> list[CameraId]:
         """Get all cameras reachable from the given camera (one hop)."""
-        return [
-            edge.to_camera
-            for edge in self._edges.get(camera_id, [])
-        ]
+        return [edge.to_camera for edge in self._edges.get(camera_id, [])]
 
     def get_max_transition(self, from_camera: CameraId, to_camera: CameraId) -> float | None:
         """Get the maximum transition time between two adjacent cameras.
