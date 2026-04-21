@@ -103,6 +103,8 @@ class TrackletManager:
         self._config = config or TrackletConfig()
         # In-memory state for active tracklets: keyed by tracklet_id
         self._active: dict[str, _TrackletState] = {}
+        # Reverse map: local_track_id (from PerCameraTracker) → tracklet_id (UUID)
+        self._local_to_tracklet: dict[str, str] = {}
 
     async def step(
         self,
@@ -133,8 +135,10 @@ class TrackletManager:
         det_by_id: dict[str, Detection] = {d.detection_id: d for d in detections}
         lt_by_local_id: dict[str, Any] = {lt.local_track_id: lt for lt in local_tracks}
 
-        # Tracks that are alive this frame
-        alive_local_ids: set[str] = set(lt_by_local_id.keys())
+        # Tracklet IDs that are alive this frame (via reverse map)
+        alive_tracklet_ids: set[str] = {
+            self._local_to_tracklet[lid] for lid in lt_by_local_id if lid in self._local_to_tracklet
+        }
 
         # ---- Extend or close existing tracklets ----
         new_gallery_entries: list[GalleryEmbedding] = []
@@ -143,9 +147,12 @@ class TrackletManager:
         to_remove: list[str] = []
 
         for tracklet_id, state in self._active.items():
-            if tracklet_id in alive_local_ids:
-                # Extend this tracklet
-                local_track = lt_by_local_id[tracklet_id]
+            if tracklet_id in alive_tracklet_ids:
+                # Find the local_track for this tracklet via reverse map
+                local_id = next(
+                    lid for lid, tid in self._local_to_tracklet.items() if tid == tracklet_id
+                )
+                local_track = lt_by_local_id[local_id]
                 det = det_by_id.get(local_track.detection.detection_id)
                 if det is not None:
                     emb_idx = self._find_embedding_index(local_track.detection)
@@ -169,27 +176,20 @@ class TrackletManager:
                     else:
                         to_remove.append(tracklet_id)
             else:
-                # Check if we should close this tracklet
-                state.lost_count = getattr(state, "lost_count", 0) + 1
+                # Increment once; close if grace window exhausted
+                state.lost_count += 1
                 if state.lost_count >= self._config.close_grace_frames:
                     to_remove.append(tracklet_id)
-                    # Close the tracklet
-                    closed = state.tracklet
-                    closed = self._close_tracklet(closed, event_time)
+                    closed = self._close_tracklet(state.tracklet, event_time)
                     updated_tracklets.append(closed)
-                    lost = state.lost_count
-                    self._active[tracklet_id] = _TrackletState(
-                        tracklet=closed,
-                        lost_count=lost,
-                    )
                 else:
-                    # Keep alive but mark as lost
-                    state.lost_count = getattr(state, "lost_count", 0) + 1
                     self._active[tracklet_id] = state
 
-        # Remove closed tracklets
+        # Remove closed tracklets and their reverse-map entries
         for tracklet_id in to_remove:
             del self._active[tracklet_id]
+            for lid in [k for k, v in self._local_to_tracklet.items() if v == tracklet_id]:
+                del self._local_to_tracklet[lid]
 
         # ---- Create new tracklets from confirmed LocalTracks ----
         new_tracklets: list[Tracklet] = []
@@ -209,9 +209,9 @@ class TrackletManager:
                     embeddings=[emb] if emb is not None else [],
                 )
 
-                # Register in active set before gallery append (so _append_gallery
-                # can look up the state)
+                # Register in active set and reverse map before gallery append
                 self._active[tracklet.tracklet_id] = state
+                self._local_to_tracklet[local_track.local_track_id] = tracklet.tracklet_id
 
                 # Check gallery append for new tracklet
                 quality = self._compute_quality(det, camera)
@@ -322,7 +322,7 @@ class TrackletManager:
         return GalleryEmbedding(
             gallery_entry_id=entry_id,
             identity_id="",  # Empty until M5 identity resolution
-            embedding=detection.embedding,
+            embedding=list(embedding),
             seen_at=event_time,
             quality=quality,
             origin_tracklet_id=tracklet_id,

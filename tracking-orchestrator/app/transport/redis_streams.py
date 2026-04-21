@@ -113,6 +113,8 @@ class RedisStreamsTransport:
         self._config = config or TransportConfig()
         self._redis: redis.Redis | None = None
         self._group_created = False
+        # Maps id(frame) → Redis message ID for pending XACK
+        self._pending_acks: dict[int, Any] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -188,8 +190,8 @@ class RedisStreamsTransport:
             for message_id, fields in messages:
                 frame = self._deserialize_frame(fields)
                 if frame is not None:
-                    # Store the message ID for later XACK
-                    frame._message_id = message_id  # type: ignore[attr-defined]
+                    # Store the message ID keyed by object identity for later XACK
+                    self._pending_acks[id(frame)] = message_id
                     yield frame
 
     async def ack_frame(self, frame: FrameReady) -> None:
@@ -204,7 +206,7 @@ class RedisStreamsTransport:
         if self._redis is None:
             return
 
-        message_id = getattr(frame, "_message_id", None)
+        message_id = self._pending_acks.pop(id(frame), None)
         if message_id is None:
             logger.warning("Cannot ACK: no message ID on frame", camera_id=frame.camera_id)
             return

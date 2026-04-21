@@ -26,6 +26,7 @@ from ..domain import CameraConfig, Detection, FrameRef, TrackingEvent
 from ..inference.detector import PersonDetector
 from ..inference.schemas import DetectionBox
 from ..storage.base import InMemoryTrackingRepository, TrackingRepository
+from ..tracking.tracker import PerCameraTrackers, TrackerConfig
 from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
 from ..transport.redis_streams import (
     FrameReady,
@@ -75,6 +76,7 @@ class FrameProcessingPipeline:
         self._transport: RedisStreamsTransport | None = None
         self._detector: PersonDetector | None = None
         self._tracklet_manager: TrackletManager | None = None
+        self._tracker: PerCameraTrackers | None = None
         self._repo: TrackingRepository | None = None
         self._running = False
         self._tasks: list[asyncio.Task[None]] = []
@@ -105,8 +107,6 @@ class FrameProcessingPipeline:
         self._detector = detector
 
         # Tracklet manager
-        from ..tracking.tracker import PerCameraTrackers, TrackerConfig
-
         tracker = PerCameraTrackers(TrackerConfig())
         from ..storage.base import InMemoryGalleryRepository
 

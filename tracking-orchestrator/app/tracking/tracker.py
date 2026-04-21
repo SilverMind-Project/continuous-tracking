@@ -310,8 +310,8 @@ class PerCameraTracker:
 
         # ---- Step 3: update matched tracks ----
         result: list[LocalTrack] = []
-        for trk_idx, det_idx in zip(matched_tracks, matched_dets, strict=True):
-            track = self._tracks[self._track_id(trk_idx)]
+        for trk_id, det_idx in zip(matched_tracks, matched_dets, strict=True):
+            track = self._tracks[trk_id]
             det = detections[det_idx]
             emb = embeddings[det_idx]
 
@@ -346,18 +346,14 @@ class PerCameraTracker:
                 result.append(self._make_local_track(track, det, emb))
 
         # ---- Step 5: advance unmatched tracks (lost count) ----
-        for trk_idx in unmatched_tracks:
-            local_id = self._track_id(trk_idx)
-            if local_id in self._tracks:
-                self._tracks[local_id].lost_count += 1
+        for trk_id in unmatched_tracks:
+            if trk_id in self._tracks:
+                self._tracks[trk_id].lost_count += 1
 
         # ---- Step 6: terminate stale tracks ----
         self._advance_lost_tracks()
 
         return result
-
-    def _track_id(self, idx: int) -> str:
-        return f"track-{idx}"
 
     def _create_track(self, detection: Detection, embedding: Embedding) -> str:
         local_id = f"track-{self._next_local_id}"
@@ -393,20 +389,20 @@ class PerCameraTracker:
         self,
         detections: list[Detection],
         embeddings: list[Embedding],
-    ) -> tuple[list[int], list[int], list[int], list[int]]:
+    ) -> tuple[list[str], list[int], list[str], list[int]]:
         """Run Hungarian association between existing tracks and detections.
 
         Returns:
-            (matched_track_indices, matched_det_indices,
-             unmatched_track_indices, unmatched_det_indices)
+            (matched_track_ids, matched_det_indices,
+             unmatched_track_ids, unmatched_det_indices)
         """
         if not self._tracks:
             # No existing tracks: all detections are unmatched.
             return ([], [], [], list(range(len(detections))))
 
         active_tracks = [
-            (idx, track)
-            for idx, track in enumerate(self._tracks.values())
+            (track_id, track)
+            for track_id, track in self._tracks.items()
             if track.lost_count < self._config.max_time_lost
         ]
 
@@ -491,31 +487,23 @@ class PerCameraTracker:
         # ---- Hungarian assignment ----
         track_indices, det_indices = linear_sum_assignment(cost)
 
-        # ---- Filter by threshold ----
-        matched_tracks: list[int] = []
+        # ---- Filter by threshold and map positions → track IDs ----
+        matched_tracks: list[str] = []
         matched_dets: list[int] = []
-        for trk_idx, _det_idx in zip(track_indices, det_indices, strict=True):
-            # Map internal index to actual detection index
-            _ = active_tracks[trk_idx]  # validate index exists
-
-        # Re-do filtering with correct indices
-        matched_tracks = []
-        matched_dets = []
         for trk_idx, det_idx in zip(track_indices, det_indices, strict=True):
             if trk_idx < n_tracks and det_idx < n_dets:
-                # Check cost threshold
                 cost_value = cost[trk_idx, det_idx]
-                # Convert cost (0..1, where 0=good) to a threshold
-                # match_thresh=0.8 means IoU >= 0.8 is acceptable, cost <= 0.2
                 if cost_value <= (1.0 - self._config.match_thresh):
-                    matched_tracks.append(trk_idx)
+                    matched_tracks.append(active_tracks[trk_idx][0])
                     matched_dets.append(det_idx)
 
         # ---- Compute unmatched sets ----
-        matched_set_tracks = set(matched_tracks)
+        matched_set_track_ids = set(matched_tracks)
         matched_set_dets = set(matched_dets)
 
-        unmatched_tracks = [i for i in range(n_tracks) if i not in matched_set_tracks]
+        unmatched_tracks: list[str] = [
+            tid for tid, _ in active_tracks if tid not in matched_set_track_ids
+        ]
         unmatched_dets = [i for i in range(n_dets) if i not in matched_set_dets]
 
         return matched_tracks, matched_dets, unmatched_tracks, unmatched_dets

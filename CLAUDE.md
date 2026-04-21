@@ -47,6 +47,46 @@ The design defines 10 milestones (M1-M10) spanning 16+ weeks. Never implement ou
 | M9 | 16 | Live view, identity corrections, runtime integration |
 | M10 | 16+ | K8s, observability, docs, performance hardening |
 
+## Coding Rules (Derived from M4 Code Review)
+
+These rules were extracted from bugs found during the M4 implementation review. Apply them to all future milestone work.
+
+### Python / asyncpg
+
+1. **Use `$N` placeholders in all asyncpg SQL.** asyncpg uses `$1, $2, ...` positional parameters. Never use `%s` (psycopg2 syntax) or `?` (sqlite3). `executemany` also requires `$N` style — one row's worth of placeholders per statement.
+
+2. **`datetime.now(UTC)` everywhere.** Never call `datetime.now()` without a timezone argument. Bare `datetime.now()` produces a timezone-naive object that conflicts with TimescaleDB's timestamptz columns and the domain model's aware datetimes. Always `from datetime import UTC` and use `datetime.now(UTC)`.
+
+3. **Declare all instance attributes in `__init__`.** Every attribute a class owns must be declared in `__init__` with its correct `Optional[T] | None` type, even if its real value is set later (e.g., in an `initialize()` method). Attributes first assigned outside `__init__` cause `AttributeError` on any access before that method runs, and mypy cannot track them.
+
+4. **Never mutate frozen dataclasses.** `@dataclass(frozen=True)` raises `FrozenInstanceError` at runtime on any `instance.attr = value` assignment — even if mypy is silenced with `# type: ignore`. For transport-layer metadata that must travel alongside a frozen message (e.g., Redis message IDs), maintain a side-channel `dict[int, T]` keyed by `id(obj)` on the owning transport object. Clean up entries after use.
+
+### SQL correctness
+
+1. **PostgreSQL array concatenation uses `||` directly.** In `ON CONFLICT DO UPDATE SET`, to merge two existing array columns write `col = EXCLUDED.col || table.col`. The `array[...]` constructor syntax is for array literals only; `array[EXCLUDED.col || table.col]` is a syntax error.
+
+2. **Conditional SQL injection: replace a unique anchor, not a suffix keyword.** When adding a `WHERE ... AND extra_clause` branch at runtime via `str.replace`, replace a unique substring that includes the insertion point (e.g., `"WHERE global_track_id = $1"` → `"WHERE global_track_id = $1\n    AND extra_clause"`). Never replace a trailing keyword like `"LIMIT 100"` and prepend `AND ...` — this inserts a predicate after `ORDER BY`, producing invalid SQL.
+
+### Tracking / data-structure correctness
+
+1. **Build `active_tracks` from `.items()`, not `enumerate(.values())`.** When you need to map a position index back to a dict key (e.g., after Hungarian assignment), you must capture the key at construction time. `enumerate(dict.values())` gives positions 0..N that diverge from key names after any deletion. Use `[(key, value) for key, value in dict.items() if ...]` and return keys from assignment functions, not positions.
+
+2. **Use explicit reverse maps for cross-namespace ID lookups.** When two modules use different ID namespaces for the same logical entity (e.g., `local_track_id` strings from the tracker vs. UUID `tracklet_id`s in the tracklet manager), maintain an explicit `dict[local_id, uuid_id]` reverse map on the owning object. Document which namespace each dict is keyed by.
+
+3. **Increment shared counters exactly once per code path.** A pattern like:
+
+   ```python
+   state.count += 1          # unconditional increment
+   if state.count >= threshold:
+       ...
+   else:
+       state.count += 1      # BUG: second increment in the else branch
+   ```
+
+   silently doubles the increment on the non-threshold path. Use a single increment before the branch.
+
+4. **Prefer method parameters over object fields when they carry the same semantic.** If a helper method receives `embedding` as a parameter and also has access to `detection.embedding` (a domain placeholder field), use the parameter — it carries the live value from Triton. Domain fields like `Detection.embedding` are zero-initialized placeholders until M5 identity resolution fills them in.
+
 ## Engineering Standards (from phase-0, section 0.18)
 
 - **Python**: 3.12, `from __future__ import annotations`, strict mypy on domain/services/storage/transport, Pydantic v2 at boundaries, frozen dataclasses internally.
@@ -129,6 +169,14 @@ Implemented files:
 - `tracking-orchestrator/pyproject.toml` — added `scipy>=1.14.0` dependency
 
 **DoD verified**: `make check` passes cleanly — ruff check, ruff format, mypy (21 files, 0 errors), import-lint, pytest (90/90 tests across 6 files).
+
+**Post-review fixes applied** (all latent runtime/logic bugs, no regressions):
+
+- `tracker.py`: `_associate` redesigned to return track ID strings instead of position indices; dead-code double-loop removed; `_track_id()` helper eliminated.
+- `tracklet_manager.py`: added `_local_to_tracklet` reverse map to resolve the UUID/local-ID key mismatch; fixed double `lost_count` increment; `_append_gallery` now uses the passed Triton embedding, not the placeholder `detection.embedding`.
+- `redis_streams.py`: replaced `frame._message_id = ...` mutation (crashes on frozen dataclass) with a `_pending_acks: dict[int, Any]` side-channel keyed by `id(frame)`.
+- `tracking_repo.py`: `_SQL_SAVE_DETECTIONS` changed from `VALUES %s` to asyncpg `VALUES ($1...$11)`; `_SQL_SAVE_GLOBAL_TRACK` array concat fixed (`EXCLUDED.col || table.col`, not `array[...]`); `list_identity_revisions` SQL replacement anchored to `WHERE` clause (not `LIMIT`); `datetime.now()` → `datetime.now(UTC)`.
+- `frame_pipeline.py`: `PerCameraTrackers` imported at module level; `self._tracker: PerCameraTrackers | None = None` declared in `__init__`.
 
 ## When Working with This Repo
 

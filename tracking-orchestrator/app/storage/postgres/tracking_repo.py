@@ -7,7 +7,7 @@ raw connection pools. This is the storage layer boundary.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import asyncpg  # type: ignore[import-untyped]
 from structlog import get_logger
@@ -45,7 +45,7 @@ _SQL_SAVE_DETECTIONS = """
         confidence, tracklet_id, global_track_id,
         floor_point, capture_time, event_time
     )
-    VALUES %s
+    VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9::jsonb, $10, $11)
     ON CONFLICT (detection_id) DO NOTHING
 """
 
@@ -70,8 +70,8 @@ _SQL_SAVE_GLOBAL_TRACK = """
                                last_seen_at, state)
     VALUES ($1, $2, $3, $4, $5, $6)
     ON CONFLICT (global_track_id) DO UPDATE SET
-        camera_ids = array_remove(array[EXCLUDED.camera_ids || global_tracks.camera_ids], ''),
-        tracklet_ids = array_remove(array[EXCLUDED.tracklet_ids || global_tracks.tracklet_ids], ''),
+        camera_ids = array_remove(EXCLUDED.camera_ids || global_tracks.camera_ids, ''),
+        tracklet_ids = array_remove(EXCLUDED.tracklet_ids || global_tracks.tracklet_ids, ''),
         last_seen_at = GREATEST(EXCLUDED.last_seen_at, global_tracks.last_seen_at),
         state = EXCLUDED.state,
         updated_at = now()
@@ -146,7 +146,7 @@ class PostgresTrackingRepository(TrackingRepository):
             width=frame_data["width"],
             height=frame_data["height"],
             frame_index=frame_data["frame_index"],
-            capture_time=datetime.now(),
+            capture_time=datetime.now(UTC),
         )
         return TrackingEvent(
             event_id=row["event_id"],
@@ -279,8 +279,8 @@ class PostgresTrackingRepository(TrackingRepository):
 
         if after is not None:
             sql = _SQL_LIST_IDENTITY_REVISIONS.replace(
-                "LIMIT 100",
-                "AND revision_time >= $2 ORDER BY revision_time DESC LIMIT 100",
+                "WHERE global_track_id = $1",
+                "WHERE global_track_id = $1\n    AND revision_time >= $2",
             )
             params = [global_track_id, after]
 
