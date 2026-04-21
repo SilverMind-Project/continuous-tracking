@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+import uuid
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import UTC, datetime
 
 from ..domain import (
     CameraConfig,
@@ -12,6 +13,7 @@ from ..domain import (
     GalleryEmbedding,
     GlobalTrack,
     Identity,
+    IdentityCandidate,
     IdentityCorrection,
     IdentityRevision,
     PersonActivity,
@@ -192,6 +194,48 @@ class PrivacyRepository(ABC):
     @abstractmethod
     async def list_privacy_zones(self, camera_id: str | None = None) -> list[PrivacyZone]:
         """List privacy zones."""
+
+
+class GlobalTrackRepository(ABC):
+    """Persist global tracks and their identity assignments."""
+
+    @abstractmethod
+    async def save(self, track: GlobalTrack) -> None:
+        """Store or update a global track."""
+
+    @abstractmethod
+    async def get(self, global_track_id: str) -> GlobalTrack | None:
+        """Retrieve a global track by ID."""
+
+    @abstractmethod
+    async def list_active(self) -> list[GlobalTrack]:
+        """List all active global tracks."""
+
+    @abstractmethod
+    async def merge_tracklets(
+        self,
+        tracklet_ids: list[str],
+        camera_ids: list[str],
+        existing: GlobalTrack | None = None,
+    ) -> GlobalTrack:
+        """Create or extend a global track from tracklet IDs.
+
+        If existing is provided, the new tracklet IDs and camera IDs are
+        merged into it. Otherwise a new GlobalTrack is created.
+        """
+
+    @abstractmethod
+    async def assign_identity(
+        self,
+        global_track_id: str,
+        identity_id: str | None,
+        candidates: list[IdentityCandidate] | None = None,
+    ) -> None:
+        """Assign an identity to a global track."""
+
+    @abstractmethod
+    async def get_by_tracklet_id(self, tracklet_id: str) -> GlobalTrack | None:
+        """Find the global track that contains a given tracklet ID."""
 
 
 class InMemoryTrackingRepository(TrackingRepository):
@@ -420,6 +464,96 @@ class InMemoryPrivacyRepository(PrivacyRepository):
         if camera_id is not None:
             zones = [zone for zone in zones if zone.camera_id == camera_id]
         return zones
+
+
+class InMemoryGlobalTrackRepository(GlobalTrackRepository):
+    """In-memory store for global tracks."""
+
+    def __init__(self) -> None:
+        self._tracks: dict[str, GlobalTrack] = {}
+        # Reverse index: tracklet_id -> global_track_id
+        self._by_tracklet: dict[str, str] = {}
+
+    async def save(self, track: GlobalTrack) -> None:
+        old = self._tracks.get(track.global_track_id)
+        if old is None:
+            self._tracks[track.global_track_id] = track
+            for tid in track.tracklet_ids:
+                self._by_tracklet[tid] = track.global_track_id
+            return
+
+        # Merge: extend camera_ids and tracklet_ids
+        merged = GlobalTrack(
+            global_track_id=track.global_track_id,
+            camera_ids=list(dict.fromkeys(old.camera_ids + track.camera_ids)),
+            tracklet_ids=list(dict.fromkeys(old.tracklet_ids + track.tracklet_ids)),
+            started_at=min(old.started_at, track.started_at),
+            last_seen_at=max(old.last_seen_at, track.last_seen_at),
+            current_identity_id=track.current_identity_id or old.current_identity_id,
+            state=track.state,
+        )
+        self._tracks[track.global_track_id] = merged
+        for tid in track.tracklet_ids:
+            self._by_tracklet[tid] = track.global_track_id
+
+    async def get(self, global_track_id: str) -> GlobalTrack | None:
+        return self._tracks.get(global_track_id)
+
+    async def list_active(self) -> list[GlobalTrack]:
+        return [t for t in self._tracks.values() if t.state == "active"]
+
+    async def merge_tracklets(
+        self,
+        tracklet_ids: list[str],
+        camera_ids: list[str],
+        existing: GlobalTrack | None = None,
+    ) -> GlobalTrack:
+        if existing is not None:
+            merged = GlobalTrack(
+                global_track_id=existing.global_track_id,
+                camera_ids=list(dict.fromkeys(existing.camera_ids + camera_ids)),
+                tracklet_ids=list(dict.fromkeys(existing.tracklet_ids + tracklet_ids)),
+                started_at=existing.started_at,
+                last_seen_at=datetime.now(UTC),
+                current_identity_id=existing.current_identity_id,
+                state="active",
+            )
+            await self.save(merged)
+            return merged
+
+        return GlobalTrack(
+            global_track_id=str(uuid.uuid4()),
+            camera_ids=list(dict.fromkeys(camera_ids)),
+            tracklet_ids=list(dict.fromkeys(tracklet_ids)),
+            started_at=datetime.now(UTC),
+            last_seen_at=datetime.now(UTC),
+            current_identity_id=None,
+            state="active",
+        )
+
+    async def assign_identity(
+        self,
+        global_track_id: str,
+        identity_id: str | None,
+        candidates: list[IdentityCandidate] | None = None,
+    ) -> None:
+        track = self._tracks.get(global_track_id)
+        if track is not None:
+            self._tracks[global_track_id] = GlobalTrack(
+                global_track_id=track.global_track_id,
+                camera_ids=track.camera_ids,
+                tracklet_ids=track.tracklet_ids,
+                started_at=track.started_at,
+                last_seen_at=track.last_seen_at,
+                current_identity_id=identity_id,
+                state=track.state,
+            )
+
+    async def get_by_tracklet_id(self, tracklet_id: str) -> GlobalTrack | None:
+        gt_id = self._by_tracklet.get(tracklet_id)
+        if gt_id is None:
+            return None
+        return self._tracks.get(gt_id)
 
 
 def _cosine_sim(a: list[float], b: list[float]) -> float:

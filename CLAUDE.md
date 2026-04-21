@@ -178,10 +178,28 @@ Implemented files:
 - `tracking_repo.py`: `_SQL_SAVE_DETECTIONS` changed from `VALUES %s` to asyncpg `VALUES ($1...$11)`; `_SQL_SAVE_GLOBAL_TRACK` array concat fixed (`EXCLUDED.col || table.col`, not `array[...]`); `list_identity_revisions` SQL replacement anchored to `WHERE` clause (not `LIMIT`); `datetime.now()` → `datetime.now(UTC)`.
 - `frame_pipeline.py`: `PerCameraTrackers` imported at module level; `self._tracker: PerCameraTrackers | None = None` declared in `__init__`.
 
+**M5 — In progress.** Identity resolution with Bayesian posterior and retroactive revision. Implemented files (untracked, not yet committed):
+
+- `tracking-orchestrator/app/tracking/identity_resolver.py` — Bayesian identity resolver: posterior over {identities, UNKNOWN}, evidence from face anchors + ReID gallery + temporal prior, commit rule with prob+margin+evidence-gate. Retroactive revision protocol with rate limiting.
+- `tracking-orchestrator/app/tracking/camera_adjacency.py` — Camera adjacency graph with time-bounded reachability for cross-camera association.
+- `tracking-orchestrator/app/tracking/cross_camera.py` — Cross-camera associator: merges tracklets from adjacent cameras into GlobalTracks.
+- `tracking-orchestrator/app/transport/revision_publisher.py` — Publishes IdentityRevision messages to Redis Streams.
+- `tracking-orchestrator/tests/test_identity_resolver.py` — 21 unit tests (PosteriorDist + IdentityResolver, all pass).
+- `tracking-orchestrator/tests/test_camera_adjacency.py` — 13 unit tests (all pass).
+- `tracking-orchestrator/tests/test_cross_camera.py` — 7 unit tests (all pass).
+
+**M5 parameter tuning**: `commit_prob` lowered from 0.85 to 0.65 and evidence-gate added to `_commit()`. The temporal prior (weight=0.6) alone can push the posterior above 0.85 for a single identity (~0.81) or two identities (~0.71), causing false commits. The evidence-gate requires the top identity to appear in the face or ReID likelihood distribution before the commit rule applies. This ensures the prior maintains existing assignments but cannot create new ones without sensory evidence.
+
+**Known issues in M5 (untracked files)**:
+- `test_in_memory_repos.py::test_identity_revision`: `IdentityRevision` constructor signature mismatch — test uses fields (`tracklet_ids`, `previous_identity_id`, `new_identity_id`, `reason`, `evidence`) that differ from the domain model (`map_identity_id`, etc.).
+- Pipeline tests (`test_pipeline.py`) require Redis — fail with `ConnectionError` when Redis is not running.
+- Mypy errors in untracked files (`revision_publisher.py`, `cross_camera.py`, `identity_resolver.py`) due to type mismatches with domain models being refactored.
+- Pre-existing ruff lint errors (E501 line lengths, SIM108, RUF002 ambiguous ×) in committed and untracked files.
+
 ## When Working with This Repo
 
-- **M1, M2, M3, and M4 are implemented.** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, and `triton-models/`.
-- **Next milestone: M5** (weeks 9-10) — Identity resolution, retroactive revision. See `phase-3-tracking-reid.md` and `phase-5-backend-integration.md` for scope.
+- **M1, M2, M3, and M4 are implemented (committed).** M5 is in progress (untracked files, not yet committed). Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, and `triton-models/`.
+- **M5** (weeks 9-10) — Identity resolution, retroactive revision. See `phase-3-tracking-reid.md` and `phase-5-backend-integration.md` for scope. Key file: `tracking-orchestrator/app/tracking/identity_resolver.py`.
 - **Always reference phase-0 first.** It supersedes phases 1-5 where they conflict.
 - **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
 - **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.

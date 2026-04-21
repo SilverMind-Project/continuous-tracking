@@ -1,12 +1,14 @@
-"""Frame processing pipeline for M4.
+"""Frame processing pipeline for M5.
 
 This is the core orchestrator that wires together:
 1. Transport (Redis Streams consumer for FrameReady)
-2. Inference (Triton person detector)
+2. Inference (Triton person detector + ReID)
 3. Tracking (BoT-SORT per-camera tracker)
 4. Tracklet management (lifecycle, gallery append)
-5. Persistence (repository layer)
-6. Event emission (Redis Streams producer)
+5. Cross-camera association (GlobalTrack formation)
+6. Identity resolution (Bayesian posterior + retroactive revision)
+7. Persistence (repository layer)
+8. Event emission (Redis Streams producer + revision publisher)
 
 The pipeline runs as a background task in the FastAPI lifespan.
 """
@@ -22,10 +24,26 @@ from datetime import UTC, datetime
 import numpy as np
 from structlog import get_logger
 
-from ..domain import CameraConfig, Detection, FrameRef, TrackingEvent
+from ..domain import (
+    CameraConfig,
+    Detection,
+    FaceAnchor,
+    FrameRef,
+    GlobalTrack,
+    Identity,
+    IdentityRevision,
+    TrackingEvent,
+)
 from ..inference.detector import PersonDetector
 from ..inference.schemas import DetectionBox
-from ..storage.base import InMemoryTrackingRepository, TrackingRepository
+from ..storage.base import (
+    InMemoryGlobalTrackRepository,
+    InMemoryTrackingRepository,
+    TrackingRepository,
+)
+from ..tracking.camera_adjacency import CameraAdjacency
+from ..tracking.cross_camera import CrossCamConfig, CrossCameraAssociator
+from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.tracker import PerCameraTrackers, TrackerConfig
 from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
 from ..transport.redis_streams import (
@@ -33,6 +51,7 @@ from ..transport.redis_streams import (
     RedisStreamsTransport,
     TransportConfig,
 )
+from ..transport.revision_publisher import RevisionPublisher
 
 logger = get_logger(__name__)
 
@@ -51,6 +70,12 @@ class PipelineConfig:
     detector_confidence: float = 0.25
     max_concurrent_frames: int = 4
     shutdown_timeout: float = 5.0
+    # Cross-camera association
+    cross_cam: CrossCamConfig = field(default_factory=CrossCamConfig)
+    # Identity resolution
+    resolver: ResolverConfig = field(default_factory=ResolverConfig)
+    # Known identities (from the persons table)
+    known_identities: list[Identity] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +103,11 @@ class FrameProcessingPipeline:
         self._tracklet_manager: TrackletManager | None = None
         self._tracker: PerCameraTrackers | None = None
         self._repo: TrackingRepository | None = None
+        self._global_track_repo: InMemoryGlobalTrackRepository | None = None
+        self._cross_camera: CrossCameraAssociator | None = None
+        self._identity_resolver: IdentityResolver | None = None
+        self._revision_publisher: RevisionPublisher | None = None
+        self._adjacency: CameraAdjacency | None = None
         self._running = False
         self._tasks: list[asyncio.Task[None]] = []
 
@@ -121,7 +151,36 @@ class FrameProcessingPipeline:
         # Store tracker reference for pipeline step
         self._tracker = tracker
 
-        logger.info("Pipeline initialized", detector=bool(detector))
+        # ---- M5: Cross-camera + identity resolution ----
+        self._global_track_repo = InMemoryGlobalTrackRepository()
+
+        self._adjacency = CameraAdjacency()
+
+        self._cross_camera = CrossCameraAssociator(
+            gallery=gallery,
+            adjacency=self._adjacency,
+            global_track_repo=self._global_track_repo,
+            config=self._config.cross_cam,
+        )
+
+        self._identity_resolver = IdentityResolver(
+            tracking_repo=self._repo,
+            gallery_repo=gallery,
+            global_track_repo=self._global_track_repo,
+            identities=self._config.known_identities,
+            config=self._config.resolver,
+        )
+
+        self._revision_publisher = RevisionPublisher(
+            redis_url=self._config.transport.redis_url,
+        )
+        await self._revision_publisher.connect()
+
+        logger.info(
+            "Pipeline initialized",
+            detector=bool(detector),
+            m5_components=True,
+        )
 
     async def start(self) -> None:
         """Start the pipeline background tasks."""
@@ -195,13 +254,17 @@ class FrameProcessingPipeline:
     async def _process_frame(self, frame: FrameReady) -> None:
         """Process a single FrameReady message through the full pipeline.
 
-        Steps:
+        Steps (M4):
         1. (Skeleton mode) Skip MinIO fetch — in production, fetch JPEG.
         2. Run person detection via Triton (if detector available).
         3. Run per-camera tracking (BoT-SORT).
         4. Run TrackletManager step.
-        5. Persist results.
-        6. Publish tracking event.
+
+        Steps (M5):
+        5. Cross-camera association (GlobalTrack formation).
+        6. Identity resolution (Bayesian posterior + retroactive revision).
+        7. Persist results + emit revisions.
+        8. Publish tracking event.
         """
         if self._detector is None or self._tracklet_manager is None or self._tracker is None:
             # Skeleton mode: produce a zero-detection event
@@ -272,7 +335,47 @@ class FrameProcessingPipeline:
         else:
             detection_count = 0
 
-        # Step 5 & 6: Publish tracking event
+        # ---- M5: Cross-camera association ----
+        active_tracklets = self._tracklet_manager.get_active_tracklets() if self._tracklet_manager else []
+        active_global_tracks: list[GlobalTrack] = []
+        face_anchors: list[FaceAnchor] = []
+        new_revisions: list[IdentityRevision] = []
+
+        if active_tracklets:
+            assert self._cross_camera is not None
+            assert self._identity_resolver is not None
+
+            # Step 5: Cross-camera association
+            active_global_tracks = await self._cross_camera.associate(
+                active_tracklets,
+                captured_at=datetime.now(UTC),
+            )
+
+            # Step 6: Identity resolution
+            outcome = await self._identity_resolver.resolve(
+                global_tracks=active_global_tracks,
+                new_face_anchors=face_anchors,
+                captured_at=datetime.now(UTC),
+            )
+
+            # Apply decisions: update GlobalTrack identity assignments.
+            for decision in outcome.decisions:
+                if decision.identity_id is not None or decision.revises_previous:
+                    await self._global_track_repo.assign_identity(
+                        global_track_id=decision.global_track_id,
+                        identity_id=decision.identity_id,
+                    )
+
+            # Collect revisions to emit.
+            new_revisions = list(outcome.revisions)
+
+        # Step 7: Persist identity revisions.
+        if new_revisions and self._revision_publisher:
+            await self._revision_publisher.publish_many(new_revisions)
+            for rev in new_revisions:
+                await self._repo.save_identity_revision(revision=rev)
+
+        # Step 8: Publish tracking event
         assert self._transport is not None
         await self._transport.publish_event(
             camera_id=frame.camera_id,
@@ -280,6 +383,14 @@ class FrameProcessingPipeline:
             frame_index=frame.frame_index,
             detection_count=detection_count,
         )
+
+        if new_revisions:
+            logger.info(
+                "Identity revisions emitted",
+                camera_id=frame.camera_id,
+                frame_index=frame.frame_index,
+                revision_count=len(new_revisions),
+            )
 
     async def _skeleton_frame(self, frame: FrameReady) -> None:
         """Process a frame in skeleton mode (no detector, no tracking).

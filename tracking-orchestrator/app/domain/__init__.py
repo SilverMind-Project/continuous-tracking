@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 # ---------------------------------------------------------------------------
@@ -145,6 +145,7 @@ class GlobalTrack:
     tracklet_ids: list[TrackletId]
     started_at: datetime
     last_seen_at: datetime
+    current_identity_id: IdentityId | None = None
     state: Literal["active", "closed"] = "active"
 
 
@@ -168,14 +169,135 @@ class IdentityCandidate:
 
 @dataclass(frozen=True)
 class IdentityRevision:
-    """Bayesian posterior update for a global track at a point in time."""
+    """Bayesian posterior update for a global track at a point in time.
+
+    Emitted when a GlobalTrack's identity assignment changes. Covers all
+    tracklets within the revision horizon that were part of the same
+    GlobalTrack at the time of the decision.
+    """
 
     revision_id: RevisionId
     global_track_id: GlobalTrackId
+    tracklet_ids: list[TrackletId]
     candidates: list[IdentityCandidate]
     map_identity_id: IdentityId
     posterior_entropy: float
-    revision_time: datetime
+    previous_identity_id: IdentityId | None = None
+    new_identity_id: IdentityId | None = None
+    reason: str = ""
+    evidence: dict[str, Any] = field(default_factory=dict)
+    revision_time: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class FaceAnchor:
+    """A face-confirmed identity anchor from the face ID service.
+
+    Face anchors are the strongest evidence source in the Bayesian
+    posterior. They carry a person_id from the face recognition service
+    along with confidence and quality metrics.
+    """
+
+    person_id: IdentityId
+    confidence: float
+    quality: float = 1.0
+    tracklet_id: TrackletId = ""
+    camera_id: CameraId = ""
+    captured_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class PosteriorDist:
+    """A probability distribution over identities for one GlobalTrack.
+
+    Represents the posterior distribution after combining prior,
+    face likelihood, and ReID likelihood. The sum of all probabilities
+    should be close to 1.0.
+
+    An empty distribution means "no evidence" — the caller should treat
+    it as uniform over all candidates.
+    """
+
+    distribution: dict[str, float]  # identity_id -> probability
+
+    def __post_init__(self) -> None:
+        total = sum(self.distribution.values())
+        if total <= 0 and self.distribution:
+            raise ValueError("PosteriorDist must have positive total probability")
+        # Normalize only if non-empty
+        if self.distribution:
+            object.__setattr__(
+                self,
+                "distribution",
+                {k: v / total for k, v in self.distribution.items()},
+            )
+
+    def top_identity(self) -> tuple[str, float]:
+        """Return (identity_id, probability) of the top candidate.
+
+        Returns ('UNKNOWN', 0.0) for empty distributions.
+        """
+        if not self.distribution:
+            return "UNKNOWN", 0.0
+        top_id = max(self.distribution, key=self.distribution.__getitem__)
+        return top_id, self.distribution[top_id]
+
+    def top_with_margin(self) -> tuple[tuple[str, float], float]:
+        """Return ((top_id, prob), margin_to_second).
+
+        The margin is the difference between the top and second-highest
+        probabilities. Used by the commit rule.
+
+        Returns (('UNKNOWN', 0.0), 0.0) for empty distributions.
+        """
+        if not self.distribution:
+            return ("UNKNOWN", 0.0), 0.0
+        sorted_probs = sorted(self.distribution.items(), key=lambda x: x[1], reverse=True)
+        top_id, top_prob = sorted_probs[0]
+        if len(sorted_probs) > 1:
+            margin = top_prob - sorted_probs[1][1]
+        else:
+            margin = 1.0  # Only one candidate, infinite margin
+        return (top_id, top_prob), margin
+
+    def entropy(self) -> float:
+        """Compute Shannon entropy in bits.
+
+        Returns 0.0 for empty distributions.
+        """
+        if not self.distribution:
+            return 0.0
+        import math
+        return -sum(
+            p * math.log2(p) for p in self.distribution.values() if p > 0
+        )
+
+    def has_identity(self, identity_id: IdentityId) -> bool:
+        return identity_id in self.distribution
+
+
+class ResolveOutcome:
+    """The result of running identity resolution on a batch of GlobalTracks.
+
+    Contains per-track decisions and any identity revisions that need
+    to be emitted to downstream consumers.
+    """
+
+    def __init__(self) -> None:
+        self.decisions: list[IdentityDecision] = []
+        self.revisions: list[IdentityRevision] = []
+
+
+@dataclass(frozen=True)
+class IdentityDecision:
+    """A single identity decision for one GlobalTrack."""
+
+    global_track_id: GlobalTrackId
+    identity_id: IdentityId | None
+    posterior: PosteriorDist
+    revises_previous: bool
+    previous_identity_id: IdentityId | None = None
+    reason: str = ""
 
 
 @dataclass(frozen=True)

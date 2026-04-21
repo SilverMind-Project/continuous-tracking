@@ -1,7 +1,7 @@
 """Storage package — repository protocols and implementations.
 
 Exports:
-- Base protocols: TrackingRepository, GalleryRepository, etc.
+- Base protocols: TrackingRepository, GalleryRepository, GlobalTrackRepository, etc.
 - In-memory implementations for testing
 - Postgres implementations for production
 """
@@ -11,10 +11,12 @@ from .base import (
     AssignmentRepository,
     CorrectionRepository,
     GalleryRepository,
+    GlobalTrackRepository,
     InMemoryActivityRepository,
     InMemoryAssignmentRepository,
     InMemoryCorrectionRepository,
     InMemoryGalleryRepository,
+    InMemoryGlobalTrackRepository,
     InMemoryPrivacyRepository,
     InMemorySettingsRepository,
     InMemoryTrackingRepository,
@@ -28,10 +30,12 @@ __all__ = [
     "AssignmentRepository",
     "CorrectionRepository",
     "GalleryRepository",
+    "GlobalTrackRepository",
     "InMemoryActivityRepository",
     "InMemoryAssignmentRepository",
     "InMemoryCorrectionRepository",
     "InMemoryGalleryRepository",
+    "InMemoryGlobalTrackRepository",
     "InMemoryPrivacyRepository",
     "InMemorySettingsRepository",
     "InMemoryTrackingRepository",
