@@ -115,9 +115,25 @@ Implemented files:
 
 **Outstanding DoD gate**: `tritonserver` loading all three models (`curl :8000/v2/models/ready`) and benchmark p99 ≤ 12ms at batch 8 require materialised `.plan`/`.onnx` files (run export scripts on the target GPU). The code scaffolding is complete and verified.
 
+**M4 — Implemented.** Tracking orchestrator skeleton with per-camera tracking and tracklet lifecycle management. Implemented files:
+
+- `tracking-orchestrator/app/tracking/{__init__,tracker,tracklet_manager}.py` — BoT-SORT-like tracker (Kalman filter + IoU + embedding Hungarian assignment), tracklet-to-track bridging, ID lifecycle management
+- `tracking-orchestrator/app/pipeline/{__init__,frame_pipeline}.py` — `FrameProcessingPipeline` wiring transport → inference → tracking → tracklet management → persistence
+- `tracking-orchestrator/app/transport/redis_streams.py` — Redis Streams transport with consumer groups, XACK for at-least-once delivery
+- `tracking-orchestrator/app/storage/postgres/{__init__,tracking_repo,gallery_repo}.py` — Postgres/pgvector repository implementations
+- `tracking-orchestrator/app/main.py` — FastAPI app factory with asyncpg lifespan (Triton + Postgres + Redis)
+- `tracking-orchestrator/tests/test_tracker.py` — 36 unit tests (mocked Triton, no GPU required)
+- `tracking-orchestrator/tests/test_tracklet_manager.py` — 20 unit tests (tracklet lifecycle, gallery management)
+- `tracking-orchestrator/tests/test_pipeline.py` — 10 unit tests (pipeline wiring, event propagation)
+- `tracking-orchestrator/tests/test_transport.py` — 14 unit tests (Redis Streams, gallery repo helpers)
+- `tracking-orchestrator/pyproject.toml` — added `scipy>=1.14.0` dependency
+
+**DoD verified**: `make check` passes cleanly — ruff check, ruff format, mypy (21 files, 0 errors), import-lint, pytest (90/90 tests across 6 files).
+
 ## When Working with This Repo
 
-- **M1, M2, and M3 are implemented.** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, and `triton-models/`.
+- **M1, M2, M3, and M4 are implemented.** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, and `triton-models/`.
+- **Next milestone: M5** (weeks 9-10) — Identity resolution, retroactive revision. See `phase-3-tracking-reid.md` and `phase-5-backend-integration.md` for scope.
 - **Always reference phase-0 first.** It supersedes phases 1-5 where they conflict.
 - **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
 - **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.

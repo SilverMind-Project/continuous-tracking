@@ -1,7 +1,7 @@
 """FastAPI application factory for the tracking orchestrator.
 
 Mirrors the cognitive-companion pattern: create_app() returns the app,
-lifespan manages service lifecycle.
+lifespan manages service lifecycle (pipeline start/stop).
 """
 
 from collections.abc import AsyncIterator
@@ -9,13 +9,45 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from .pipeline import FrameProcessingPipeline
+from .pipeline.frame_pipeline import PipelineConfig
+from .storage.postgres.tracking_repo import PostgresTrackingRepository
+
+# Module-level pipeline singleton, initialized in lifespan.
+_pipeline: FrameProcessingPipeline | None = None
+
+
+def get_pipeline() -> FrameProcessingPipeline | None:
+    """Access the running pipeline from dependency injection."""
+    return _pipeline
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Startup order follows phase-0 section 0.6:
-    # database pools, Redis clients, model/runtime handles, then routers.
+    global _pipeline
+
+    # Startup: initialize pipeline and start background tasks
+    config = PipelineConfig()
+    _pipeline = FrameProcessingPipeline(config)
+
+    # Optionally inject a Postgres repo if DATABASE_URL is set
+    repo = None
+    database_url = app.state.config.get("database_url") if hasattr(app.state, "config") else None
+    if database_url:
+        import asyncpg  # type: ignore[import-untyped]
+
+        pool = await asyncpg.create_pool(dsn=database_url)
+        repo = PostgresTrackingRepository(pool)
+
+    await _pipeline.initialize(repo=repo)
+    await _pipeline.start()
+
     yield
-    # Shutdown drains in reverse order and eventually adds the mTLS admin port.
+
+    # Shutdown: stop pipeline gracefully
+    if _pipeline is not None:
+        await _pipeline.stop()
+        _pipeline = None
 
 
 def create_app() -> FastAPI:
@@ -28,6 +60,13 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, str]:
-        return {"status": "ok", "service": "tracking-orchestrator", "version": "0.1.0"}
+        status = "starting"
+        if _pipeline is not None:
+            status = "running" if _pipeline.is_running else "stopped"
+        return {
+            "status": status,
+            "service": "tracking-orchestrator",
+            "version": "0.1.0",
+        }
 
     return app
