@@ -67,18 +67,22 @@ _SQL_LIST_GALLERY_ENTRIES = """
 """
 
 _SQL_SEARCH_SIMILAR = """
-    SELECT id, identity_id, embedding, quality,
-           origin_tracklet_id, seen_at, face_confirmed
-    FROM reid_gallery
-    WHERE ($1::text IS NULL OR identity_id = $1)
+    SELECT rg.id, rg.identity_id, rg.embedding, rg.quality,
+           rg.origin_tracklet_id, rg.seen_at, rg.face_confirmed,
+           t.camera_id
+    FROM reid_gallery rg
+    LEFT JOIN tracklets t ON rg.origin_tracklet_id = t.tracklet_id
+    WHERE ($1::text IS NULL OR rg.identity_id = $1)
       AND ($2 IS TRUE
            OR (
                SELECT is_active
                FROM identities
-               WHERE identity_id = reid_gallery.identity_id
+               WHERE identity_id = rg.identity_id
            ))
-    ORDER BY embedding <=> $3::vector
-    LIMIT $4
+      AND ($4::text IS NULL OR t.camera_id = $4)
+      AND ($5 IS NULL OR rg.seen_at > now() - ($6::integer || 'seconds')::interval)
+    ORDER BY rg.embedding <=> $3::vector
+    LIMIT $7
 """
 
 
@@ -184,11 +188,23 @@ class PostgresGalleryRepository(GalleryRepository):
         ]
 
     async def search_similar(
-        self, embedding: list[float], limit: int = 10
+        self,
+        embedding: list[float],
+        limit: int = 10,
+        camera_id: str | None = None,
+        max_age_seconds: int | None = None,
     ) -> list[GalleryEmbedding]:
         embedding_str = _embedding_to_pgvector(embedding)
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(_SQL_SEARCH_SIMILAR, None, True, embedding_str, limit)
+            rows = await conn.fetch(
+                _SQL_SEARCH_SIMILAR,
+                None,  # $1: identity_id filter
+                True,  # $2: active_only filter
+                embedding_str,  # $3: query embedding
+                camera_id,  # $4: camera_id filter
+                max_age_seconds,  # $5: max_age_seconds filter
+                limit,  # $6: limit
+            )
         return [
             GalleryEmbedding(
                 gallery_entry_id=row["id"],
@@ -198,6 +214,7 @@ class PostgresGalleryRepository(GalleryRepository):
                 seen_at=row["seen_at"],
                 origin_tracklet_id=row["origin_tracklet_id"] or "",
                 face_confirmed=row["face_confirmed"],
+                camera_id=row["camera_id"] or "",
             )
             for row in rows
         ]

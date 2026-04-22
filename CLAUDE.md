@@ -203,6 +203,27 @@ Implemented files:
 
 **DoD verified**: `make check` passes cleanly — ruff check, ruff format, mypy (25 files, 0 errors), import-lint, pytest (139/139 tests across 15 files).
 
+**Post-M5 code review fixes** (10 issues from `phase-M1-M5-code-review.md`):
+
+- `tracklet_manager.py` (#1 Critical): `_find_embedding_index` replaced placeholder `return 0` with linear search over `detections` by detection ID; both call sites updated to pass `detections` parameter.
+- `tracking_repo.py` (#2 Medium): `save_tracking_event` now serializes `capture_time` into `frame_data` JSONB; `get_tracking_event` parses it back via `datetime.fromisoformat()` instead of `datetime.now(UTC)`.
+- `tracking_repo.py` (#3 Medium): `_SQL_LIST_IDENTITY_REVISIONS` SELECT clause includes `evidence`; row loop parses `evidence` into `IdentityRevision` constructor.
+- `tracker.py` (#4 Medium): Mixed embedding history bias fixed — tracks without history now use `np.full(768, 0.5, dtype=np.float32)` as placeholder (produces mean embedding distance) instead of `emb_cost[i, :] = 0.0`.
+- `tracker.py` (#5 Low): `_embedding_distance` normalized to `[0, 1]` by dividing by 2.0: `return (1.0 - cosine_sim) / 2.0`.
+- `tracker.py` (#6 Low): Embedding arrays use `dtype=np.float32` throughout (was `np.float64`).
+- `redis_streams.py` (#7 Medium): `_pending_acks` now stores `(message_id, time.monotonic())` tuples; `_cleanup_stale_acks()` method evicts entries older than `ack_ttl_seconds` (300s); called at start of `consume_frames()`.
+- `tracklet_manager.py` (#8 Low): `_compute_quality` accepts `*, max_area: int = 1920 * 1080` parameter instead of hardcoded `1920 * 1080`.
+- **Not yet implemented**: #9 (gallery_repo.py `search_similar` camera/time filters), #10 (camera_adjacency.py `within_s` wiring or removal).
+- **Not yet implemented**: Test updates for embedding distance range change in `test_tracker.py` (assertions for `test_opposite_embeddings` and `test_orthogonal_embeddings`).
+- **Not yet implemented**: ~16 new tests for the fixed bugs (per code review recommendation).
+
+**Next steps**:
+1. Run `make check` to verify all fixes pass quality gate.
+2. Update embedding distance tests in `test_tracker.py` for new `[0, 1]` range.
+3. Implement fixes #9 and #10.
+4. Add new tests for the 8 fixed bugs.
+5. Plan M6 (trajectories, dwells, keyframes).
+
 ## When Working with This Repo
 
 - **M1, M2, M3, M4, and M5 are implemented (committed).** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, and `triton-models/`.

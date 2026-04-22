@@ -318,6 +318,7 @@ class GalleryEmbedding:
     quality: float = 1.0
     origin_tracklet_id: TrackletId = ""
     face_confirmed: bool = False
+    camera_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -357,6 +358,8 @@ class CameraConfig:
     name: str = ""
     rtsp_url: str = ""
     location: str = ""
+    resolution_width: int = 1920
+    resolution_height: int = 1080
     floor_plan: dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
 

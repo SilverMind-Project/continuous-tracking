@@ -124,10 +124,17 @@ class CameraAdjacency:
     def get_max_transition(self, from_camera: CameraId, to_camera: CameraId) -> float | None:
         """Get the maximum transition time between two adjacent cameras.
 
+        Checks both directions since physical camera connectivity is
+        bidirectional even though the graph edges are directed.
+
         Returns None if the cameras are not directly connected.
         """
         for edge in self._edges.get(from_camera, []):
             if edge.to_camera == to_camera:
+                return edge.max_transition_seconds
+        # Check reverse direction
+        for edge in self._edges.get(to_camera, []):
+            if edge.to_camera == from_camera:
                 return edge.max_transition_seconds
         return None
 

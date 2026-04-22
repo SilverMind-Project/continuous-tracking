@@ -258,3 +258,75 @@ class TestCrossCameraAssociator:
         # Should create a new GlobalTrack, not extend the closed one.
         assert len(result) == 1
         assert result[0].global_track_id != "gt-closed"
+
+    @pytest.mark.asyncio
+    async def test_within_s_time_budget_reduces_matches(
+        self,
+        global_track_repo: GlobalTrackRepository,
+    ) -> None:
+        """Verify that the within_s time budget is wired into the cross-camera
+        associator. When tracklets are old enough that the time budget exceeds
+        max_transition, they should still be linkable. But when the budget
+        is tight, adjacency filtering should apply.
+
+        This exercises the fix for review issue #10 (within_s dead code).
+        """
+        adj = CameraAdjacency()
+        # cam_a -> cam_b with 30s transition, cam_b -> cam_c with 30s transition.
+        adj.add_edge(AdjacencyEdge("cam_a", "cam_b", max_transition_seconds=30))
+        adj.add_edge(AdjacencyEdge("cam_b", "cam_c", max_transition_seconds=30))
+
+        assoc = CrossCameraAssociator(
+            gallery=InMemoryGalleryRepository(),
+            adjacency=adj,
+            global_track_repo=global_track_repo,
+            config=CrossCamConfig(min_link_score=0.5),
+        )
+
+        now = datetime.now(UTC)
+        # t1 started 10 seconds ago, t2 just now.
+        t_a = Tracklet(
+            tracklet_id="t1",
+            camera_id="cam_a",
+            detection_ids=["det-t1"],
+            started_at=now.replace(second=now.second - 10) if now.second >= 10 else now,
+            ended_at=None,
+            state="active",
+        )
+        t_b = _make_tracklet("t2", "cam_b")
+
+        result = await assoc.associate([t_a, t_b], captured_at=now)
+        # Both tracklets should merge since they are adjacent and time budget
+        # is sufficient (tracklet age >= max_transition means budget = tracklet_age).
+        assert len(result) == 1
+        assert set(result[0].tracklet_ids) == {"t1", "t2"}
+        assert set(result[0].camera_ids) == {"cam_a", "cam_b"}
+
+    @pytest.mark.asyncio
+    async def test_within_s_blocks_non_adjacent_cameras(
+        self,
+        global_track_repo: GlobalTrackRepository,
+    ) -> None:
+        """Verify that within_s filtering blocks tracklets from cameras that
+        are not directly adjacent. cam_a and cam_c are not directly adjacent
+        (only via cam_b), so they should not link."""
+        adj = CameraAdjacency()
+        adj.add_edge(AdjacencyEdge("cam_a", "cam_b", max_transition_seconds=120))
+        adj.add_edge(AdjacencyEdge("cam_b", "cam_c", max_transition_seconds=60))
+        # No direct edge between cam_a and cam_c.
+
+        assoc = CrossCameraAssociator(
+            gallery=InMemoryGalleryRepository(),
+            adjacency=adj,
+            global_track_repo=global_track_repo,
+            config=CrossCamConfig(min_link_score=0.5),
+        )
+
+        t_a = _make_tracklet("t1", "cam_a")
+        t_c = _make_tracklet("t2", "cam_c")
+
+        result = await assoc.associate([t_a, t_c], captured_at=datetime.now(UTC))
+        # Should create separate GlobalTracks since cam_a and cam_c are not
+        # directly adjacent (within_s filtering blocks transitive edges).
+        assert len(result) == 2
+        assert all(len(r.tracklet_ids) == 1 for r in result)

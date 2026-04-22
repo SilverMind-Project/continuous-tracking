@@ -194,7 +194,7 @@ class TrackletManager:
         # ---- Create new tracklets from confirmed LocalTracks ----
         new_tracklets: list[Tracklet] = []
         for local_track in local_tracks:
-            if local_track.confirmed:
+            if local_track.confirmed and local_track.local_track_id not in self._local_to_tracklet:
                 det = local_track.detection
                 emb_idx = self._find_embedding_index(det, detections)
                 emb = embeddings[emb_idx] if emb_idx < len(embeddings) else None
@@ -329,9 +329,7 @@ class TrackletManager:
             face_confirmed=False,
         )
 
-    def _compute_quality(
-        self, detection: Detection, camera: CameraConfig, *, max_area: int = 1920 * 1080
-    ) -> float:
+    def _compute_quality(self, detection: Detection, camera: CameraConfig) -> float:
         """Compute a quality score for a detection (0..1).
 
         Quality is based on:
@@ -342,9 +340,10 @@ class TrackletManager:
         Args:
             detection: the detection to score.
             camera: configuration for the current camera.
-            max_area: assumed max frame area for normalization.
         """
         # Size component: normalize box area to a 0..1 range
+        # Use the camera's actual resolution for normalization.
+        max_area = camera.resolution_width * camera.resolution_height
         box_area = detection.bbox.width * detection.bbox.height
         size_score = min(box_area / (max_area * 0.001), 1.0)  # 0.1% of frame = max score
 
@@ -355,9 +354,7 @@ class TrackletManager:
         quality = 0.4 * size_score + 0.6 * conf_score
         return min(max(quality, 0.0), 1.0)
 
-    def _find_embedding_index(
-        self, detection: Detection, detections: list[Detection]
-    ) -> int:
+    def _find_embedding_index(self, detection: Detection, detections: list[Detection]) -> int:
         """Find the index of a detection in the embeddings list by matching
         detection IDs. Embeddings are returned in the same order as detections
         from the inference pipeline, so we locate the position by ID."""

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
-from app.domain import Detection
 from app.storage.postgres.gallery_repo import (
     _embedding_to_pgvector,
     _pgvector_to_list,
@@ -254,7 +253,7 @@ class TestTransportDataPath:
             width=640,
             height=480,
         )
-        transport._pending_acks[id(frame)] = "1700000000000-0"
+        transport._pending_acks[id(frame)] = ("1700000000000-0", 0.0)
 
         await transport.ack_frame(frame)
         mock_redis.xack.assert_called_once_with(
@@ -309,3 +308,58 @@ class TestTransportDataPath:
         mock_redis.xadd.assert_called_once()
         call_args = mock_redis.xadd.call_args
         assert call_args[0][0] == "tracking.events"
+
+
+class TestPendingAcksEviction:
+    """Tests for the _pending_acks TTL-based eviction (review issue #7)."""
+
+    def test_cleanup_removes_stale_acks(self) -> None:
+        """Verify that _cleanup_stale_acks removes entries older than the
+        configured TTL."""
+        import time
+
+        config = TransportConfig(ack_ttl_seconds=10)
+        transport = RedisStreamsTransport(config)
+
+        # Manually inject a stale entry (timestamp = 20 seconds ago).
+        stale_time = time.monotonic() - 20
+        frame = FrameReady(
+            camera_id="cam-1",
+            minio_key="frames/cam-1/1.jpg",
+            frame_index=1,
+            capture_time_unix_ns=1000000000,
+            received_time_unix_ns=1000000001,
+            width=640,
+            height=480,
+        )
+        transport._pending_acks[id(frame)] = ("msg-1", stale_time)
+
+        # Also add a fresh entry.
+        transport._pending_acks[id(frame) + 1] = ("msg-2", time.monotonic())
+
+        assert len(transport._pending_acks) == 2
+        transport._cleanup_stale_acks()
+        # Stale entry should be removed, fresh one remains.
+        assert len(transport._pending_acks) == 1
+
+    def test_cleanup_keeps_fresh_acks(self) -> None:
+        """Verify that _cleanup_stale_acks does not remove entries within
+        the TTL window."""
+        import time
+
+        config = TransportConfig(ack_ttl_seconds=300)
+        transport = RedisStreamsTransport(config)
+
+        frame = FrameReady(
+            camera_id="cam-1",
+            minio_key="frames/cam-1/1.jpg",
+            frame_index=1,
+            capture_time_unix_ns=1000000000,
+            received_time_unix_ns=1000000001,
+            width=640,
+            height=480,
+        )
+        transport._pending_acks[id(frame)] = ("msg-1", time.monotonic())
+
+        transport._cleanup_stale_acks()
+        assert len(transport._pending_acks) == 1

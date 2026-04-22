@@ -217,24 +217,26 @@ def _iou_matrix(
 
 
 def _embedding_distance(
-    embeddings_a: npt.NDArray[np.float64],
-    embeddings_b: npt.NDArray[np.float64],
+    embeddings_a: npt.NDArray[np.floating],
+    embeddings_b: npt.NDArray[np.floating],
 ) -> npt.NDArray[np.float64]:
     """Compute cosine distance matrix between two sets of embeddings.
 
     Args:
-        embeddings_a: shape (N, D).
-        embeddings_b: shape (M, D).
+        embeddings_a: shape (N, D). Accepts any floating dtype.
+        embeddings_b: shape (M, D). Accepts any floating dtype.
 
     Returns:
         Cosine distance matrix of shape (N, M). Values in [0, 1].
     """
-    if embeddings_a.size == 0 or embeddings_b.size == 0:
-        return np.zeros((len(embeddings_a), len(embeddings_b)), dtype=np.float64)
+    a = embeddings_a.astype(np.float64)
+    b = embeddings_b.astype(np.float64)
+    if a.size == 0 or b.size == 0:
+        return np.zeros((len(a), len(b)), dtype=np.float64)
 
     # L2-normalize rows
-    norm_a = np.linalg.norm(embeddings_a, axis=1, keepdims=True)
-    norm_b = np.linalg.norm(embeddings_b, axis=1, keepdims=True)
+    norm_a = np.linalg.norm(a, axis=1, keepdims=True)
+    norm_b = np.linalg.norm(b, axis=1, keepdims=True)
     norm_a = np.where(norm_a > 0, norm_a, 1.0)
     norm_b = np.where(norm_b > 0, norm_b, 1.0)
 
@@ -446,7 +448,8 @@ class PerCameraTracker:
 
             # Embedding distance (normalized to [0, 1])
             # Only use appearance cost for tracks that have embedding history.
-            # New tracks (no history yet) rely on IoU alone.
+            # New tracks (no history yet) rely on IoU alone to avoid
+            # artificial advantage from a neutral embedding.
             has_history = [bool(track.embedding_history) for _, track in active_tracks]
             det_embs = np.array(embeddings, dtype=np.float32)
 
@@ -455,29 +458,38 @@ class PerCameraTracker:
                     [track.embedding_history[-1] for _, track in active_tracks], dtype=np.float32
                 )
                 emb_cost = _embedding_distance(track_embs, det_embs)
+                # Combined cost — full weighted cost for all tracks
+                cost = (
+                    (1.0 - self._config.appearance_weight) * iou_cost
+                    + self._config.appearance_weight * emb_cost
+                )
             elif any(has_history):
                 # Mixed: tracks with history get embedding cost,
-                # tracks without get a neutral cost (1.0, the mean of [0,2]).
-                # Using the mean avoids giving tracks without history an
-                # artificial advantage over tracks with similar embeddings.
-                track_embs_list: list[npt.NDArray[np.float64]] = []
+                # tracks without get IoU-only cost (no appearance penalty).
+                track_embs_list: list[npt.NDArray[np.float32]] = []
                 for _, track in active_tracks:
                     if track.embedding_history:
                         track_embs_list.append(
-                            np.asarray(track.embedding_history[-1], dtype=np.float64)
+                            np.asarray(track.embedding_history[-1], dtype=np.float32)
                         )
                     else:
-                        track_embs_list.append(np.full(768, 0.5, dtype=np.float32))
+                        # Placeholder — embedding cost for these rows will be set to 0
+                        # so the combined cost becomes purely IoU-based.
+                        track_embs_list.append(np.zeros(768, dtype=np.float32))
                 track_embs = np.array(track_embs_list, dtype=np.float32)
                 emb_cost = _embedding_distance(track_embs, det_embs)
+                # Combined cost
+                cost = (
+                    (1.0 - self._config.appearance_weight) * iou_cost
+                    + self._config.appearance_weight * emb_cost
+                )
+                # For tracks without embedding history, use IoU-only cost
+                for i, has in enumerate(has_history):
+                    if not has:
+                        cost[i, :] = iou_cost[i, :]
             else:
                 # No tracks have embedding history: use IoU only
-                emb_cost = np.zeros((n_tracks, n_dets), dtype=np.float64)
-
-            # Combined cost
-            cost = (
-                1.0 - self._config.appearance_weight
-            ) * iou_cost + self._config.appearance_weight * emb_cost
+                cost = iou_cost
         else:
             cost = np.zeros((n_tracks, n_dets), dtype=np.float64)
 
@@ -485,12 +497,14 @@ class PerCameraTracker:
         track_indices, det_indices = linear_sum_assignment(cost)
 
         # ---- Filter by threshold and map positions → track IDs ----
+        # Apply threshold to IoU cost, not combined cost. The match_thresh
+        # semantic is a minimum IoU — appearance similarity is additive and
+        # should not invalidate a good spatial match.
         matched_tracks: list[str] = []
         matched_dets: list[int] = []
         for trk_idx, det_idx in zip(track_indices, det_indices, strict=True):
             if trk_idx < n_tracks and det_idx < n_dets:
-                cost_value = cost[trk_idx, det_idx]
-                if cost_value <= (1.0 - self._config.match_thresh):
+                if iou_cost[trk_idx, det_idx] <= (1.0 - self._config.match_thresh):
                     matched_tracks.append(active_tracks[trk_idx][0])
                     matched_dets.append(det_idx)
 

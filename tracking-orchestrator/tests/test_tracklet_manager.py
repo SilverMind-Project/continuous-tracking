@@ -427,5 +427,94 @@ class TestTrackletManager:
         )
         assert len(closed_tracklets) == 1
         assert closed_tracklets[0].tracklet_id == tracklet_id
-        assert closed_tracklets[0].state == "closed"
+        assert closed_tracklets[0].state == "terminated"
         assert len(manager.get_active_tracklets()) == 0
+
+    async def test_embedding_indexing_with_different_embeddings(
+        self,
+        manager: TrackletManager,
+        camera: CameraConfig,
+        event_time: datetime,
+    ) -> None:
+        """Verify that each detection gets its correct embedding when multiple
+        detections have different embeddings. This exercises the _find_embedding_index
+        fix (review issue #1)."""
+        d1 = _make_detection("d1", x_min=0, y_min=0, x_max=100, y_max=100, confidence=0.9)
+        d2 = _make_detection("d2", x_min=200, y_min=0, x_max=300, y_max=100, confidence=0.85)
+        lt1 = _make_local_track("lt-1", d1, confirmed=True)
+        lt2 = _make_local_track("lt-2", d2, confirmed=True)
+        # Different embeddings: d1 gets all-ones, d2 gets all-zeros.
+        emb1: Embedding = np.ones(768, dtype=np.float32) * 1.0
+        emb2: Embedding = np.zeros(768, dtype=np.float32)
+
+        tracklets, gallery_entries, _ = await manager.step(
+            camera=camera,
+            local_tracks=[lt1, lt2],
+            detections=[d1, d2],
+            embeddings=[emb1, emb2],
+            event_time=event_time,
+            frame_index=0,
+        )
+
+        assert len(tracklets) == 2
+        # Collect unique embedding signatures from gallery entries
+        unique_embs: list[tuple[float, ...]] = []
+        for entry in gallery_entries:
+            sig = tuple(round(v, 4) for v in entry.embedding[:4])
+            unique_embs.append(sig)
+        # If embedding indexing is correct, we should see at least two
+        # distinct signatures (one for all-ones, one for all-zeros).
+        assert len(set(unique_embs)) > 1
+
+    async def test_compute_quality_uses_camera_resolution(
+        self,
+        manager: TrackletManager,
+        event_time: datetime,
+    ) -> None:
+        """Verify that _compute_quality uses the camera's resolution for
+        normalization, not a hard-coded 1920x1080 (review issue #8)."""
+        # Small detection: 20x20 = 400 px.
+        det = _make_detection(
+            "d1",
+            x_min=0,
+            y_min=0,
+            x_max=20,
+            y_max=20,
+            confidence=1.0,
+        )
+
+        # 4K camera: 3840x2160 → max_area = 8294400
+        cam_4k = CameraConfig(camera_id="cam-4k", resolution_width=3840, resolution_height=2160)
+        quality_4k = manager._compute_quality(det, cam_4k)
+
+        # HD camera: 1920x1080 → max_area = 2073600
+        cam_hd = CameraConfig(camera_id="cam-hd", resolution_width=1920, resolution_height=1080)
+        quality_hd = manager._compute_quality(det, cam_hd)
+
+        # The same detection should score higher on the smaller (HD) camera
+        # because it occupies a larger fraction of the frame.
+        assert quality_hd > quality_4k
+        # Both should be > 0 since confidence is 1.0
+        assert quality_hd > 0
+        assert quality_4k > 0
+
+    async def test_compute_quality_default_resolution(
+        self,
+        manager: TrackletManager,
+    ) -> None:
+        """Verify that CameraConfig without explicit resolution defaults to
+        1920x1080 for backward compatibility."""
+        det = _make_detection(
+            "d1",
+            x_min=0,
+            y_min=0,
+            x_max=192,  # 10% of 1920 width
+            y_max=108,  # 10% of 1080 height
+            confidence=1.0,
+        )
+        cam_default = CameraConfig(camera_id="cam-default")
+        quality = manager._compute_quality(det, cam_default)
+        # Box area = 192*108 = 20736. max_area = 1920*1080 = 2073600.
+        # size_score = min(20736 / (2073600 * 0.001), 1.0) = min(10.0, 1.0) = 1.0
+        # quality = 0.4 * 1.0 + 0.6 * 1.0 = 1.0
+        assert quality == pytest.approx(1.0)

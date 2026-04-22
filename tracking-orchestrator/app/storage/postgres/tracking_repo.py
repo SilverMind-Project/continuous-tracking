@@ -7,7 +7,7 @@ raw connection pools. This is the storage layer boundary.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 
 import asyncpg  # type: ignore[import-untyped]
 from structlog import get_logger

@@ -111,6 +111,9 @@ class CrossCameraAssociator:
         if not open_tracklets:
             return await self._repo.list_active()
 
+        # ---- Step 0: Build tracklet lookup ----
+        tracklet_by_id: dict[TrackletId, Tracklet] = {t.tracklet_id: t for t in open_tracklets}
+
         # ---- Step 1: Group tracklets by existing GlobalTrack ----
         existing_gt_map: dict[TrackletId, str] = {}
         active_gts: list[GlobalTrack] = await self._repo.list_active()
@@ -140,8 +143,20 @@ class CrossCameraAssociator:
                     continue
                 seen_pairs.add(pair_key)
 
-                # Check adjacency
-                if not self._adjacency.reachable(ta.camera_id, tb.camera_id):
+                # Check adjacency with time-bounded reachability.
+                # The time budget is the max transition time for this camera pair,
+                # capped by the age of the older tracklet (a tracklet that started
+                # 10 minutes ago can't reach a camera reachable in 30 seconds if
+                # the person already left).
+                max_transition = self._adjacency.get_max_transition(ta.camera_id, tb.camera_id)
+                if max_transition is None:
+                    continue
+                older_started = min(ta.started_at, tb.started_at)
+                budget = max_transition
+                tracklet_age = (captured_at - older_started).total_seconds()
+                if tracklet_age >= budget:
+                    budget = tracklet_age
+                if not self._adjacency.reachable(ta.camera_id, tb.camera_id, within_s=budget):
                     continue
 
                 score = self._score_pair(ta, tb)
@@ -151,25 +166,33 @@ class CrossCameraAssociator:
         # Sort by combined score descending (greedy merge).
         candidate_scores.sort(key=lambda s: s.combined_score, reverse=True)
 
+        # Helper to refresh a GlobalTrack entry in active_gts from the repo.
+        # merge_tracklets updates the repo but leaves in-memory active_gts stale.
+        async def _refresh(gt_id: str) -> None:
+            fresh = await self._repo.get(gt_id)
+            if fresh is not None:
+                idx = next((i for i, g in enumerate(active_gts) if g.global_track_id == gt_id), None)
+                if idx is not None:
+                    active_gts[idx] = fresh
+
         # ---- Step 3: Greedy merge into GlobalTracks ----
-        assigned_tracklets: set[TrackletId] = set()
-        # Map from tracklet_id -> global_track_id (in-memory, not persisted yet)
+        # assignment_map tracks tracklets in newly created clusters (not pre-existing).
         assignment_map: dict[TrackletId, str] = {}
 
         for pair in candidate_scores:
-            if (
-                pair.tracklet_a_id in assigned_tracklets
-                and pair.tracklet_b_id in assigned_tracklets
-            ):
+            a_in_existing = pair.tracklet_a_id in existing_gt_map
+            b_in_existing = pair.tracklet_b_id in existing_gt_map
+
+            # Both in pre-existing GlobalTracks — already handled, skip.
+            if a_in_existing and b_in_existing:
                 continue
 
-            if pair.tracklet_a_id in existing_gt_map or pair.tracklet_b_id in existing_gt_map:
-                # One or both already belong to an existing GlobalTrack.
+            # One in pre-existing GT, one newly assigned or unassigned — extend.
+            if a_in_existing or b_in_existing:
                 gt_id = existing_gt_map.get(pair.tracklet_a_id) or existing_gt_map.get(
                     pair.tracklet_b_id
                 )
                 if gt_id:
-                    # Extend the existing GlobalTrack
                     new_tids = [
                         pair.tracklet_a_id
                         if pair.tracklet_a_id not in existing_gt_map
@@ -189,30 +212,53 @@ class CrossCameraAssociator:
                             camera_ids=new_cids,
                             existing=existing_gt,
                         )
-                        for tid in new_tids:
-                            assignment_map[tid] = merged.global_track_id
-                            assigned_tracklets.add(tid)
+                        await _refresh(merged.global_track_id)
+                        assignment_map[new_tids[0]] = merged.global_track_id
                         continue
 
-            # Both unassigned: create a new GlobalTrack or merge into existing cluster.
+            # Both newly assigned to clusters.
             gt_a = assignment_map.get(pair.tracklet_a_id)
             gt_b = assignment_map.get(pair.tracklet_b_id)
 
             if gt_a and gt_b:
-                # Both in clusters: merge clusters (gt_b -> gt_a).
+                # Different clusters: merge gt_b into gt_a.
                 if gt_a != gt_b:
-                    # Find all tracklets in gt_b's cluster and reassign to gt_a.
                     for tid, gid in list(assignment_map.items()):
                         if gid == gt_b:
                             assignment_map[tid] = gt_a
-                    # Remove gt_b from active_gts
                     active_gts = [gt for gt in active_gts if gt.global_track_id != gt_b]
+                    # Persist the merge and refresh the in-memory reference.
+                    merged_gt = next(
+                        (gt for gt in active_gts if gt.global_track_id == gt_a), None
+                    )
+                    if merged_gt:
+                        await _refresh(gt_a)
             elif gt_a:
-                assignment_map[pair.tracklet_b_id] = gt_a
-                assigned_tracklets.add(pair.tracklet_b_id)
+                # One in a new cluster, one unassigned — add to that cluster.
+                add_tid = pair.tracklet_b_id
+                add_cid = pair.camera_b
+                existing_gt = next((gt for gt in active_gts if gt.global_track_id == gt_a), None)
+                if existing_gt:
+                    merged = await self._repo.merge_tracklets(
+                        tracklet_ids=[add_tid],
+                        camera_ids=[add_cid],
+                        existing=existing_gt,
+                    )
+                    await _refresh(merged.global_track_id)
+                    assignment_map[add_tid] = merged.global_track_id
             elif gt_b:
-                assignment_map[pair.tracklet_a_id] = gt_b
-                assigned_tracklets.add(pair.tracklet_a_id)
+                # One in a new cluster, one unassigned — add to that cluster.
+                add_tid = pair.tracklet_a_id
+                add_cid = pair.camera_a
+                existing_gt = next((gt for gt in active_gts if gt.global_track_id == gt_b), None)
+                if existing_gt:
+                    merged = await self._repo.merge_tracklets(
+                        tracklet_ids=[add_tid],
+                        camera_ids=[add_cid],
+                        existing=existing_gt,
+                    )
+                    await _refresh(merged.global_track_id)
+                    assignment_map[add_tid] = merged.global_track_id
             else:
                 # Neither assigned: create a new GlobalTrack.
                 new_gt = await self._repo.merge_tracklets(
@@ -221,13 +267,12 @@ class CrossCameraAssociator:
                 )
                 assignment_map[pair.tracklet_a_id] = new_gt.global_track_id
                 assignment_map[pair.tracklet_b_id] = new_gt.global_track_id
-                assigned_tracklets.add(pair.tracklet_a_id)
-                assigned_tracklets.add(pair.tracklet_b_id)
                 active_gts.append(new_gt)
 
         # ---- Step 4: Handle remaining unassigned tracklets ----
+        newly_assigned: set[TrackletId] = set(assignment_map.keys())
         for t in unassigned:
-            if t.tracklet_id in assigned_tracklets or t.tracklet_id in existing_gt_map:
+            if t.tracklet_id in newly_assigned or t.tracklet_id in existing_gt_map:
                 continue
 
             # Try to extend an existing GlobalTrack first.
@@ -239,17 +284,51 @@ class CrossCameraAssociator:
                 if t.camera_id in gt.camera_ids:
                     continue
                 # Check if any camera in this GlobalTrack is adjacent to t's camera.
+                # Time budget: the max transition time, capped by the age of the new
+                # tracklet and the time since the GlobalTrack was last seen.
                 for existing_cam in gt.camera_ids:
-                    if self._adjacency.reachable(existing_cam, t.camera_id):
-                        # Extend this GlobalTrack.
-                        merged = await self._repo.merge_tracklets(
-                            tracklet_ids=[t.tracklet_id],
-                            camera_ids=[t.camera_id],
-                            existing=gt,
-                        )
-                        assignment_map[t.tracklet_id] = merged.global_track_id
-                        assigned_tracklets.add(t.tracklet_id)
-                        extended = True
+                    max_transition = self._adjacency.get_max_transition(existing_cam, t.camera_id)
+                    if max_transition is not None:
+                        older_time = min(gt.last_seen_at, t.started_at)
+                        budget = max_transition
+                        tracklet_age = (captured_at - older_time).total_seconds()
+                        if tracklet_age >= budget:
+                            budget = tracklet_age
+                        if self._adjacency.reachable(existing_cam, t.camera_id, within_s=budget):
+                            # Check association score before extending.
+                            # Find the tracklet on existing_cam from this GlobalTrack.
+                            existing_tid = next(
+                                (tid for tid, cid in zip(gt.tracklet_ids, gt.camera_ids)
+                                 if cid == existing_cam), None
+                            )
+                            existing_tl = (
+                                tracklet_by_id.get(existing_tid)
+                                if existing_tid
+                                else (
+                                    await self._repo.get_tracklet(existing_tid)
+                                    if existing_tid
+                                    else None
+                                )
+                            )
+                            score = (
+                                self._score_pair(t, existing_tl)
+                                if existing_tl
+                                else None
+                            )
+                            if score is not None and score.combined_score < self._config.min_link_score:
+                                continue  # skip if score below threshold
+                            # Extend this GlobalTrack.
+                            merged = await self._repo.merge_tracklets(
+                                tracklet_ids=[t.tracklet_id],
+                                camera_ids=[t.camera_id],
+                                existing=gt,
+                            )
+                            await _refresh(merged.global_track_id)
+                            assignment_map[t.tracklet_id] = merged.global_track_id
+                            newly_assigned.add(t.tracklet_id)
+                            extended = True
+                            break
+                    if extended:
                         break
                 if extended:
                     break
@@ -261,12 +340,16 @@ class CrossCameraAssociator:
                     camera_ids=[t.camera_id],
                 )
                 assignment_map[t.tracklet_id] = new_gt.global_track_id
-                assigned_tracklets.add(t.tracklet_id)
+                newly_assigned.add(t.tracklet_id)
                 active_gts.append(new_gt)
 
         # ---- Step 5: Update last_seen_at for all existing GlobalTracks ----
+        # Fetch fresh state from repo (active_gts may have stale tracklet_ids
+        # and camera_ids from merge_tracklets calls that updated the repo but
+        # not the in-memory list).
         updated_gts: list[GlobalTrack] = []
-        for gt in active_gts:
+        fresh_active = await self._repo.list_active()
+        for gt in fresh_active:
             updated_gts.append(
                 GlobalTrack(
                     global_track_id=gt.global_track_id,

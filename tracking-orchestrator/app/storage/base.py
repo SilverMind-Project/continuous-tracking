@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import uuid
 from abc import ABC, abstractmethod
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from ..domain import (
     CameraConfig,
@@ -98,9 +98,20 @@ class GalleryRepository(ABC):
 
     @abstractmethod
     async def search_similar(
-        self, embedding: list[float], limit: int = 10
+        self,
+        embedding: list[float],
+        limit: int = 10,
+        camera_id: str | None = None,
+        max_age_seconds: int | None = None,
     ) -> list[GalleryEmbedding]:
-        """Nearest-neighbor search over gallery embeddings."""
+        """Nearest-neighbor search over gallery embeddings.
+
+        Args:
+            embedding: query embedding vector.
+            limit: maximum number of results.
+            camera_id: if provided, filter to gallery entries from this camera.
+            max_age_seconds: if provided, filter to entries newer than now - max_age_seconds.
+        """
 
 
 class SettingsRepository(ABC):
@@ -353,10 +364,19 @@ class InMemoryGalleryRepository(GalleryRepository):
         return entries
 
     async def search_similar(
-        self, embedding: list[float], limit: int = 10
+        self,
+        embedding: list[float],
+        limit: int = 10,
+        camera_id: str | None = None,
+        max_age_seconds: int | None = None,
     ) -> list[GalleryEmbedding]:
         # Intentional O(n): this in-memory implementation favors clarity over ANN performance.
         entries = await self.list_gallery_entries()
+        if camera_id is not None:
+            entries = [e for e in entries if e.camera_id == camera_id]
+        if max_age_seconds is not None:
+            cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
+            entries = [e for e in entries if e.seen_at >= cutoff]
         scored = [(entry, _cosine_sim(embedding, entry.embedding)) for entry in entries]
         scored.sort(key=lambda item: item[1], reverse=True)
         return [entry for entry, _ in scored[:limit]]
@@ -477,16 +497,26 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
     async def save(self, track: GlobalTrack) -> None:
         old = self._tracks.get(track.global_track_id)
         if old is None:
-            self._tracks[track.global_track_id] = track
-            for tid in track.tracklet_ids:
+            # Sort tracklet_ids for deterministic ordering.
+            sorted_track = GlobalTrack(
+                global_track_id=track.global_track_id,
+                camera_ids=track.camera_ids,
+                tracklet_ids=sorted(set(track.tracklet_ids)),
+                started_at=track.started_at,
+                last_seen_at=track.last_seen_at,
+                current_identity_id=track.current_identity_id,
+                state=track.state,
+            )
+            self._tracks[track.global_track_id] = sorted_track
+            for tid in sorted_track.tracklet_ids:
                 self._by_tracklet[tid] = track.global_track_id
             return
 
-        # Merge: extend camera_ids and tracklet_ids
+        # Merge: extend camera_ids and tracklet_ids (sorted for determinism).
         merged = GlobalTrack(
             global_track_id=track.global_track_id,
             camera_ids=list(dict.fromkeys(old.camera_ids + track.camera_ids)),
-            tracklet_ids=list(dict.fromkeys(old.tracklet_ids + track.tracklet_ids)),
+            tracklet_ids=sorted(set(old.tracklet_ids + track.tracklet_ids)),
             started_at=min(old.started_at, track.started_at),
             last_seen_at=max(old.last_seen_at, track.last_seen_at),
             current_identity_id=track.current_identity_id or old.current_identity_id,
@@ -521,7 +551,7 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
             await self.save(merged)
             return merged
 
-        return GlobalTrack(
+        new_gt = GlobalTrack(
             global_track_id=str(uuid.uuid4()),
             camera_ids=list(dict.fromkeys(camera_ids)),
             tracklet_ids=list(dict.fromkeys(tracklet_ids)),
@@ -530,6 +560,8 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
             current_identity_id=None,
             state="active",
         )
+        await self.save(new_gt)
+        return new_gt
 
     async def assign_identity(
         self,
