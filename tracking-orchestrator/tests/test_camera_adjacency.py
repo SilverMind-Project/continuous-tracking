@@ -33,10 +33,10 @@ class TestCameraAdjacency:
     def test_reachable_time_bounded(self) -> None:
         adj = CameraAdjacency()
         adj.add_edge(AdjacencyEdge("cam_a", "cam_b", max_transition_seconds=60))
-        # Within budget: 30s < 60s
-        assert adj.reachable("cam_a", "cam_b", within_s=30)
-        # Exceeds budget: 120s > 60s
-        assert not adj.reachable("cam_a", "cam_b", within_s=120)
+        # Budget 30s is too tight for a 60s transition → not reachable.
+        assert not adj.reachable("cam_a", "cam_b", within_s=30)
+        # Budget 120s covers a 60s transition → reachable.
+        assert adj.reachable("cam_a", "cam_b", within_s=120)
 
     def test_overlap(self) -> None:
         adj = CameraAdjacency()

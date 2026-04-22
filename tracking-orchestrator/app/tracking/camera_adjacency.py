@@ -78,13 +78,14 @@ class CameraAdjacency:
         """Check if to_camera is reachable from from_camera.
 
         Uses BFS for transitive reachability. If within_s is provided,
-        only edges with max_transition_seconds >= within_s are considered.
+        only edges whose max_transition_seconds fits within the budget are
+        considered (i.e., the transition must be fast enough).
 
         Args:
             from_camera: source camera ID.
             to_camera: destination camera ID.
             within_s: optional time budget in seconds. If set, only edges
-                with max_transition_seconds >= within_s pass the filter.
+                with max_transition_seconds <= within_s pass the filter.
 
         Returns:
             True if to_camera is reachable from from_camera.
@@ -106,7 +107,7 @@ class CameraAdjacency:
             for edge in self._edges.get(current, []):
                 if edge.to_camera in visited:
                     continue
-                if within_s is not None and edge.max_transition_seconds < within_s:
+                if within_s is not None and edge.max_transition_seconds > within_s:
                     continue
                 queue.append(edge.to_camera)
 

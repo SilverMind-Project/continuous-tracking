@@ -12,6 +12,7 @@ at-least-once delivery.
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -44,6 +45,7 @@ class TransportConfig:
     batch_max_wait_ms: int = 100
     batch_max_size: int = 8
     xack_timeout_ms: int = 5000
+    ack_ttl_seconds: int = 300
     max_retries: int = 3
 
 
@@ -113,8 +115,8 @@ class RedisStreamsTransport:
         self._config = config or TransportConfig()
         self._redis: redis.Redis | None = None
         self._group_created = False
-        # Maps id(frame) → Redis message ID for pending XACK
-        self._pending_acks: dict[int, Any] = {}
+        # Maps id(frame) → (Redis message ID, monotonic timestamp) for pending XACK
+        self._pending_acks: dict[int, tuple[Any, float]] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -158,6 +160,27 @@ class RedisStreamsTransport:
             self._redis = None
             logger.info("Disconnected from Redis")
 
+    def _cleanup_stale_acks(self) -> None:
+        """Remove pending ack entries older than the configured TTL.
+
+        Entries that have not been ACKed within the TTL window are
+        discarded to prevent unbounded memory growth.
+        """
+        now = time.monotonic()
+        stale = [
+            fid
+            for fid, (_, ts) in self._pending_acks.items()
+            if now - ts > self._config.ack_ttl_seconds
+        ]
+        for fid in stale:
+            del self._pending_acks[fid]
+        if stale:
+            logger.info(
+                "Cleaned up stale pending acks",
+                count=len(stale),
+                remaining=len(self._pending_acks),
+            )
+
     async def consume_frames(self, count: int = 1) -> AsyncIterator[FrameReady]:
         """Consume FrameReady messages from the frames.ready stream.
 
@@ -173,6 +196,8 @@ class RedisStreamsTransport:
         if self._redis is None:
             logger.warning("Cannot consume: not connected to Redis")
             return
+
+        self._cleanup_stale_acks()
 
         # XREADGROUP with block
         streams = await self._redis.xreadgroup(
@@ -191,7 +216,7 @@ class RedisStreamsTransport:
                 frame = self._deserialize_frame(fields)
                 if frame is not None:
                     # Store the message ID keyed by object identity for later XACK
-                    self._pending_acks[id(frame)] = message_id
+                    self._pending_acks[id(frame)] = (message_id, time.monotonic())
                     yield frame
 
     async def ack_frame(self, frame: FrameReady) -> None:
@@ -206,11 +231,12 @@ class RedisStreamsTransport:
         if self._redis is None:
             return
 
-        message_id = self._pending_acks.pop(id(frame), None)
-        if message_id is None:
+        entry = self._pending_acks.pop(id(frame), None)
+        if entry is None:
             logger.warning("Cannot ACK: no message ID on frame", camera_id=frame.camera_id)
             return
 
+        message_id = entry[0]
         await self._redis.xack(
             self._config.frames_stream,
             self._config.consumer_group,

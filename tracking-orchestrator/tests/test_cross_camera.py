@@ -188,3 +188,73 @@ class TestCrossCameraAssociator:
         gt = await global_track_repo.get("gt-closed")
         assert gt is not None
         assert gt.state == "closed"
+
+    @pytest.mark.asyncio
+    async def test_low_score_pair_not_linked(
+        self,
+        assoc: CrossCameraAssociator,
+    ) -> None:
+        """Pairs below min_link_score should not be linked."""
+        # The default config uses min_link_score=0.5 and the approximate
+        # gallery similarity returns 0.8, geo_score is also moderate.
+        # To test the threshold, raise min_link_score above the combined score.
+        assoc._config = CrossCamConfig(min_link_score=0.99)
+        t_a = _make_tracklet("t1", "cam_a")
+        t_b = _make_tracklet("t2", "cam_b")
+        result = await assoc.associate([t_a, t_b], captured_at=datetime.now(UTC))
+        # Should create two separate GlobalTracks.
+        assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_cluster_merge(
+        self,
+        assoc: CrossCameraAssociator,
+        global_track_repo: GlobalTrackRepository,
+    ) -> None:
+        """Three tracklets should merge into one cluster when both pairs link."""
+        # cam_a -> cam_b -> cam_c chain, all adjacent.
+        # t1 on cam_a, t2 on cam_b, t3 on cam_c.
+        t_a = _make_tracklet("t1", "cam_a")
+        t_b = _make_tracklet("t2", "cam_b")
+        t_c = _make_tracklet("t3", "cam_c")
+        result = await assoc.associate([t_a, t_b, t_c], captured_at=datetime.now(UTC))
+        # All three should end up in a single GlobalTrack.
+        assert len(result) == 1
+        assert result[0].tracklet_ids == ["t1", "t2", "t3"]
+        assert set(result[0].camera_ids) == {"cam_a", "cam_b", "cam_c"}
+
+    @pytest.mark.asyncio
+    async def test_non_adjacent_cameras_create_separate_tracks(
+        self,
+        assoc: CrossCameraAssociator,
+    ) -> None:
+        """cam_a and cam_c are not directly adjacent, so should be separate."""
+        # Only cam_a<->cam_b and cam_b<->cam_c edges exist.
+        t_a = _make_tracklet("t1", "cam_a")
+        t_c = _make_tracklet("t2", "cam_c")
+        result = await assoc.associate([t_a, t_c], captured_at=datetime.now(UTC))
+        assert len(result) == 2
+        assert all(len(r.tracklet_ids) == 1 for r in result)
+
+    @pytest.mark.asyncio
+    async def test_closed_gt_not_reused_for_new_tracklet(
+        self,
+        assoc: CrossCameraAssociator,
+        global_track_repo: GlobalTrackRepository,
+    ) -> None:
+        """A new tracklet should not be merged into a closed GlobalTrack."""
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-closed",
+                camera_ids=["cam_a"],
+                tracklet_ids=["t1"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+                state="closed",
+            )
+        )
+        t2 = _make_tracklet("t2", "cam_b")
+        result = await assoc.associate([t2], captured_at=datetime.now(UTC))
+        # Should create a new GlobalTrack, not extend the closed one.
+        assert len(result) == 1
+        assert result[0].global_track_id != "gt-closed"

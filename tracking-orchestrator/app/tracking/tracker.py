@@ -227,7 +227,7 @@ def _embedding_distance(
         embeddings_b: shape (M, D).
 
     Returns:
-        Cosine distance matrix of shape (N, M). Values in [0, 2].
+        Cosine distance matrix of shape (N, M). Values in [0, 1].
     """
     if embeddings_a.size == 0 or embeddings_b.size == 0:
         return np.zeros((len(embeddings_a), len(embeddings_b)), dtype=np.float64)
@@ -244,7 +244,7 @@ def _embedding_distance(
     cosine_sim = a_norm @ b_norm.T
     # Clip to numerical precision
     cosine_sim = np.clip(cosine_sim, -1.0, 1.0)
-    return 1.0 - cosine_sim
+    return (1.0 - cosine_sim) / 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -448,16 +448,18 @@ class PerCameraTracker:
             # Only use appearance cost for tracks that have embedding history.
             # New tracks (no history yet) rely on IoU alone.
             has_history = [bool(track.embedding_history) for _, track in active_tracks]
-            det_embs = np.array(embeddings, dtype=np.float64)
+            det_embs = np.array(embeddings, dtype=np.float32)
 
             if all(has_history):
                 track_embs = np.array(
-                    [track.embedding_history[-1] for _, track in active_tracks], dtype=np.float64
+                    [track.embedding_history[-1] for _, track in active_tracks], dtype=np.float32
                 )
                 emb_cost = _embedding_distance(track_embs, det_embs)
             elif any(has_history):
                 # Mixed: tracks with history get embedding cost,
-                # tracks without get zero cost (IoU-only).
+                # tracks without get a neutral cost (1.0, the mean of [0,2]).
+                # Using the mean avoids giving tracks without history an
+                # artificial advantage over tracks with similar embeddings.
                 track_embs_list: list[npt.NDArray[np.float64]] = []
                 for _, track in active_tracks:
                     if track.embedding_history:
@@ -465,14 +467,9 @@ class PerCameraTracker:
                             np.asarray(track.embedding_history[-1], dtype=np.float64)
                         )
                     else:
-                        # Placeholder: will be masked out later
-                        track_embs_list.append(np.zeros(768, dtype=np.float64))
-                track_embs = np.array(track_embs_list, dtype=np.float64)
+                        track_embs_list.append(np.full(768, 0.5, dtype=np.float32))
+                track_embs = np.array(track_embs_list, dtype=np.float32)
                 emb_cost = _embedding_distance(track_embs, det_embs)
-                # Mask out embedding cost for tracks without history
-                for i, has in enumerate(has_history):
-                    if not has:
-                        emb_cost[i, :] = 0.0
             else:
                 # No tracks have embedding history: use IoU only
                 emb_cost = np.zeros((n_tracks, n_dets), dtype=np.float64)

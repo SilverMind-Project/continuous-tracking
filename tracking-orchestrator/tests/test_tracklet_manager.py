@@ -188,7 +188,7 @@ class TestTrackletManager:
             frame_index=0,
         )
 
-        persisted = manager.get_tracklet(tracklets[0].tracklet_id)
+        persisted = await manager._repo.get_tracklet(tracklets[0].tracklet_id)
         assert persisted is not None
         assert persisted.tracklet_id == tracklets[0].tracklet_id
 
@@ -332,3 +332,100 @@ class TestTrackletManager:
         assert len(tracklets) == 2
         assert len(events) == 1
         assert events[0].detections == [d1, d2]
+
+    async def test_tracklet_extension(
+        self,
+        manager: TrackletManager,
+        camera: CameraConfig,
+        event_time: datetime,
+    ) -> None:
+        """A confirmed local track across multiple frames should extend the
+        same tracklet, growing its detection_ids."""
+        det1 = _make_detection("d1", confidence=0.9)
+        lt = _make_local_track("lt-1", det1, confirmed=True)
+        emb: Embedding = np.zeros(768, dtype=np.float32)
+
+        # Frame 0: creates tracklet.
+        tracklets_0, _, _ = await manager.step(
+            camera=camera,
+            local_tracks=[lt],
+            detections=[det1],
+            embeddings=[emb],
+            event_time=event_time,
+            frame_index=0,
+        )
+        assert len(tracklets_0) == 1
+        tracklet_id = tracklets_0[0].tracklet_id
+        assert len(tracklets_0[0].detection_ids) == 1
+
+        # Frame 1: same local track, new detection → extension.
+        det2 = _make_detection("d2", confidence=0.9)
+        # The local track must have the same local_track_id to be recognized as
+        # the same tracklet, but the detection changes.
+        lt2 = _make_local_track("lt-1", det2, confirmed=True)
+
+        tracklets_1, _, _ = await manager.step(
+            camera=camera,
+            local_tracks=[lt2],
+            detections=[det2],
+            embeddings=[emb],
+            event_time=event_time,
+            frame_index=1,
+        )
+        assert len(tracklets_1) == 1
+        assert tracklets_1[0].tracklet_id == tracklet_id
+        assert len(tracklets_1[0].detection_ids) == 2
+
+    async def test_tracklet_closure_after_lost_frames(
+        self,
+        manager: TrackletManager,
+        camera: CameraConfig,
+        event_time: datetime,
+    ) -> None:
+        """A tracklet that is no longer alive should close after the grace
+        window and return a closed-tracklet update."""
+        det = _make_detection("d1", confidence=0.9)
+        lt = _make_local_track("lt-1", det, confirmed=True)
+        emb: Embedding = np.zeros(768, dtype=np.float32)
+
+        # Create tracklet.
+        tracklets, _, _ = await manager.step(
+            camera=camera,
+            local_tracks=[lt],
+            detections=[det],
+            embeddings=[emb],
+            event_time=event_time,
+            frame_index=0,
+        )
+        assert len(tracklets) == 1
+        tracklet_id = tracklets[0].tracklet_id
+
+        # Stop sending the local track — tracklet is no longer in alive set.
+        # Use a short grace window for faster testing.
+        manager._config = TrackletConfig(close_grace_frames=2)
+
+        # Frame 1: lost_count = 1, still alive.
+        _, _, _ = await manager.step(
+            camera=camera,
+            local_tracks=[],
+            detections=[],
+            embeddings=[],
+            event_time=event_time,
+            frame_index=1,
+        )
+        active = manager.get_active_tracklets()
+        assert len(active) == 1
+
+        # Frame 2: lost_count = 2 >= grace, tracklet closes.
+        closed_tracklets, _, _ = await manager.step(
+            camera=camera,
+            local_tracks=[],
+            detections=[],
+            embeddings=[],
+            event_time=event_time,
+            frame_index=2,
+        )
+        assert len(closed_tracklets) == 1
+        assert closed_tracklets[0].tracklet_id == tracklet_id
+        assert closed_tracklets[0].state == "closed"
+        assert len(manager.get_active_tracklets()) == 0

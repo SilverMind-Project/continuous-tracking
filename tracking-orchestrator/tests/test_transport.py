@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
+from app.domain import Detection
 from app.storage.postgres.gallery_repo import (
     _embedding_to_pgvector,
     _pgvector_to_list,
@@ -155,3 +159,153 @@ class TestEmbeddingConversion:
     def test_from_empty_pgvector(self) -> None:
         assert _pgvector_to_list("[]") == []
         assert _pgvector_to_list("") == []
+
+
+# ---------------------------------------------------------------------------
+# Transport data-path tests (mocked Redis)
+# ---------------------------------------------------------------------------
+
+
+class TestTransportDataPath:
+    """Test consume_frames, ack_frame, publish_event with mocked Redis."""
+
+    def _mock_transport(self) -> tuple[RedisStreamsTransport, AsyncMock]:
+        transport = RedisStreamsTransport()
+        mock_redis = AsyncMock()
+        mock_redis.xgroup_create = AsyncMock()
+        mock_redis.ResponseError = Exception
+        transport._redis = mock_redis
+        transport._group_created = True
+        return transport, mock_redis
+
+    @pytest.mark.asyncio
+    async def test_consume_frames_no_redis(self) -> None:
+        transport = RedisStreamsTransport()
+        frames = []
+        async for frame in transport.consume_frames(count=1):
+            frames.append(frame)
+        assert frames == []
+
+    @pytest.mark.asyncio
+    async def test_consume_frames_yields_frames(self) -> None:
+        transport, mock_redis = self._mock_transport()
+        mock_redis.xreadgroup = AsyncMock(
+            return_value=[
+                (
+                    b"frames.ready",
+                    [
+                        (
+                            "1700000000000-0",
+                            {
+                                "camera_id": "cam-1",
+                                "minio_key": "frames/cam-1/1.jpg",
+                                "frame_index": "1",
+                                "capture_time_unix_ns": "1000000000",
+                                "received_time_unix_ns": "1000000001",
+                                "width": "640",
+                                "height": "480",
+                            },
+                        ),
+                        (
+                            "1700000000001-0",
+                            {
+                                "camera_id": "cam-1",
+                                "minio_key": "frames/cam-1/2.jpg",
+                                "frame_index": "2",
+                                "capture_time_unix_ns": "1000000002",
+                                "received_time_unix_ns": "1000000003",
+                                "width": "640",
+                                "height": "480",
+                            },
+                        ),
+                    ],
+                ),
+            ]
+        )
+
+        frames = []
+        async for frame in transport.consume_frames(count=2):
+            frames.append(frame)
+        assert len(frames) == 2
+        assert frames[0].camera_id == "cam-1"
+        assert frames[0].frame_index == 1
+        assert frames[1].frame_index == 2
+
+    @pytest.mark.asyncio
+    async def test_consume_frames_empty_stream(self) -> None:
+        transport, mock_redis = self._mock_transport()
+        mock_redis.xreadgroup = AsyncMock(return_value=[])
+
+        frames = []
+        async for frame in transport.consume_frames(count=1):
+            frames.append(frame)
+        assert frames == []
+
+    @pytest.mark.asyncio
+    async def test_ack_frame_with_pending(self) -> None:
+        transport, mock_redis = self._mock_transport()
+        # Simulate a frame that was consumed (message ID stored in pending_acks).
+        frame = FrameReady(
+            camera_id="cam-1",
+            minio_key="frames/cam-1/1.jpg",
+            frame_index=1,
+            capture_time_unix_ns=1000000000,
+            received_time_unix_ns=1000000001,
+            width=640,
+            height=480,
+        )
+        transport._pending_acks[id(frame)] = "1700000000000-0"
+
+        await transport.ack_frame(frame)
+        mock_redis.xack.assert_called_once_with(
+            "frames.ready",
+            "cts-orchestrator",
+            "1700000000000-0",
+        )
+
+    @pytest.mark.asyncio
+    async def test_ack_frame_no_pending_id(self) -> None:
+        transport, mock_redis = self._mock_transport()
+        frame = FrameReady(
+            camera_id="cam-1",
+            minio_key="frames/cam-1/1.jpg",
+            frame_index=1,
+            capture_time_unix_ns=1000000000,
+            received_time_unix_ns=1000000001,
+            width=640,
+            height=480,
+        )
+        # No message ID stored → should not call xack.
+        await transport.ack_frame(frame)
+        mock_redis.xack.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ack_frame_not_connected(self) -> None:
+        transport = RedisStreamsTransport()
+        frame = FrameReady(
+            camera_id="cam-1",
+            minio_key="frames/cam-1/1.jpg",
+            frame_index=1,
+            capture_time_unix_ns=1000000000,
+            received_time_unix_ns=1000000001,
+            width=640,
+            height=480,
+        )
+        # Should not raise.
+        await transport.ack_frame(frame)
+
+    @pytest.mark.asyncio
+    async def test_publish_event(self) -> None:
+        transport, mock_redis = self._mock_transport()
+        mock_redis.xadd = AsyncMock(return_value="event-msg-1")
+
+        msg_id = await transport.publish_event(
+            camera_id="cam-1",
+            event_time=datetime.now(UTC),
+            frame_index=42,
+            detection_count=3,
+        )
+        assert msg_id == "event-msg-1"
+        mock_redis.xadd.assert_called_once()
+        call_args = mock_redis.xadd.call_args
+        assert call_args[0][0] == "tracking.events"

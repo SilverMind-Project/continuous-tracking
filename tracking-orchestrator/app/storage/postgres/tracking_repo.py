@@ -95,7 +95,7 @@ _SQL_SAVE_IDENTITY_REVISION = """
 _SQL_LIST_IDENTITY_REVISIONS = """
     SELECT revision_id, revision_time, global_track_id, tracklet_ids, candidates,
            map_identity_id, posterior_entropy, previous_identity_id,
-           new_identity_id, reason
+           new_identity_id, reason, evidence
     FROM identity_revisions
     WHERE global_track_id = $1
     ORDER BY revision_time DESC
@@ -125,6 +125,7 @@ class PostgresTrackingRepository(TrackingRepository):
             "width": event.frame_ref.width,
             "height": event.frame_ref.height,
             "frame_index": event.frame_ref.frame_index,
+            "capture_time": event.frame_ref.capture_time.isoformat(),
         }
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -150,7 +151,7 @@ class PostgresTrackingRepository(TrackingRepository):
             width=frame_data["width"],
             height=frame_data["height"],
             frame_index=frame_data["frame_index"],
-            capture_time=datetime.now(UTC),
+            capture_time=datetime.fromisoformat(frame_data["capture_time"]),
         )
         return TrackingEvent(
             event_id=row["event_id"],
@@ -321,6 +322,7 @@ class PostgresTrackingRepository(TrackingRepository):
                     previous_identity_id=row["previous_identity_id"],
                     new_identity_id=row["new_identity_id"],
                     reason=row["reason"] or "",
+                    evidence=json.loads(row["evidence"]) if row["evidence"] else {},
                 )
             )
         return revisions

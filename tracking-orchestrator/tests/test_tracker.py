@@ -258,3 +258,123 @@ class TestPerCameraTrackers:
         registry = PerCameraTrackers()
         tracks = registry.update("cam-1", [], None, frame_index=0)
         assert tracks == []
+
+
+class TestPerCameraTrackerHungarian:
+    """Tests for the Hungarian assignment in PerCameraTracker._associate."""
+
+    def test_hungarian_two_tracks_two_detections(
+        self,
+    ) -> None:
+        """Two confirmed tracks + two detections should produce correct
+        Hungarian assignment based on IoU proximity."""
+        tracker = PerCameraTracker(TrackerConfig(new_track_thresh=0.5, min_hits=1))
+        # Create two existing tracks from previous frames.
+        d1 = _make_detection("d1", 0, 0, 100, 100, confidence=0.9)
+        emb1 = _make_embedding()
+        tracks = tracker.update([d1], [emb1], frame_index=0)
+        assert len(tracks) == 1
+        track_a_id = tracks[0].local_track_id
+
+        # Second track from a nearby but distinct detection.
+        d2 = _make_detection("d2", 10, 10, 110, 110, confidence=0.9)
+        emb2 = _make_embedding()
+        # Re-process with the same detection to create second track.
+        # Actually, since d2 is very close to d1's box, it might match track_a.
+        # So create a second track with a more distant detection.
+        d2_far = _make_detection("d2", 200, 200, 300, 300, confidence=0.9)
+        emb_far = _make_embedding()
+        tracks2 = tracker.update([d2_far], [emb_far], frame_index=1)
+        assert len(tracks2) == 1
+        track_b_id = tracks2[0].local_track_id
+
+        assert tracker.active_track_count == 2
+
+        # Now two new detections: one close to track_a's box, one close to track_b's box.
+        d_a_new = _make_detection("da", 5, 5, 105, 105, confidence=0.9)
+        d_b_new = _make_detection("db", 205, 205, 305, 305, confidence=0.9)
+        emb_a = _make_embedding()
+        emb_b = _make_embedding()
+
+        tracks = tracker.update([d_a_new, d_b_new], [emb_a, emb_b], frame_index=2)
+        assert len(tracks) == 2
+        track_ids = {t.local_track_id for t in tracks}
+        assert track_a_id in track_ids
+        assert track_b_id in track_ids
+
+    def test_unmatched_track_lost_count_increments(
+        self,
+    ) -> None:
+        """When detections arrive but a track is not matched, its lost_count
+        should increment via the normal update path (not the early-return)."""
+        tracker = PerCameraTracker(
+            TrackerConfig(new_track_thresh=0.5, max_time_lost=2, min_hits=1)
+        )
+        # Create one confirmed track.
+        d1 = _make_detection("d1", 0, 0, 100, 100, confidence=0.9)
+        emb1 = _make_embedding()
+        tracks = tracker.update([d1], [emb1], frame_index=0)
+        assert len(tracks) == 1
+        track_id = tracks[0].local_track_id
+
+        # Get the track's lost_count before.
+        internal = tracker._tracks[track_id]
+        assert internal.lost_count == 0
+
+        # Send a detection that is far away — should NOT match this track.
+        # IoU will be near zero, cost near 1.0, which likely exceeds threshold.
+        d_far = _make_detection("dfar", 500, 500, 600, 600, confidence=0.9)
+        emb_far = _make_embedding()
+
+        # Frame 1: detection arrives but doesn't match existing track.
+        tracks = tracker.update([d_far], [emb_far], frame_index=1)
+        # The far detection creates a new track; existing track is unmatched.
+        assert len(tracks) == 1  # new track from unmatched detection
+
+        # The original track should have lost_count incremented.
+        internal = tracker._tracks[track_id]
+        assert internal.lost_count == 1
+
+    def test_new_track_from_unmatched_detection_with_existing_tracks(
+        self,
+    ) -> None:
+        """Unmatched detections should spawn new tracks even when existing
+        tracks are present."""
+        tracker = PerCameraTracker(TrackerConfig(new_track_thresh=0.5, min_hits=1))
+        # Create one track.
+        d1 = _make_detection("d1", 0, 0, 100, 100, confidence=0.9)
+        emb1 = _make_embedding()
+        tracker.update([d1], [emb1], frame_index=0)
+        assert tracker.active_track_count == 1
+
+        # Detection far from existing track → new track.
+        d2 = _make_detection("d2", 300, 300, 400, 400, confidence=0.9)
+        emb2 = _make_embedding()
+        tracks = tracker.update([d2], [emb2], frame_index=1)
+        assert len(tracks) == 1
+        assert tracker.active_track_count == 2
+
+    def test_detection_replaces_new_track_when_no_match(
+        self,
+    ) -> None:
+        """After a track terminates, a new detection in a different location
+        creates a fresh track."""
+        tracker = PerCameraTracker(
+            TrackerConfig(new_track_thresh=0.5, max_time_lost=1, min_hits=1)
+        )
+        d1 = _make_detection("d1", 0, 0, 100, 100, confidence=0.9)
+        emb1 = _make_embedding()
+        tracker.update([d1], [emb1], frame_index=0)
+        assert tracker.active_track_count == 1
+
+        # Terminate the track by sending no detections (lost_count increments
+        # in the early-return path).
+        tracker.update([], [], frame_index=1)
+        assert tracker.active_track_count == 0
+
+        # New detection creates a fresh track.
+        d2 = _make_detection("d2", 200, 200, 300, 300, confidence=0.9)
+        emb2 = _make_embedding()
+        tracks = tracker.update([d2], [emb2], frame_index=2)
+        assert len(tracks) == 1
+        assert tracker.active_track_count == 1

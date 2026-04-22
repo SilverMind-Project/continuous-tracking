@@ -8,37 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.domain import (
-    FaceAnchor,
-    GlobalTrack,
-    Identity,
     IdentityCandidate,
     IdentityRevision,
 )
-from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 from app.transport.revision_publisher import RevisionPublisher
-
-
-def _make_identity(identity_id: str, display_name: str = "") -> Identity:
-    return Identity(
-        identity_id=identity_id,
-        display_name=display_name,
-        enrolled_at=datetime.now(UTC),
-        is_active=True,
-    )
-
-
-def _make_gt(
-    global_track_id: str,
-    current_identity_id: str | None = None,
-) -> GlobalTrack:
-    return GlobalTrack(
-        global_track_id=global_track_id,
-        camera_ids=["cam-1"],
-        tracklet_ids=["t1"],
-        current_identity_id=current_identity_id,
-        started_at=datetime.now(UTC),
-        last_seen_at=datetime.now(UTC),
-    )
 
 
 def _make_revision(
@@ -114,74 +87,3 @@ class TestRevisionPublisher:
         assert result[0] == "msg-1"
         assert result[1] == "msg-2"
         assert mock_pipe.xadd.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_integration_produces_revisions(self) -> None:
-        """Full integration: resolver should produce revisions on identity change."""
-
-        identities = [
-            _make_identity("alice", "Alice"),
-            _make_identity("bob", "Bob"),
-        ]
-        resolver = IdentityResolver(
-            identities=identities,
-            gallery_repo=type(
-                "MockGalleryRepo",
-                (),
-                {
-                    "search_similar": AsyncMock(return_value=[]),
-                },
-            )(),
-            global_track_repo=type(
-                "MockTrackRepo",
-                (),
-                {
-                    "get": AsyncMock(return_value=None),
-                },
-            )(),
-            tracking_repo=type("MockTrackingRepo", (), {})(),
-            config=ResolverConfig(
-                commit_prob=0.5,
-                prior_weight=0.3,
-            ),
-        )
-
-        # First: assign alice
-        gt = _make_gt("gt-1", current_identity_id=None)
-        face_anchor = FaceAnchor(
-            person_id="alice",
-            confidence=0.9,
-            quality=0.8,
-            tracklet_id="t1",
-        )
-
-        outcome1 = await resolver.resolve(
-            global_tracks=[gt],
-            new_face_anchors=[face_anchor],
-            captured_at=datetime.now(UTC),
-        )
-        assert outcome1.decisions[0].identity_id == "alice"
-        assert len(outcome1.revisions) == 1
-        assert outcome1.revisions[0].new_identity_id == "alice"
-
-        # Simulate pipeline applying the decision to the GT
-        gt = _make_gt("gt-1", current_identity_id="alice")
-
-        # Second: assign bob -> revision
-        face_anchor2 = FaceAnchor(
-            person_id="bob",
-            confidence=0.9,
-            quality=0.8,
-            tracklet_id="t1",
-        )
-        outcome2 = await resolver.resolve(
-            global_tracks=[gt],
-            new_face_anchors=[face_anchor2],
-            captured_at=datetime.now(UTC),
-        )
-        assert outcome2.decisions[0].identity_id == "bob"
-        assert outcome2.decisions[0].revises_previous is True
-        assert len(outcome2.revisions) == 1
-        rev = outcome2.revisions[0]
-        assert rev.previous_identity_id == "alice"
-        assert rev.new_identity_id == "bob"

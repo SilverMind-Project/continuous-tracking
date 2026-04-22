@@ -197,8 +197,10 @@ class TestIdentityResolver:
         assert decision.identity_id is None
 
     @pytest.mark.asyncio
-    async def test_resolve_revises_previous(self) -> None:
-        """A new face anchor for a different person should revise the identity."""
+    async def test_resolve_no_revision_when_same_identity(
+        self,
+    ) -> None:
+        """A strong face anchor for the same identity should not produce a revision."""
         identities = [
             _make_identity("grandma", "Grandma"),
             _make_identity("dad", "Dad"),

@@ -155,7 +155,7 @@ class TrackletManager:
                 local_track = lt_by_local_id[local_id]
                 det = det_by_id.get(local_track.detection.detection_id)
                 if det is not None:
-                    emb_idx = self._find_embedding_index(local_track.detection)
+                    emb_idx = self._find_embedding_index(local_track.detection, detections)
                     emb = embeddings[emb_idx] if emb_idx < len(embeddings) else None
 
                     new_state = self._extend_tracklet(state, det, emb, event_time, frame_index)
@@ -196,7 +196,7 @@ class TrackletManager:
         for local_track in local_tracks:
             if local_track.confirmed:
                 det = local_track.detection
-                emb_idx = self._find_embedding_index(det)
+                emb_idx = self._find_embedding_index(det, detections)
                 emb = embeddings[emb_idx] if emb_idx < len(embeddings) else None
 
                 tracklet = self._create_tracklet(camera, det, event_time, frame_index)
@@ -329,18 +329,23 @@ class TrackletManager:
             face_confirmed=False,
         )
 
-    def _compute_quality(self, detection: Detection, camera: CameraConfig) -> float:
+    def _compute_quality(
+        self, detection: Detection, camera: CameraConfig, *, max_area: int = 1920 * 1080
+    ) -> float:
         """Compute a quality score for a detection (0..1).
 
         Quality is based on:
         - Box size (larger = more reliable)
         - Detection confidence
         - Whether the box is fully within frame bounds
+
+        Args:
+            detection: the detection to score.
+            camera: configuration for the current camera.
+            max_area: assumed max frame area for normalization.
         """
         # Size component: normalize box area to a 0..1 range
-        # Assume max frame size of 1920x1080 for normalization
         box_area = detection.bbox.width * detection.bbox.height
-        max_area = 1920 * 1080
         size_score = min(box_area / (max_area * 0.001), 1.0)  # 0.1% of frame = max score
 
         # Confidence component
@@ -350,12 +355,15 @@ class TrackletManager:
         quality = 0.4 * size_score + 0.6 * conf_score
         return min(max(quality, 0.0), 1.0)
 
-    def _find_embedding_index(self, detection: Detection) -> int:
-        """Find the index of a detection in the embeddings list.
-
-        This is a placeholder that returns 0. In production, embeddings
-        would be returned in the same order as detections from Triton.
-        """
+    def _find_embedding_index(
+        self, detection: Detection, detections: list[Detection]
+    ) -> int:
+        """Find the index of a detection in the embeddings list by matching
+        detection IDs. Embeddings are returned in the same order as detections
+        from the inference pipeline, so we locate the position by ID."""
+        for i, d in enumerate(detections):
+            if d.detection_id == detection.detection_id:
+                return i
         return 0
 
     async def _build_events(
