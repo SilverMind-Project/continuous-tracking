@@ -84,8 +84,7 @@ class CalibrationState:
         return {
             "homographies": {k: v for k, v in self.homographies.items()},
             "privacy_zones": {
-                k: [{"zone_id": z.zone_id, "policy": z.policy, "enabled": z.enabled}
-                    for z in v]
+                k: [{"zone_id": z.zone_id, "policy": z.policy, "enabled": z.enabled} for z in v]
                 for k, v in self.privacy_zones.items()
             },
             "adjacency_edge_count": len(self.adjacency_edges),

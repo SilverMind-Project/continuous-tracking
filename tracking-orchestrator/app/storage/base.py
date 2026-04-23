@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 from ..domain import (
     CameraConfig,
+    DementiaSignal,
     Detection,
     GalleryEmbedding,
     GlobalTrack,
@@ -732,6 +733,55 @@ class InMemoryKeyframeRepository(KeyframeRepository):
         if after is not None:
             results = [k for k in results if k.captured_at >= after]
         results.sort(key=lambda k: k.captured_at, reverse=True)
+        return results[:limit]
+
+
+class DementiaSignalRepository(ABC):
+    """Persist dementia signals."""
+
+    @abstractmethod
+    async def upsert_signal(self, signal: DementiaSignal) -> None:
+        """Store or update a dementia signal."""
+
+    @abstractmethod
+    async def list_signals(
+        self,
+        identity_id: str | None = None,
+        signal_kind: str | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        limit: int = 200,
+    ) -> list[DementiaSignal]:
+        """List dementia signals with optional filters."""
+
+
+class InMemoryDementiaSignalRepository(DementiaSignalRepository):
+    """In-memory store for dementia signals."""
+
+    def __init__(self) -> None:
+        self._signals: dict[str, DementiaSignal] = {}
+
+    async def upsert_signal(self, signal: DementiaSignal) -> None:
+        self._signals[signal.signal_id] = signal
+
+    async def list_signals(
+        self,
+        identity_id: str | None = None,
+        signal_kind: str | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        limit: int = 200,
+    ) -> list[DementiaSignal]:
+        results = list(self._signals.values())
+        if identity_id is not None:
+            results = [s for s in results if s.identity_id == identity_id]
+        if signal_kind is not None:
+            results = [s for s in results if s.signal_kind == signal_kind]
+        if after is not None:
+            results = [s for s in results if s.emitted_at >= after]
+        if before is not None:
+            results = [s for s in results if s.emitted_at <= before]
+        results.sort(key=lambda s: s.emitted_at, reverse=True)
         return results[:limit]
 
 

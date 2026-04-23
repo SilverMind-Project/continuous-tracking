@@ -476,3 +476,42 @@ class PersonActivity:
     metadata: dict[str, Any] = field(default_factory=dict)
     confidence: float = 1.0
     related_event_id: TrackingEventId = ""
+
+
+# ---------------------------------------------------------------------------
+# Dementia Signal types
+# ---------------------------------------------------------------------------
+
+DementiaSignalKind = Literal[
+    "pacing",
+    "room_revisit_rate",
+    "bathroom_dwell_anomaly",
+    "sundowning_index",
+    "nighttime_movement",
+    "stillness_anomaly",
+    "absence",
+]
+
+DementiaSignalSeverity = Literal["info", "warning", "emergency"]
+
+
+@dataclass(frozen=True)
+class DementiaSignal:
+    """A computed dementia-relevant signal.
+
+    Emitted periodically by :class:`DementiaSignalWorker`.  Each signal
+    covers a time window and carries a severity and z-score relative to
+    the person's historical baseline.
+    """
+
+    signal_id: str
+    identity_id: IdentityId
+    signal_kind: DementiaSignalKind
+    severity: DementiaSignalSeverity
+    value: float
+    baseline: float | None = None
+    z_score: float | None = None
+    window_start: datetime = field(default_factory=lambda: datetime.now(UTC))
+    window_end: datetime = field(default_factory=lambda: datetime.now(UTC))
+    context: dict[str, Any] = field(default_factory=dict)
+    emitted_at: datetime = field(default_factory=lambda: datetime.now(UTC))

@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from .pipeline import FrameProcessingPipeline
 from .pipeline.frame_pipeline import PipelineConfig
 from .routers.calibration import router as calibration_router
+from .routers.dashboard import router as dashboard_router
 from .storage.postgres.tracking_repo import PostgresTrackingRepository
 
 # Module-level pipeline singleton, initialized in lifespan.
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     # Phase-0 §0.27 will move these to a separate :8310 listener; for M7
     # they live on the same app under /internal/ to keep the routing simple.
     app.include_router(calibration_router)
+    app.include_router(dashboard_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
