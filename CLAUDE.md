@@ -43,7 +43,7 @@ The design defines 10 milestones (M1-M10) spanning 16+ weeks. Never implement ou
 | M5 | 9-10 | Identity resolution, retroactive revision |
 | M6 | 11 | Trajectories, dwells, keyframes |
 | M7 | 12-13 | Admin UI (cameras, calibration, privacy, adjacency) — **COMPLETE** |
-| M8 | 14-15 | Dementia signals, dashboard, keyframes — **PARTIALLY COMPLETE** |
+| M8 | 14-15 | Dementia signals, dashboard, keyframes — **COMPLETE** |
 | M9 | 16 | Live view, identity corrections, runtime integration |
 | M10 | 16+ | K8s, observability, docs, performance hardening |
 
@@ -279,59 +279,52 @@ Key implementation notes:
 - **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
 - **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.
 
-## M8 — Partially Implemented (Dementia Signals, Dashboard, Keyframes)
+## M8 — Implemented. Dementia signals, dashboard, and keyframes.
 
-M8 builds directly on the trajectory and keyframe data produced by M6.
+### tracking-orchestrator
 
-### Completed in M8
-
-**tracking-orchestrator:**
-
+- `tracking-orchestrator/migrations/0003_m8_signals.sql` — `dementia_signals` TimescaleDB hypertable (identity_id, signal_kind, severity, value, baseline, z_score, window_start/end, context_json, emitted_at). Retention policy (365 days). Continuous aggregate `dementia_signals_daily` for baseline computation.
 - `tracking-orchestrator/app/domain/__init__.py` — Added M8 types: `DementiaSignal`, `DementiaSignalKind`, `DementiaSignalSeverity`.
 - `tracking-orchestrator/app/storage/base.py` — Added `DementiaSignalRepository` protocol and `InMemoryDementiaSignalRepository` implementation.
-- `tracking-orchestrator/app/trajectory/dementia_signals.py` — `DementiaSignalWorker` with 5 signal detectors: pacing, sundowning_index, bathroom_dwell_anomaly, nighttime_movement, stillness_anomaly. `SignalConfig` for threshold tuning.
+- `tracking-orchestrator/app/storage/postgres/signal_repo.py` — `PostgresDementiaSignalRepository`: asyncpg impl with `$N` placeholders, upsert on conflict, filtered list query.
+- `tracking-orchestrator/app/trajectory/dementia_signals.py` — `DementiaSignalWorker` with 6 signal detectors: pacing, sundowning_index, bathroom_dwell_anomaly, nighttime_movement, stillness_anomaly, absence. `SignalConfig` for threshold tuning. All detectors sort trajectory windows ascending before comparing consecutive points.
 - `tracking-orchestrator/app/transport/signal_publisher.py` — `SignalPublisher`: publishes `DementiaSignal` messages to the `tracking.signals` Redis Stream.
+- `tracking-orchestrator/app/routers/dashboard.py` — 6 internal endpoints: `GET /internal/dashboard/signals`, `GET /internal/dashboard/trajectory`, `GET /internal/dashboard/dwell_summary`, `GET /internal/keyframes`, `GET /internal/keyframes/{sample_id}`, `POST /internal/keyframes/{sample_id}/retain`.
+- `tracking-orchestrator/app/main.py` — Dashboard router wired in.
+- `tracking-orchestrator/pyproject.toml` — Added `httpx>=0.27` (test dep), `B008` added to ruff ignore list (FastAPI Depends pattern).
+- `tracking-orchestrator/tests/test_dementia_signals.py` — 18 unit tests covering all 6 detectors with fixture trajectories/dwells.
 
-**cognitive-companion (BFF gateway):**
+**DoD verified (tracking-orchestrator)**: ruff clean, pytest (199/199 tests across 14 files).
 
-- `backend/models/cts_signal.py` — `DementiaSignal` SQLAlchemy ORM model (person_id, signal_type, severity, window_start/end, value, baseline, z_score, context_json, acknowledged_at, received_at).
-- `backend/services/cts/signal_store.py` — `SignalStore`: async persistence and read API (insert, acknowledge, list_recent, get_unacknowledged, get_24h_summary, get_daily_trend). Bug fixed: replaced `with self._db_factory() as db:` (context manager) with `db = self._db_factory(); try/finally db.close()` pattern matching the codebase convention.
-- `backend/services/cts/subscriber.py` — `DementiaSignalSubscriber`: Redis Streams consumer for `tracking.signals` (consumer group `cognitive-companion-signals`); JSON decode with required-field validation; fires pipeline events for rule-engine matching.
-- `backend/services/cts/stream_consumer.py` — `StreamConsumer` base class: consumer-group creation, XAUTOCLAIM reclaim, bounded semaphore, graceful shutdown.
-- `backend/filters/builtin/dementia_signal.py` — `DementiaSignalFilter`: rule-engine context filter matching on signal kind, person ID, severity, time-of-day window, and cooldown.
-- `backend/routers/cts_signals.py` — 5 endpoints: `GET /cts/signals`, `POST /cts/signals/{id}/ack`, `GET /cts/signals/unacknowledged`, `GET /cts/signals/summary`, `GET /cts/signals/trend/{person_id}`. Bug fixed: `_get_signal_store` now uses `get_session` (not `get_db` generator).
-- `backend/routers/cts_keyframes.py` — 3 endpoints: `GET /cts/keyframes`, `GET /cts/keyframes/{sample_id}`, `POST /cts/keyframes/{sample_id}/retain`. Proxies to `OrchestratorClient`. Bug fixed: catches `UpstreamError` (not just `HTTPException`) for 404 mapping.
-- `backend/integrations/tracking_orchestrator_client.py` — Added `list_keyframes`, `get_keyframe`, `retain_keyframe` methods.
-- `backend/main.py` — `DementiaSignalSubscriber` wired into CTS startup block with proper shutdown (stop + cancel task). `redis[hiredis]>=5.0` added to `pyproject.toml`.
-- `backend/tests/services/test_signal_store.py` — 20 unit tests (insert, list_recent, acknowledge, get_unacknowledged, get_24h_summary, get_daily_trend).
-- `backend/tests/services/test_dementia_signal_subscriber.py` — 10 unit tests (decode valid/invalid/missing fields, handle persist/pipeline/error paths).
-- `backend/tests/filters/test_dementia_signal_filter.py` — 20 unit tests (metadata, guards, kinds/person/severity/time-of-day/cooldown filters).
-- `backend/tests/routers/test_cts_signals.py` — 14 router tests (all 5 endpoints, CTS-disabled guard, filters, validation).
-- `backend/tests/routers/test_cts_keyframes.py` — 11 router tests (all 3 endpoints, CTS-disabled guard, upstream error handling).
+### cognitive-companion (BFF gateway)
 
-**DoD verified (cognitive-companion)**: pytest (852/852 tests pass), ruff clean.
+- `backend/models/cts_signal.py` — `DementiaSignal` SQLAlchemy ORM model.
+- `backend/services/cts/signal_store.py` — `SignalStore`: async persistence and read API. Bug fixed: `with self._db_factory() as db:` → `db = self._db_factory(); try/finally db.close()`. Bug fixed: `func.case()` → standalone `case()` (SQLAlchemy 2.x).
+- `backend/services/cts/subscriber.py` — `DementiaSignalSubscriber`: Redis Streams consumer for `tracking.signals`.
+- `backend/services/cts/stream_consumer.py` — `StreamConsumer` base class.
+- `backend/filters/builtin/dementia_signal.py` — `DementiaSignalFilter`: rule-engine context filter.
+- `backend/routers/cts_signals.py` — 5 endpoints. Bug fixed: `get_db` → `get_session` in `_get_signal_store`.
+- `backend/routers/cts_keyframes.py` — 3 endpoints. Bug fixed: catches `UpstreamError` not just `HTTPException`.
+- `backend/routers/cts_dashboard.py` — 3 proxy endpoints: `GET /cts/dashboard/signals`, `GET /cts/dashboard/trajectory`, `GET /cts/dashboard/dwell_summary`.
+- `backend/integrations/tracking_orchestrator_client.py` — Added `list_keyframes`, `get_keyframe`, `retain_keyframe`, `get_dashboard_signals`, `get_dashboard_trajectory`, `get_dashboard_dwell_summary`.
+- `backend/main.py` — `DementiaSignalSubscriber` wired into CTS startup/shutdown. `cts_dashboard` router included.
+- `backend/tests/services/test_signal_store.py` — 20 unit tests.
+- `backend/tests/services/test_dementia_signal_subscriber.py` — 10 unit tests.
+- `backend/tests/filters/test_dementia_signal_filter.py` — 20 unit tests.
+- `backend/tests/routers/test_cts_signals.py` — 14 router tests.
+- `backend/tests/routers/test_cts_keyframes.py` — 11 router tests.
+- `frontend/src/views/admin/CTSDashboardView.vue` — Per-person signal timeline, floor-plan trajectory SVG overlay, room dwell bar chart. Wired to `/cts/dashboard/*` proxy endpoints.
+- `frontend/src/services/cts.js` — Added `getDashboardSignals`, `getDashboardTrajectory`, `getDashboardDwellSummary`.
+- `backend/pyproject.toml` — Added `redis[hiredis]>=5.0`.
 
-### Remaining M8 Work
+**DoD verified (cognitive-companion)**: ruff clean, pytest (852/852 tests).
 
-The following items are **not yet implemented** and must be completed before M8 is done:
+## When Working with This Repo
 
-**tracking-orchestrator:**
-
-1. `tracking-orchestrator/migrations/0003_m8_signals.sql` — `dementia_signals` TimescaleDB hypertable with `identity_id`, `signal_kind`, `severity`, `value`, `baseline`, `z_score`, `window_start`, `window_end`, `context_json`, `computed_at`. Retention policy (365 days). Continuous aggregate for daily baseline computation.
-2. `tracking-orchestrator/app/storage/postgres/signal_repo.py` — Postgres implementation of `DementiaSignalRepository` (asyncpg, `$N` placeholders).
-3. `tracking-orchestrator/app/trajectory/dementia_signals.py` — Add `absence` detector: no detections across all cameras for a configurable window (requires querying `person_trajectories` for gaps).
-4. `tracking-orchestrator/app/routers/dashboard.py` — Three internal dashboard endpoints:
-   - `GET /internal/dashboard/signals?person_id=&window_hours=` — recent signals per person
-   - `GET /internal/dashboard/trajectory?person_id=&start=&end=` — trajectory points for floor-plan overlay
-   - `GET /internal/dashboard/dwell_summary?person_id=&date=` — room dwell aggregation (time-in-room per day)
-5. `tracking-orchestrator/app/routers/keyframes.py` — `GET /internal/keyframes?person_id=&tag_reason=&limit=` — retrieve tagged keyframes for review.
-6. `tracking-orchestrator/tests/test_dementia_signals.py` — Unit tests for `DementiaSignalWorker` covering all 5 implemented detectors with fixture trajectories.
-7. Posture integration: wire `RTMPose` inference output into `PersonTrajectoryPoint.posture` in the frame pipeline (M6 stub completion).
-
-**cognitive-companion:**
-
-8. `backend/routers/cts_dashboard.py` — Proxy router for the three dashboard endpoints above (`GET /cts/dashboard/signals`, `/cts/dashboard/trajectory`, `/cts/dashboard/dwell_summary`).
-9. `frontend/src/views/admin/CTSDashboardView.vue` — Per-person signal timeline, floor-plan trajectory overlay (SVG), room dwell bar chart. Wired to the proxy endpoints above.
+- **M1–M8 are implemented (committed).** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, `triton-models/`, and `cognitive-companion/`.
+- **Always reference phase-0 first.** It supersedes phases 1-5 where they conflict.
+- **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
+- **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.
 
 ## Next Milestone: M9 (Live View, Identity Corrections, Runtime Integration)
 
