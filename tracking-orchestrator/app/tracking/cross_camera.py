@@ -171,7 +171,10 @@ class CrossCameraAssociator:
         async def _refresh(gt_id: str) -> None:
             fresh = await self._repo.get(gt_id)
             if fresh is not None:
-                idx = next((i for i, g in enumerate(active_gts) if g.global_track_id == gt_id), None)
+                idx = next(
+                    (i for i, g in enumerate(active_gts) if g.global_track_id == gt_id),
+                    None,
+                )
                 if idx is not None:
                     active_gts[idx] = fresh
 
@@ -228,9 +231,7 @@ class CrossCameraAssociator:
                             assignment_map[tid] = gt_a
                     active_gts = [gt for gt in active_gts if gt.global_track_id != gt_b]
                     # Persist the merge and refresh the in-memory reference.
-                    merged_gt = next(
-                        (gt for gt in active_gts if gt.global_track_id == gt_a), None
-                    )
+                    merged_gt = next((gt for gt in active_gts if gt.global_track_id == gt_a), None)
                     if merged_gt:
                         await _refresh(gt_a)
             elif gt_a:
@@ -298,8 +299,14 @@ class CrossCameraAssociator:
                             # Check association score before extending.
                             # Find the tracklet on existing_cam from this GlobalTrack.
                             existing_tid = next(
-                                (tid for tid, cid in zip(gt.tracklet_ids, gt.camera_ids)
-                                 if cid == existing_cam), None
+                                (
+                                    tid
+                                    for tid, cid in zip(
+                                        gt.tracklet_ids, gt.camera_ids, strict=False
+                                    )
+                                    if cid == existing_cam
+                                ),
+                                None,
                             )
                             existing_tl = (
                                 tracklet_by_id.get(existing_tid)
@@ -310,12 +317,11 @@ class CrossCameraAssociator:
                                     else None
                                 )
                             )
-                            score = (
-                                self._score_pair(t, existing_tl)
-                                if existing_tl
-                                else None
-                            )
-                            if score is not None and score.combined_score < self._config.min_link_score:
+                            score = self._score_pair(t, existing_tl) if existing_tl else None
+                            if (
+                                score is not None
+                                and score.combined_score < self._config.min_link_score
+                            ):
                                 continue  # skip if score below threshold
                             # Extend this GlobalTrack.
                             merged = await self._repo.merge_tracklets(

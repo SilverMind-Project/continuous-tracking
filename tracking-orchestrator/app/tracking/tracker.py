@@ -460,9 +460,8 @@ class PerCameraTracker:
                 emb_cost = _embedding_distance(track_embs, det_embs)
                 # Combined cost — full weighted cost for all tracks
                 cost = (
-                    (1.0 - self._config.appearance_weight) * iou_cost
-                    + self._config.appearance_weight * emb_cost
-                )
+                    1.0 - self._config.appearance_weight
+                ) * iou_cost + self._config.appearance_weight * emb_cost
             elif any(has_history):
                 # Mixed: tracks with history get embedding cost,
                 # tracks without get IoU-only cost (no appearance penalty).
@@ -480,9 +479,8 @@ class PerCameraTracker:
                 emb_cost = _embedding_distance(track_embs, det_embs)
                 # Combined cost
                 cost = (
-                    (1.0 - self._config.appearance_weight) * iou_cost
-                    + self._config.appearance_weight * emb_cost
-                )
+                    1.0 - self._config.appearance_weight
+                ) * iou_cost + self._config.appearance_weight * emb_cost
                 # For tracks without embedding history, use IoU-only cost
                 for i, has in enumerate(has_history):
                     if not has:
@@ -503,10 +501,13 @@ class PerCameraTracker:
         matched_tracks: list[str] = []
         matched_dets: list[int] = []
         for trk_idx, det_idx in zip(track_indices, det_indices, strict=True):
-            if trk_idx < n_tracks and det_idx < n_dets:
-                if iou_cost[trk_idx, det_idx] <= (1.0 - self._config.match_thresh):
-                    matched_tracks.append(active_tracks[trk_idx][0])
-                    matched_dets.append(det_idx)
+            if (
+                trk_idx < n_tracks
+                and det_idx < n_dets
+                and iou_cost[trk_idx, det_idx] <= (1.0 - self._config.match_thresh)
+            ):
+                matched_tracks.append(active_tracks[trk_idx][0])
+                matched_dets.append(det_idx)
 
         # ---- Compute unmatched sets ----
         matched_set_track_ids = set(matched_tracks)
