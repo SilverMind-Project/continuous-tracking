@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,6 +14,23 @@ from app.transport.redis_streams import FrameReady
 # ---------------------------------------------------------------------------
 # Pipeline skeleton tests
 # ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _mock_redis_deps() -> Generator[tuple[AsyncMock, AsyncMock, AsyncMock], None, None]:
+    """Mock all Redis-dependent components so tests don't need a live Redis."""
+    with (
+        patch("app.pipeline.frame_pipeline.RedisStreamsTransport") as mock_transport_cls,
+        patch("app.pipeline.frame_pipeline.RevisionPublisher") as mock_rev_cls,
+        patch("app.pipeline.frame_pipeline.SceneSamplesPublisher") as mock_scene_cls,
+    ):
+        mock_transport = AsyncMock()
+        mock_transport_cls.return_value = mock_transport
+        mock_rev = AsyncMock()
+        mock_rev_cls.return_value = mock_rev
+        mock_scene = AsyncMock()
+        mock_scene_cls.return_value = mock_scene
+        yield mock_transport, mock_rev, mock_scene
 
 
 class TestPipelineSkeleton:
@@ -43,33 +62,19 @@ class TestPipelineSkeleton:
     @pytest.mark.asyncio
     async def test_initialize_without_detector(self, pipeline: FrameProcessingPipeline) -> None:
         """Initialize should create repo and tracklet manager without a detector."""
-        with (
-            patch("app.pipeline.frame_pipeline.RedisStreamsTransport") as mock_transport_cls,
-            patch("app.pipeline.frame_pipeline.RevisionPublisher") as mock_rev_cls,
-        ):
-            mock_transport = AsyncMock()
-            mock_transport_cls.return_value = mock_transport
-            mock_rev = AsyncMock()
-            mock_rev_cls.return_value = mock_rev
-
+        with _mock_redis_deps():
             await pipeline.initialize()
 
             assert pipeline._transport is not None
             assert pipeline._repo is not None
             assert pipeline._detector is None  # Skeleton mode
+            assert pipeline._trajectory_writer is not None  # M6
+            assert pipeline._keyframe_sampler is not None  # M6
 
     @pytest.mark.asyncio
     async def test_skeleton_frame_processed(self, pipeline: FrameProcessingPipeline) -> None:
         """In skeleton mode, a frame should produce a zero-detection event."""
-        with (
-            patch("app.pipeline.frame_pipeline.RedisStreamsTransport") as mock_transport_cls,
-            patch("app.pipeline.frame_pipeline.RevisionPublisher") as mock_rev_cls,
-        ):
-            mock_transport = AsyncMock()
-            mock_transport_cls.return_value = mock_transport
-            mock_rev = AsyncMock()
-            mock_rev_cls.return_value = mock_rev
-
+        with _mock_redis_deps():
             await pipeline.initialize()
             assert pipeline._transport is not None
 
@@ -97,15 +102,7 @@ class TestPipelineSkeleton:
 
     @pytest.mark.asyncio
     async def test_stop_without_start(self, pipeline: FrameProcessingPipeline) -> None:
-        with (
-            patch("app.pipeline.frame_pipeline.RedisStreamsTransport") as mock_transport_cls,
-            patch("app.pipeline.frame_pipeline.RevisionPublisher") as mock_rev_cls,
-        ):
-            mock_transport = AsyncMock()
-            mock_transport_cls.return_value = mock_transport
-            mock_rev = AsyncMock()
-            mock_rev_cls.return_value = mock_rev
-
+        with _mock_redis_deps():
             await pipeline.initialize()
             # Should not raise
             await pipeline.stop()

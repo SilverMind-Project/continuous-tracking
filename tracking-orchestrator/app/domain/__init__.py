@@ -394,6 +394,59 @@ class StreamAssignment:
 # Dementia Activity Layer
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# M6: Trajectory, dwell, and keyframe types
+# ---------------------------------------------------------------------------
+
+PostureType = Literal["standing", "sitting", "walking", "lying", "unknown"]
+TagReason = Literal["periodic", "identity_changed", "hazard", "dwell_start"]
+
+
+@dataclass(frozen=True)
+class PersonTrajectoryPoint:
+    """One confirmed ground-plane position row in person_trajectories."""
+
+    identity_id: IdentityId
+    global_track_id: GlobalTrackId
+    observed_at: datetime
+    room_name: str = ""
+    ground_x: float = 0.0  # meters, floor-plan frame
+    ground_y: float = 0.0  # meters, floor-plan frame
+    posture: PostureType = "unknown"
+    identity_confidence: float = 0.0
+
+
+@dataclass(frozen=True)
+class RoomDwell:
+    """Contiguous interval a person spent in one room."""
+
+    dwell_id: str
+    identity_id: IdentityId
+    global_track_id: GlobalTrackId
+    room_name: str
+    entered_at: datetime
+    exited_at: datetime | None = None
+    duration_seconds: int | None = None
+    entry_confidence: float = 0.0
+    primary_posture: PostureType = "unknown"
+    activity_summary: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TaggedKeyframe:
+    """A periodic or triggered frame sample tagged with tracking annotations."""
+
+    keyframe_id: str
+    tracklet_id: TrackletId
+    global_track_id: GlobalTrackId
+    camera_id: CameraId
+    minio_key: str
+    captured_at: datetime
+    annotations: dict[str, Any]  # bbox, person_id, posture, activity, confidence
+    tag_reason: TagReason
+    expires_at: datetime
+
+
 ActivityType = Literal[
     "entry",
     "exit",

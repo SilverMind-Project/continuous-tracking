@@ -1,4 +1,4 @@
-"""Frame processing pipeline for M5.
+"""Frame processing pipeline for M6.
 
 This is the core orchestrator that wires together:
 1. Transport (Redis Streams consumer for FrameReady)
@@ -7,8 +7,10 @@ This is the core orchestrator that wires together:
 4. Tracklet management (lifecycle, gallery append)
 5. Cross-camera association (GlobalTrack formation)
 6. Identity resolution (Bayesian posterior + retroactive revision)
-7. Persistence (repository layer)
-8. Event emission (Redis Streams producer + revision publisher)
+7. Trajectory writer (person_trajectories + room_dwells)
+8. Keyframe sampler (tagged_keyframes + scene.samples publisher)
+9. Persistence (repository layer)
+10. Event emission (Redis Streams producer + revision publisher)
 
 The pipeline runs as a background task in the FastAPI lifespan.
 """
@@ -28,17 +30,22 @@ from ..domain import (
     CameraConfig,
     Detection,
     FaceAnchor,
+    FloorPoint,
     FrameRef,
     GlobalTrack,
     Identity,
     IdentityRevision,
+    TaggedKeyframe,
     TrackingEvent,
 )
 from ..inference.detector import PersonDetector
 from ..inference.schemas import DetectionBox
+from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..storage.base import (
     InMemoryGlobalTrackRepository,
+    InMemoryKeyframeRepository,
     InMemoryTrackingRepository,
+    InMemoryTrajectoryRepository,
     TrackingRepository,
 )
 from ..tracking.camera_adjacency import CameraAdjacency
@@ -46,12 +53,14 @@ from ..tracking.cross_camera import CrossCamConfig, CrossCameraAssociator
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.tracker import PerCameraTrackers, TrackerConfig
 from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
+from ..trajectory.trajectory_writer import TrajectoryWriter
 from ..transport.redis_streams import (
     FrameReady,
     RedisStreamsTransport,
     TransportConfig,
 )
 from ..transport.revision_publisher import RevisionPublisher
+from ..transport.scene_publisher import SceneSamplesPublisher
 
 logger = get_logger(__name__)
 
@@ -76,6 +85,10 @@ class PipelineConfig:
     resolver: ResolverConfig = field(default_factory=ResolverConfig)
     # Known identities (from the persons table)
     known_identities: list[Identity] = field(default_factory=list)
+    # Keyframe sampling
+    sampler: SamplerConfig = field(default_factory=SamplerConfig)
+    # Camera-to-room mapping (camera_id -> room_name); resolved from stream assignments.
+    camera_room_map: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +121,10 @@ class FrameProcessingPipeline:
         self._identity_resolver: IdentityResolver | None = None
         self._revision_publisher: RevisionPublisher | None = None
         self._adjacency: CameraAdjacency | None = None
+        # M6
+        self._trajectory_writer: TrajectoryWriter | None = None
+        self._keyframe_sampler: KeyframeSampler | None = None
+        self._scene_publisher: SceneSamplesPublisher | None = None
         self._running = False
         self._tasks: list[asyncio.Task[None]] = []
 
@@ -176,10 +193,26 @@ class FrameProcessingPipeline:
         )
         await self._revision_publisher.connect()
 
+        # ---- M6: Trajectory writer + keyframe sampler ----
+        trajectory_repo = InMemoryTrajectoryRepository()
+        self._trajectory_writer = TrajectoryWriter(repo=trajectory_repo)
+
+        keyframe_repo = InMemoryKeyframeRepository()
+        self._keyframe_sampler = KeyframeSampler(
+            repo=keyframe_repo,
+            config=self._config.sampler,
+        )
+
+        self._scene_publisher = SceneSamplesPublisher(
+            redis_url=self._config.transport.redis_url,
+        )
+        await self._scene_publisher.connect()
+
         logger.info(
             "Pipeline initialized",
             detector=bool(detector),
             m5_components=True,
+            m6_components=True,
         )
 
     async def start(self) -> None:
@@ -202,6 +235,9 @@ class FrameProcessingPipeline:
 
         if self._transport:
             await self._transport.disconnect()
+
+        if self._scene_publisher:
+            await self._scene_publisher.disconnect()
 
         self._tasks.clear()
         logger.info("Pipeline stopped")
@@ -263,8 +299,12 @@ class FrameProcessingPipeline:
         Steps (M5):
         5. Cross-camera association (GlobalTrack formation).
         6. Identity resolution (Bayesian posterior + retroactive revision).
-        7. Persist results + emit revisions.
-        8. Publish tracking event.
+
+        Steps (M6):
+        7. Trajectory writer (person_trajectories + room_dwells).
+        8. Keyframe sampler (tagged_keyframes + scene.samples).
+        9. Persist identity revisions.
+        10. Publish tracking event.
         """
         if self._detector is None or self._tracklet_manager is None or self._tracker is None:
             # Skeleton mode: produce a zero-detection event
@@ -372,14 +412,74 @@ class FrameProcessingPipeline:
             # Collect revisions to emit.
             new_revisions = list(outcome.revisions)
 
-        # Step 7: Persist identity revisions.
+        # Step 7: Write trajectory points and manage room dwells.
+        if outcome.decisions and self._trajectory_writer:
+            traj_time = datetime.now(UTC)
+            room_name = self._config.camera_room_map.get(frame.camera_id, "")
+            for decision in outcome.decisions:
+                if decision.identity_id is None:
+                    continue
+                _top_id, top_prob = decision.posterior.top_identity()
+                await self._trajectory_writer.write(
+                    identity_id=decision.identity_id,
+                    global_track_id=decision.global_track_id,
+                    room_name=room_name,
+                    floor_point=FloorPoint(0, 0),  # homography-based projection added in M9
+                    captured_at=traj_time,
+                    identity_confidence=top_prob,
+                )
+
+        # Step 8: Keyframe sampling (periodic per tracklet + triggered on identity change).
+        if self._keyframe_sampler and active_tracklets:
+            sample_time = datetime.now(UTC)
+            revised_gt_ids = {rev.global_track_id for rev in new_revisions}
+            for tracklet in active_tracklets:
+                gt_id = next(
+                    (
+                        gt.global_track_id
+                        for gt in active_global_tracks
+                        if tracklet.tracklet_id in gt.tracklet_ids
+                    ),
+                    tracklet.tracklet_id,
+                )
+                annotations: dict[str, object] = {
+                    "tracklet_id": tracklet.tracklet_id,
+                    "camera_id": tracklet.camera_id,
+                }
+
+                sampled: TaggedKeyframe | None
+                # Trigger on identity revision.
+                if gt_id in revised_gt_ids:
+                    sampled = await self._keyframe_sampler.trigger_sample(
+                        tracklet_id=tracklet.tracklet_id,
+                        global_track_id=gt_id,
+                        camera_id=tracklet.camera_id,
+                        minio_key=frame.minio_key,
+                        captured_at=sample_time,
+                        annotations=annotations,
+                        tag_reason="identity_changed",
+                    )
+                else:
+                    sampled = await self._keyframe_sampler.maybe_sample(
+                        tracklet_id=tracklet.tracklet_id,
+                        global_track_id=gt_id,
+                        camera_id=tracklet.camera_id,
+                        minio_key=frame.minio_key,
+                        captured_at=sample_time,
+                        annotations=annotations,
+                    )
+
+                if sampled is not None and self._scene_publisher:
+                    await self._scene_publisher.publish(sampled)
+
+        # Step 9: Persist identity revisions.
         if new_revisions and self._revision_publisher:
             await self._revision_publisher.publish_many(new_revisions)
             if self._repo:
                 for rev in new_revisions:
                     await self._repo.save_identity_revision(revision=rev)
 
-        # Step 8: Publish tracking event
+        # Step 10: Publish tracking event
         assert self._transport is not None
         await self._transport.publish_event(
             camera_id=frame.camera_id,
