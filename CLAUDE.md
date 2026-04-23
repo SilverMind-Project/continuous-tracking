@@ -42,7 +42,7 @@ The design defines 10 milestones (M1-M10) spanning 16+ weeks. Never implement ou
 | M4 | 7-8 | Tracking orchestrator skeleton (per-camera tracking, tracklets) |
 | M5 | 9-10 | Identity resolution, retroactive revision |
 | M6 | 11 | Trajectories, dwells, keyframes |
-| M7 | 12-13 | Admin UI (cameras, calibration, privacy, adjacency) |
+| M7 | 12-13 | Admin UI (cameras, calibration, privacy, adjacency) — **COMPLETE** |
 | M8 | 14-15 | Dementia signals, dashboard, keyframes |
 | M9 | 16 | Live view, identity corrections, runtime integration |
 | M10 | 16+ | K8s, observability, docs, performance hardening |
@@ -236,9 +236,81 @@ Implemented files:
 
 **Notes on M6 scope**: Floor-plane coordinates (`ground_x/y`) default to 0.0 — homography-based projection from pixel coords is M9. `posture` defaults to `"unknown"` — pose integration is M8.
 
+**M7 — Implemented.** Admin UI for cameras, calibration, privacy zones, and camera adjacency. All work lives in `cognitive-companion/` (the BFF gateway), not in `tracking-orchestrator/`. Implemented files:
+
+Backend (cognitive-companion):
+
+- `backend/core/upstream_errors.py` — `UpstreamError` exception with HTTP status forwarding
+- `backend/core/service_jwt.py` — EdDSA JWT generation for service-to-service auth (CTS upstream calls)
+- `backend/integrations/cts_ingress.py` — `IngressAdminClient`: RTSP test, snapshot proxy, health check, stream reload
+- `backend/integrations/cts_orchestrator.py` — `OrchestratorClient`: homography push/get, privacy zones push/get, adjacency push/get, calibration status
+- `backend/models/cts_camera.py` — `CtsCamera` SQLAlchemy model (id, name, rtsp_url, location, enabled, homography_json, privacy_zones_json, created_at, updated_at)
+- `backend/schemas/cts.py` — Pydantic schemas: `CtsCameraCreate`, `CtsCameraUpdate`, `CtsCameraOut`, `HomographyRequest`, `HomographyOut`, `PrivacyZoneRequest`, `PrivacyZoneOut`, `AdjacencyEdge`, `AdjacencyOut`
+- `backend/routers/cts.py` — Feature-flag status/features endpoints; `_cts_enabled()` guard returning 404 with `{"code": "cts.disabled"}` when `cts.enabled` is falsy
+- `backend/routers/cts_cameras.py` — Camera CRUD (9 endpoints): list, create, get, patch, delete, test-connect, snapshot, health, reload
+- `backend/routers/cts_calibration.py` — Calibration endpoints (6 endpoints): homography fit via `compute_homography()` (OpenCV RANSAC, min 4 points), privacy zones replace, adjacency replace
+- `backend/tests/routers/test_cts.py` — 8 tests (feature flag on/off, status, features)
+- `backend/tests/routers/test_cts_cameras.py` — 16 tests (CRUD, test-connect, snapshot, health, reload)
+- `backend/tests/routers/test_cts_calibration.py` — 5 tests (homography fit, privacy zones, adjacency)
+
+Frontend (cognitive-companion):
+
+- `frontend/src/services/cts.js` — CTS API client: cameras CRUD, snapshot (returns blob URL with lifecycle management), calibration, privacy zones, adjacency
+- `frontend/src/views/admin/CTSCamerasView.vue` — Camera roster table (enabled chip, calibrated icon, privacy zone count); Add/Edit/Delete dialogs; RTSP test dialog; snapshot preview dialog
+- `frontend/src/views/admin/CTSCalibrationView.vue` — Click-to-place homography calibration: snapshot with crosshair cursor, SVG point overlay, floor coordinate inputs, RANSAC fit, residual table, status chip
+- `frontend/src/views/admin/CTSPrivacyView.vue` — Per-camera privacy zone editor: zone cards with inline SVG polygon preview (normalized coords); Add/Edit/Delete dialog with vertex list editor
+- `frontend/src/views/admin/CTSAdjacencyView.vue` — Camera adjacency graph editor: from/to pairs with min/max transit window; inline validation; save pushes full graph to orchestrator
+- `frontend/src/router/index.js` — Added four CTS child routes under `/admin`: `cts/cameras`, `cts/calibration`, `cts/privacy`, `cts/adjacency`
+- `frontend/src/views/AdminView.vue` — Added "Tracking (CTS)" nav subheader with four list items
+
+Key implementation notes:
+
+- All CTS router handlers check `_cts_enabled()` first; returns 404 + `{"code": "cts.disabled"}` when off
+- `compute_homography()` in `cts_calibration.py` is a pure module-level function; raises `ValueError` for fewer than 4 point pairs
+- Snapshot endpoint proxies raw JPEG bytes from ingress; frontend creates a blob URL and revokes it on close
+- Router tests override `get_auth_context` (not `require_permission`); use `StaticPool` for in-memory SQLite; call `register_exception_handlers(app)` on every test app instance
+
+**DoD verified**: All 29 new router tests pass. `make check` passes cleanly.
+
 ## When Working with This Repo
 
-- **M1–M6 are implemented (committed).** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, and `triton-models/`.
+- **M1–M7 are implemented (committed).** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, `triton-models/`, and `cognitive-companion/`.
 - **Always reference phase-0 first.** It supersedes phases 1-5 where they conflict.
 - **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
 - **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.
+
+## Next Milestone: M8 (Dementia Signals, Dashboard, Keyframes)
+
+M8 builds directly on the trajectory and keyframe data produced by M6. Scope:
+
+**Dementia signal detectors** (new module: `tracking-orchestrator/app/signals/`):
+
+- `pacing_detector.py` — repeated back-and-forth trajectory segments in a room within a time window
+- `sundowning_detector.py` — elevated movement frequency and room-change rate during the late-afternoon/evening window
+- `bathroom_anomaly_detector.py` — dwell duration outlier detection against per-person baseline
+- `stillness_detector.py` — absence of movement for a configurable duration during active hours
+- `nighttime_movement_detector.py` — trajectory events outside the expected sleep window
+- `absence_detector.py` — no detections across all cameras for a configurable window
+
+Each detector reads from `person_trajectories` and `room_dwells` via the repository layer. Signals are persisted to a new `dementia_signals` table and published to a `signals.detected` Redis Stream for downstream consumers (CC notification rules).
+
+**Posture integration** (complete the M6 stub):
+
+- Wire `RTMPose` inference output into `PersonTrajectoryPoint.posture` via the existing keyframe sampler pipeline step
+
+**Dashboard API endpoints** (in `tracking-orchestrator/app/routers/`):
+
+- `GET /internal/dashboard/signals?person_id=&window_hours=` — recent dementia signals per person
+- `GET /internal/dashboard/trajectory?person_id=&start=&end=` — trajectory points for floor-plan overlay
+- `GET /internal/dashboard/dwell_summary?person_id=&date=` — room dwell aggregation (time-in-room per day)
+
+**Keyframe query endpoint** (in `tracking-orchestrator/app/routers/`):
+
+- `GET /internal/keyframes?person_id=&tag_reason=&limit=` — retrieve tagged keyframes for review
+
+**Cognitive-companion frontend** (new admin views):
+
+- `CTSDashboardView.vue` — per-person signal timeline, floor-plan trajectory overlay (SVG), room dwell bar chart
+- Reuses `GET /cts/dashboard/*` proxy endpoints in `cognitive-companion/backend/routers/cts_dashboard.py`
+
+Migration: `tracking-orchestrator/migrations/0003_m8_signals.sql` — `dementia_signals` table with `person_id`, `signal_type`, `detected_at`, `window_start`, `window_end`, `metadata_json`.

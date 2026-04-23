@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from .pipeline import FrameProcessingPipeline
 from .pipeline.frame_pipeline import PipelineConfig
+from .routers.calibration import router as calibration_router
 from .storage.postgres.tracking_repo import PostgresTrackingRepository
 
 # Module-level pipeline singleton, initialized in lifespan.
@@ -56,7 +57,10 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
-    # TODO(phase-0 0.27): add the separate internal admin API listener on :8310.
+    # Internal calibration endpoints consumed by the CC BFF.
+    # Phase-0 §0.27 will move these to a separate :8310 listener; for M7
+    # they live on the same app under /internal/ to keep the routing simple.
+    app.include_router(calibration_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
