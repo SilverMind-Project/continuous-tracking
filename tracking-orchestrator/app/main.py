@@ -11,8 +11,12 @@ from fastapi import FastAPI
 
 from .pipeline import FrameProcessingPipeline
 from .pipeline.frame_pipeline import PipelineConfig
+from .routers import corrections as corrections_router_mod
+from .routers import live as live_router_mod
 from .routers.calibration import router as calibration_router
+from .routers.corrections import router as corrections_router
 from .routers.dashboard import router as dashboard_router
+from .routers.live import router as live_router
 from .storage.postgres.tracking_repo import PostgresTrackingRepository
 
 # Module-level pipeline singleton, initialized in lifespan.
@@ -44,6 +48,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _pipeline.initialize(repo=repo)
     await _pipeline.start()
 
+    # Wire the corrections + live routers to share the pipeline's repositories
+    # and revision publisher so manual overrides produce real revisions on the
+    # same stream the automatic ones do.
+    if _pipeline._repo is not None and _pipeline._global_track_repo is not None:
+        corrections_router_mod.set_context(
+            tracking_repo=_pipeline._repo,
+            global_track_repo=_pipeline._global_track_repo,
+            publisher=_pipeline._revision_publisher,
+        )
+        live_router_mod.set_context(global_track_repo=_pipeline._global_track_repo)
+
     yield
 
     # Shutdown: stop pipeline gracefully
@@ -63,6 +78,8 @@ def create_app() -> FastAPI:
     # they live on the same app under /internal/ to keep the routing simple.
     app.include_router(calibration_router)
     app.include_router(dashboard_router)
+    app.include_router(corrections_router)
+    app.include_router(live_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

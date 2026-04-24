@@ -250,6 +250,9 @@ class RedisStreamsTransport:
         frame_index: int,
         detection_count: int,
         detections: list[Detection] | None = None,
+        minio_key: str = "",
+        room_name: str = "",
+        identities: dict[str, tuple[str, float]] | None = None,
     ) -> str:
         """Publish a tracking event to the tracking.events stream.
 
@@ -259,6 +262,11 @@ class RedisStreamsTransport:
             frame_index: the frame index.
             detection_count: number of detections in this event.
             detections: optional detection details for the event payload.
+            minio_key: optional MinIO key of the frame for downstream review.
+            room_name: optional resolved room name for the camera.
+            identities: mapping ``global_track_id -> (identity_id, confidence)``
+                for detections that resolved to a committed identity. Missing
+                entries are treated as UNKNOWN.
 
         Returns:
             The Redis message ID of the published event.
@@ -276,8 +284,11 @@ class RedisStreamsTransport:
             "event_time_unix_ns": str(event_time_ns),
             "frame_index": str(frame_index),
             "detection_count": str(detection_count),
+            "minio_key": minio_key,
+            "room_name": room_name,
         }
 
+        id_map = identities or {}
         if detections:
             for i, det in enumerate(detections):
                 prefix = f"detection.{i}"
@@ -289,6 +300,16 @@ class RedisStreamsTransport:
                 payload[f"{prefix}.confidence"] = str(det.confidence)
                 payload[f"{prefix}.tracklet_id"] = det.tracklet_id or ""
                 payload[f"{prefix}.global_track_id"] = det.global_track_id or ""
+                payload[f"{prefix}.floor_x_mm"] = str(det.floor_point.x_mm)
+                payload[f"{prefix}.floor_y_mm"] = str(det.floor_point.y_mm)
+                id_entry = id_map.get(det.global_track_id)
+                if id_entry is not None:
+                    identity_id, identity_conf = id_entry
+                    payload[f"{prefix}.identity_id"] = identity_id
+                    payload[f"{prefix}.identity_confidence"] = f"{identity_conf:.6f}"
+                else:
+                    payload[f"{prefix}.identity_id"] = ""
+                    payload[f"{prefix}.identity_confidence"] = "0"
 
         message_id = await self._redis.xadd(
             self._config.events_stream,

@@ -318,13 +318,13 @@ class FrameProcessingPipeline:
         # We need a placeholder image for detection
         # In production: detections = await self._detector.detect(image)
         detections: list[DetectionBox] = []
+        domain_detections: list[Detection] = []
 
         if detections:
             # Step 3: Per-camera tracking
             from ..inference.schemas import Embedding
 
             # Create Detection domain objects from inference results
-            domain_detections: list[Detection] = []
             embeddings: list[Embedding] = []
 
             for det in detections:
@@ -382,6 +382,9 @@ class FrameProcessingPipeline:
         active_global_tracks: list[GlobalTrack] = []
         face_anchors: list[FaceAnchor] = []
         new_revisions: list[IdentityRevision] = []
+        from ..domain import ResolveOutcome
+
+        outcome: ResolveOutcome = ResolveOutcome()
 
         if active_tracklets:
             assert self._cross_camera is not None
@@ -479,13 +482,26 @@ class FrameProcessingPipeline:
                 for rev in new_revisions:
                     await self._repo.save_identity_revision(revision=rev)
 
-        # Step 10: Publish tracking event
+        # Step 10: Publish tracking event with identity + room context so the
+        # CC-side TrackingEventSubscriber can write PersonLocationState directly.
+        identities: dict[str, tuple[str, float]] = {}
+        if active_tracklets and outcome.decisions:
+            for decision in outcome.decisions:
+                if decision.identity_id is None:
+                    continue
+                _top_id, top_prob = decision.posterior.top_identity()
+                identities[decision.global_track_id] = (decision.identity_id, top_prob)
+
         assert self._transport is not None
         await self._transport.publish_event(
             camera_id=frame.camera_id,
             event_time=datetime.now(UTC),
             frame_index=frame.frame_index,
             detection_count=detection_count,
+            detections=domain_detections if detections else None,
+            minio_key=frame.minio_key,
+            room_name=self._config.camera_room_map.get(frame.camera_id, ""),
+            identities=identities or None,
         )
 
         if new_revisions:
@@ -529,6 +545,8 @@ class FrameProcessingPipeline:
             event_time=event_time,
             frame_index=frame.frame_index,
             detection_count=0,
+            minio_key=frame.minio_key,
+            room_name=self._config.camera_room_map.get(frame.camera_id, ""),
         )
 
         logger.debug(
