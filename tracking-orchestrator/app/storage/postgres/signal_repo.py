@@ -101,9 +101,7 @@ class PostgresDementiaSignalRepository(DementiaSignalRepository):
 
 def _row_to_signal(row: Any) -> DementiaSignal:
     ctx_raw = row["context_json"]
-    ctx: dict[str, Any] = (
-        json.loads(ctx_raw) if isinstance(ctx_raw, str) else dict(ctx_raw or {})
-    )
+    ctx: dict[str, Any] = json.loads(ctx_raw) if isinstance(ctx_raw, str) else dict(ctx_raw or {})
     return DementiaSignal(
         signal_id=str(row["signal_id"]),
         identity_id=row["identity_id"],

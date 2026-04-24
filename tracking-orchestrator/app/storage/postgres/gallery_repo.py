@@ -202,8 +202,9 @@ class PostgresGalleryRepository(GalleryRepository):
                 True,  # $2: active_only filter
                 embedding_str,  # $3: query embedding
                 camera_id,  # $4: camera_id filter
-                max_age_seconds,  # $5: max_age_seconds filter
-                limit,  # $6: limit
+                max_age_seconds,  # $5: IS NULL check
+                max_age_seconds,  # $6: interval seconds value
+                limit,  # $7: LIMIT
             )
         return [
             GalleryEmbedding(

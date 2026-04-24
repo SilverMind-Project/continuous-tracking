@@ -36,15 +36,15 @@ The design defines 10 milestones (M1-M10) spanning 16+ weeks. Never implement ou
 
 | Milestone | Weeks | Scope |
 |-----------|-------|-------|
-| M1 | 1-2 | Protobuf contracts, repository interfaces, docker-compose, CI |
-| M2 | 3-4 | rtsp-ingress (Go) |
-| M3 | 5-6 | Triton models + benchmark harness |
-| M4 | 7-8 | Tracking orchestrator skeleton (per-camera tracking, tracklets) |
-| M5 | 9-10 | Identity resolution, retroactive revision |
-| M6 | 11 | Trajectories, dwells, keyframes |
+| M1 | 1-2 | Protobuf contracts, repository interfaces, docker-compose, CI — **COMPLETE** |
+| M2 | 3-4 | rtsp-ingress (Go) — **COMPLETE** |
+| M3 | 5-6 | Triton models + benchmark harness — **COMPLETE** |
+| M4 | 7-8 | Tracking orchestrator skeleton (per-camera tracking, tracklets) — **COMPLETE** |
+| M5 | 9-10 | Identity resolution, retroactive revision — **COMPLETE** |
+| M6 | 11 | Trajectories, dwells, keyframes — **COMPLETE** |
 | M7 | 12-13 | Admin UI (cameras, calibration, privacy, adjacency) — **COMPLETE** |
 | M8 | 14-15 | Dementia signals, dashboard, keyframes — **COMPLETE** |
-| M9 | 16 | Live view, identity corrections, runtime integration |
+| M9 | 16 | Live view, identity corrections, runtime integration — **NEXT** |
 | M10 | 16+ | K8s, observability, docs, performance hardening |
 
 ## Coding Rules (Derived from M4 Code Review)
@@ -294,7 +294,17 @@ Key implementation notes:
 - `tracking-orchestrator/pyproject.toml` — Added `httpx>=0.27` (test dep), `B008` added to ruff ignore list (FastAPI Depends pattern).
 - `tracking-orchestrator/tests/test_dementia_signals.py` — 18 unit tests covering all 6 detectors with fixture trajectories/dwells.
 
-**DoD verified (tracking-orchestrator)**: ruff clean, pytest (199/199 tests across 14 files).
+**DoD verified (tracking-orchestrator)**: ruff clean, mypy (40 files, 0 errors), import-lint, pytest (211/211 tests across 15 files).
+
+**Post-M8 verification fixes** (found during M1–M8 correctness review — all fixed):
+
+- `migrations/0003_m8_signals.sql`: Added `CREATE SCHEMA IF NOT EXISTS continuous_tracking;` before `CREATE TABLE` — schema must exist before schema-qualified table creation. Also fixed `uuid_generate_v4()` → `gen_random_uuid()` (consistent with 0001/0002; avoids requiring uuid-ossp extension).
+- `app/transport/signal_publisher.py`: Fixed mypy return-type errors — `xadd` returns `Any`; explicit `str()` casts added; `publish_batch` return changed from `# type: ignore` to `[str(mid) for mid in message_ids]`; `_serialize` annotated as `dict[str, object]`.
+- `app/routers/calibration.py`: Fixed RUF001 ambiguous Unicode `×` in Field description and validator message; deprecated `HTTP_422_UNPROCESSABLE_ENTITY` → `HTTP_422_UNPROCESSABLE_CONTENT` (Starlette deprecation becomes a test failure with `filterwarnings = ["error::DeprecationWarning"]`); added missing `Any` import.
+- `app/calibration/state.py`: Fixed RUF003 ambiguous `×` in comment; C416 unnecessary dict comprehension removed.
+- `tests/test_calibration_router.py`: Replaced `create_app()` fixture (triggered full FastAPI lifespan → Redis connection attempt → `ConnectionRefusedError`) with a minimal `FastAPI()` app wrapping only the calibration router; added `monkeypatch` to inject a fresh `CalibrationState` per test for isolation.
+- `app/storage/postgres/gallery_repo.py`: **Critical runtime bug** — `search_similar()` passed 6 arguments to `_SQL_SEARCH_SIMILAR` which has 7 placeholders (`$5` = IS NULL guard, `$6` = interval seconds, `$7` = LIMIT). asyncpg would raise `ValueError: bind parameter $7 not found` at runtime. Fixed by passing `max_age_seconds` twice and `limit` as `$7`.
+- `app/trajectory/dementia_signals.py` + `app/storage/postgres/signal_repo.py`: **Idempotency design flaw** — `signal_id=str(uuid.uuid4())` generated a fresh UUID every emission, so `ON CONFLICT (signal_id, emitted_at)` could never trigger (upsert was always a plain INSERT). Fixed by adding `_stable_signal_id()` helper using `uuid.uuid5(NAMESPACE_URL, "{identity_id}\x00{signal_kind}\x00{window_start}\x00{window_end}")` — the same window always hashes to the same UUID — and setting `emitted_at=window_end` explicitly at all 6 construction sites so both conflict-key columns are deterministic on retry.
 
 ### cognitive-companion (BFF gateway)
 
@@ -321,7 +331,7 @@ Key implementation notes:
 
 ## When Working with This Repo
 
-- **M1–M8 are implemented (committed).** Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, `triton-models/`, and `cognitive-companion/`.
+- **M1–M8 are implemented and fully verified.** All correctness bugs identified during the M1–M8 review pass have been fixed. The Python quality gate (`make check`) passes cleanly at 211/211 tests with zero ruff, mypy, or import-linter errors. Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, `triton-models/`, and `cognitive-companion/`.
 - **Always reference phase-0 first.** It supersedes phases 1-5 where they conflict.
 - **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
 - **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.

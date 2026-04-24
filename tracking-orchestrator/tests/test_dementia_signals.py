@@ -64,7 +64,9 @@ def _dwell(
     )
 
 
-def _make_worker(cfg: SignalConfig | None = None) -> tuple[
+def _make_worker(
+    cfg: SignalConfig | None = None,
+) -> tuple[
     DementiaSignalWorker,
     InMemoryTrajectoryRepository,
     InMemoryDementiaSignalRepository,
@@ -87,9 +89,7 @@ def _make_worker(cfg: SignalConfig | None = None) -> tuple[
 class TestPacingDetector:
     @pytest.mark.asyncio
     async def test_pacing_detected_above_threshold(self):
-        worker, traj_repo, _ = _make_worker(
-            SignalConfig(pacing_room_threshold=4)
-        )
+        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=4))
         # 10 alternating room transitions in 20 minutes.
         rooms = ["kitchen", "hallway"] * 5
         for i, room in enumerate(rooms):
@@ -144,8 +144,18 @@ class TestSundowningDetector:
             )
 
         # Evening (17-22): 8 transitions across 10 points (high rate — 4x afternoon).
-        evening_rooms = ["kitchen", "hallway", "kitchen", "hallway", "kitchen",
-                         "hallway", "kitchen", "hallway", "kitchen", "hallway"]
+        evening_rooms = [
+            "kitchen",
+            "hallway",
+            "kitchen",
+            "hallway",
+            "kitchen",
+            "hallway",
+            "kitchen",
+            "hallway",
+            "kitchen",
+            "hallway",
+        ]
         for i, room in enumerate(evening_rooms):
             await traj_repo.save_trajectory_point(
                 _point(room, offset_minutes=0, now=datetime(2026, 4, 23, 18, i, 0, tzinfo=UTC))
@@ -233,9 +243,7 @@ class TestBathroomDwellAnomalyDetector:
 class TestNighttimeMovementDetector:
     @pytest.mark.asyncio
     async def test_nighttime_movement_detected(self):
-        worker, traj_repo, _ = _make_worker(
-            SignalConfig(nighttime_transition_threshold=2)
-        )
+        worker, traj_repo, _ = _make_worker(SignalConfig(nighttime_transition_threshold=2))
         now = datetime(2026, 4, 23, 3, 0, 0, tzinfo=UTC)  # 03:00
 
         # 4 room transitions between 01:00 and 05:00.
@@ -268,9 +276,7 @@ class TestNighttimeMovementDetector:
 class TestStillnessAnomalyDetector:
     @pytest.mark.asyncio
     async def test_stillness_detected_in_non_bed_room(self):
-        worker, traj_repo, _ = _make_worker(
-            SignalConfig(stillness_threshold_minutes=20)
-        )
+        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=20))
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=41))
         # Open dwell in kitchen for 40 minutes.
         open_dwell = _dwell("kitchen", 40, duration_seconds=None, exited=False)
@@ -283,9 +289,7 @@ class TestStillnessAnomalyDetector:
 
     @pytest.mark.asyncio
     async def test_stillness_not_detected_in_bedroom(self):
-        worker, traj_repo, _ = _make_worker(
-            SignalConfig(stillness_threshold_minutes=20)
-        )
+        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=20))
         await traj_repo.save_trajectory_point(_point("bedroom", offset_minutes=121))
         # Long dwell in bedroom — should be ignored.
         open_dwell = _dwell("bedroom", 120, duration_seconds=None, exited=False)
@@ -296,9 +300,7 @@ class TestStillnessAnomalyDetector:
 
     @pytest.mark.asyncio
     async def test_stillness_not_detected_below_threshold(self):
-        worker, traj_repo, _ = _make_worker(
-            SignalConfig(stillness_threshold_minutes=30)
-        )
+        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=30))
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=11))
         # Only 10 minutes in kitchen.
         open_dwell = _dwell("kitchen", 10, duration_seconds=None, exited=False)
@@ -316,9 +318,7 @@ class TestStillnessAnomalyDetector:
 class TestAbsenceDetector:
     @pytest.mark.asyncio
     async def test_absence_detected_when_gap_exceeds_threshold(self):
-        worker, traj_repo, _ = _make_worker(
-            SignalConfig(absence_threshold_minutes=30)
-        )
+        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30))
         # Last seen 90 minutes ago.
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=90))
 
@@ -329,9 +329,7 @@ class TestAbsenceDetector:
 
     @pytest.mark.asyncio
     async def test_absence_severity_emergency_at_2h(self):
-        worker, traj_repo, _ = _make_worker(
-            SignalConfig(absence_threshold_minutes=30)
-        )
+        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30))
         # Last seen 130 minutes ago.
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=130))
 
@@ -342,9 +340,7 @@ class TestAbsenceDetector:
 
     @pytest.mark.asyncio
     async def test_no_absence_when_recently_seen(self):
-        worker, traj_repo, _ = _make_worker(
-            SignalConfig(absence_threshold_minutes=30)
-        )
+        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30))
         # Last seen 5 minutes ago.
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=5))
 
@@ -367,9 +363,7 @@ class TestAbsenceDetector:
 class TestRunOnce:
     @pytest.mark.asyncio
     async def test_signals_persisted_to_repo(self):
-        worker, traj_repo, sig_repo = _make_worker(
-            SignalConfig(pacing_room_threshold=3)
-        )
+        worker, traj_repo, sig_repo = _make_worker(SignalConfig(pacing_room_threshold=3))
         rooms = ["kitchen", "hallway"] * 4
         for i, room in enumerate(rooms):
             await traj_repo.save_trajectory_point(_point(room, offset_minutes=20 - i * 2))
@@ -380,9 +374,7 @@ class TestRunOnce:
 
     @pytest.mark.asyncio
     async def test_multiple_identities_processed_independently(self):
-        worker, traj_repo, _ = _make_worker(
-            SignalConfig(pacing_room_threshold=3)
-        )
+        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=3))
         # Identity A: pacing.
         rooms = ["kitchen", "hallway"] * 4
         for i, room in enumerate(rooms):

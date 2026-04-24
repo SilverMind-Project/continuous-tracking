@@ -112,7 +112,7 @@ class SignalPublisher:
             severity=signal.severity,
             message_id=message_id,
         )
-        return message_id
+        return str(message_id)
 
     async def publish_batch(self, signals: list[DementiaSignal]) -> list[str]:
         """Publish multiple signals in a single pipeline.
@@ -142,9 +142,9 @@ class SignalPublisher:
             "Published batch of dementia signals",
             count=len(signals),
         )
-        return message_ids  # type: ignore[return-value]
+        return [str(mid) for mid in message_ids]
 
-    def _serialize(self, signal: DementiaSignal) -> dict:
+    def _serialize(self, signal: DementiaSignal) -> dict[str, object]:
         """Convert a DementiaSignal to a JSON-serialisable dict."""
         return {
             "signal_id": signal.signal_id,

@@ -29,6 +29,18 @@ from datetime import UTC, datetime, timedelta
 from ..domain import DementiaSignal, DementiaSignalSeverity, PersonTrajectoryPoint, RoomDwell
 from ..storage.base import DementiaSignalRepository, TrajectoryRepository
 
+_SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # uuid.NAMESPACE_URL
+
+
+def _stable_signal_id(
+    identity_id: str, signal_kind: str, window_start: datetime, window_end: datetime
+) -> str:
+    """Return a deterministic UUID5 for (identity, kind, window) so upserts are idempotent."""
+    key = (
+        f"{identity_id}\x00{signal_kind}\x00{window_start.isoformat()}\x00{window_end.isoformat()}"
+    )
+    return str(uuid.uuid5(_SIGNAL_NS, key))
+
 
 class DementiaSignalWorker:
     """Periodically compute dementia signals from trajectory/dwell data.
@@ -168,17 +180,20 @@ class DementiaSignalWorker:
             baseline_key="pacing_baseline",
         )
 
+        w_start = sorted_window[0].observed_at
+        w_end = sorted_window[-1].observed_at
         return [
             DementiaSignal(
-                signal_id=str(uuid.uuid4()),
+                signal_id=_stable_signal_id(identity_id, "pacing", w_start, w_end),
                 identity_id=identity_id,
                 signal_kind="pacing",
                 severity=severity,
                 value=float(room_changes),
                 baseline=z_score.baseline,
                 z_score=z_score.z_score,
-                window_start=sorted_window[0].observed_at,
-                window_end=sorted_window[-1].observed_at,
+                window_start=w_start,
+                window_end=w_end,
+                emitted_at=w_end,
                 context={
                     "room_transitions": room_changes,
                     "unique_rooms": len(unique_rooms),
@@ -255,17 +270,20 @@ class DementiaSignalWorker:
             baseline_key="sundowning_baseline",
         )
 
+        w_start = sorted_window[0].observed_at
+        w_end = sorted_window[-1].observed_at
         return [
             DementiaSignal(
-                signal_id=str(uuid.uuid4()),
+                signal_id=_stable_signal_id(identity_id, "sundowning_index", w_start, w_end),
                 identity_id=identity_id,
                 signal_kind="sundowning_index",
                 severity=severity,
                 value=round(index, 3),
                 baseline=z_score.baseline,
                 z_score=z_score.z_score,
-                window_start=sorted_window[0].observed_at,
-                window_end=sorted_window[-1].observed_at,
+                window_start=w_start,
+                window_end=w_end,
+                emitted_at=w_end,
                 context={
                     "afternoon_transitions": afternoon_transitions,
                     "evening_transitions": evening_transitions,
@@ -321,19 +339,20 @@ class DementiaSignalWorker:
         else:
             severity = "info"
 
+        w_start = open_bathroom[-1].entered_at if open_bathroom else bathroom_dwells[-1].entered_at
+        w_end = now
         return [
             DementiaSignal(
-                signal_id=str(uuid.uuid4()),
+                signal_id=_stable_signal_id(identity_id, "bathroom_dwell_anomaly", w_start, w_end),
                 identity_id=identity_id,
                 signal_kind="bathroom_dwell_anomaly",
                 severity=severity,
                 value=float(current_dur),
                 baseline=float(mean_dur),
                 z_score=round(z_score_val, 2),
-                window_start=open_bathroom[-1].entered_at
-                if open_bathroom
-                else bathroom_dwells[-1].entered_at,
-                window_end=now,
+                window_start=w_start,
+                window_end=w_end,
+                emitted_at=w_end,
                 context={
                     "current_duration_seconds": current_dur,
                     "mean_duration_seconds": round(mean_dur, 1),
@@ -375,15 +394,18 @@ class DementiaSignalWorker:
         else:
             severity = "info"
 
+        w_start = night_points[0].observed_at if night_points else now
+        w_end = night_points[-1].observed_at if night_points else now
         return [
             DementiaSignal(
-                signal_id=str(uuid.uuid4()),
+                signal_id=_stable_signal_id(identity_id, "nighttime_movement", w_start, w_end),
                 identity_id=identity_id,
                 signal_kind="nighttime_movement",
                 severity=severity,
                 value=float(night_transitions),
-                window_start=night_points[0].observed_at if night_points else now,
-                window_end=night_points[-1].observed_at if night_points else now,
+                window_start=w_start,
+                window_end=w_end,
+                emitted_at=w_end,
                 context={
                     "room_transitions": night_transitions,
                     "nighttime_points": len(night_points),
@@ -413,15 +435,19 @@ class DementiaSignalWorker:
                 # Closed dwell — check if it was unusually long/still.
                 duration = dwell.duration_seconds or 0
                 if duration >= self._cfg.stillness_threshold_minutes * 60:
+                    w_end = dwell.exited_at
                     still_signals.append(
                         DementiaSignal(
-                            signal_id=str(uuid.uuid4()),
+                            signal_id=_stable_signal_id(
+                                identity_id, "stillness_anomaly", dwell.entered_at, w_end
+                            ),
                             identity_id=identity_id,
                             signal_kind="stillness_anomaly",
                             severity="warning",
                             value=float(duration),
                             window_start=dwell.entered_at,
-                            window_end=dwell.exited_at,
+                            window_end=w_end,
+                            emitted_at=w_end,
                             context={
                                 "room_name": dwell.room_name,
                                 "duration_seconds": duration,
@@ -434,13 +460,16 @@ class DementiaSignalWorker:
                 if duration >= self._cfg.stillness_threshold_minutes * 60:
                     still_signals.append(
                         DementiaSignal(
-                            signal_id=str(uuid.uuid4()),
+                            signal_id=_stable_signal_id(
+                                identity_id, "stillness_anomaly", dwell.entered_at, now
+                            ),
                             identity_id=identity_id,
                             signal_kind="stillness_anomaly",
                             severity="warning",
                             value=float(duration),
                             window_start=dwell.entered_at,
                             window_end=now,
+                            emitted_at=now,
                             context={
                                 "room_name": dwell.room_name,
                                 "duration_seconds": duration,
@@ -483,13 +512,14 @@ class DementiaSignalWorker:
 
         return [
             DementiaSignal(
-                signal_id=str(uuid.uuid4()),
+                signal_id=_stable_signal_id(identity_id, "absence", most_recent, now),
                 identity_id=identity_id,
                 signal_kind="absence",
                 severity=severity,
                 value=round(gap_minutes, 1),
                 window_start=most_recent,
                 window_end=now,
+                emitted_at=now,
                 context={
                     "last_seen_at": most_recent.isoformat(),
                     "gap_minutes": round(gap_minutes, 1),

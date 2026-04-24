@@ -1,8 +1,10 @@
 -- Migration 0003: M8 dementia signals table
 -- Requires TimescaleDB (already enabled in 0001_init.sql).
 
+CREATE SCHEMA IF NOT EXISTS continuous_tracking;
+
 CREATE TABLE IF NOT EXISTS continuous_tracking.dementia_signals (
-    signal_id        UUID        NOT NULL DEFAULT uuid_generate_v4(),
+    signal_id        UUID        NOT NULL DEFAULT gen_random_uuid(),
     identity_id      VARCHAR(255) NOT NULL,
     signal_kind      VARCHAR(64)  NOT NULL,
     severity         VARCHAR(16)  NOT NULL CHECK (severity IN ('info', 'warning', 'emergency')),

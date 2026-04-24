@@ -37,7 +37,7 @@ class CalibrationState:
 
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
-    # camera_id -> 3×3 homography matrix (row-major)
+    # camera_id -> 3x3 homography matrix (row-major)
     homographies: dict[str, list[list[float]]] = field(default_factory=dict)
 
     # camera_id -> list of privacy zones
@@ -82,7 +82,7 @@ class CalibrationState:
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "homographies": {k: v for k, v in self.homographies.items()},
+            "homographies": dict(self.homographies),
             "privacy_zones": {
                 k: [{"zone_id": z.zone_id, "policy": z.policy, "enabled": z.enabled} for z in v]
                 for k, v in self.privacy_zones.items()

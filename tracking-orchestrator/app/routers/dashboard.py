@@ -226,10 +226,7 @@ async def list_keyframes(
     # Apply person_id and tag_reason filters in-memory (KeyframeRepository
     # protocol does not expose these filters to keep the interface minimal).
     if person_id:
-        keyframes = [
-            k for k in keyframes
-            if k.annotations.get("identity_id") == person_id
-        ]
+        keyframes = [k for k in keyframes if k.annotations.get("identity_id") == person_id]
     if tag_reason:
         keyframes = [k for k in keyframes if k.tag_reason == tag_reason]
 

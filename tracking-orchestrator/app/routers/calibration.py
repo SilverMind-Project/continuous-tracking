@@ -13,7 +13,7 @@ Routes:
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
@@ -33,16 +33,16 @@ class HomographyRequest(BaseModel):
     camera_id: str = Field(..., min_length=1)
     matrix: list[list[float]] = Field(
         ...,
-        description="3×3 homography matrix, row-major (9 floats in 3 rows of 3)",
+        description="3x3 homography matrix, row-major (9 floats in 3 rows of 3)",
     )
-    points: list[dict] = Field(default_factory=list)
-    meta: dict = Field(default_factory=dict)
+    points: list[dict[str, Any]] = Field(default_factory=list)
+    meta: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("matrix")
     @classmethod
     def _validate_matrix(cls, m: list[list[float]]) -> list[list[float]]:
         if len(m) != 3 or any(len(row) != 3 for row in m):
-            raise ValueError("matrix must be 3×3")
+            raise ValueError("matrix must be 3x3")
         return m
 
 
@@ -163,7 +163,7 @@ async def post_camera_adjacency(
     ]
     if any(e.max_transit_s < e.min_transit_s for e in edges):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="max_transit_s must be >= min_transit_s for every edge",
         )
     await state.set_adjacency(edges)

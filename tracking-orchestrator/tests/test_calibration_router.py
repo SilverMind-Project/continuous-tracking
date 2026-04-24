@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import app.routers.calibration as _cal_router_mod
 from app.calibration.state import CalibrationState
-from app.main import create_app
+from app.routers.calibration import router as calibration_router
 
 
 @pytest.fixture
-def client():
-    app = create_app()
+def client(monkeypatch):
+    """Minimal app with fresh calibration state — no lifespan, no Redis."""
+    fresh = CalibrationState()
+    monkeypatch.setattr(_cal_router_mod, "_default_state", fresh)
+    app = FastAPI()
+    app.include_router(calibration_router)
     with TestClient(app) as c:
         yield c
 
