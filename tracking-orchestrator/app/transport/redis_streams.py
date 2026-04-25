@@ -1,13 +1,14 @@
-"""Redis Streams transport layer.
+"""Redis Streams transport layer (proto-only).
 
-Provides a durable, replay-capable message transport using Redis Streams.
-The tracking-orchestrator consumes FrameReady messages from the
-`frames.ready` stream and publishes TrackingEvent results to the
-`tracking.events` stream.
+The orchestrator consumes ``FrameReady`` proto messages from
+``frames.ready`` (published by the Go ingress) and publishes
+``TrackingEvent`` proto messages to ``tracking.events``. Each Redis
+Streams message carries exactly one named field whose value is the raw
+``Message.SerializeToString()`` output -- no codec discriminator, no
+JSON, no base64.
 
-All messages are protobuf-serialized (via the proto-generated Python
-bindings) and stored in Redis Streams with consumer groups for
-at-least-once delivery.
+The Redis client runs with ``decode_responses=False`` so binary proto
+payloads round-trip unchanged.
 """
 
 from __future__ import annotations
@@ -24,8 +25,19 @@ from structlog import get_logger
 
 from ..domain import Detection
 from ..inference.triton_client import TritonClientProtocol
+from ..observability import metrics
+from ..proto.continuoustracking.v1 import frame_pb2, tracking_pb2
+from .codec import decode as proto_decode
+from .codec import encode as proto_encode
 
 logger = get_logger(__name__)
+
+# Field names per stream. Each stream carries one proto type, so the
+# field name doubles as a content hint for ``XRANGE`` debugging.
+FIELD_FRAME = "frame"
+FIELD_EVENT = "event"
+FIELD_RESPONSE = "response"
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -50,18 +62,15 @@ class TransportConfig:
 
 
 # ---------------------------------------------------------------------------
-# FrameReady message (proto-generated, but we define the shape here for
-# type safety without requiring proto compilation in the base path).
+# FrameReady domain shape (mirrors frame.proto::FrameReady).  We keep a
+# frozen dataclass so the rest of the codebase doesn't import the proto
+# class directly.  Conversion happens at the transport boundary.
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class FrameReady:
-    """Deserialized FrameReady message from Redis Streams.
-
-    This mirrors proto/continuoustracking/v1/frame.proto::FrameReady.
-    In production, use the proto-generated Python class directly.
-    """
+    """Domain shape for an inbound frame from rtsp-ingress."""
 
     camera_id: str
     minio_key: str
@@ -71,11 +80,6 @@ class FrameReady:
     width: int
     height: int
     sample_fps: float = 0.0
-
-
-# ---------------------------------------------------------------------------
-# FrameBatch: collects frames for batched processing
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -95,19 +99,18 @@ class RedisStreamsTransport:
     """Redis Streams transport for the tracking orchestrator.
 
     Provides:
-    - consume_frames(): async generator yielding FrameReady messages
-    - publish_event(): publish a tracking event to the events stream
-    - publish_response(): publish a FrameResponse for XACK
+
+    - :meth:`consume_frames` -- async generator yielding FrameReady messages.
+    - :meth:`publish_event` -- emit a TrackingEvent.
+    - :meth:`publish_response` -- emit a FrameResponse for XACK metrics.
 
     Usage::
 
         transport = RedisStreamsTransport(config)
         await transport.connect()
-
         async for frame in transport.consume_frames():
-            # Process frame...
+            ...
             await transport.publish_response(frame, success=True)
-
         await transport.disconnect()
     """
 
@@ -115,7 +118,7 @@ class RedisStreamsTransport:
         self._config = config or TransportConfig()
         self._redis: redis.Redis | None = None
         self._group_created = False
-        # Maps id(frame) → (Redis message ID, monotonic timestamp) for pending XACK
+        # id(frame) -> (Redis message ID bytes, monotonic timestamp)
         self._pending_acks: dict[int, tuple[Any, float]] = {}
 
     @property
@@ -127,19 +130,19 @@ class RedisStreamsTransport:
         if self._redis is not None:
             return
 
+        # decode_responses=False so proto bytes round-trip unchanged.
         self._redis = redis.from_url(
             self._config.redis_url,
-            decode_responses=True,
+            decode_responses=False,
             socket_timeout=5.0,
             socket_connect_timeout=5.0,
         )
 
-        # Create consumer group (ignores error if it already exists)
         try:
             await self._redis.xgroup_create(
                 self._config.frames_stream,
                 self._config.consumer_group,
-                id="0",  # Start from beginning
+                id="0",
                 mkstream=True,
             )
             self._group_created = True
@@ -161,10 +164,9 @@ class RedisStreamsTransport:
             logger.info("Disconnected from Redis")
 
     def _cleanup_stale_acks(self) -> None:
-        """Remove pending ack entries older than the configured TTL.
+        """Evict pending-ack entries older than the configured TTL.
 
-        Entries that have not been ACKed within the TTL window are
-        discarded to prevent unbounded memory growth.
+        Prevents unbounded memory growth when consumers fail to ack.
         """
         now = time.monotonic()
         stale = [
@@ -182,52 +184,34 @@ class RedisStreamsTransport:
             )
 
     async def consume_frames(self, count: int = 1) -> AsyncIterator[FrameReady]:
-        """Consume FrameReady messages from the frames.ready stream.
-
-        Uses XREADGROUP with consumer group for at-least-once delivery.
-        Messages are XACKed after the caller processes them.
-
-        Args:
-            count: maximum number of messages to read per call.
-
-        Yields:
-            FrameReady messages deserialized from Redis Streams.
-        """
+        """Yield FrameReady messages via XREADGROUP."""
         if self._redis is None:
             logger.warning("Cannot consume: not connected to Redis")
             return
 
         self._cleanup_stale_acks()
 
-        # XREADGROUP with block
         streams = await self._redis.xreadgroup(
             self._config.consumer_group,
             self._config.consumer_name,
-            {self._config.frames_stream: ">"},  # Only new messages
+            {self._config.frames_stream: ">"},
             count=count,
             block=self._config.batch_max_wait_ms,
         )
-
         if not streams:
             return
 
         for _stream_name, messages in streams:
             for message_id, fields in messages:
                 frame = self._deserialize_frame(fields)
-                if frame is not None:
-                    # Store the message ID keyed by object identity for later XACK
-                    self._pending_acks[id(frame)] = (message_id, time.monotonic())
-                    yield frame
+                if frame is None:
+                    continue
+                self._pending_acks[id(frame)] = (message_id, time.monotonic())
+                metrics.metrics.frames_consumed_total.labels(camera_id=frame.camera_id).inc()
+                yield frame
 
     async def ack_frame(self, frame: FrameReady) -> None:
-        """Acknowledge processing of a FrameReady message.
-
-        This tells Redis that the message has been successfully processed
-        and can be removed from the pending entries list.
-
-        Args:
-            frame: the FrameReady message to acknowledge.
-        """
+        """Acknowledge processing of a FrameReady message."""
         if self._redis is None:
             return
 
@@ -236,11 +220,10 @@ class RedisStreamsTransport:
             logger.warning("Cannot ACK: no message ID on frame", camera_id=frame.camera_id)
             return
 
-        message_id = entry[0]
         await self._redis.xack(
             self._config.frames_stream,
             self._config.consumer_group,
-            message_id,
+            entry[0],
         )
 
     async def publish_event(
@@ -254,70 +237,56 @@ class RedisStreamsTransport:
         room_name: str = "",
         identities: dict[str, tuple[str, float]] | None = None,
     ) -> str:
-        """Publish a tracking event to the tracking.events stream.
+        """Publish a ``TrackingEvent`` proto to ``tracking.events``.
 
         Args:
             camera_id: the camera that produced this event.
             event_time: wall-clock time of the event.
-            frame_index: the frame index.
-            detection_count: number of detections in this event.
-            detections: optional detection details for the event payload.
-            minio_key: optional MinIO key of the frame for downstream review.
-            room_name: optional resolved room name for the camera.
+            frame_index: the source frame index.
+            detection_count: number of detections in this event (kept for
+                back-compat with internal counters; defaults to len(detections)).
+            detections: per-person detections to embed in the proto.
+            minio_key: MinIO key of the frame for downstream review.
+            room_name: resolved room name for the camera (currently
+                propagated separately by :class:`KeyframeSampler`; reserved
+                for inclusion when a future proto revision lifts it).
             identities: mapping ``global_track_id -> (identity_id, confidence)``
-                for detections that resolved to a committed identity. Missing
-                entries are treated as UNKNOWN.
+                for detections that resolved to a committed identity. Each
+                entry becomes an ``IdentityRevision`` sub-message.
 
         Returns:
-            The Redis message ID of the published event.
+            The Redis message ID of the published event (decoded).
         """
+        del detection_count  # derived from len(detections); kept for back-compat callers
         if self._redis is None:
             logger.error("Cannot publish: not connected to Redis")
             return ""
 
         event_id = str(uuid.uuid4())
-        event_time_ns = int(event_time.timestamp() * 1e9)
+        event_pb = _build_tracking_event_pb(
+            camera_id=camera_id,
+            event_id=event_id,
+            event_time_ns=int(event_time.timestamp() * 1e9),
+            frame_index=frame_index,
+            minio_key=minio_key,
+            room_name=room_name,
+            detections=detections or [],
+            identities=identities or {},
+        )
 
-        payload: dict[str, str] = {
-            "event_id": event_id,
-            "camera_id": camera_id,
-            "event_time_unix_ns": str(event_time_ns),
-            "frame_index": str(frame_index),
-            "detection_count": str(detection_count),
-            "minio_key": minio_key,
-            "room_name": room_name,
-        }
-
-        id_map = identities or {}
-        if detections:
-            for i, det in enumerate(detections):
-                prefix = f"detection.{i}"
-                payload[f"{prefix}.id"] = det.detection_id
-                payload[f"{prefix}.bbox_xmin"] = str(det.bbox.x_min)
-                payload[f"{prefix}.bbox_ymin"] = str(det.bbox.y_min)
-                payload[f"{prefix}.bbox_xmax"] = str(det.bbox.x_max)
-                payload[f"{prefix}.bbox_ymax"] = str(det.bbox.y_max)
-                payload[f"{prefix}.confidence"] = str(det.confidence)
-                payload[f"{prefix}.tracklet_id"] = det.tracklet_id or ""
-                payload[f"{prefix}.global_track_id"] = det.global_track_id or ""
-                payload[f"{prefix}.floor_x_mm"] = str(det.floor_point.x_mm)
-                payload[f"{prefix}.floor_y_mm"] = str(det.floor_point.y_mm)
-                id_entry = id_map.get(det.global_track_id)
-                if id_entry is not None:
-                    identity_id, identity_conf = id_entry
-                    payload[f"{prefix}.identity_id"] = identity_id
-                    payload[f"{prefix}.identity_confidence"] = f"{identity_conf:.6f}"
-                else:
-                    payload[f"{prefix}.identity_id"] = ""
-                    payload[f"{prefix}.identity_confidence"] = "0"
-
-        message_id = await self._redis.xadd(
+        message_id_bytes = await self._redis.xadd(
             self._config.events_stream,
-            payload,  # type: ignore[arg-type]
-            maxlen=10000,  # Auto-trim old entries
+            proto_encode(event_pb, field=FIELD_EVENT),  # type: ignore[arg-type]
+            maxlen=10000,
             approximate=True,
         )
 
+        metrics.metrics.tracking_events_published_total.labels(camera_id=camera_id).inc()
+        message_id = (
+            message_id_bytes.decode("ascii")
+            if isinstance(message_id_bytes, bytes)
+            else str(message_id_bytes)
+        )
         logger.debug("Published tracking event", event_id=event_id, message_id=message_id)
         return message_id
 
@@ -329,137 +298,153 @@ class RedisStreamsTransport:
         error_code: str = "",
         processing_latency_us: int = 0,
     ) -> str:
-        """Publish a FrameResponse for a processed FrameReady message.
-
-        This is used by rtsp-ingress for acknowledgment and metrics.
-
-        Args:
-            frame: the original FrameReady message.
-            success: whether processing succeeded.
-            detection_count: number of detections produced.
-            error_code: error code if not success.
-            processing_latency_us: processing latency in microseconds.
-
-        Returns:
-            The Redis message ID of the published response.
-        """
+        """Publish a ``FrameResponse`` proto to ``tracking.responses``."""
         if self._redis is None:
             return ""
 
-        completed_time_ns = int(datetime.now(UTC).timestamp() * 1e9)
+        response = frame_pb2.FrameResponse(
+            camera_id=frame.camera_id,
+            frame_index=frame.frame_index,
+            success=success,
+            error_code=error_code,
+            detection_count=detection_count,
+            processing_latency_us=processing_latency_us,
+            completed_time_unix_ns=int(datetime.now(UTC).timestamp() * 1e9),
+        )
 
-        payload: dict[str, str] = {
-            "camera_id": frame.camera_id,
-            "frame_index": str(frame.frame_index),
-            "success": str(int(success)),
-            "error_code": error_code,
-            "detection_count": str(detection_count),
-            "processing_latency_us": str(processing_latency_us),
-            "completed_time_unix_ns": str(completed_time_ns),
-        }
-
-        message_id = await self._redis.xadd(
+        message_id_bytes = await self._redis.xadd(
             self._config.responses_stream,
-            payload,  # type: ignore[arg-type]
+            proto_encode(response, field=FIELD_RESPONSE),  # type: ignore[arg-type]
             maxlen=10000,
             approximate=True,
         )
+        return (
+            message_id_bytes.decode("ascii")
+            if isinstance(message_id_bytes, bytes)
+            else str(message_id_bytes)
+        )
 
-        return message_id
-
-    def _deserialize_frame(self, fields: dict[str, str]) -> FrameReady | None:
-        """Deserialize a Redis Streams fields dict into a FrameReady message."""
+    def _deserialize_frame(self, fields: dict[Any, Any]) -> FrameReady | None:
+        """Decode a ``FrameReady`` proto from a Redis-Streams field dict."""
         try:
-            return FrameReady(
-                camera_id=fields.get("camera_id", ""),
-                minio_key=fields.get("minio_key", ""),
-                frame_index=int(fields.get("frame_index", "0")),
-                capture_time_unix_ns=int(fields.get("capture_time_unix_ns", "0")),
-                received_time_unix_ns=int(fields.get("received_time_unix_ns", "0")),
-                width=int(fields.get("width", "0")),
-                height=int(fields.get("height", "0")),
-                sample_fps=float(fields.get("sample_fps", "0.0")),
-            )
-        except (ValueError, KeyError) as exc:
-            logger.error("Failed to deserialize FrameReady", error=str(exc), fields=fields)
+            message = proto_decode(fields, frame_pb2.FrameReady, field=FIELD_FRAME)
+        except Exception as exc:  # proto parse / lookup can raise non-ValueError types
+            logger.error("Failed to deserialize FrameReady", error=str(exc))
             return None
+        return FrameReady(
+            camera_id=message.camera_id,
+            minio_key=message.minio_key,
+            frame_index=int(message.frame_index),
+            capture_time_unix_ns=int(message.capture_time_unix_ns),
+            received_time_unix_ns=int(message.received_time_unix_ns),
+            width=int(message.width),
+            height=int(message.height),
+            sample_fps=float(message.sample_fps),
+        )
 
     async def stream_length(self, stream: str | None = None) -> int:
-        """Return the number of entries in a stream."""
         if self._redis is None:
             return 0
-
-        stream_name = stream or self._config.frames_stream
-        info = await self._redis.xinfo_stream(stream_name)
-        return int(info.get("length", 0))
+        info = await self._redis.xinfo_stream(stream or self._config.frames_stream)
+        return int(info.get(b"length") or info.get("length") or 0)
 
     async def pending_count(self) -> int:
-        """Return the number of pending messages for this consumer group."""
         if self._redis is None:
             return 0
-
-        # XINFO CONSUMERS returns consumer info including pending count
-        stream = self._config.frames_stream
-        group = self._config.consumer_group
-        consumers = await self._redis.xinfo_consumers(stream, group)
+        consumers = await self._redis.xinfo_consumers(
+            self._config.frames_stream, self._config.consumer_group
+        )
         if not consumers:
             return 0
-
-        return int(consumers[0].get("pending", 0))
+        first = consumers[0]
+        return int(first.get(b"pending") or first.get("pending") or 0)
 
 
 # ---------------------------------------------------------------------------
-# Frame processor: the main processing loop that uses transport + inference
+# Frame processor (skeleton; M4+ pipeline integration lives in
+# :mod:`app.pipeline`).
 # ---------------------------------------------------------------------------
 
 
 async def process_frame(
     frame: FrameReady,
     detector: TritonClientProtocol,
-    tracker: Any,  # PerCameraTracker
+    tracker: Any,
     transport: RedisStreamsTransport,
     detector_confidence: float = 0.25,
 ) -> tuple[int, int]:
-    """Process a single FrameReady message through the detection + tracking pipeline.
-
-    This is the core M4 processing loop:
-    1. Fetch the frame JPEG from MinIO (via aiobotocore).
-    2. Run YOLO11m detection via Triton.
-    3. Run per-camera tracking (BoT-SORT).
-    4. Publish results.
-
-    Args:
-        frame: the FrameReady message from Redis Streams.
-        detector: the Triton client for person detection.
-        tracker: the per-camera tracker instance.
-        transport: the Redis Streams transport.
-        detector_confidence: minimum confidence for detections.
-
-    Returns:
-        (detection_count, processing_latency_us)
-    """
-    import time
-
+    """Process a single FrameReady through detection + tracking."""
+    del detector, tracker, detector_confidence  # skeleton mode
     start = time.monotonic()
-
-    # TODO: fetch frame JPEG from MinIO via aiobotocore
-    # image = await minio.fetch_jpeg(frame.minio_key)
-
-    # For now, return zero detections (skeleton mode)
-    # In production, this would be:
-    #   detections = await detector.detect(image, confidence=detector_confidence)
-    #   local_tracks = tracker.update(frame.camera_id, detections, frame.frame_index)
-
     detection_count = 0
-
     latency_us = int((time.monotonic() - start) * 1e6)
-
-    # Publish response for XACK
     await transport.publish_response(
         frame=frame,
         success=True,
         detection_count=detection_count,
         processing_latency_us=latency_us,
     )
-
     return detection_count, latency_us
+
+
+# ---------------------------------------------------------------------------
+# Proto build helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_tracking_event_pb(
+    *,
+    camera_id: str,
+    event_id: str,
+    event_time_ns: int,
+    frame_index: int,
+    minio_key: str,
+    room_name: str,
+    detections: list[Detection],
+    identities: dict[str, tuple[str, float]],
+) -> tracking_pb2.TrackingEvent:
+    """Build a TrackingEvent proto from domain types.
+
+    The ``embedding`` field on Detection is intentionally not populated:
+    the gallery owns canonical per-person embeddings; shipping a 768-float
+    array per detection per frame would 10x the wire payload with no
+    consumer.
+    """
+    event = tracking_pb2.TrackingEvent(
+        camera_id=camera_id,
+        event_time_unix_ns=event_time_ns,
+        room_name=room_name,
+        event_id=event_id,
+    )
+    event.frame_ref.minio_key = minio_key
+    event.frame_ref.frame_index = frame_index
+
+    for det in detections:
+        d = event.detections.add(
+            detection_id=det.detection_id,
+            confidence=det.confidence,
+            tracklet_id=det.tracklet_id or "",
+            global_track_id=det.global_track_id or "",
+        )
+        d.bbox.x_min = det.bbox.x_min
+        d.bbox.y_min = det.bbox.y_min
+        d.bbox.x_max = det.bbox.x_max
+        d.bbox.y_max = det.bbox.y_max
+        d.floor_point.x_mm = det.floor_point.x_mm
+        d.floor_point.y_mm = det.floor_point.y_mm
+        d.floor_point.calibrated = det.floor_point.calibrated
+
+    # Per-detection identity decisions are folded into the per-event
+    # IdentityRevision repeated field. Stream-level revision fields
+    # (revision_id, tracklet_ids, ...) are unset here -- those carry
+    # meaning only on the standalone tracking.revisions stream.
+    for global_track_id, (identity_id, confidence) in identities.items():
+        if not global_track_id or not identity_id:
+            continue
+        revision = event.identity_revisions.add(
+            global_track_id=global_track_id,
+            map_identity_id=identity_id,
+        )
+        revision.candidates.add(identity_id=identity_id, probability=float(confidence))
+
+    return event

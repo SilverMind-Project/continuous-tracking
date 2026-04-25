@@ -1,15 +1,12 @@
-"""SceneSamplesPublisher: emits TaggedKeyframe messages to the scene.samples stream.
+"""SceneSamplesPublisher: emits SceneSample proto messages to scene.samples.
 
-The scene.samples Redis Stream is consumed by the scene-worker (CTSSceneWorker)
-in the cognitive-companion service, which runs VLM analysis on tagged keyframes.
+The scene.samples Redis Stream is consumed by the scene worker
+(``CTSSceneWorker`` in cognitive-companion), which fetches the JPEG from
+MinIO and runs scene analysis on tagged frames.
 
-Each message carries the minimal fields needed for the scene worker to fetch
-the frame from MinIO and run inference:
-- keyframe_id, tracklet_id, global_track_id, camera_id
-- minio_key: path in MinIO to the JPEG frame
-- captured_at: ISO 8601 timestamp
-- tag_reason: 'periodic' | 'identity_changed' | 'hazard' | 'dwell_start'
-- annotations: JSON-encoded dict with bbox, person_id, posture, confidence
+Wire format: each Redis Streams message is a single field ``sample``
+carrying the raw protobuf body of a
+``continuoustracking.v1.SceneSample``.
 """
 
 from __future__ import annotations
@@ -19,43 +16,37 @@ import json
 from structlog import get_logger
 
 from ..domain import TaggedKeyframe
+from ..observability import metrics
+from ..proto.continuoustracking.v1 import scene_pb2
 from .base_publisher import BasePublisher
 
 logger = get_logger(__name__)
 
+FIELD = b"sample"
+
+
+_TAG_REASON_TO_PROTO: dict[str, int] = {
+    "periodic": scene_pb2.TAG_REASON_PERIODIC,
+    "identity_changed": scene_pb2.TAG_REASON_IDENTITY_CHANGED,
+    "hazard": scene_pb2.TAG_REASON_HAZARD,
+    "dwell_start": scene_pb2.TAG_REASON_DWELL_START,
+    "fall": scene_pb2.TAG_REASON_FALL,
+    "dementia_signal": scene_pb2.TAG_REASON_DEMENTIA_SIGNAL,
+}
+
 
 class SceneSamplesPublisher(BasePublisher):
-    """Publishes TaggedKeyframe messages to the scene.samples Redis Stream.
-
-    Usage::
-
-        publisher = SceneSamplesPublisher(redis_url="redis://localhost:6379/0")
-        await publisher.connect()
-        await publisher.publish(keyframe)
-        await publisher.disconnect()
-    """
+    """Publishes SceneSample proto messages to ``scene.samples``."""
 
     _stream_name = "scene.samples"
     _default_maxlen = 20000
 
     async def publish(self, keyframe: TaggedKeyframe) -> str:
-        """Publish one TaggedKeyframe to the scene.samples stream.
+        """Publish one TaggedKeyframe as a SceneSample proto."""
+        message = _to_proto(keyframe)
+        message_id = await self._xadd({FIELD: message.SerializeToString()})
 
-        Returns the Redis message ID, or "" if not connected.
-        """
-        payload: dict[str, str] = {
-            "keyframe_id": keyframe.keyframe_id,
-            "tracklet_id": keyframe.tracklet_id,
-            "global_track_id": keyframe.global_track_id,
-            "camera_id": keyframe.camera_id,
-            "minio_key": keyframe.minio_key,
-            "captured_at": keyframe.captured_at.isoformat(),
-            "tag_reason": keyframe.tag_reason,
-            "annotations": json.dumps(keyframe.annotations),
-            "expires_at": keyframe.expires_at.isoformat(),
-        }
-
-        message_id = await self._xadd(payload)
+        metrics.metrics.scene_samples_published_total.labels(reason=keyframe.tag_reason).inc()
 
         logger.debug(
             "Published scene sample",
@@ -65,3 +56,23 @@ class SceneSamplesPublisher(BasePublisher):
             message_id=message_id,
         )
         return message_id
+
+
+def _to_proto(keyframe: TaggedKeyframe) -> scene_pb2.SceneSample:
+    pb = scene_pb2.SceneSample()
+    pb.keyframe_id = keyframe.keyframe_id
+    pb.tracklet_id = keyframe.tracklet_id
+    pb.global_track_id = keyframe.global_track_id
+    pb.camera_id = keyframe.camera_id
+    pb.minio_key = keyframe.minio_key
+    pb.captured_at_unix_ns = int(keyframe.captured_at.timestamp() * 1e9)
+    # Proto enum values are plain ints at runtime; the generated stub types
+    # the attribute as the enum class so mypy rejects direct assignment.
+    setattr(  # noqa: B010
+        pb,
+        "tag_reason",
+        _TAG_REASON_TO_PROTO.get(keyframe.tag_reason, scene_pb2.TAG_REASON_UNSPECIFIED),
+    )
+    pb.annotations_json = json.dumps(keyframe.annotations, default=str)
+    pb.expires_at_unix_ns = int(keyframe.expires_at.timestamp() * 1e9)
+    return pb

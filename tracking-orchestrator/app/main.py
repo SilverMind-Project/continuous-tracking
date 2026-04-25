@@ -8,6 +8,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from .pipeline import FrameProcessingPipeline
 from .pipeline.frame_pipeline import PipelineConfig
@@ -91,5 +93,15 @@ def create_app() -> FastAPI:
             "service": "tracking-orchestrator",
             "version": "0.1.0",
         }
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics_endpoint() -> Response:
+        """Prometheus scrape target.
+
+        Exposes the default ``prometheus_client`` registry so the
+        observability stack can pull counters, gauges, and histograms
+        registered by :mod:`app.observability.metrics`.
+        """
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return app

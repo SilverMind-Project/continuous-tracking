@@ -56,45 +56,41 @@ class TestFrameReady:
 
 
 class TestTransportDeserialization:
-    def test_valid_fields(self) -> None:
-        transport = RedisStreamsTransport()
-        fields = {
+    def _proto_frame_fields(self, **overrides) -> dict[bytes, bytes]:
+        from app.proto.continuoustracking.v1 import frame_pb2
+
+        defaults = {
             "camera_id": "cam-1",
             "minio_key": "frames/cam-1/5.jpg",
-            "frame_index": "5",
-            "capture_time_unix_ns": "1000000000",
-            "received_time_unix_ns": "1000000001",
-            "width": "640",
-            "height": "480",
-            "sample_fps": "5.0",
+            "frame_index": 5,
+            "capture_time_unix_ns": 1000000000,
+            "received_time_unix_ns": 1000000001,
+            "width": 640,
+            "height": 480,
+            "sample_fps": 5.0,
         }
-        frame = transport._deserialize_frame(fields)
+        defaults.update(overrides)
+        msg = frame_pb2.FrameReady(**defaults)
+        return {b"frame": msg.SerializeToString()}
+
+    def test_valid_fields(self) -> None:
+        transport = RedisStreamsTransport()
+        frame = transport._deserialize_frame(self._proto_frame_fields())
         assert frame is not None
         assert frame.camera_id == "cam-1"
         assert frame.frame_index == 5
         assert frame.width == 640
+        assert frame.sample_fps == pytest.approx(5.0)
 
-    def test_missing_fields(self) -> None:
+    def test_missing_payload_returns_none(self) -> None:
         transport = RedisStreamsTransport()
-        fields: dict[str, str] = {}
-        frame = transport._deserialize_frame(fields)
-        assert frame is not None  # Should still work with defaults
-        assert frame.camera_id == ""
-        assert frame.frame_index == 0
+        # Empty fields dict -> no `frame` key -> codec raises -> None
+        assert transport._deserialize_frame({}) is None
 
-    def test_invalid_frame_index(self) -> None:
+    def test_invalid_proto_returns_none(self) -> None:
         transport = RedisStreamsTransport()
-        fields = {
-            "camera_id": "cam-1",
-            "minio_key": "frames/cam-1/x.jpg",
-            "frame_index": "not_a_number",
-            "capture_time_unix_ns": "1000000000",
-            "received_time_unix_ns": "1000000001",
-            "width": "640",
-            "height": "480",
-        }
-        frame = transport._deserialize_frame(fields)
-        assert frame is None  # Should return None on deserialization error
+        # Garbage bytes that cannot be parsed as FrameReady.
+        assert transport._deserialize_frame({b"frame": b"not-valid-protobuf-\xff\x01"}) is None
 
 
 # ---------------------------------------------------------------------------
@@ -187,36 +183,29 @@ class TestTransportDataPath:
 
     @pytest.mark.asyncio
     async def test_consume_frames_yields_frames(self) -> None:
+        from app.proto.continuoustracking.v1 import frame_pb2
+
         transport, mock_redis = self._mock_transport()
+
+        def _frame(idx: int) -> dict[bytes, bytes]:
+            msg = frame_pb2.FrameReady(
+                camera_id="cam-1",
+                minio_key=f"frames/cam-1/{idx}.jpg",
+                frame_index=idx,
+                capture_time_unix_ns=1_000_000_000 + idx,
+                received_time_unix_ns=1_000_000_001 + idx,
+                width=640,
+                height=480,
+            )
+            return {b"frame": msg.SerializeToString()}
+
         mock_redis.xreadgroup = AsyncMock(
             return_value=[
                 (
                     b"frames.ready",
                     [
-                        (
-                            "1700000000000-0",
-                            {
-                                "camera_id": "cam-1",
-                                "minio_key": "frames/cam-1/1.jpg",
-                                "frame_index": "1",
-                                "capture_time_unix_ns": "1000000000",
-                                "received_time_unix_ns": "1000000001",
-                                "width": "640",
-                                "height": "480",
-                            },
-                        ),
-                        (
-                            "1700000000001-0",
-                            {
-                                "camera_id": "cam-1",
-                                "minio_key": "frames/cam-1/2.jpg",
-                                "frame_index": "2",
-                                "capture_time_unix_ns": "1000000002",
-                                "received_time_unix_ns": "1000000003",
-                                "width": "640",
-                                "height": "480",
-                            },
-                        ),
+                        (b"1700000000000-0", _frame(1)),
+                        (b"1700000000001-0", _frame(2)),
                     ],
                 ),
             ]
@@ -308,6 +297,121 @@ class TestTransportDataPath:
         mock_redis.xadd.assert_called_once()
         call_args = mock_redis.xadd.call_args
         assert call_args[0][0] == "tracking.events"
+
+
+class TestPublishEventProto:
+    """tracking.events publishes a proto-only envelope."""
+
+    def _mock_transport(self) -> tuple[RedisStreamsTransport, AsyncMock]:
+        transport = RedisStreamsTransport()
+        mock_redis = AsyncMock()
+        transport._redis = mock_redis
+        return transport, mock_redis
+
+    def _sample_detections(self) -> list:
+        from app.domain import BoundingBox, Detection, FloorPoint
+
+        return [
+            Detection(
+                detection_id="d1",
+                camera_id="cam-1",
+                bbox=BoundingBox(10, 20, 30, 40),
+                embedding=[0.0] * 4,
+                capture_time=datetime.now(UTC),
+                event_time=datetime.now(UTC),
+                confidence=0.92,
+                tracklet_id="tr-1",
+                global_track_id="gt-1",
+                floor_point=FloorPoint(1234, 5678, calibrated=True),
+            ),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_payload_is_single_proto_field(self) -> None:
+        transport, mock_redis = self._mock_transport()
+        mock_redis.xadd = AsyncMock(return_value=b"msg-1")
+
+        await transport.publish_event(
+            camera_id="cam-1",
+            event_time=datetime.now(UTC),
+            frame_index=42,
+            detection_count=1,
+            detections=self._sample_detections(),
+            minio_key="frames/cam-1/42.jpg",
+            room_name="Kitchen",
+            identities={"gt-1": ("person-grandma", 0.81)},
+        )
+
+        payload = mock_redis.xadd.call_args[0][1]
+        assert set(payload.keys()) == {"event"}
+        assert isinstance(payload["event"], bytes)
+
+    @pytest.mark.asyncio
+    async def test_proto_carries_identity_and_floor_point(self) -> None:
+        from app.proto.continuoustracking.v1 import tracking_pb2
+
+        transport, mock_redis = self._mock_transport()
+        mock_redis.xadd = AsyncMock(return_value=b"msg-1")
+
+        await transport.publish_event(
+            camera_id="cam-1",
+            event_time=datetime.now(UTC),
+            frame_index=99,
+            detection_count=1,
+            detections=self._sample_detections(),
+            minio_key="frames/cam-1/99.jpg",
+            room_name="Bedroom",
+            identities={"gt-1": ("person-grandma", 0.81)},
+        )
+
+        payload = mock_redis.xadd.call_args[0][1]
+        parsed = tracking_pb2.TrackingEvent.FromString(payload["event"])
+        assert parsed.camera_id == "cam-1"
+        assert parsed.room_name == "Bedroom"
+        assert parsed.event_id  # populated with a fresh UUID
+        assert parsed.frame_ref.frame_index == 99
+        assert parsed.detections[0].floor_point.x_mm == 1234
+        assert parsed.detections[0].floor_point.y_mm == 5678
+        assert parsed.detections[0].floor_point.calibrated is True
+        assert len(parsed.identity_revisions) == 1
+        assert parsed.identity_revisions[0].map_identity_id == "person-grandma"
+        assert parsed.identity_revisions[0].candidates[0].probability == pytest.approx(0.81)
+
+
+class TestFrameReadyConsume:
+    """The transport consumes proto-encoded FrameReady messages from ingress."""
+
+    @pytest.mark.asyncio
+    async def test_consume_proto_frame(self) -> None:
+        from app.proto.continuoustracking.v1 import frame_pb2
+
+        transport = RedisStreamsTransport()
+        mock_redis = AsyncMock()
+        transport._redis = mock_redis
+
+        proto_frame = frame_pb2.FrameReady(
+            camera_id="cam-2",
+            minio_key="frames/cam-2/7.jpg",
+            frame_index=7,
+            capture_time_unix_ns=2000000000,
+            received_time_unix_ns=2000000010,
+            width=1280,
+            height=720,
+            sample_fps=2.5,
+        )
+        fields = {b"frame": proto_frame.SerializeToString()}
+        mock_redis.xreadgroup = AsyncMock(
+            return_value=[(b"frames.ready", [(b"0-1", fields)])],
+        )
+
+        frames = []
+        async for frame in transport.consume_frames(count=1):
+            frames.append(frame)
+
+        assert len(frames) == 1
+        assert frames[0].camera_id == "cam-2"
+        assert frames[0].frame_index == 7
+        assert frames[0].sample_fps == pytest.approx(2.5)
 
 
 class TestPendingAcksEviction:

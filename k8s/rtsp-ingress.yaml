@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rtsp-ingress
+  namespace: cts
+  labels:
+    app.kubernetes.io/name: rtsp-ingress
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: continuous-tracking
+spec:
+  # One replica per ~16 cameras. Sharding is via the ASSIGNED_CAMERAS env
+  # var (e.g. "hash_mod/2/0" for replica 0 of 2). Operators bump
+  # replicas alongside the env var when the camera count crosses 16/32/...
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rtsp-ingress
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rtsp-ingress
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: rtsp-ingress
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10002
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: ghcr.io/khoofia/rtsp-ingress:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: health
+              containerPort: 8090
+          env:
+            - name: ASSIGNED_CAMERAS
+              value: "ALL"
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cts-minio
+                  key: access_key
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cts-minio
+                  key: secret_key
+            - name: CC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cc-service-tokens
+                  key: api_key
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: cts-ingress-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rtsp-ingress
+  namespace: cts
+  labels:
+    app.kubernetes.io/name: rtsp-ingress
+    app.kubernetes.io/part-of: continuous-tracking
+spec:
+  selector:
+    app.kubernetes.io/name: rtsp-ingress
+  ports:
+    - name: health
+      port: 8090
+      targetPort: health
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rtsp-ingress
+  namespace: cts
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-browser-ingress
+  namespace: cts
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [rtsp-ingress, tracking-orchestrator]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cc
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8000
+          protocol: TCP
+        - port: 8090
+          protocol: TCP

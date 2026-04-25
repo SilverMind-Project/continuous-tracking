@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package continuoustracking.v1;
+
+option go_package = "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1";
+
+// DementiaSignal is published to the tracking.signals Redis Stream by the
+// orchestrator's DementiaSignalWorker after each evaluation window.
+// Cognitive Companion's DementiaSignalSubscriber persists each signal and
+// fires a context filter so caregiver rules can react.
+message DementiaSignal {
+  // Unique stable signal ID. Computed deterministically from
+  // (identity_id, kind, window_start, window_end) so a re-emission of the
+  // same window is idempotent on the consumer side.
+  string signal_id = 1;
+
+  // Resident the signal is about.
+  string identity_id = 2;
+
+  DementiaSignalKind kind = 3;
+  DementiaSignalSeverity severity = 4;
+
+  // Raw value of the signal in its natural units (steps, minutes, etc).
+  float value = 5;
+
+  // Per-resident historical baseline. Optional; encoded via has_baseline.
+  bool has_baseline = 6;
+  float baseline = 7;
+
+  // z-score relative to the baseline distribution. Optional.
+  bool has_z_score = 8;
+  float z_score = 9;
+
+  // Window the signal was computed over.
+  fixed64 window_start_unix_ns = 10;
+  fixed64 window_end_unix_ns = 11;
+
+  // When the worker emitted the signal (wall clock).
+  fixed64 emitted_at_unix_ns = 12;
+
+  // Detector-specific context (window count, room name, last-known posture,
+  // etc.) serialised as a JSON string. Free-form by design.
+  string context_json = 13;
+}
+
+enum DementiaSignalKind {
+  DEMENTIA_SIGNAL_KIND_UNSPECIFIED = 0;
+  DEMENTIA_SIGNAL_KIND_PACING = 1;
+  DEMENTIA_SIGNAL_KIND_SUNDOWNING_INDEX = 2;
+  DEMENTIA_SIGNAL_KIND_BATHROOM_DWELL_ANOMALY = 3;
+  DEMENTIA_SIGNAL_KIND_NIGHTTIME_MOVEMENT = 4;
+  DEMENTIA_SIGNAL_KIND_STILLNESS_ANOMALY = 5;
+  DEMENTIA_SIGNAL_KIND_ABSENCE = 6;
+}
+
+enum DementiaSignalSeverity {
+  DEMENTIA_SIGNAL_SEVERITY_UNSPECIFIED = 0;
+  DEMENTIA_SIGNAL_SEVERITY_INFO = 1;
+  DEMENTIA_SIGNAL_SEVERITY_WARNING = 2;
+  DEMENTIA_SIGNAL_SEVERITY_EMERGENCY = 3;
+}

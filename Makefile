@@ -5,7 +5,16 @@ UV := uv
 GO_ENV := . $(CURDIR)/scripts/go-env.sh &&
 GO := $(GO_ENV) go
 
-.PHONY: help venv venv-check proto proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check all-check go-install go-env-check go-tools go-lint go-test go-build go-check
+PROTOC ?= protoc
+ORCH_PROTO_OUT := tracking-orchestrator/app/proto
+CC_PROTO_OUT   := ../cognitive-companion/backend/integrations/proto
+PROTO_FILES    := \
+	proto/continuoustracking/v1/frame.proto \
+	proto/continuoustracking/v1/tracking.proto \
+	proto/continuoustracking/v1/signals.proto \
+	proto/continuoustracking/v1/scene.proto
+
+.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check all-check go-install go-env-check go-tools go-lint go-test go-build go-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -16,8 +25,22 @@ venv: ## Create or sync the project venv at tracking-orchestrator/.venv
 venv-check: ## Fail if VIRTUAL_ENV is not the project venv
 	@sh scripts/require-venv.sh
 
-proto: go-env-check ## Generate protobuf code
+proto: proto-go proto-py ## Generate protobuf code (Go + Python)
+
+proto-go: go-env-check ## Generate Go protobuf bindings via buf
 	cd proto && $(GO_ENV) buf generate
+
+proto-py: ## Generate Python protobuf bindings (orchestrator + cognitive-companion)
+	@command -v $(PROTOC) >/dev/null 2>&1 || { \
+	  echo "protoc not found on PATH. Install protoc >= 25 (e.g. apt install protobuf-compiler) or set PROTOC=/path/to/protoc." >&2; \
+	  exit 1; \
+	}
+	mkdir -p $(ORCH_PROTO_OUT) $(CC_PROTO_OUT)
+	$(PROTOC) --proto_path=proto --python_out=$(ORCH_PROTO_OUT) --pyi_out=$(ORCH_PROTO_OUT) $(PROTO_FILES)
+	$(PROTOC) --proto_path=proto --python_out=$(CC_PROTO_OUT)   --pyi_out=$(CC_PROTO_OUT)   $(PROTO_FILES)
+	@for d in $(ORCH_PROTO_OUT) $(CC_PROTO_OUT) $(ORCH_PROTO_OUT)/continuoustracking $(ORCH_PROTO_OUT)/continuoustracking/v1 $(CC_PROTO_OUT)/continuoustracking $(CC_PROTO_OUT)/continuoustracking/v1; do \
+	  test -f $$d/__init__.py || : > $$d/__init__.py; \
+	done
 
 proto-lint: go-env-check ## Lint proto files
 	cd proto && $(GO_ENV) buf lint

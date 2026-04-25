@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package continuoustracking.v1;
+
+option go_package = "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1";
+
+// SceneSample is published to the scene.samples Redis Stream by the
+// orchestrator's KeyframeSampler. The scene worker (currently in
+// Cognitive Companion as CTSSceneWorker) fetches the JPEG from MinIO and
+// runs scene analysis on tagged frames.
+message SceneSample {
+  // Unique keyframe ID (ULID or UUID).
+  string keyframe_id = 1;
+
+  // Originating tracklet and global track. Both required.
+  string tracklet_id = 2;
+  string global_track_id = 3;
+
+  // Originating camera.
+  string camera_id = 4;
+
+  // MinIO object key for the JPEG.
+  string minio_key = 5;
+
+  // Capture wall clock in unix nanoseconds.
+  fixed64 captured_at_unix_ns = 6;
+
+  // Why this frame was sampled.
+  TagReason tag_reason = 7;
+
+  // Annotations envelope (bbox, person_id, posture, activity, confidence)
+  // serialised as JSON for forward-compat with future detector schemas.
+  string annotations_json = 8;
+
+  // Retention deadline in unix nanoseconds.
+  fixed64 expires_at_unix_ns = 9;
+}
+
+enum TagReason {
+  TAG_REASON_UNSPECIFIED = 0;
+  TAG_REASON_PERIODIC = 1;
+  TAG_REASON_IDENTITY_CHANGED = 2;
+  TAG_REASON_HAZARD = 3;
+  TAG_REASON_DWELL_START = 4;
+  TAG_REASON_FALL = 5;
+  TAG_REASON_DEMENTIA_SIGNAL = 6;
+}

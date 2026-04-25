@@ -41,6 +41,7 @@ from ..domain import (
     PosteriorDist,
     ResolveOutcome,
 )
+from ..observability import metrics
 from ..storage.base import GalleryRepository, GlobalTrackRepository, TrackingRepository
 
 logger = get_logger(__name__)
@@ -413,6 +414,14 @@ class IdentityResolver:
                     f"identity_change: {prev_id} -> {new_id} "
                     f"(p={top_prob:.3f}, margin={margin:.3f})"
                 )
+
+        # Observability: record posterior entropy for every decision so we
+        # can plot entropy distributions per resident in Grafana.
+        metrics.metrics.posterior_entropy.observe(posterior.entropy())
+        if new_id is not None and revises:
+            metrics.metrics.identity_commits_total.labels(
+                source="face" if top_id in face_likelihood.distribution else "reid",
+            ).inc()
 
         return IdentityDecision(
             global_track_id=gt.global_track_id,

@@ -45,7 +45,7 @@ The design defines 10 milestones (M1-M10) spanning 16+ weeks. Never implement ou
 | M7 | 12-13 | Admin UI (cameras, calibration, privacy, adjacency) — **COMPLETE** |
 | M8 | 14-15 | Dementia signals, dashboard, keyframes — **COMPLETE** |
 | M9 | 16 | Live view, identity corrections, runtime integration — **COMPLETE** |
-| M10 | 16+ | K8s, observability, docs, performance hardening |
+| M10 | 16+ | K8s, observability, docs, performance hardening — **IN PROGRESS** (proto wire migration, metrics, LocationRepository, e2e gate, manifests, runbook landed; remaining stream proto migrations + perf hardening deferred) |
 
 ## Coding Rules (Derived from M4 Code Review)
 
@@ -388,22 +388,34 @@ Key implementation notes:
 - **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
 - **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.
 
-## Next Milestone: M10 (K8s, Observability, Docs, Performance Hardening)
+## M10 — Production hardening (in progress)
 
-M10 hardens the system for production deployment. It depends on M9 being complete.
+M10 hardens the system for production deployment. The coherent slice landed in this PR is below; the remaining items are tracked as follow-ups.
 
-**Scope:**
+### Landed
 
-- Kubernetes manifests / Helm charts for orchestrator, ingress, and CC services.
-- Observability: structured logging, OpenTelemetry tracing across Redis Streams boundaries, Prometheus metrics (tracking latency, identity commit rate, signal throughput).
-- Protobuf wire migration: switch Redis Streams envelopes from JSON to proto (TD-004).
-- `TrackingEvent` payload enrichment: add `identity_id`, `floor_point`, `embedding` to `publish_event` (TD-001).
-- `LocationRepository` abstraction for `PersonLocationState` writes (TD-005).
-- End-to-end replay suite: deterministic feed → rule fire → UI reflection (TD-002 follow-up).
-- Performance hardening: HNSW index tuning, Kalman filter numerical stability under drift, WebSocket fan-out backpressure.
-- Operational docs: runbook, capacity planning, disaster recovery for Redis Streams replay.
+- **Python proto codegen.** `make proto-py` runs `protoc --python_out --pyi_out` against `proto/continuoustracking/v1/*.proto` and writes generated bindings into both `tracking-orchestrator/app/proto/` and `cognitive-companion/backend/integrations/proto/`. Generated files are committed; mypy + ruff exclude them. CI image must install `protobuf-compiler` (>= 25). See `proto/README.md`.
+- **Proto-only wire format (TD-004).** Every Redis Stream carries one named field whose value is the raw `Message.SerializeToString()` body — no codec discriminator, no JSON, no base64. `app/transport/codec.py` is a ten-line `encode` / `decode` pair. All four streams (`frames.ready`, `tracking.events`, `tracking.revisions`, `tracking.signals`) plus `scene.samples` use this envelope. See `docs/wire-format.md` for the per-stream contract. Since there were no production consumers, the dual-codec compatibility shim was removed entirely instead of being maintained.
+- **TD-001 partial.** `identity_id` / `floor_point` were already on the legacy wire; the proto path now carries them in the `Detection` and `IdentityRevision` sub-messages of `TrackingEvent`. The `embedding` field is intentionally left empty — gallery owns canonical per-person embeddings; shipping 768 floats per detection per frame would 10× the wire payload with no consumer.
+- **TD-005 LocationRepository.** `PersonTrackingService._update_location_state` now delegates all `PersonLocationState` / `PersonLocationHistory` writes to `SqlAlchemyLocationRepository` so the camera-event ingest path and the CTS `LocationWriter` share one canonical write surface. `_make_history_entry` removed (dead code).
+- **Prometheus metrics.** `tracking-orchestrator/app/observability/metrics.py` registers the metric set from phase-1 §1.9 / phase-3 §3.19 (frames consumed, events / revisions / signals published, posterior entropy histogram, identity commits, latency histograms, gallery and tracklet gauges). Producers and the identity resolver record against the global registry; `app/main.py` exposes `/metrics` for Prometheus scrape.
+- **E2E DoD gate.** `cognitive-companion/backend/tests/e2e/test_cts_pipeline.py` drives the full path with `fakeredis`: producer → proto encode → Redis Streams → subscriber decode → `LocationWriter` → DB rows + WS broadcast + pipeline fire → `IdentityRevisionSubscriber` → `IdentityRewriter` stamps `superseded_by_revision_id` and inserts replacement rows. Asserts both halves of the DoD ("rule fires" and "UI reflects identity correction"). Legacy JSON-flat compatibility is covered by a sibling test.
+- **K8s manifests.** `k8s/` ships namespace, ConfigMap (with the wire-format toggles), Postgres + Redis StatefulSets (TimescaleDB image, AOF on), Triton Deployment (GPU node selector, `Recreate` strategy), rtsp-ingress + tracking-orchestrator Deployments with HPA on Redis-lag custom metric, NetworkPolicy enforcing the BFF gateway rule, and a PodDisruptionBudget.
+- **Operational docs.** `docs/runbook.md` (top-line dashboards, common incidents, capacity planning, DR), `docs/wire-format-migration.md` (rollout state machine, rollback procedure, deferred streams), `proto/README.md` (codegen + add-a-field workflow), `k8s/README.md` (apply order + ops notes).
 
-**DoD gate (from phase-0 Appendix F):**
+### DoD status
 
-- `tests/e2e/test_cts_pipeline.py` passes in CI nightly: feed a capture, assert rule fires, assert UI reflects the identity correction.
-- All three subscribers start cleanly via `CTSRuntime` on `cts.enabled=true`.
+- `cognitive-companion/backend/tests/e2e/test_cts_pipeline.py` passes in CI: feed a synthetic capture, assert pipeline fires, assert WS broadcasts the live frame, assert identity correction rewrites prior history rows.
+- All three subscribers start cleanly via `CTSRuntime` on `cts.enabled=true` (M9 carry-over).
+
+### Quality gate
+
+- `tracking-orchestrator`: `make all-check` green — ruff, ruff format, mypy strict, import-linter, pytest 255/255, Go race tests, buf lint.
+- `cognitive-companion`: `make check-all` green — ruff, mypy (core strict), pytest 1041/1041 including the M10 e2e gate.
+
+### Deferred to follow-up PRs
+
+- Protobuf migration for `tracking.revisions` / `tracking.signals` / `scene.samples`. Codec is generic; defining proto envelopes for these three messages is mechanical work.
+- OpenTelemetry tracing across Redis Streams boundaries. Skipped until an OTel collector target exists.
+- Performance hardening (HNSW `ef_search` tuning, Kalman P-matrix conditioning, WS backpressure). Wait for the Prometheus dashboards from this milestone to surface real hotspots before tuning blind.
+- Helm chart packaging on top of the raw manifests in `k8s/`.

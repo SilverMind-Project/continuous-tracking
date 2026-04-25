@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: cts
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: continuous-tracking
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      containers:
+        - name: postgres
+          # ha image ships pgvector + timescaledb; we depend on both
+          # (pgvector for ReID similarity, TimescaleDB for hypertables).
+          image: timescale/timescaledb-ha:pg16
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: cts-postgres
+                  key: user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cts-postgres
+                  key: password
+            - name: POSTGRES_DB
+              value: continuous_tracking
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: cts
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

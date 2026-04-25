@@ -1,12 +1,15 @@
 """Shared base class for Redis Streams publishers.
 
 All CTS publishers (revisions, signals, scene samples) follow the same
-lifecycle pattern: connect to Redis, XADD serialized payloads, disconnect.
-This base class eliminates the duplicated connection management, leaving
-each subclass to implement only serialization and domain-specific publish
-methods.
+lifecycle pattern: connect to Redis, XADD a single proto-bytes field,
+disconnect.  This base class eliminates the duplicated connection
+management; subclasses implement only the proto build + the public
+``publish`` method.
 
-Design note: publishers never create consumer groups.  ``XADD`` creates
+Connections run with ``decode_responses=False`` so binary proto bodies
+round-trip unchanged through ``XADD``.
+
+Design note: publishers never create consumer groups -- ``XADD`` creates
 the stream when ``mkstream`` is implied by Redis defaults.  Consumer
 groups belong to the consuming side (see ``StreamConsumer._ensure_group``
 on the CC backend).
@@ -32,8 +35,7 @@ class BasePublisher:
             _stream_name = "my.stream"
 
             async def publish(self, msg: MyMessage) -> str:
-                payload = self._serialize(msg)
-                return await self._xadd(payload)
+                return await self._xadd({b"my_field": msg.SerializeToString()})
 
         pub = MyPublisher(redis_url="redis://localhost:6379/0")
         await pub.connect()
@@ -49,13 +51,10 @@ class BasePublisher:
         redis_url: str = "redis://localhost:6379/0",
         stream: str | None = None,
         maxlen: int | None = None,
-        *,
-        decode_responses: bool = True,
     ) -> None:
         self._redis_url = redis_url
         self._stream = stream or self._stream_name
         self._maxlen = maxlen if maxlen is not None else self._default_maxlen
-        self._decode_responses = decode_responses
         self._redis: redis.Redis | None = None
 
     @property
@@ -69,7 +68,7 @@ class BasePublisher:
 
         self._redis = redis.from_url(
             self._redis_url,
-            decode_responses=self._decode_responses,
+            decode_responses=False,
             socket_timeout=5.0,
             socket_connect_timeout=5.0,
         )
@@ -86,18 +85,16 @@ class BasePublisher:
             self._redis = None
             logger.info("Publisher disconnected from Redis", stream=self._stream)
 
-    async def _xadd(self, payload: dict[str, str]) -> str:
+    async def _xadd(self, payload: dict[bytes, bytes]) -> str:
         """Append *payload* to the stream.  Returns the message ID or ``""``."""
         if self._redis is None:
             logger.error("Cannot publish: not connected to Redis", stream=self._stream)
             return ""
 
-        message_id = str(
-            await self._redis.xadd(
-                self._stream,
-                payload,  # type: ignore[arg-type]
-                maxlen=self._maxlen,
-                approximate=True,
-            )
+        message_id = await self._redis.xadd(
+            self._stream,
+            payload,  # type: ignore[arg-type]
+            maxlen=self._maxlen,
+            approximate=True,
         )
-        return message_id
+        return message_id.decode("ascii") if isinstance(message_id, bytes) else str(message_id)

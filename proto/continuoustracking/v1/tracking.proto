@@ -24,6 +24,14 @@ message TrackingEvent {
   // Identity resolution: for each global track that was matched to a known
   // person, the posterior probability distribution over candidates.
   repeated IdentityRevision identity_revisions = 5;
+
+  // Resolved room name for the camera at event time. Empty when the camera
+  // has no room mapping configured. The CC LocationWriter uses this to
+  // open / close PersonLocationHistory rows on room transitions.
+  string room_name = 6;
+
+  // Unique event identifier for tracing / audit. UUID4.
+  string event_id = 7;
 }
 
 // FrameRef points to a frame stored in MinIO without duplicating pixel data.
@@ -87,8 +95,12 @@ message FloorPoint {
   bool calibrated = 3;
 }
 
-// IdentityRevision captures the Bayesian posterior update for a single
-// global track at a given event time.
+// IdentityRevision is dual-purpose: it serves both as a TrackingEvent
+// sub-message (Bayesian posterior snapshot for one global track at one
+// event time) and as the standalone message published to the
+// tracking.revisions Redis Stream when an identity assignment changes.
+// Stream consumers care about tags 6+ which are absent from the
+// per-detection variant.
 message IdentityRevision {
   // The global track being updated.
   string global_track_id = 1;
@@ -105,6 +117,29 @@ message IdentityRevision {
 
   // When this revision was computed.
   fixed64 revision_time_unix_ns = 5;
+
+  // -- stream-message-only fields (unused in the per-detection variant) --
+
+  // Unique ID of this revision. Used for idempotent CC-side rewrites.
+  string revision_id = 6;
+
+  // Tracklets that fall within the revision horizon and are affected.
+  repeated string tracklet_ids = 7;
+
+  // Identity before the revision (empty when promoting from UNKNOWN).
+  string previous_identity_id = 8;
+
+  // Identity after the revision (empty when demoting to UNKNOWN).
+  string new_identity_id = 9;
+
+  // Human-readable reason: initial_assignment | identity_change |
+  // demoted_to_unknown | manual_override | merge.
+  string reason = 10;
+
+  // Free-form evidence snapshot (top_probability, margin, anchor_ids, ...)
+  // serialised as JSON. Keeping it as a string sidesteps a Struct
+  // dependency without losing fidelity for a debug-only field.
+  string evidence_json = 11;
 }
 
 // IdentityCandidate is one candidate identity with its posterior probability.
