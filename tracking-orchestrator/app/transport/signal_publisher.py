@@ -14,15 +14,15 @@ from __future__ import annotations
 
 import json
 
-import redis.asyncio as redis
 from structlog import get_logger
 
 from ..domain import DementiaSignal
+from .base_publisher import BasePublisher
 
 logger = get_logger(__name__)
 
 
-class SignalPublisher:
+class SignalPublisher(BasePublisher):
     """Publishes dementia signals to the ``tracking.signals`` Redis Stream.
 
     Usage::
@@ -33,55 +33,19 @@ class SignalPublisher:
         await publisher.disconnect()
     """
 
-    STREAM = "tracking.signals"
+    _stream_name = "tracking.signals"
+    _default_maxlen = 50000
 
-    def __init__(self, redis_url: str = "redis://localhost:6379/0", maxlen: int = 50000) -> None:
-        self._redis_url = redis_url
-        self._maxlen = maxlen
-        self._redis: redis.Redis | None = None
-        self._group_created = False
-
-    @property
-    def is_connected(self) -> bool:
-        return self._redis is not None
-
-    async def connect(self) -> None:
-        """Connect to Redis and create the consumer group if needed."""
-        if self._redis is not None:
-            return
-
-        self._redis = redis.from_url(
-            self._redis_url,
-            decode_responses=False,  # We serialize JSON ourselves
-            socket_timeout=5.0,
-            socket_connect_timeout=5.0,
+    def __init__(
+        self,
+        redis_url: str = "redis://localhost:6379/0",
+        maxlen: int = 50000,
+    ) -> None:
+        super().__init__(
+            redis_url=redis_url,
+            maxlen=maxlen,
+            decode_responses=False,
         )
-
-        # Create consumer group (ignores BUSYGROUP error)
-        try:
-            await self._redis.xgroup_create(
-                self.STREAM,
-                "cognitive-companion-signals",
-                id="$",
-                mkstream=True,
-            )
-            self._group_created = True
-            logger.info("Created signal consumer group", stream=self.STREAM)
-        except redis.ResponseError as exc:
-            if "BUSYGROUP" in str(exc):
-                self._group_created = True
-                logger.info("Signal consumer group already exists", stream=self.STREAM)
-            else:
-                raise
-
-        logger.info("Connected to Redis for signal publishing", url=self._redis_url)
-
-    async def disconnect(self) -> None:
-        """Close the Redis connection."""
-        if self._redis is not None:
-            await self._redis.close()
-            self._redis = None
-            logger.info("Disconnected from Redis for signal publishing")
 
     async def publish_signal(self, signal: DementiaSignal) -> str:
         """Publish a dementia signal to the Redis Stream.
@@ -98,7 +62,7 @@ class SignalPublisher:
 
         payload = self._serialize(signal)
         message_id = await self._redis.xadd(
-            self.STREAM,
+            self._stream,
             {"signal": json.dumps(payload).encode("utf-8")},
             maxlen=self._maxlen,
             approximate=True,
@@ -131,7 +95,7 @@ class SignalPublisher:
         for signal in signals:
             payload = self._serialize(signal)
             pipe.xadd(
-                self.STREAM,
+                self._stream,
                 {"signal": json.dumps(payload).encode("utf-8")},
                 maxlen=self._maxlen,
                 approximate=True,

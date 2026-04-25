@@ -1,6 +1,6 @@
 """Revision publisher: emits IdentityRevision messages to Redis Streams.
 
-Publishes identity revisions to the `tracking.revisions` stream so that
+Publishes identity revisions to the ``tracking.revisions`` stream so that
 downstream consumers (Cognitive Companion's identity_rewriter, UI, etc.)
 can react to retroactive identity changes.
 
@@ -24,20 +24,15 @@ from __future__ import annotations
 
 import json
 
-import redis.asyncio as redis
 from structlog import get_logger
 
 from ..domain import IdentityRevision
+from .base_publisher import BasePublisher
 
 logger = get_logger(__name__)
 
-# Default stream name for identity revisions.
-DEFAULT_REVISIONS_STREAM = "tracking.revisions"
-# Default max length for the stream (auto-trim).
-DEFAULT_MAXLEN = 50000
 
-
-class RevisionPublisher:
+class RevisionPublisher(BasePublisher):
     """Publishes IdentityRevision messages to Redis Streams.
 
     Usage::
@@ -51,58 +46,8 @@ class RevisionPublisher:
         await publisher.disconnect()
     """
 
-    def __init__(
-        self,
-        redis_url: str = "redis://localhost:6379/0",
-        stream: str = DEFAULT_REVISIONS_STREAM,
-        maxlen: int = DEFAULT_MAXLEN,
-    ) -> None:
-        self._redis_url = redis_url
-        self._stream = stream
-        self._maxlen = maxlen
-        self._redis: redis.Redis | None = None
-        self._group_created = False
-
-    @property
-    def is_connected(self) -> bool:
-        return self._redis is not None
-
-    async def connect(self) -> None:
-        """Connect to Redis and create the consumer group if needed."""
-        if self._redis is not None:
-            return
-
-        self._redis = redis.from_url(
-            self._redis_url,
-            decode_responses=True,
-            socket_timeout=5.0,
-            socket_connect_timeout=5.0,
-        )
-
-        try:
-            await self._redis.xgroup_create(
-                self._stream,
-                "cts-orchestrator",
-                id="0",
-                mkstream=True,
-            )
-            self._group_created = True
-            logger.info("Created revision consumer group", stream=self._stream)
-        except redis.ResponseError as exc:
-            if "BUSYGROUP" in str(exc):
-                self._group_created = True
-                logger.info("Revision consumer group already exists", stream=self._stream)
-            else:
-                raise
-
-        logger.info("Connected to Redis for revisions", url=self._redis_url)
-
-    async def disconnect(self) -> None:
-        """Close the Redis connection."""
-        if self._redis is not None:
-            await self._redis.close()
-            self._redis = None
-            logger.info("Disconnected from Redis (revisions)")
+    _stream_name = "tracking.revisions"
+    _default_maxlen = 50000
 
     async def publish(self, revision: IdentityRevision) -> str:
         """Publish an IdentityRevision to the revisions stream.
@@ -113,31 +58,8 @@ class RevisionPublisher:
         Returns:
             The Redis message ID.
         """
-        if self._redis is None:
-            logger.error("Cannot publish revision: not connected")
-            return ""
-
-        payload: dict[str, str] = {
-            "revision_id": revision.revision_id,
-            "global_track_id": revision.global_track_id,
-            "tracklet_ids": json.dumps(revision.tracklet_ids),
-            "previous_identity_id": revision.previous_identity_id or "",
-            "new_identity_id": revision.new_identity_id or "",
-            "map_identity_id": revision.map_identity_id,
-            "posterior_entropy": str(revision.posterior_entropy),
-            "reason": revision.reason,
-            "evidence": json.dumps(revision.evidence),
-            "revision_time": revision.revision_time.isoformat(),
-        }
-
-        message_id = str(
-            await self._redis.xadd(
-                self._stream,
-                payload,  # type: ignore[arg-type]
-                maxlen=self._maxlen,
-                approximate=True,
-            )
-        )
+        payload = _serialize(revision)
+        message_id = await self._xadd(payload)
 
         logger.info(
             "Published identity revision",
@@ -167,28 +89,14 @@ class RevisionPublisher:
             return []
 
         pipe = self._redis.pipeline(transaction=False)
-        message_ids: list[str] = []
 
         for revision in revisions:
-            payload: dict[str, str] = {
-                "revision_id": revision.revision_id,
-                "global_track_id": revision.global_track_id,
-                "tracklet_ids": json.dumps(revision.tracklet_ids),
-                "previous_identity_id": revision.previous_identity_id or "",
-                "new_identity_id": revision.new_identity_id or "",
-                "map_identity_id": revision.map_identity_id,
-                "posterior_entropy": str(revision.posterior_entropy),
-                "reason": revision.reason,
-                "evidence": json.dumps(revision.evidence),
-                "revision_time": revision.revision_time.isoformat(),
-            }
-            message_ids.append(
-                pipe.xadd(
-                    self._stream,
-                    payload,  # type: ignore[arg-type]
-                    maxlen=self._maxlen,
-                    approximate=True,
-                )
+            payload = _serialize(revision)
+            pipe.xadd(
+                self._stream,
+                payload,  # type: ignore[arg-type]
+                maxlen=self._maxlen,
+                approximate=True,
             )
 
         results = await pipe.execute()
@@ -198,3 +106,19 @@ class RevisionPublisher:
             message_ids=results,
         )
         return [str(r) for r in results]
+
+
+def _serialize(revision: IdentityRevision) -> dict[str, str]:
+    """Convert an IdentityRevision to a flat Redis-fields dict."""
+    return {
+        "revision_id": revision.revision_id,
+        "global_track_id": revision.global_track_id,
+        "tracklet_ids": json.dumps(revision.tracklet_ids),
+        "previous_identity_id": revision.previous_identity_id or "",
+        "new_identity_id": revision.new_identity_id or "",
+        "map_identity_id": revision.map_identity_id,
+        "posterior_entropy": str(revision.posterior_entropy),
+        "reason": revision.reason,
+        "evidence": json.dumps(revision.evidence),
+        "revision_time": revision.revision_time.isoformat(),
+    }
