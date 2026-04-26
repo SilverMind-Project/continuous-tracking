@@ -104,6 +104,16 @@ class TrajectoryWriter:
             await self._repo.update_room_dwell(closed)
             self._current_room.pop(global_track_id, None)
 
+    async def close_all(self, closed_at: datetime) -> None:
+        """Close all open dwells and clear per-track state.
+
+        Called on pipeline shutdown to prevent unbounded memory growth from
+        per-track state that is never cleared otherwise.
+        """
+        for global_track_id in list(self._open_dwell):
+            await self.close_track(global_track_id, closed_at)
+        self._current_room.clear()
+
     async def _handle_dwell(
         self,
         identity_id: str,

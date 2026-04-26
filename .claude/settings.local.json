@@ -25,7 +25,9 @@
       "Bash(go list *)",
       "WebFetch(domain:api.github.com)",
       "Bash(go build *)",
-      "Bash(go doc *)"
+      "Bash(go doc *)",
+      "Bash(make mypy *)",
+      "Bash(tracking-orchestrator/.venv/bin/ruff format *)"
     ]
   }
 }

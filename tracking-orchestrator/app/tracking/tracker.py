@@ -234,14 +234,14 @@ def _embedding_distance(
     if a.size == 0 or b.size == 0:
         return np.zeros((len(a), len(b)), dtype=np.float64)
 
-    # L2-normalize rows
+    # L2-normalize rows (using the cast float64 arrays).
     norm_a = np.linalg.norm(a, axis=1, keepdims=True)
     norm_b = np.linalg.norm(b, axis=1, keepdims=True)
     norm_a = np.where(norm_a > 0, norm_a, 1.0)
     norm_b = np.where(norm_b > 0, norm_b, 1.0)
 
-    a_norm = embeddings_a / norm_a
-    b_norm = embeddings_b / norm_b
+    a_norm = a / norm_a
+    b_norm = b / norm_b
 
     cosine_sim = a_norm @ b_norm.T
     # Clip to numerical precision
@@ -291,14 +291,19 @@ class PerCameraTracker:
             List of LocalTrack objects, one per confirmed detection.
         """
         if not detections:
-            # Advance lost counts for all tracks, then terminate stale ones.
+            # Predict and age all tracks even without detections so the
+            # Kalman state doesn't freeze and track ages advance.
             for track in self._tracks.values():
+                track.kalman.predict()
+                track.age += 1
                 track.lost_count += 1
             self._advance_lost_tracks()
             return []
 
-        if not embeddings:
-            embeddings = [np.zeros(768, dtype=np.float64) for _ in detections]
+        # Normalise: None → list of Nones, empty list → list of Nones.
+        emb_list: list[Embedding | None] = (
+            list(embeddings) if embeddings else [None] * len(detections)
+        )
 
         # ---- Step 1: predict all track states ----
         for track in self._tracks.values():
@@ -307,7 +312,7 @@ class PerCameraTracker:
 
         # ---- Step 2: build cost matrix and associate ----
         matched_tracks, matched_dets, unmatched_tracks, unmatched_dets = self._associate(
-            detections, embeddings
+            detections, emb_list
         )
 
         # ---- Step 3: update matched tracks ----
@@ -315,7 +320,7 @@ class PerCameraTracker:
         for trk_id, det_idx in zip(matched_tracks, matched_dets, strict=True):
             track = self._tracks[trk_id]
             det = detections[det_idx]
-            emb = embeddings[det_idx]
+            emb = emb_list[det_idx]
 
             track.hit_count += 1
             track.lost_count = 0
@@ -334,14 +339,16 @@ class PerCameraTracker:
             )
             track.kalman.update(obs)
             track.bbox_history.append((bbox.x_min, bbox.y_min, bbox.x_max, bbox.y_max))
-            track.embedding_history.append(emb)
+            # Only record real embeddings; None means no appearance evidence.
+            if emb is not None:
+                track.embedding_history.append(emb)
 
             result.append(self._make_local_track(track, det, emb))
 
         # ---- Step 4: handle unmatched detections (new tracks) ----
         for det_idx in unmatched_dets:
             det = detections[det_idx]
-            emb = embeddings[det_idx]
+            emb = emb_list[det_idx]
             if det.confidence >= self._config.new_track_thresh:
                 local_id = self._create_track(det, emb)
                 track = self._tracks[local_id]
@@ -357,7 +364,7 @@ class PerCameraTracker:
 
         return result
 
-    def _create_track(self, detection: Detection, embedding: Embedding) -> str:
+    def _create_track(self, detection: Detection, embedding: Embedding | None) -> str:
         local_id = f"track-{self._next_local_id}"
         self._next_local_id += 1
 
@@ -379,7 +386,7 @@ class PerCameraTracker:
             local_track_id=local_id,
             kalman=kalman,
             bbox_history=[(bbox.x_min, bbox.y_min, bbox.x_max, bbox.y_max)],
-            embedding_history=[embedding],
+            embedding_history=[embedding] if embedding is not None else [],
             hit_count=1,
             lost_count=0,
             confirmed=False,
@@ -390,7 +397,7 @@ class PerCameraTracker:
     def _associate(
         self,
         detections: list[Detection],
-        embeddings: list[Embedding],
+        emb_list: list[Embedding | None],
     ) -> tuple[list[str], list[int], list[str], list[int]]:
         """Run Hungarian association between existing tracks and detections.
 
@@ -451,13 +458,24 @@ class PerCameraTracker:
             # New tracks (no history yet) rely on IoU alone to avoid
             # artificial advantage from a neutral embedding.
             has_history = [bool(track.embedding_history) for _, track in active_tracks]
-            det_embs = np.array(embeddings, dtype=np.float32)
 
-            if all(has_history):
+            # Filter out None embeddings from detections.
+            det_embs_valid: list[npt.NDArray[np.float32]] = []
+            det_indices_valid: list[int] = []
+            for i, emb in enumerate(emb_list):
+                if emb is not None:
+                    det_embs_valid.append(np.asarray(emb, dtype=np.float32))
+                    det_indices_valid.append(i)
+
+            det_embs_array: npt.NDArray[np.float32] | None = (
+                np.array(det_embs_valid, dtype=np.float32) if det_embs_valid else None
+            )
+
+            if all(has_history) and det_embs_array is not None:
                 track_embs = np.array(
                     [track.embedding_history[-1] for _, track in active_tracks], dtype=np.float32
                 )
-                emb_cost = _embedding_distance(track_embs, det_embs)
+                emb_cost = _embedding_distance(track_embs, det_embs_array)
                 # Combined cost — full weighted cost for all tracks
                 cost = (
                     1.0 - self._config.appearance_weight
@@ -465,26 +483,29 @@ class PerCameraTracker:
             elif any(has_history):
                 # Mixed: tracks with history get embedding cost,
                 # tracks without get IoU-only cost (no appearance penalty).
-                track_embs_list: list[npt.NDArray[np.float32]] = []
-                for _, track in active_tracks:
-                    if track.embedding_history:
-                        track_embs_list.append(
-                            np.asarray(track.embedding_history[-1], dtype=np.float32)
-                        )
-                    else:
-                        # Placeholder — embedding cost for these rows will be set to 0
-                        # so the combined cost becomes purely IoU-based.
-                        track_embs_list.append(np.zeros(768, dtype=np.float32))
-                track_embs = np.array(track_embs_list, dtype=np.float32)
-                emb_cost = _embedding_distance(track_embs, det_embs)
-                # Combined cost
-                cost = (
-                    1.0 - self._config.appearance_weight
-                ) * iou_cost + self._config.appearance_weight * emb_cost
-                # For tracks without embedding history, use IoU-only cost
-                for i, has in enumerate(has_history):
-                    if not has:
-                        cost[i, :] = iou_cost[i, :]
+                if det_embs_array is not None:
+                    track_embs_list: list[npt.NDArray[np.float32]] = []
+                    for _, track in active_tracks:
+                        if track.embedding_history:
+                            track_embs_list.append(
+                                np.asarray(track.embedding_history[-1], dtype=np.float32)
+                            )
+                        else:
+                            # No appearance evidence — row will be overridden to IoU-only.
+                            track_embs_list.append(np.zeros(768, dtype=np.float32))
+                    track_embs = np.array(track_embs_list, dtype=np.float32)
+                    emb_cost = _embedding_distance(track_embs, det_embs_array)
+                    # Combined cost
+                    cost = (
+                        1.0 - self._config.appearance_weight
+                    ) * iou_cost + self._config.appearance_weight * emb_cost
+                    # For tracks without embedding history, use IoU-only cost
+                    for i, has in enumerate(has_history):
+                        if not has:
+                            cost[i, :] = iou_cost[i, :]
+                else:
+                    # No valid detection embeddings: use IoU only.
+                    cost = iou_cost
             else:
                 # No tracks have embedding history: use IoU only
                 cost = iou_cost
@@ -534,7 +555,7 @@ class PerCameraTracker:
         self,
         track: _InternalTrack,
         detection: Detection,
-        embedding: Embedding,
+        embedding: Embedding | None,
     ) -> LocalTrack:
         return LocalTrack(
             local_track_id=track.local_track_id,
@@ -545,7 +566,7 @@ class PerCameraTracker:
             hit_count=track.hit_count,
             lost_count=track.lost_count,
             confirmed=track.confirmed,
-            embedding=embedding.tolist(),
+            embedding=embedding.tolist() if embedding is not None else None,
         )
 
 

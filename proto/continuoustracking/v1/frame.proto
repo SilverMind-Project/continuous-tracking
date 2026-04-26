@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package continuoustracking.v1;
 
-option go_package = "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1";
+option go_package = "github.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1";
 
 // FrameReady is published to Redis Streams by the rtsp-ingress Go service
 // when a new frame is available for processing. The tracking-orchestrator

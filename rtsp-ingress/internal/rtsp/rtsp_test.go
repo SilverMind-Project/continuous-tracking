@@ -8,9 +8,9 @@ import (
 	"github.com/bluenviron/gortsplib/v4/pkg/format"
 	"go.uber.org/zap"
 
-	pb "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/config"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/decode"
+	pb "github.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/config"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/decode"
 )
 
 type nopPublisher struct{}
@@ -72,5 +72,20 @@ func TestInitialBackoffClamp(t *testing.T) {
 	)
 	if got := w.initialBackoff(); got != 2*time.Second {
 		t.Fatalf("initial backoff: got %v", got)
+	}
+}
+
+func TestNextBackoffAddsJitterAndCaps(t *testing.T) {
+	current := 2 * time.Second
+	got := nextBackoff(current)
+	if got < 4*time.Second {
+		t.Fatalf("next backoff: got %v, want at least doubled backoff", got)
+	}
+	if got >= 4500*time.Millisecond {
+		t.Fatalf("next backoff: got %v, want jitter below 25%% of current", got)
+	}
+
+	if capped := nextBackoff(45 * time.Second); capped != 60*time.Second {
+		t.Fatalf("capped backoff: got %v, want 60s", capped)
 	}
 }

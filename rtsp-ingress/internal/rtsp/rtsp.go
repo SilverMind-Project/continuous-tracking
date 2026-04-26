@@ -3,8 +3,10 @@ package rtsp
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"fmt"
 	"math"
+	"math/big"
 	"sync/atomic"
 	"time"
 
@@ -14,12 +16,12 @@ import (
 	"github.com/pion/rtp"
 	"go.uber.org/zap"
 
-	pb "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/config"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/decode"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/media"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/metrics"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/motion"
+	pb "github.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/config"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/decode"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/media"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/metrics"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/motion"
 )
 
 // FramePublisher is the interface for publishing encoded frames.
@@ -73,7 +75,7 @@ func (w *Worker) Run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			}
-			backoff = min(backoff*2, 60*time.Second)
+			backoff = nextBackoff(backoff)
 			continue
 		}
 		backoff = w.initialBackoff()
@@ -150,8 +152,8 @@ func (w *Worker) session(ctx context.Context) error {
 		}
 
 		seq := w.seq.Add(1) - 1
-		captureTime := now.UnixNano()
-		if captureTime < 0 {
+		receivedTime := now.UnixNano()
+		if receivedTime < 0 {
 			return
 		}
 		width := img.Bounds().Dx()
@@ -169,8 +171,8 @@ func (w *Worker) session(ctx context.Context) error {
 		meta := &pb.FrameReady{
 			CameraId:           w.camera.ID,
 			FrameIndex:         frameIndex,
-			CaptureTimeUnixNs:  uint64(captureTime),
-			ReceivedTimeUnixNs: uint64(captureTime),
+			CaptureTimeUnixNs:  0,
+			ReceivedTimeUnixNs: uint64(receivedTime),
 			Width:              frameWidth,
 			Height:             frameHeight,
 			SampleFps:          0,
@@ -199,4 +201,22 @@ func (w *Worker) initialBackoff() time.Duration {
 		return 2 * time.Second
 	}
 	return backoff
+}
+
+func nextBackoff(current time.Duration) time.Duration {
+	doubled := current * 2
+	jitterRange := max(current/4, time.Millisecond)
+	jitter := randomJitter(jitterRange)
+	return min(doubled+jitter, 60*time.Second)
+}
+
+func randomJitter(upper time.Duration) time.Duration {
+	if upper <= 0 {
+		return 0
+	}
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(upper)))
+	if err != nil {
+		return 0
+	}
+	return time.Duration(n.Int64())
 }

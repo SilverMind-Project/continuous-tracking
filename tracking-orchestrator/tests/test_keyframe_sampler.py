@@ -158,3 +158,30 @@ async def test_keyframe_stored_with_correct_fields(
     assert s.minio_key == "frames/x.jpg"
     assert s.annotations == anns
     assert s.tag_reason == "periodic"
+
+
+async def test_keyframe_direct_lookup_and_retention_update(
+    sampler: KeyframeSampler,
+    repo: InMemoryKeyframeRepository,
+) -> None:
+    """Issue #34: O(1) lookup/update methods back dashboard keyframe routes."""
+    sample = await sampler.trigger_sample(
+        tracklet_id="tl-retain",
+        global_track_id="gt-retain",
+        camera_id="cam-1",
+        minio_key="frames/retain.jpg",
+        captured_at=_T0,
+        annotations={},
+        tag_reason="identity_changed",
+    )
+    assert sample is not None
+
+    fetched = await repo.get_keyframe(sample.keyframe_id)
+    assert fetched == sample
+
+    new_expiry = _T0 + timedelta(days=30)
+    assert await repo.update_retention(sample.keyframe_id, new_expiry)
+    retained = await repo.get_keyframe(sample.keyframe_id)
+    assert retained is not None
+    assert retained.expires_at == new_expiry
+    assert not await repo.update_retention("missing", new_expiry)

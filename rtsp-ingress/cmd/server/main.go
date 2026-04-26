@@ -19,12 +19,12 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/config"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/decode"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/media"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/metrics"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/reconciler"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/rtsp"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/config"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/decode"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/media"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/metrics"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/reconciler"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/rtsp"
 )
 
 func main() {
@@ -83,7 +83,6 @@ func main() {
 		redisClient,
 		cfg.Redis.Stream,
 		cfg.Redis.MaxLenApprox,
-		cfg.MinIO.JPEGQuality,
 	)
 	if err := publisher.EnsureBucket(ctx); err != nil {
 		logger.Fatal("minio ensure bucket", zap.Error(err))

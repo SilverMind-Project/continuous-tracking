@@ -228,7 +228,7 @@ const file_continuoustracking_v1_scene_proto_rawDesc = "" +
 	"\x11TAG_REASON_HAZARD\x10\x03\x12\x1a\n" +
 	"\x16TAG_REASON_DWELL_START\x10\x04\x12\x13\n" +
 	"\x0fTAG_REASON_FALL\x10\x05\x12\x1e\n" +
-	"\x1aTAG_REASON_DEMENTIA_SIGNAL\x10\x06BDZBgithub.com/khoofia/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
+	"\x1aTAG_REASON_DEMENTIA_SIGNAL\x10\x06BOZMgithub.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
 
 var (
 	file_continuoustracking_v1_scene_proto_rawDescOnce sync.Once

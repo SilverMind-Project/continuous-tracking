@@ -414,12 +414,14 @@ class TestIdentityResolver:
         identities = [_make_identity("alice", "Alice")]
         gallery_repo = InMemoryGalleryRepository()
         await gallery_repo.upsert_identity(identities[0])
+        # Gallery entry for the GlobalTrack's default tracklet "t1".
         await gallery_repo.upsert_gallery_entry(
             GalleryEmbedding(
                 gallery_entry_id="ge-1",
                 identity_id="alice",
-                embedding=[0.5] * 768,  # matches placeholder [0.0]*768 (cosine sim = 0)
+                embedding=[0.9] * 768,
                 seen_at=datetime.now(UTC),
+                origin_tracklet_id="t1",
             )
         )
 

@@ -134,6 +134,10 @@ class Tracklet:
     started_at: datetime
     ended_at: datetime | None = None
     state: Literal["active", "terminated"] = "active"
+    # Last observed pixel bbox and its floor projection — in-memory only,
+    # not persisted. Used by CrossCameraAssociator for geometric scoring.
+    last_bbox: BoundingBox | None = None
+    last_floor_point: FloorPoint | None = None
 
 
 @dataclass(frozen=True)

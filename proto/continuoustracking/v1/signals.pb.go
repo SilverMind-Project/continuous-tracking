@@ -322,7 +322,7 @@ const file_continuoustracking_v1_signals_proto_rawDesc = "" +
 	"$DEMENTIA_SIGNAL_SEVERITY_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dDEMENTIA_SIGNAL_SEVERITY_INFO\x10\x01\x12$\n" +
 	" DEMENTIA_SIGNAL_SEVERITY_WARNING\x10\x02\x12&\n" +
-	"\"DEMENTIA_SIGNAL_SEVERITY_EMERGENCY\x10\x03BDZBgithub.com/khoofia/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
+	"\"DEMENTIA_SIGNAL_SEVERITY_EMERGENCY\x10\x03BOZMgithub.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
 
 var (
 	file_continuoustracking_v1_signals_proto_rawDescOnce sync.Once

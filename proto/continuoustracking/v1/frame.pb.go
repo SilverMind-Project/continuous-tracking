@@ -258,7 +258,7 @@ const file_continuoustracking_v1_frame_proto_rawDesc = "" +
 	"error_code\x18\x04 \x01(\tR\terrorCode\x122\n" +
 	"\x15processing_latency_us\x18\x05 \x01(\x03R\x13processingLatencyUs\x12'\n" +
 	"\x0fdetection_count\x18\x06 \x01(\x05R\x0edetectionCount\x123\n" +
-	"\x16completed_time_unix_ns\x18\a \x01(\x06R\x13completedTimeUnixNsBDZBgithub.com/khoofia/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
+	"\x16completed_time_unix_ns\x18\a \x01(\x06R\x13completedTimeUnixNsBOZMgithub.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
 
 var (
 	file_continuoustracking_v1_frame_proto_rawDescOnce sync.Once

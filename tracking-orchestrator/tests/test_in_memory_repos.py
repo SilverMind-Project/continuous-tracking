@@ -240,7 +240,8 @@ async def test_search_similar(gallery_repo: InMemoryGalleryRepository) -> None:
     )
     results = await gallery_repo.search_similar([1.0] * 768, limit=2)
     assert len(results) == 2
-    assert results[0].identity_id == "i1"
+    assert results[0][0].identity_id == "i1"
+    assert results[0][1] > results[1][1]
 
 
 # -----------------------------------------------------------------------

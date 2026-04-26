@@ -1,4 +1,4 @@
-module github.com/khoofia/continuous-tracking/proto
+module github.com/SilverMind-Project/continuous-tracking/proto
 
 go 1.24.0
 

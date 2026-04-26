@@ -107,14 +107,30 @@ class GalleryRepository(ABC):
         limit: int = 10,
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
-    ) -> list[GalleryEmbedding]:
+    ) -> list[tuple[GalleryEmbedding, float]]:
         """Nearest-neighbor search over gallery embeddings.
+
+        Returns a list of (GalleryEmbedding, similarity_score) tuples,
+        sorted by similarity descending. The similarity score is cosine
+        similarity in [0, 1].
 
         Args:
             embedding: query embedding vector.
             limit: maximum number of results.
             camera_id: if provided, filter to gallery entries from this camera.
             max_age_seconds: if provided, filter to entries newer than now - max_age_seconds.
+        """
+
+    @abstractmethod
+    async def list_gallery_entries_for_tracklets(
+        self,
+        tracklet_ids: set[str],
+        limit: int = 20,
+    ) -> list[GalleryEmbedding]:
+        """List gallery entries whose origin_tracklet_id is in *tracklet_ids*.
+
+        Used by the identity resolver to build a real query embedding from
+        a GlobalTrack's existing gallery entries.
         """
 
 
@@ -240,6 +256,10 @@ class GlobalTrackRepository(ABC):
         """
 
     @abstractmethod
+    async def merge_global_tracks(self, into_id: str, from_id: str) -> GlobalTrack | None:
+        """Merge one active GlobalTrack into another and close the source track."""
+
+    @abstractmethod
     async def assign_identity(
         self,
         global_track_id: str,
@@ -294,6 +314,8 @@ class InMemoryTrackingRepository(TrackingRepository):
             started_at=min(existing.started_at, tracklet.started_at),
             ended_at=ended_at,
             state=state,
+            last_bbox=tracklet.last_bbox,
+            last_floor_point=tracklet.last_floor_point,
         )
 
     async def get_tracklet(self, tracklet_id: str) -> Tracklet | None:
@@ -364,7 +386,13 @@ class InMemoryGalleryRepository(GalleryRepository):
             active_ids = {
                 identity.identity_id for identity in await self.list_identities(active_only=True)
             }
-            entries = [entry for entry in entries if entry.identity_id in active_ids]
+            # Keep entries that belong to active identities OR have no identity yet
+            # (unowned gallery entries written before identity resolution).
+            entries = [
+                entry
+                for entry in entries
+                if entry.identity_id in active_ids or entry.identity_id == ""
+            ]
         return entries
 
     async def search_similar(
@@ -373,7 +401,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         limit: int = 10,
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
-    ) -> list[GalleryEmbedding]:
+    ) -> list[tuple[GalleryEmbedding, float]]:
         # Intentional O(n): this in-memory implementation favors clarity over ANN performance.
         entries = await self.list_gallery_entries()
         if camera_id is not None:
@@ -383,7 +411,20 @@ class InMemoryGalleryRepository(GalleryRepository):
             entries = [e for e in entries if e.seen_at >= cutoff]
         scored = [(entry, _cosine_sim(embedding, entry.embedding)) for entry in entries]
         scored.sort(key=lambda item: item[1], reverse=True)
-        return [entry for entry, _ in scored[:limit]]
+        return scored[:limit]
+
+    async def list_gallery_entries_for_tracklets(
+        self,
+        tracklet_ids: set[str],
+        limit: int = 20,
+    ) -> list[GalleryEmbedding]:
+        if not tracklet_ids:
+            return []
+        entries = [
+            entry for entry in self._entries.values() if entry.origin_tracklet_id in tracklet_ids
+        ]
+        entries.sort(key=lambda e: e.seen_at, reverse=True)
+        return entries[:limit]
 
 
 class InMemorySettingsRepository(SettingsRepository):
@@ -567,6 +608,36 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
         await self.save(new_gt)
         return new_gt
 
+    async def merge_global_tracks(self, into_id: str, from_id: str) -> GlobalTrack | None:
+        into = self._tracks.get(into_id)
+        from_track = self._tracks.get(from_id)
+        if into is None or from_track is None or into_id == from_id:
+            return into
+
+        merged = GlobalTrack(
+            global_track_id=into.global_track_id,
+            camera_ids=list(dict.fromkeys(into.camera_ids + from_track.camera_ids)),
+            tracklet_ids=list(dict.fromkeys(into.tracklet_ids + from_track.tracklet_ids)),
+            started_at=min(into.started_at, from_track.started_at),
+            last_seen_at=max(into.last_seen_at, from_track.last_seen_at),
+            current_identity_id=into.current_identity_id or from_track.current_identity_id,
+            state="active",
+        )
+        closed_source = GlobalTrack(
+            global_track_id=from_track.global_track_id,
+            camera_ids=from_track.camera_ids,
+            tracklet_ids=from_track.tracklet_ids,
+            started_at=from_track.started_at,
+            last_seen_at=from_track.last_seen_at,
+            current_identity_id=from_track.current_identity_id,
+            state="closed",
+        )
+        self._tracks[into_id] = merged
+        self._tracks[from_id] = closed_source
+        for tid in merged.tracklet_ids:
+            self._by_tracklet[tid] = into_id
+        return merged
+
     async def assign_identity(
         self,
         global_track_id: str,
@@ -638,6 +709,14 @@ class KeyframeRepository(ABC):
     @abstractmethod
     async def save_keyframe(self, keyframe: TaggedKeyframe) -> None:
         """Store a tagged keyframe."""
+
+    @abstractmethod
+    async def get_keyframe(self, keyframe_id: str) -> TaggedKeyframe | None:
+        """Retrieve a tagged keyframe by ID."""
+
+    @abstractmethod
+    async def update_retention(self, keyframe_id: str, expires_at: datetime) -> bool:
+        """Update keyframe retention expiry. Returns True if the row existed."""
 
     @abstractmethod
     async def list_keyframes(
@@ -717,6 +796,26 @@ class InMemoryKeyframeRepository(KeyframeRepository):
 
     async def save_keyframe(self, keyframe: TaggedKeyframe) -> None:
         self._keyframes[keyframe.keyframe_id] = keyframe
+
+    async def get_keyframe(self, keyframe_id: str) -> TaggedKeyframe | None:
+        return self._keyframes.get(keyframe_id)
+
+    async def update_retention(self, keyframe_id: str, expires_at: datetime) -> bool:
+        keyframe = self._keyframes.get(keyframe_id)
+        if keyframe is None:
+            return False
+        self._keyframes[keyframe_id] = TaggedKeyframe(
+            keyframe_id=keyframe.keyframe_id,
+            tracklet_id=keyframe.tracklet_id,
+            global_track_id=keyframe.global_track_id,
+            camera_id=keyframe.camera_id,
+            minio_key=keyframe.minio_key,
+            captured_at=keyframe.captured_at,
+            annotations=keyframe.annotations,
+            tag_reason=keyframe.tag_reason,
+            expires_at=expires_at,
+        )
+        return True
 
     async def list_keyframes(
         self,

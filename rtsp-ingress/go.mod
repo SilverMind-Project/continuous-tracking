@@ -1,4 +1,4 @@
-module github.com/khoofia/continuous-tracking/rtsp-ingress
+module github.com/SilverMind-Project/continuous-tracking/rtsp-ingress
 
 go 1.24.0
 
@@ -6,7 +6,7 @@ toolchain go1.24.5
 
 require (
 	github.com/bluenviron/gortsplib/v4 v4.10.6
-	github.com/khoofia/continuous-tracking/proto v0.0.0-00010101000000-000000000000
+	github.com/SilverMind-Project/continuous-tracking/proto v0.0.0-00010101000000-000000000000
 	github.com/minio/minio-go/v7 v7.0.98
 	github.com/pion/rtp v1.10.1
 	github.com/prometheus/client_golang v1.23.2
@@ -50,4 +50,4 @@ require (
 	golang.org/x/text v0.32.0 // indirect
 )
 
-replace github.com/khoofia/continuous-tracking/proto => ../proto
+replace github.com/SilverMind-Project/continuous-tracking/proto => ../proto

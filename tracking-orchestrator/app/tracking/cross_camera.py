@@ -19,9 +19,14 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 
+from structlog import get_logger
+
 from ..domain import CameraId, GlobalTrack, Tracklet, TrackletId
 from ..storage.base import GalleryRepository, GlobalTrackRepository
 from .camera_adjacency import CameraAdjacency
+from .floor_projector import FloorProjector
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -88,11 +93,13 @@ class CrossCameraAssociator:
         adjacency: CameraAdjacency,
         global_track_repo: GlobalTrackRepository,
         config: CrossCamConfig | None = None,
+        floor_projector: FloorProjector | None = None,
     ) -> None:
         self._gallery = gallery
         self._adjacency = adjacency
         self._repo = global_track_repo
         self._config = config or CrossCamConfig()
+        self._floor_projector = floor_projector
 
     async def associate(
         self,
@@ -159,7 +166,7 @@ class CrossCameraAssociator:
                 if not self._adjacency.reachable(ta.camera_id, tb.camera_id, within_s=budget):
                     continue
 
-                score = self._score_pair(ta, tb)
+                score = await self._score_pair(ta, tb)
                 if score is not None and score.combined_score >= self._config.min_link_score:
                     candidate_scores.append(score)
 
@@ -226,13 +233,12 @@ class CrossCameraAssociator:
             if gt_a and gt_b:
                 # Different clusters: merge gt_b into gt_a.
                 if gt_a != gt_b:
-                    for tid, gid in list(assignment_map.items()):
-                        if gid == gt_b:
-                            assignment_map[tid] = gt_a
-                    active_gts = [gt for gt in active_gts if gt.global_track_id != gt_b]
-                    # Persist the merge and refresh the in-memory reference.
-                    merged_gt = next((gt for gt in active_gts if gt.global_track_id == gt_a), None)
-                    if merged_gt:
+                    merged_gt = await self._repo.merge_global_tracks(into_id=gt_a, from_id=gt_b)
+                    if merged_gt is not None:
+                        for tid, gid in list(assignment_map.items()):
+                            if gid == gt_b:
+                                assignment_map[tid] = gt_a
+                        active_gts = [gt for gt in active_gts if gt.global_track_id != gt_b]
                         await _refresh(gt_a)
             elif gt_a:
                 # One in a new cluster, one unassigned — add to that cluster.
@@ -317,12 +323,21 @@ class CrossCameraAssociator:
                                     else None
                                 )
                             )
-                            score = self._score_pair(t, existing_tl) if existing_tl else None
-                            if (
-                                score is not None
-                                and score.combined_score < self._config.min_link_score
-                            ):
-                                continue  # skip if score below threshold
+                            if existing_tl:
+                                score = await self._score_pair(t, existing_tl)
+                                logger.debug(
+                                    "remaining_unassigned_score",
+                                    tracklet=t.tracklet_id,
+                                    gt_id=gt.global_track_id,
+                                    score=score.combined_score if score else None,
+                                    threshold=self._config.min_link_score,
+                                )
+                                if (
+                                    score is not None
+                                    and score.combined_score < self._config.min_link_score
+                                ):
+                                    continue  # skip if score below threshold
+                            # If existing_tl is None, skip scoring — adjacency already verified.
                             # Extend this GlobalTrack.
                             merged = await self._repo.merge_tracklets(
                                 tracklet_ids=[t.tracklet_id],
@@ -370,26 +385,29 @@ class CrossCameraAssociator:
 
         return updated_gts
 
-    def _score_pair(self, ta: Tracklet, tb: Tracklet) -> TrackletPairScore | None:
+    async def _score_pair(self, ta: Tracklet, tb: Tracklet) -> TrackletPairScore | None:
         """Score a candidate pair of tracklets.
 
         Returns None if the pair cannot be scored (e.g., missing adjacency).
+        Uses bidirectional adjacency check since cross-camera association
+        works regardless of transition direction.
         """
-        # Geometry: use the last detection's bbox center as a proxy for position.
-        # In production, this would use floor_plan projection from homography.
-        # For now, use a simple heuristic based on camera distance.
         max_transition = self._adjacency.get_max_transition(ta.camera_id, tb.camera_id)
+        if max_transition is None:
+            max_transition = self._adjacency.get_max_transition(tb.camera_id, ta.camera_id)
         if max_transition is None:
             return None
 
-        # Geometry score: exponential decay based on max_transition.
-        # Shorter max_transition = closer cameras = higher geo_score.
-        geo_score = math.exp(-max_transition / (self._config.floor_sigma_m * 100))
+        # Geometry score: exponential decay of floor-plane distance when both
+        # tracklets carry a calibrated last_floor_point.  Falls back to 1.0
+        # (binary adjacency gate) when projection is unavailable.
+        geo_score = self._geo_score(ta, tb)
+        if geo_score is None:
+            # Distance exceeds max_floor_distance_m — pair is impossible.
+            return None
 
-        # Appearance: query the gallery for similarity between the two tracklets.
-        # We approximate by comparing the last gallery embedding from each tracklet.
-        # In production, this uses Gallery.cross_tracklet_similarity().
-        appearance_sim = self._approximate_gallery_similarity(ta, tb)
+        # Appearance: real gallery similarity between the two tracklets.
+        appearance_sim = await self._approximate_gallery_similarity(ta, tb)
 
         # Combined score
         combined = self._config.alpha * appearance_sim + (1 - self._config.alpha) * geo_score
@@ -404,17 +422,75 @@ class CrossCameraAssociator:
             combined_score=combined,
         )
 
-    def _approximate_gallery_similarity(self, ta: Tracklet, tb: Tracklet) -> float:
-        """Approximate gallery similarity between two tracklets.
+    def _geo_score(self, ta: Tracklet, tb: Tracklet) -> float | None:
+        """Return a geometry score in [0, 1] for a candidate tracklet pair.
 
-        In production, this queries the GalleryRepository for cross-tracklet
-        similarity. Here we return a moderate-high default since the actual
-        gallery data is populated by the TrackletManager.
+        Returns None when the pair exceeds ``max_floor_distance_m`` (pruned).
+        Returns 1.0 when floor projection is unavailable (binary adjacency gate).
 
-        The approximation uses the tracklet IDs as a proxy: if both tracklets
-        have the same number of detections, they are more likely to be the
-        same person.
+        When both tracklets carry calibrated ``last_floor_point`` values the
+        score follows the phase-3 formula::
+
+            geo_score = exp(-(dist_m / floor_sigma_m) ** 2)
         """
-        # Placeholder: in production, this queries the gallery.
-        # For the in-memory test, we rely on the actual gallery repo.
-        return 0.8
+        if self._floor_projector is None:
+            return 1.0
+
+        fp_a = ta.last_floor_point
+        fp_b = tb.last_floor_point
+
+        # Project from last_bbox if floor point not yet attached.
+        if fp_a is None and ta.last_bbox is not None:
+            fp_a = self._floor_projector.project(ta.camera_id, ta.last_bbox)
+        if fp_b is None and tb.last_bbox is not None:
+            fp_b = self._floor_projector.project(tb.camera_id, tb.last_bbox)
+
+        if fp_a is None or fp_b is None or not fp_a.calibrated or not fp_b.calibrated:
+            return 1.0
+
+        dist_m = FloorProjector.distance_m(fp_a, fp_b)
+        if dist_m > self._config.max_floor_distance_m:
+            return None
+
+        return math.exp(-((dist_m / self._config.floor_sigma_m) ** 2))
+
+    async def _approximate_gallery_similarity(self, ta: Tracklet, tb: Tracklet) -> float:
+        """Compute real cosine similarity between two tracklets via gallery.
+
+        Queries the GalleryRepository for recent gallery embeddings from each
+        tracklet, computes the mean embedding per tracklet, and returns the
+        cosine similarity between those means.
+
+        Returns 0.0 when either tracklet has no gallery entries.
+        """
+        import numpy as np
+
+        try:
+            entries_a = await self._gallery.list_gallery_entries_for_tracklets(
+                tracklet_ids={ta.tracklet_id},
+                limit=3,
+            )
+        except Exception:
+            entries_a = []
+
+        try:
+            entries_b = await self._gallery.list_gallery_entries_for_tracklets(
+                tracklet_ids={tb.tracklet_id},
+                limit=3,
+            )
+        except Exception:
+            entries_b = []
+
+        if not entries_a or not entries_b:
+            return 0.0
+
+        emb_a = np.mean([e.embedding for e in entries_a], axis=0)
+        emb_b = np.mean([e.embedding for e in entries_b], axis=0)
+
+        norm_a = np.linalg.norm(emb_a)
+        norm_b = np.linalg.norm(emb_b)
+
+        if norm_a < 1e-9 or norm_b < 1e-9:
+            return 0.0
+
+        return float(np.dot(emb_a, emb_b) / (norm_a * norm_b + 1e-9))

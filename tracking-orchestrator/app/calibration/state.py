@@ -52,6 +52,9 @@ class CalibrationState:
     # arbitrary metadata per camera (e.g. reprojection error)
     camera_meta: dict[str, dict[str, Any]] = field(default_factory=dict)
 
+    # Monotonic version incremented on every calibration mutation.
+    version: int = 0
+
     async def set_homography(
         self,
         camera_id: str,
@@ -62,6 +65,7 @@ class CalibrationState:
             self.homographies[camera_id] = matrix
             if meta:
                 self.camera_meta.setdefault(camera_id, {}).update(meta)
+            self.version += 1
 
     async def set_privacy_zones(
         self,
@@ -70,15 +74,18 @@ class CalibrationState:
     ) -> None:
         async with self._lock:
             self.privacy_zones[camera_id] = zones
+            self.version += 1
 
     async def set_adjacency(self, edges: list[AdjacencyEdge]) -> None:
         async with self._lock:
             self.adjacency_edges = edges
+            self.version += 1
 
     async def reload(self) -> None:
         """Mark the last reload time.  Callers may extend this for filesystem re-reads."""
         async with self._lock:
             self.last_reload_at = datetime.now(UTC).isoformat()
+            self.version += 1
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -89,6 +96,7 @@ class CalibrationState:
             },
             "adjacency_edge_count": len(self.adjacency_edges),
             "last_reload_at": self.last_reload_at,
+            "version": self.version,
         }
 
 

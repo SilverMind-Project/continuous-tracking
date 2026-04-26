@@ -62,7 +62,7 @@ CREATE TABLE detections (
     event_id         UUID NOT NULL,
     camera_id        TEXT NOT NULL REFERENCES cameras(camera_id) ON DELETE CASCADE,
     bbox             JSONB NOT NULL DEFAULT '{}',
-    embedding        vector(768) NOT NULL,
+    embedding        vector(768),
     confidence       REAL NOT NULL DEFAULT 1.0,
     tracklet_id      UUID,
     global_track_id  UUID,
@@ -75,7 +75,8 @@ CREATE TABLE detections (
 );
 
 CREATE INDEX idx_detections_embedding ON detections
-    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)
+    WHERE embedding IS NOT NULL;
 
 CREATE INDEX idx_detections_global_track ON detections(global_track_id)
     WHERE global_track_id IS NOT NULL;
@@ -120,6 +121,7 @@ CREATE TABLE global_tracks (
     tracklet_ids    UUID[] NOT NULL DEFAULT '{}',
     started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    current_identity_id UUID,
     state           TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'closed')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()

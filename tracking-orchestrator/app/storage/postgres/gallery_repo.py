@@ -46,7 +46,12 @@ _SQL_UPSERT_GALLERY_ENTRY = """
     INSERT INTO reid_gallery (id, identity_id, embedding, quality, origin_tracklet_id,
                               seen_at, face_confirmed)
     VALUES ($1, $2, $3::vector, $4, $5, $6, $7)
-    ON CONFLICT (id) DO NOTHING
+    ON CONFLICT (id) DO UPDATE SET
+        embedding = EXCLUDED.embedding,
+        quality = EXCLUDED.quality,
+        seen_at = EXCLUDED.seen_at,
+        face_confirmed = EXCLUDED.face_confirmed,
+        updated_at = now()
 """
 
 _SQL_GET_GALLERY_ENTRY = """
@@ -69,7 +74,8 @@ _SQL_LIST_GALLERY_ENTRIES = """
 _SQL_SEARCH_SIMILAR = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality,
            rg.origin_tracklet_id, rg.seen_at, rg.face_confirmed,
-           t.camera_id
+           t.camera_id,
+           1.0 - (rg.embedding <=> $3::vector) AS similarity
     FROM reid_gallery rg
     LEFT JOIN tracklets t ON rg.origin_tracklet_id = t.tracklet_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
@@ -83,6 +89,15 @@ _SQL_SEARCH_SIMILAR = """
       AND ($5 IS NULL OR rg.seen_at > now() - ($6::integer || 'seconds')::interval)
     ORDER BY rg.embedding <=> $3::vector
     LIMIT $7
+"""
+
+_SQL_LIST_GALLERY_FOR_TRACKLETS = """
+    SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
+           rg.seen_at, rg.face_confirmed
+    FROM reid_gallery rg
+    WHERE rg.origin_tracklet_id = ANY($1::text[])
+    ORDER BY rg.seen_at DESC
+    LIMIT $2
 """
 
 
@@ -193,7 +208,7 @@ class PostgresGalleryRepository(GalleryRepository):
         limit: int = 10,
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
-    ) -> list[GalleryEmbedding]:
+    ) -> list[tuple[GalleryEmbedding, float]]:
         embedding_str = _embedding_to_pgvector(embedding)
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
@@ -207,6 +222,36 @@ class PostgresGalleryRepository(GalleryRepository):
                 limit,  # $7: LIMIT
             )
         return [
+            (
+                GalleryEmbedding(
+                    gallery_entry_id=row["id"],
+                    identity_id=row["identity_id"],
+                    embedding=_pgvector_to_list(row["embedding"]),
+                    quality=row["quality"],
+                    seen_at=row["seen_at"],
+                    origin_tracklet_id=row["origin_tracklet_id"] or "",
+                    face_confirmed=row["face_confirmed"],
+                    camera_id=row["camera_id"] or "",
+                ),
+                float(row["similarity"]),
+            )
+            for row in rows
+        ]
+
+    async def list_gallery_entries_for_tracklets(
+        self,
+        tracklet_ids: set[str],
+        limit: int = 20,
+    ) -> list[GalleryEmbedding]:
+        if not tracklet_ids:
+            return []
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                _SQL_LIST_GALLERY_FOR_TRACKLETS,
+                list(tracklet_ids),
+                limit,
+            )
+        return [
             GalleryEmbedding(
                 gallery_entry_id=row["id"],
                 identity_id=row["identity_id"],
@@ -215,7 +260,6 @@ class PostgresGalleryRepository(GalleryRepository):
                 seen_at=row["seen_at"],
                 origin_tracklet_id=row["origin_tracklet_id"] or "",
                 face_confirmed=row["face_confirmed"],
-                camera_id=row["camera_id"] or "",
             )
             for row in rows
         ]
@@ -230,13 +274,18 @@ def _embedding_to_pgvector(embedding: list[float]) -> str:
     return f"[{','.join(f'{v:.8f}' for v in embedding)}]"
 
 
-def _pgvector_to_list(vector_str: str) -> list[float]:
-    """Convert a pgvector string literal to a Python list of floats.
+def _pgvector_to_list(vector_value: str | list[float] | bytes) -> list[float]:
+    """Convert a pgvector value to a Python list of floats.
 
-    Handles the PostgreSQL vector text representation.
+    Handles both the PostgreSQL vector text representation ('[0.1,0.2,...]')
+    and native Python list types returned by newer pgvector/asyncpg versions.
     """
-    if not vector_str or vector_str == "[]":
+    if vector_value is None or vector_value == "[]" or vector_value == "":
         return []
+    if isinstance(vector_value, list):
+        return [float(v) for v in vector_value]
+    if isinstance(vector_value, bytes):
+        vector_value = vector_value.decode("utf-8")
     # Remove brackets and parse
-    inner = vector_str.strip("[]")
+    inner = vector_value.strip("[]")
     return [float(x) for x in inner.split(",") if x.strip()]

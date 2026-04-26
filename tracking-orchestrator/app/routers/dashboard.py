@@ -111,7 +111,7 @@ async def get_trajectory(
                 after = after.replace(tzinfo=UTC)
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid start timestamp: {start!r}",
             ) from exc
 
@@ -130,7 +130,7 @@ async def get_trajectory(
             points = [p for p in points if p.observed_at <= end_dt]
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid end timestamp: {end!r}",
             ) from exc
 
@@ -155,10 +155,12 @@ async def get_dwell_summary(
     """Return room dwell aggregation (time-in-room) for one day."""
     if date:
         try:
-            day = datetime.fromisoformat(date).replace(tzinfo=UTC)
+            day = datetime.fromisoformat(date)
+            day = day.replace(tzinfo=UTC) if day.tzinfo is None else day.astimezone(UTC)
+            day = day.replace(hour=0, minute=0, second=0, microsecond=0)
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid date: {date!r}",
             ) from exc
     else:
@@ -217,7 +219,7 @@ async def list_keyframes(
                 after_dt = after_dt.replace(tzinfo=UTC)
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid after timestamp: {after!r}",
             ) from exc
 
@@ -242,10 +244,9 @@ async def get_keyframe(
     repo: KeyframeRepository = Depends(get_keyframe_repo),
 ) -> dict[str, Any]:
     """Return a single tagged keyframe by ID."""
-    keyframes = await repo.list_keyframes(limit=10000)
-    for k in keyframes:
-        if k.keyframe_id == sample_id:
-            return _keyframe_to_dict(k)
+    keyframe = await repo.get_keyframe(sample_id)
+    if keyframe is not None:
+        return _keyframe_to_dict(keyframe)
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={"code": "keyframe.not_found", "message": f"Keyframe {sample_id} not found."},
@@ -258,12 +259,13 @@ async def retain_keyframe(
     repo: KeyframeRepository = Depends(get_keyframe_repo),
 ) -> dict[str, Any]:
     """Extend a keyframe's retention past the normal window."""
-    keyframes = await repo.list_keyframes(limit=10000)
-    for k in keyframes:
-        if k.keyframe_id == sample_id:
-            # Retention extension is a no-op in the in-memory impl;
-            # the Postgres impl would UPDATE expires_at.
-            return {"retained": True, "sample_id": sample_id}
+    expires_at = datetime.now(UTC) + timedelta(days=365)
+    if await repo.update_retention(sample_id, expires_at):
+        return {
+            "retained": True,
+            "sample_id": sample_id,
+            "expires_at": expires_at.isoformat(),
+        }
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={"code": "keyframe.not_found", "message": f"Keyframe {sample_id} not found."},

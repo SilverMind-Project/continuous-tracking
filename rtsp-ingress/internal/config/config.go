@@ -23,7 +23,7 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	// TODO(phase-0 0.27): add the separate mTLS admin listener on :8310.
+	// TODO(phase-0 0.27): add the separate mTLS admin listener on :8510.
 	ListenAddr           string        `yaml:"health_addr"`
 	ReadTimeout          time.Duration `yaml:"-"`
 	WriteTimeout         time.Duration `yaml:"-"`

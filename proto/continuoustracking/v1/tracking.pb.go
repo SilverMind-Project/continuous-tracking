@@ -719,7 +719,7 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\videntity_id\x18\x01 \x01(\tR\n" +
 	"identityId\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
-	"\vprobability\x18\x03 \x01(\x02R\vprobabilityBDZBgithub.com/khoofia/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
+	"\vprobability\x18\x03 \x01(\x02R\vprobabilityBOZMgithub.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
 
 var (
 	file_continuoustracking_v1_tracking_proto_rawDescOnce sync.Once

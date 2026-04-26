@@ -22,10 +22,13 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Protocol
 
 import numpy as np
+import numpy.typing as npt
 from structlog import get_logger
 
+from ..calibration.state import calibration_state
 from ..domain import (
     CameraConfig,
     Detection,
@@ -39,17 +42,24 @@ from ..domain import (
     TrackingEvent,
 )
 from ..inference.detector import PersonDetector
-from ..inference.schemas import DetectionBox
+from ..inference.schemas import DetectionBox, Embedding
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..storage.base import (
+    GalleryRepository,
+    GlobalTrackRepository,
+    InMemoryGalleryRepository,
     InMemoryGlobalTrackRepository,
     InMemoryKeyframeRepository,
     InMemoryTrackingRepository,
     InMemoryTrajectoryRepository,
+    KeyframeRepository,
     TrackingRepository,
+    TrajectoryRepository,
 )
+from ..tracking.camera_adjacency import AdjacencyEdge as GraphAdjacencyEdge
 from ..tracking.camera_adjacency import CameraAdjacency
 from ..tracking.cross_camera import CrossCamConfig, CrossCameraAssociator
+from ..tracking.floor_projector import FloorProjector
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.tracker import PerCameraTrackers, TrackerConfig
 from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
@@ -63,6 +73,36 @@ from ..transport.revision_publisher import RevisionPublisher
 from ..transport.scene_publisher import SceneSamplesPublisher
 
 logger = get_logger(__name__)
+
+
+class FrameImageFetcher(Protocol):
+    """Loads an RGB frame image from object storage."""
+
+    async def fetch_rgb(self, minio_key: str) -> npt.NDArray[np.uint8]:
+        """Return an RGB uint8 image for the object key."""
+
+
+class ReidEmbedderProtocol(Protocol):
+    """Appearance embedding boundary used by the pipeline."""
+
+    async def embed_batch(
+        self,
+        crops: list[npt.NDArray[np.uint8]],
+    ) -> list[Embedding]:
+        """Return one ReID embedding per crop."""
+
+
+def _crop_detection(
+    image: npt.NDArray[np.uint8],
+    det: DetectionBox,
+) -> npt.NDArray[np.uint8]:
+    """Crop one normalized detector box from an RGB image."""
+    h, w = image.shape[:2]
+    x1 = max(0, min(w - 1, int(det.x1 * w)))
+    y1 = max(0, min(h - 1, int(det.y1 * h)))
+    x2 = max(x1 + 1, min(w, int(det.x2 * w)))
+    y2 = max(y1 + 1, min(h, int(det.y2 * h)))
+    return np.ascontiguousarray(image[y1:y2, x1:x2])
 
 
 # ---------------------------------------------------------------------------
@@ -116,48 +156,93 @@ class FrameProcessingPipeline:
         self._tracklet_manager: TrackletManager | None = None
         self._tracker: PerCameraTrackers | None = None
         self._repo: TrackingRepository | None = None
-        self._global_track_repo: InMemoryGlobalTrackRepository | None = None
+        self._gallery_repo: GalleryRepository | None = None
+        self._global_track_repo: GlobalTrackRepository | None = None
         self._cross_camera: CrossCameraAssociator | None = None
         self._identity_resolver: IdentityResolver | None = None
         self._revision_publisher: RevisionPublisher | None = None
         self._adjacency: CameraAdjacency | None = None
+        self._adjacency_version: int = -1
+        self._frame_fetcher: FrameImageFetcher | None = None
+        self._reid_embedder: ReidEmbedderProtocol | None = None
         # M6
         self._trajectory_writer: TrajectoryWriter | None = None
         self._keyframe_sampler: KeyframeSampler | None = None
         self._scene_publisher: SceneSamplesPublisher | None = None
         self._running = False
         self._tasks: list[asyncio.Task[None]] = []
+        self._frame_tasks: set[asyncio.Task[None]] = set()
+        self._frame_semaphore: asyncio.Semaphore | None = None
+        self._camera_locks: dict[str, asyncio.Lock] = {}
+        # Track previously active global track IDs for close_track wiring (Issue #23).
+        self._prev_active_gt_ids: set[str] = set()
 
     @property
     def is_running(self) -> bool:
         return self._running
 
+    @property
+    def tracking_repo(self) -> TrackingRepository | None:
+        """Public accessor for the tracking repository."""
+        return self._repo
+
+    @property
+    def global_track_repo(self) -> GlobalTrackRepository | None:
+        """Public accessor for the global track repository."""
+        return self._global_track_repo
+
+    @property
+    def revision_publisher(self) -> RevisionPublisher | None:
+        """Public accessor for the revision publisher."""
+        return self._revision_publisher
+
     async def initialize(
         self,
         detector: PersonDetector | None = None,
-        repo: TrackingRepository | None = None,
+        # Tracking repository (required for tracklet manager)
+        tracking_repo: TrackingRepository | None = None,
+        # Gallery repository (required for tracklet manager + identity resolver)
+        gallery_repo: GalleryRepository | None = None,
+        # Global track repository (required for cross-camera associator)
+        global_track_repo: GlobalTrackRepository | None = None,
+        # Trajectory repository (required for trajectory writer)
+        trajectory_repo: TrajectoryRepository | None = None,
+        # Keyframe repository (required for keyframe sampler)
+        keyframe_repo: KeyframeRepository | None = None,
+        # Frame image source + ReID embedder for the real inference path.
+        frame_fetcher: FrameImageFetcher | None = None,
+        reid_embedder: ReidEmbedderProtocol | None = None,
     ) -> None:
         """Initialize all pipeline components.
 
         Args:
             detector: Triton-backed person detector. If None, skeleton mode.
-            repo: Tracking repository. If None, uses InMemoryTrackingRepository.
+            tracking_repo: Tracking repository. Defaults to InMemoryTrackingRepository.
+            gallery_repo: Gallery repository. Defaults to InMemoryGalleryRepository.
+            global_track_repo: Global track repository. Defaults to InMemoryGlobalTrackRepository.
+            trajectory_repo: Trajectory repository. Defaults to InMemoryTrajectoryRepository.
+            keyframe_repo: Keyframe repository. Defaults to InMemoryKeyframeRepository.
+            frame_fetcher: Object-storage backed RGB frame loader.
+            reid_embedder: Triton-backed ReID embedder.
         """
         # Transport
         self._transport = RedisStreamsTransport(self._config.transport)
         await self._transport.connect()
 
-        # Repository
-        self._repo = repo or InMemoryTrackingRepository()
+        # Repositories — use in-memory defaults for skeleton/test mode.
+        # In production, concrete Postgres implementations are injected.
+        self._repo = tracking_repo or InMemoryTrackingRepository()
+        gallery = gallery_repo or InMemoryGalleryRepository()
+        self._gallery_repo = gallery
+        self._global_track_repo = global_track_repo or InMemoryGlobalTrackRepository()
 
         # Detector
         self._detector = detector
+        self._frame_fetcher = frame_fetcher
+        self._reid_embedder = reid_embedder
 
         # Tracklet manager
         tracker = PerCameraTrackers(TrackerConfig())
-        from ..storage.base import InMemoryGalleryRepository
-
-        gallery = InMemoryGalleryRepository()
 
         self._tracklet_manager = TrackletManager(
             repo=self._repo,
@@ -169,8 +254,6 @@ class FrameProcessingPipeline:
         self._tracker = tracker
 
         # ---- M5: Cross-camera + identity resolution ----
-        self._global_track_repo = InMemoryGlobalTrackRepository()
-
         self._adjacency = CameraAdjacency()
 
         self._cross_camera = CrossCameraAssociator(
@@ -178,7 +261,9 @@ class FrameProcessingPipeline:
             adjacency=self._adjacency,
             global_track_repo=self._global_track_repo,
             config=self._config.cross_cam,
+            floor_projector=FloorProjector(calibration_state),
         )
+        self._sync_adjacency()
 
         self._identity_resolver = IdentityResolver(
             tracking_repo=self._repo,
@@ -194,12 +279,12 @@ class FrameProcessingPipeline:
         await self._revision_publisher.connect()
 
         # ---- M6: Trajectory writer + keyframe sampler ----
-        trajectory_repo = InMemoryTrajectoryRepository()
-        self._trajectory_writer = TrajectoryWriter(repo=trajectory_repo)
+        self._trajectory_writer = TrajectoryWriter(
+            repo=trajectory_repo or InMemoryTrajectoryRepository(),
+        )
 
-        keyframe_repo = InMemoryKeyframeRepository()
         self._keyframe_sampler = KeyframeSampler(
-            repo=keyframe_repo,
+            repo=keyframe_repo or InMemoryKeyframeRepository(),
             config=self._config.sampler,
         )
 
@@ -224,6 +309,7 @@ class FrameProcessingPipeline:
         self._tasks = [
             asyncio.create_task(self._consume_loop()),
         ]
+        self._frame_semaphore = asyncio.Semaphore(max(1, self._config.max_concurrent_frames))
         logger.info("Pipeline started")
 
     async def stop(self) -> None:
@@ -232,6 +318,15 @@ class FrameProcessingPipeline:
 
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
+
+        if self._frame_tasks:
+            await asyncio.gather(*self._frame_tasks, return_exceptions=True)
+            self._frame_tasks.clear()
+
+        # Close all open dwells in the trajectory writer to prevent unbounded
+        # per-track state from accumulating across restarts.
+        if self._trajectory_writer:
+            await self._trajectory_writer.close_all(closed_at=datetime.now(UTC))
 
         if self._transport:
             await self._transport.disconnect()
@@ -252,33 +347,16 @@ class FrameProcessingPipeline:
 
         while self._running:
             try:
-                # Read frames from Redis Streams
-                async for frame in self._transport.consume_frames(count=1):
+                # Read a batch and process frames concurrently. Per-camera
+                # locks preserve tracker ordering for each camera.
+                async for frame in self._transport.consume_frames(
+                    count=max(1, self._config.max_concurrent_frames)
+                ):
                     if not self._running:
                         break
-
-                    start = time.monotonic()
-                    try:
-                        await self._process_frame(frame)
-                        await self._transport.ack_frame(frame)
-                        latency_us = int((time.monotonic() - start) * 1e6)
-                        logger.debug(
-                            "Frame processed",
-                            camera_id=frame.camera_id,
-                            frame_index=frame.frame_index,
-                            latency_us=latency_us,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Frame processing failed",
-                            camera_id=frame.camera_id,
-                            frame_index=frame.frame_index,
-                        )
-                        await self._transport.publish_response(
-                            frame,
-                            success=False,
-                            error_code="processing_error",
-                        )
+                    task = asyncio.create_task(self._handle_frame(frame))
+                    self._frame_tasks.add(task)
+                    task.add_done_callback(self._frame_tasks.discard)
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -286,6 +364,61 @@ class FrameProcessingPipeline:
                 await asyncio.sleep(1)
 
         logger.info("Consume loop stopped")
+
+    async def _handle_frame(self, frame: FrameReady) -> None:
+        """Process and ACK one frame under global and per-camera concurrency gates."""
+        assert self._transport is not None
+        if self._frame_semaphore is None:
+            self._frame_semaphore = asyncio.Semaphore(max(1, self._config.max_concurrent_frames))
+
+        camera_lock = self._camera_locks.setdefault(frame.camera_id, asyncio.Lock())
+        async with self._frame_semaphore, camera_lock:
+            start = time.monotonic()
+            try:
+                await self._process_frame(frame)
+                await self._transport.ack_frame(frame)
+                latency_us = int((time.monotonic() - start) * 1e6)
+                logger.debug(
+                    "Frame processed",
+                    camera_id=frame.camera_id,
+                    frame_index=frame.frame_index,
+                    latency_us=latency_us,
+                )
+            except Exception:
+                logger.exception(
+                    "Frame processing failed",
+                    camera_id=frame.camera_id,
+                    frame_index=frame.frame_index,
+                )
+                await self._transport.publish_response(
+                    frame,
+                    success=False,
+                    error_code="processing_error",
+                )
+
+    def _sync_adjacency(self) -> None:
+        """Hot-reload operator-pushed calibration adjacency into the associator."""
+        if self._adjacency_version == calibration_state.version:
+            return
+        new_adjacency = CameraAdjacency()
+        for edge in calibration_state.adjacency_edges:
+            new_adjacency.add_edge(
+                GraphAdjacencyEdge(
+                    from_camera=edge.from_camera,
+                    to_camera=edge.to_camera,
+                    max_transition_seconds=edge.max_transit_s,
+                    overlap=edge.overlap,
+                )
+            )
+        self._adjacency = new_adjacency
+        self._adjacency_version = calibration_state.version
+        if self._gallery_repo is not None and self._global_track_repo is not None:
+            self._cross_camera = CrossCameraAssociator(
+                gallery=self._gallery_repo,
+                adjacency=new_adjacency,
+                global_track_repo=self._global_track_repo,
+                config=self._config.cross_cam,
+            )
 
     async def _process_frame(self, frame: FrameReady) -> None:
         """Process a single FrameReady message through the full pipeline.
@@ -311,21 +444,30 @@ class FrameProcessingPipeline:
             await self._skeleton_frame(frame)
             return
 
-        # Step 1: Fetch frame from MinIO (skeleton: skip)
-        # image = await minio.fetch_jpeg(frame.minio_key)
+        self._sync_adjacency()
+
+        event_time = datetime.now(UTC)
+        capture_time = datetime.fromtimestamp(frame.capture_time_unix_ns / 1e9, tz=UTC)
+
+        # Step 1: Fetch frame from object storage. Tests may omit the fetcher
+        # and use a detector mock; in that case a blank image keeps the real
+        # detector call path active without external services.
+        if self._frame_fetcher is not None:
+            image = await self._frame_fetcher.fetch_rgb(frame.minio_key)
+        else:
+            image = np.zeros((max(frame.height, 1), max(frame.width, 1), 3), dtype=np.uint8)
 
         # Step 2: Run detection
-        # We need a placeholder image for detection
-        # In production: detections = await self._detector.detect(image)
-        detections: list[DetectionBox] = []
+        detections = await self._detector.detect(image)
         domain_detections: list[Detection] = []
 
         if detections:
-            # Step 3: Per-camera tracking
-            from ..inference.schemas import Embedding
-
-            # Create Detection domain objects from inference results
-            embeddings: list[Embedding] = []
+            crops = [_crop_detection(image, det) for det in detections]
+            embeddings: list[Embedding] = (
+                await self._reid_embedder.embed_batch(crops)
+                if self._reid_embedder is not None
+                else []
+            )
 
             for det in detections:
                 from ..domain import BoundingBox
@@ -336,27 +478,25 @@ class FrameProcessingPipeline:
                     x_max=int(det.x2 * frame.width),
                     y_max=int(det.y2 * frame.height),
                 )
-                # Embedding comes from ReID model separately in production.
-                # Placeholder: zero embedding (float32 to match Embedding schema).
-                emb = np.zeros(768, dtype=np.float32)
+                det_idx = len(domain_detections)
+                emb = embeddings[det_idx] if det_idx < len(embeddings) else None
 
                 domain_det = Detection(
                     detection_id=str(uuid.uuid4()),
                     camera_id=frame.camera_id,
                     bbox=bbox,
-                    embedding=emb.tolist(),
-                    capture_time=datetime.fromtimestamp(frame.capture_time_unix_ns / 1e9, tz=UTC),
-                    event_time=datetime.now(UTC),
+                    embedding=emb.tolist() if emb is not None else [],
+                    capture_time=capture_time,
+                    event_time=event_time,
                     confidence=det.confidence,
                 )
                 domain_detections.append(domain_det)
-                embeddings.append(emb)
 
             # Step 3: Per-camera tracking
             local_tracks = self._tracker.update(
                 camera_id=frame.camera_id,
                 detections=domain_detections,
-                embeddings=embeddings,
+                embeddings=embeddings or None,
                 frame_index=frame.frame_index,
             )
 
@@ -367,7 +507,7 @@ class FrameProcessingPipeline:
                 local_tracks=local_tracks,
                 detections=domain_detections,
                 embeddings=embeddings,
-                event_time=datetime.now(UTC),
+                event_time=event_time,
                 frame_index=frame.frame_index,
             )
 
@@ -395,6 +535,22 @@ class FrameProcessingPipeline:
                 active_tracklets,
                 captured_at=datetime.now(UTC),
             )
+
+            # Step 5b: Close trajectory dwells for terminated global tracks.
+            # A global track is considered terminated when it was active in a
+            # previous frame but no longer appears in the current active list
+            # (all its tracklets have been closed by the tracklet manager).
+            current_gt_ids = {gt.global_track_id for gt in active_global_tracks}
+            terminated_gt_ids = self._prev_active_gt_ids - current_gt_ids
+            if terminated_gt_ids and self._trajectory_writer:
+                traj_close_time = datetime.now(UTC)
+                for gt_id in terminated_gt_ids:
+                    logger.debug(
+                        "Closing trajectory dwell for terminated global track",
+                        global_track_id=gt_id,
+                    )
+                    await self._trajectory_writer.close_track(gt_id, closed_at=traj_close_time)
+            self._prev_active_gt_ids = current_gt_ids
 
             # Step 6: Identity resolution
             outcome = await self._identity_resolver.resolve(

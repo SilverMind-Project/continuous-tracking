@@ -39,21 +39,48 @@ def _resize_letterbox(
 
     Returns (padded_float32_chw, pad_x, pad_y, scale) where pad_x/pad_y are
     the number of pixels added on each side and scale is orig→input scaling.
+    Uses bilinear interpolation for higher-quality resizing.
     """
     h, w = image.shape[:2]
     scale = target / max(h, w)
     new_h = max(1, round(h * scale))
     new_w = max(1, round(w * scale))
 
-    # Nearest-neighbour resize via index broadcasting
-    row_idx = np.floor(np.arange(new_h) * h / new_h).astype(np.intp)
-    col_idx = np.floor(np.arange(new_w) * w / new_w).astype(np.intp)
-    resized = image[row_idx[:, None], col_idx[None, :]]  # (new_h, new_w, 3)
+    # Bilinear resize via index broadcasting (per-channel to avoid 3-D index
+    # ambiguity in numpy advanced indexing).
+    src_float = image.astype(np.float32).transpose(2, 0, 1)  # (3, h, w)
+    row_f = np.arange(new_h) * h / new_h
+    col_f = np.arange(new_w) * w / new_w
+
+    r0 = np.floor(row_f).astype(np.intp)
+    c0 = np.floor(col_f).astype(np.intp)
+    r1 = np.minimum(r0 + 1, h - 1)
+    c1 = np.minimum(c0 + 1, w - 1)
+
+    wr = (row_f - np.floor(row_f)).astype(np.float32)
+    wc = (col_f - np.floor(col_f)).astype(np.float32)
+
+    # (new_h, new_w) per channel
+    w00 = (1 - wr)[:, None] * (1 - wc)[None, :]
+    w10 = wr[:, None] * (1 - wc)[None, :]
+    w01 = (1 - wr)[:, None] * wc[None, :]
+    w11 = wr[:, None] * wc[None, :]
+
+    bilinear = np.stack(
+        [
+            src_float[c, r0[:, None], c0[None, :]] * w00
+            + src_float[c, r1[:, None], c0[None, :]] * w10
+            + src_float[c, r0[:, None], c1[None, :]] * w01
+            + src_float[c, r1[:, None], c1[None, :]] * w11
+            for c in range(3)
+        ],
+        axis=2,
+    )  # (new_h, new_w, 3)
 
     pad_y = (target - new_h) // 2
     pad_x = (target - new_w) // 2
     canvas = np.full((target, target, 3), 114, dtype=np.uint8)
-    canvas[pad_y : pad_y + new_h, pad_x : pad_x + new_w] = resized
+    canvas[pad_y : pad_y + new_h, pad_x : pad_x + new_w] = np.asarray(bilinear, dtype=np.uint8)
 
     float_chw = np.asarray(canvas, dtype=np.float32) / 255.0
     float_chw = np.transpose(float_chw, (2, 0, 1))  # HWC → CHW
@@ -98,13 +125,14 @@ def _decode_output(
     pad_x: int,
     pad_y: int,
     scale: float,
+    conf_threshold: float = _CONF_THRESHOLD,
 ) -> list[DetectionBox]:
     """Decode YOLO11m output0 tensor (84, 8400) → DetectionBox list."""
     preds = raw.T  # (8400, 84)
     cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
     person_score = preds[:, 4 + _PERSON_CLASS]  # class 0
 
-    mask = person_score > _CONF_THRESHOLD
+    mask = person_score > conf_threshold
     if not mask.any():
         return []
 
@@ -173,7 +201,10 @@ class PersonDetector:
         )
         raw_batch = outputs["output0"]  # (N, 84, 8400)
 
-        return [_decode_output(raw_batch[i], *meta[i]) for i in range(len(images))]
+        return [
+            _decode_output(raw_batch[i], *meta[i], conf_threshold=self._conf)
+            for i in range(len(images))
+        ]
 
     async def detect(self, image: npt.NDArray[np.uint8]) -> list[DetectionBox]:
         """Detect persons in a single RGB image."""

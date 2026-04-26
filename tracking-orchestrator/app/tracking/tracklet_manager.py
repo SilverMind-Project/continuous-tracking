@@ -140,6 +140,11 @@ class TrackletManager:
             self._local_to_tracklet[lid] for lid in lt_by_local_id if lid in self._local_to_tracklet
         }
 
+        # Reverse map: tracklet_id → local_track_id (for O(1) lookup)
+        tracklet_to_local: dict[str, str] = {
+            tid: lid for lid, tid in self._local_to_tracklet.items() if lid in lt_by_local_id
+        }
+
         # ---- Extend or close existing tracklets ----
         new_gallery_entries: list[GalleryEmbedding] = []
         updated_tracklets: list[Tracklet] = []
@@ -148,33 +153,39 @@ class TrackletManager:
 
         for tracklet_id, state in self._active.items():
             if tracklet_id in alive_tracklet_ids:
-                # Find the local_track for this tracklet via reverse map
-                local_id = next(
-                    lid for lid, tid in self._local_to_tracklet.items() if tid == tracklet_id
-                )
+                # O(1) lookup of local_track_id → local_track
+                local_id = tracklet_to_local.get(tracklet_id)
+                if local_id is None:
+                    to_remove.append(tracklet_id)
+                    continue
                 local_track = lt_by_local_id[local_id]
                 det = det_by_id.get(local_track.detection.detection_id)
-                if det is not None:
-                    emb_idx = self._find_embedding_index(local_track.detection, detections)
-                    emb = embeddings[emb_idx] if emb_idx < len(embeddings) else None
+                if det is None:
+                    continue
 
-                    new_state = self._extend_tracklet(state, det, emb, event_time, frame_index)
-                    if new_state is not None:
-                        state = new_state
-                        self._active[tracklet_id] = state
-                        updated_tracklets.append(state.tracklet)
+                # Issue #18: filter by min_detection_confidence before extending
+                if det.confidence < self._config.min_detection_confidence:
+                    continue
 
-                        # Check gallery append
-                        if det.confidence >= self._config.min_detection_confidence:
-                            quality = self._compute_quality(det, camera)
-                            if quality >= self._config.gallery_min_quality:
-                                gallery_entry = self._append_gallery(
-                                    tracklet_id, det, emb, quality, event_time
-                                )
-                                if gallery_entry:
-                                    new_gallery_entries.append(gallery_entry)
-                    else:
-                        to_remove.append(tracklet_id)
+                emb_idx = self._find_embedding_index(local_track.detection, detections)
+                emb = embeddings[emb_idx] if emb_idx < len(embeddings) else None
+
+                new_state = self._extend_tracklet(state, det, emb, event_time, frame_index)
+                if new_state is not None:
+                    state = new_state
+                    self._active[tracklet_id] = state
+                    updated_tracklets.append(state.tracklet)
+
+                    # Check gallery append
+                    quality = self._compute_quality(det, camera)
+                    if quality >= self._config.gallery_min_quality:
+                        gallery_entry = self._append_gallery(
+                            tracklet_id, det, emb, quality, event_time
+                        )
+                        if gallery_entry:
+                            new_gallery_entries.append(gallery_entry)
+                            # Issue #17: increment gallery_size in extend branch
+                            state.gallery_size += 1
             else:
                 # Increment once; close if grace window exhausted
                 state.lost_count += 1
@@ -254,9 +265,22 @@ class TrackletManager:
         event_time: datetime,
         frame_index: int,
     ) -> _TrackletState | None:
-        """Extend an existing tracklet with a new detection."""
+        """Extend an existing tracklet with a new detection.
+
+        Returns a new _TrackletState with an immutable Tracklet (Issue #19).
+        """
+        # Issue #19: rebuild Tracklet immutably instead of mutating frozen dataclass
+        new_tracklet = Tracklet(
+            tracklet_id=state.tracklet.tracklet_id,
+            camera_id=state.tracklet.camera_id,
+            detection_ids=[*state.tracklet.detection_ids, detection.detection_id],
+            started_at=state.tracklet.started_at,
+            ended_at=state.tracklet.ended_at,
+            state=state.tracklet.state,
+            last_bbox=detection.bbox,
+        )
+
         state.detections.append(detection)
-        state.tracklet.detection_ids.append(detection.detection_id)
         state.last_detection_time = event_time
 
         # Update embedding history
@@ -268,7 +292,15 @@ class TrackletManager:
         if quality > state.peak_quality:
             state.peak_quality = quality
 
-        return state
+        return _TrackletState(
+            tracklet=new_tracklet,
+            peak_quality=state.peak_quality,
+            gallery_size=state.gallery_size,
+            last_detection_time=state.last_detection_time,
+            detections=state.detections,
+            embeddings=state.embeddings,
+            lost_count=state.lost_count,
+        )
 
     def _create_tracklet(
         self,
@@ -286,6 +318,7 @@ class TrackletManager:
             started_at=event_time,
             ended_at=None,
             state="active",
+            last_bbox=detection.bbox,
         )
 
     def _close_tracklet(self, tracklet: Tracklet, event_time: datetime) -> Tracklet:
@@ -297,6 +330,8 @@ class TrackletManager:
             started_at=tracklet.started_at,
             ended_at=event_time,
             state="terminated",
+            last_bbox=tracklet.last_bbox,
+            last_floor_point=tracklet.last_floor_point,
         )
 
     def _append_gallery(

@@ -24,7 +24,6 @@ import redis.asyncio as redis
 from structlog import get_logger
 
 from ..domain import Detection
-from ..inference.triton_client import TritonClientProtocol
 from ..observability import metrics
 from ..proto.continuoustracking.v1 import frame_pb2, tracking_pb2
 from .codec import decode as proto_decode
@@ -358,33 +357,6 @@ class RedisStreamsTransport:
             return 0
         first = consumers[0]
         return int(first.get(b"pending") or first.get("pending") or 0)
-
-
-# ---------------------------------------------------------------------------
-# Frame processor (skeleton; M4+ pipeline integration lives in
-# :mod:`app.pipeline`).
-# ---------------------------------------------------------------------------
-
-
-async def process_frame(
-    frame: FrameReady,
-    detector: TritonClientProtocol,
-    tracker: Any,
-    transport: RedisStreamsTransport,
-    detector_confidence: float = 0.25,
-) -> tuple[int, int]:
-    """Process a single FrameReady through detection + tracking."""
-    del detector, tracker, detector_confidence  # skeleton mode
-    start = time.monotonic()
-    detection_count = 0
-    latency_us = int((time.monotonic() - start) * 1e6)
-    await transport.publish_response(
-        frame=frame,
-        success=True,
-        detection_count=detection_count,
-        processing_latency_us=latency_us,
-    )
-    return detection_count, latency_us
 
 
 # ---------------------------------------------------------------------------

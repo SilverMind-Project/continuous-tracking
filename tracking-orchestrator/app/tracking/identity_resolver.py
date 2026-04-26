@@ -248,12 +248,11 @@ class IdentityResolver:
     def _p_face(self, confidence: float, quality: float) -> float:
         """Probability that a face anchor is correct.
 
-        Monotone function of confidence and quality, calibrated to
-        typical face recognition performance.
+        Real sigmoid calibrated to typical face-recognition performance.
+        At (0.5, 0.5) -> ~0.5; at (0.95, 1.0) -> ~0.96.
         """
         combined = 0.7 * confidence + 0.3 * quality
-        # Sigmoid-like: at combined=0.9 -> ~0.95, at combined=0.5 -> ~0.5
-        return min(0.99, 0.5 + 0.5 * (2 * combined - 1))
+        return min(0.99, 0.5 + 0.5 * math.tanh(4 * (combined - 0.5)))
 
     # ------------------------------------------------------------------
     # ReID likelihood from gallery
@@ -266,29 +265,40 @@ class IdentityResolver:
         gallery entries. Maps results to per-identity scores using a
         calibrated logistic curve.
         """
-        # In production, collect gallery embeddings for this GlobalTrack's
-        # tracklets and use them for k-NN search. For now, query the full
-        # gallery with a placeholder embedding.
-
-        # Query the gallery for similar embeddings (limit to top-k per tracklet).
-        # We use a simplified approach: search the full gallery and aggregate.
+        # Build a real query embedding from the GlobalTrack's existing
+        # gallery entries (mean of recent embeddings per tracklet).
         try:
-            similar = await self._gallery_repo.search_similar(
-                embedding=[0.0] * 768,  # Placeholder — in production, use actual embeddings.
+            recent = await self._gallery_repo.list_gallery_entries_for_tracklets(
+                tracklet_ids=set(gt.tracklet_ids),
                 limit=20,
             )
         except Exception:
-            # Gallery unavailable: return uniform.
+            return PosteriorDist({})
+
+        if not recent:
+            return PosteriorDist({})
+
+        # Compute mean embedding from recent gallery entries.
+        import numpy as np
+
+        embs = np.array([e.embedding for e in recent], dtype=np.float32)
+        query = np.mean(embs, axis=0).tolist()
+
+        try:
+            similar = await self._gallery_repo.search_similar(
+                embedding=query,
+                limit=20,
+            )
+        except Exception:
             return PosteriorDist({})
 
         if not similar:
             return PosteriorDist({})
 
         # Map hits to per-identity scores using logistic curve.
+        # Use the actual similarity score returned by search_similar.
         likelihood: dict[str, list[float]] = defaultdict(list)
-        for entry in similar:
-            sim = _cosine_similarity_from_distance(entry.quality)
-            # Logistic curve: midpoint at reid_decision_sim.
+        for entry, sim in similar:
             logit = self._logistic(sim)
             key = entry.identity_id if entry.identity_id else "UNKNOWN"
             likelihood[key].append(logit)
@@ -328,8 +338,12 @@ class IdentityResolver:
 
         Posterior = prior * face_likelihood * reid_likelihood
 
-        If any source is empty (no evidence), it is treated as a
-        near-zero weight so it does not overpower the prior.
+        If any source is empty (no evidence), it is treated as uniform
+        (weight=1.0) so it does not dilute evidence from other sources.
+
+        When a source is non-empty but missing an identity, a smoothing
+        constant is used instead of 1.0 to avoid penalising identities
+        that *do* appear in the evidence.
         """
         all_ids: set[str] = set(prior.distribution.keys())
         all_ids.update(face.distribution.keys())
@@ -338,18 +352,24 @@ class IdentityResolver:
         if not all_ids:
             return PosteriorDist({"UNKNOWN": 1.0})
 
-        # Weight for empty distributions: "no evidence" should be neutral
-        # (weight=1.0) so it does not dilute evidence from other sources.
-        # This ensures that a strong prior or face anchor is not weakened
-        # by empty likelihoods from other sources.
-        default_weight = 1.0
+        def _weight(dist: PosteriorDist, ident: str) -> float:
+            """Return the weight for *ident* from *dist*.
+
+            - Empty distribution → 1.0 (uninformative).
+            - Non-empty distribution → explicit value or smoothing constant.
+            """
+            if not dist.distribution:
+                return 1.0
+            if ident in dist.distribution:
+                return dist.distribution[ident]
+            # Smoothing: spread a small mass over identities not in this source.
+            # 1 / (n_present + 1) is a simple Laplace-style term.
+            n = len(dist.distribution)
+            return 1.0 / (n + 1)
 
         combined: dict[str, float] = {}
         for ident in all_ids:
-            p = prior.distribution.get(ident, default_weight)
-            f = face.distribution.get(ident, default_weight)
-            r = reid.distribution.get(ident, default_weight)
-            combined[ident] = p * f * r
+            combined[ident] = _weight(prior, ident) * _weight(face, ident) * _weight(reid, ident)
 
         if not combined:
             return PosteriorDist({"UNKNOWN": 1.0})
@@ -452,18 +472,22 @@ class IdentityResolver:
         # Rate limiting.
         now = captured_at
         window_start = now.timestamp() - 60.0
+        log_key = gt.global_track_id
         recent = [
-            ts
-            for ts in self._revision_log.get(gt.global_track_id, [])
-            if ts.timestamp() >= window_start
+            ts for ts in self._revision_log.get(log_key, []) if ts.timestamp() >= window_start
         ]
         if len(recent) >= self._config.max_revisions_per_gt_per_minute:
             logger.warning(
                 "Revision rate limit exceeded",
-                global_track_id=gt.global_track_id,
+                global_track_id=log_key,
                 recent_count=len(recent),
             )
             return None
+
+        # Prune stale entries to prevent unbounded memory growth.
+        self._revision_log[log_key] = [
+            ts for ts in self._revision_log[log_key] if ts.timestamp() >= window_start
+        ]
 
         # Collect tracklet IDs within the revision horizon.
         # In production, query the tracking repo for tracklets in the horizon.
@@ -520,12 +544,3 @@ class IdentityResolver:
     def register_identity(self, identity: Identity) -> None:
         """Register a known identity for display name lookup."""
         self._identities[identity.identity_id] = identity
-
-
-def _cosine_similarity_from_distance(quality: float) -> float:
-    """Convert a gallery entry's quality score to an approximate cosine similarity.
-
-    In production, this would be the actual cosine similarity from the
-    pgvector search. Here we use quality as a proxy.
-    """
-    return quality

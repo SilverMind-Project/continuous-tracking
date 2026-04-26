@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package continuoustracking.v1;
 
-option go_package = "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1";
+option go_package = "github.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1";
 
 // TrackingEvent is the core message produced by the tracking-orchestrator
 // after processing a frame. It carries the Bayesian identity posterior,

@@ -37,7 +37,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: app
-          image: ghcr.io/khoofia/rtsp-ingress:latest
+          image: ghcr.io/SilverMind-Project/rtsp-ingress:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: health

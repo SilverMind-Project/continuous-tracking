@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: app
-          image: ghcr.io/khoofia/tracking-orchestrator:latest
+          image: ghcr.io/SilverMind-Project/tracking-orchestrator:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

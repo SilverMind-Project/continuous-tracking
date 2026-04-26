@@ -6,7 +6,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/config"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/config"
 )
 
 func makeCameras(ids ...string) []config.CameraConfig {

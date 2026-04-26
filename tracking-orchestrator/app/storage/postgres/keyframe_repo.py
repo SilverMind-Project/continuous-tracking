@@ -32,6 +32,19 @@ FROM tagged_keyframes
 WHERE TRUE
 """
 
+_SQL_GET_KEYFRAME = """
+SELECT id, tracklet_id, global_track_id, camera_id,
+       minio_key, captured_at, annotations, tag_reason, expires_at
+FROM tagged_keyframes
+WHERE id = $1::uuid
+"""
+
+_SQL_UPDATE_RETENTION = """
+UPDATE tagged_keyframes
+SET expires_at = $2
+WHERE id = $1::uuid
+"""
+
 
 class PostgresKeyframeRepository(KeyframeRepository):
     """Postgres-backed KeyframeRepository."""
@@ -53,6 +66,16 @@ class PostgresKeyframeRepository(KeyframeRepository):
                 keyframe.tag_reason,
                 keyframe.expires_at,
             )
+
+    async def get_keyframe(self, keyframe_id: str) -> TaggedKeyframe | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_SQL_GET_KEYFRAME, keyframe_id)
+        return _row_to_keyframe(row) if row is not None else None
+
+    async def update_retention(self, keyframe_id: str, expires_at: datetime) -> bool:
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(_SQL_UPDATE_RETENTION, keyframe_id, expires_at)
+        return not result.endswith(" 0")
 
     async def list_keyframes(
         self,

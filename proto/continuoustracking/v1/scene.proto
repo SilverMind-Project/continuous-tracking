@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package continuoustracking.v1;
 
-option go_package = "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1";
+option go_package = "github.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1";
 
 // SceneSample is published to the scene.samples Redis Stream by the
 // orchestrator's KeyframeSampler. The scene worker (currently in

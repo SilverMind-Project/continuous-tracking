@@ -16,8 +16,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
 
-	pb "github.com/khoofia/continuous-tracking/proto/continuoustracking/v1"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/metrics"
+	pb "github.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/metrics"
 )
 
 var ErrNoImageData = errors.New("no image data provided")
@@ -33,9 +33,8 @@ type Publisher struct {
 }
 
 // New creates a new Publisher with the given MinIO client, bucket, Redis
-// client, stream name, approximate MAXLEN trim, and JPEG quality (1-100).
-func New(minioClient *minio.Client, bucket string, redisClient *redis.Client, stream string, maxlen int64, quality int) *Publisher {
-	_ = quality
+// client, stream name, and approximate MAXLEN trim.
+func New(minioClient *minio.Client, bucket string, redisClient *redis.Client, stream string, maxlen int64) *Publisher {
 	return &Publisher{
 		minio:  minioClient,
 		bucket: bucket,
@@ -83,14 +82,11 @@ func (p *Publisher) Publish(ctx context.Context, meta *pb.FrameReady, jpegIn []b
 	}
 	//nolint:gosec // captureTimeNS is bounded to MaxInt64 above.
 	captureTime := time.Unix(0, int64(captureTimeNS)).UTC()
-	if meta.CaptureTimeUnixNs == 0 {
-		captureTime = time.Now().UTC()
-	}
 	key := fmt.Sprintf("frames/%s/%s/%020d-%d.jpg",
 		meta.CameraId,
 		captureTime.Format("2006/01/02/15"),
 		meta.FrameIndex,
-		meta.CaptureTimeUnixNs,
+		captureTimeNS,
 	)
 
 	if err := retry(ctx, 3, func() error {
@@ -107,6 +103,7 @@ func (p *Publisher) Publish(ctx context.Context, meta *pb.FrameReady, jpegIn []b
 		return fmt.Errorf("minio put: %w", err)
 	}
 	meta.MinioKey = key
+	meta.CaptureTimeUnixNs = captureTimeNS
 
 	payload, err := proto.Marshal(meta)
 	if err != nil {

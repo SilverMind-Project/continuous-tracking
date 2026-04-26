@@ -18,8 +18,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/config"
-	"github.com/khoofia/continuous-tracking/rtsp-ingress/internal/metrics"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/config"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/metrics"
 )
 
 // Supervisor is the subset of rtsp.Supervisor used by the reconciler.

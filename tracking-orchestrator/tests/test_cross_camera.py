@@ -8,6 +8,7 @@ import pytest
 
 from app.domain import (
     CameraId,
+    GalleryEmbedding,
     GlobalTrack,
     Tracklet,
     TrackletId,
@@ -18,7 +19,7 @@ from app.storage.base import (
     InMemoryGlobalTrackRepository,
 )
 from app.tracking.camera_adjacency import AdjacencyEdge, CameraAdjacency
-from app.tracking.cross_camera import CrossCamConfig, CrossCameraAssociator
+from app.tracking.cross_camera import CrossCamConfig, CrossCameraAssociator, TrackletPairScore
 
 
 @pytest.fixture()
@@ -31,22 +32,56 @@ def adjacency() -> CameraAdjacency:
 
 @pytest.fixture()
 def global_track_repo() -> GlobalTrackRepository:
-    return InMemoryGlobalTrackRepository()
+    repo = InMemoryGlobalTrackRepository()
+    yield repo
+    # Clean up after each test to prevent state leakage.
+    repo._tracks.clear()
+    repo._by_tracklet.clear()
+
+
+@pytest.fixture()
+def gallery() -> InMemoryGalleryRepository:
+    return InMemoryGalleryRepository()
 
 
 @pytest.fixture()
 def assoc(
     adjacency: CameraAdjacency,
     global_track_repo: GlobalTrackRepository,
+    gallery: InMemoryGalleryRepository,
 ) -> CrossCameraAssociator:
     return CrossCameraAssociator(
-        gallery=InMemoryGalleryRepository(),
+        gallery=gallery,
         adjacency=adjacency,
         global_track_repo=global_track_repo,
         config=CrossCamConfig(
             alpha=0.7,
             min_link_score=0.5,
         ),
+    )
+
+
+def _make_gallery_entry(
+    tracklet_id: str,
+    camera_id: str,
+    embedding: list[float] | None = None,
+    quality: float = 0.9,
+) -> GalleryEmbedding:
+    """Create a gallery embedding for a tracklet."""
+    import uuid
+
+    if embedding is None:
+        embedding = [0.0] * 768
+    from datetime import UTC
+
+    return GalleryEmbedding(
+        gallery_entry_id=str(uuid.uuid4()),
+        identity_id="test-identity",
+        embedding=embedding,
+        seen_at=datetime.now(UTC),
+        quality=quality,
+        origin_tracklet_id=tracklet_id,
+        camera_id=camera_id,
     )
 
 
@@ -120,8 +155,18 @@ class TestCrossCameraAssociator:
         self,
         assoc: CrossCameraAssociator,
         global_track_repo: GlobalTrackRepository,
+        gallery: InMemoryGalleryRepository,
     ) -> None:
         """Tracklets on adjacent cameras should be merged into one GlobalTrack."""
+        # Populate gallery with similar embeddings so appearance similarity
+        # contributes positively to the combined score.
+        import numpy as np
+
+        np.random.seed(42)
+        emb = np.random.randn(768).tolist()
+        gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb.copy())
+        gallery._entries["e2"] = _make_gallery_entry("t2", "cam_b", embedding=emb.copy())
+
         t_a = _make_tracklet("t1", "cam_a")
         t_b = _make_tracklet("t2", "cam_b")
         result = await assoc.associate([t_a, t_b], captured_at=datetime.now(UTC))
@@ -210,10 +255,19 @@ class TestCrossCameraAssociator:
         self,
         assoc: CrossCameraAssociator,
         global_track_repo: GlobalTrackRepository,
+        gallery: InMemoryGalleryRepository,
     ) -> None:
         """Three tracklets should merge into one cluster when both pairs link."""
         # cam_a -> cam_b -> cam_c chain, all adjacent.
         # t1 on cam_a, t2 on cam_b, t3 on cam_c.
+        import numpy as np
+
+        np.random.seed(99)
+        emb = np.random.randn(768).tolist()
+        gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb.copy())
+        gallery._entries["e2"] = _make_gallery_entry("t2", "cam_b", embedding=emb.copy())
+        gallery._entries["e3"] = _make_gallery_entry("t3", "cam_c", embedding=emb.copy())
+
         t_a = _make_tracklet("t1", "cam_a")
         t_b = _make_tracklet("t2", "cam_b")
         t_c = _make_tracklet("t3", "cam_c")
@@ -222,6 +276,79 @@ class TestCrossCameraAssociator:
         assert len(result) == 1
         assert result[0].tracklet_ids == ["t1", "t2", "t3"]
         assert set(result[0].camera_ids) == {"cam_a", "cam_b", "cam_c"}
+
+    @pytest.mark.asyncio
+    async def test_different_clusters_are_consolidated_in_repo(
+        self,
+        global_track_repo: GlobalTrackRepository,
+    ) -> None:
+        """Issue #26: merging two candidate clusters must close the source
+        GlobalTrack in the repository, not only patch an in-memory map."""
+        adj = CameraAdjacency()
+        for a, b in [
+            ("cam_a", "cam_b"),
+            ("cam_c", "cam_d"),
+            ("cam_b", "cam_c"),
+            ("cam_a", "cam_c"),
+            ("cam_a", "cam_d"),
+            ("cam_b", "cam_d"),
+        ]:
+            adj.add_edge(AdjacencyEdge(a, b, max_transition_seconds=120))
+
+        assoc = CrossCameraAssociator(
+            gallery=InMemoryGalleryRepository(),
+            adjacency=adj,
+            global_track_repo=global_track_repo,
+            config=CrossCamConfig(min_link_score=0.5),
+        )
+
+        scores = {
+            ("t1", "t2"): 0.9,
+            ("t3", "t4"): 0.8,
+            ("t2", "t3"): 0.7,
+        }
+
+        async def score_pair(ta: Tracklet, tb: Tracklet) -> TrackletPairScore | None:
+            key = (ta.tracklet_id, tb.tracklet_id)
+            reverse = (tb.tracklet_id, ta.tracklet_id)
+            score = scores.get(key) or scores.get(reverse)
+            if score is None:
+                return TrackletPairScore(
+                    ta.tracklet_id,
+                    tb.tracklet_id,
+                    ta.camera_id,
+                    tb.camera_id,
+                    appearance_sim=0.0,
+                    geo_score=0.0,
+                    combined_score=0.0,
+                )
+            return TrackletPairScore(
+                ta.tracklet_id,
+                tb.tracklet_id,
+                ta.camera_id,
+                tb.camera_id,
+                appearance_sim=score,
+                geo_score=1.0,
+                combined_score=score,
+            )
+
+        assoc._score_pair = score_pair  # type: ignore[method-assign]
+
+        result = await assoc.associate(
+            [
+                _make_tracklet("t1", "cam_a"),
+                _make_tracklet("t2", "cam_b"),
+                _make_tracklet("t3", "cam_c"),
+                _make_tracklet("t4", "cam_d"),
+            ],
+            captured_at=datetime.now(UTC),
+        )
+
+        active = await global_track_repo.list_active()
+        assert len(result) == 1
+        assert len(active) == 1
+        assert set(active[0].tracklet_ids) == {"t1", "t2", "t3", "t4"}
+        assert await global_track_repo.get_by_tracklet_id("t3") == active[0]
 
     @pytest.mark.asyncio
     async def test_non_adjacent_cameras_create_separate_tracks(
@@ -276,8 +403,16 @@ class TestCrossCameraAssociator:
         adj.add_edge(AdjacencyEdge("cam_a", "cam_b", max_transition_seconds=30))
         adj.add_edge(AdjacencyEdge("cam_b", "cam_c", max_transition_seconds=30))
 
+        gallery = InMemoryGalleryRepository()
+        import numpy as np
+
+        np.random.seed(7)
+        emb = np.random.randn(768).tolist()
+        gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb.copy())
+        gallery._entries["e2"] = _make_gallery_entry("t2", "cam_b", embedding=emb.copy())
+
         assoc = CrossCameraAssociator(
-            gallery=InMemoryGalleryRepository(),
+            gallery=gallery,
             adjacency=adj,
             global_track_repo=global_track_repo,
             config=CrossCamConfig(min_link_score=0.5),

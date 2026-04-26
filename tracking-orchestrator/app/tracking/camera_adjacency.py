@@ -77,39 +77,46 @@ class CameraAdjacency:
     ) -> bool:
         """Check if to_camera is reachable from from_camera.
 
-        Uses BFS for transitive reachability. If within_s is provided,
-        only edges whose max_transition_seconds fits within the budget are
-        considered (i.e., the transition must be fast enough).
+        Uses Dijkstra's algorithm for transitive reachability with path-bounded
+        time constraint.  If within_s is provided, the *sum* of max_transition
+        seconds along the entire path must fit within the budget, not just
+        individual edges.
 
         Args:
             from_camera: source camera ID.
             to_camera: destination camera ID.
-            within_s: optional time budget in seconds. If set, only edges
-                with max_transition_seconds <= within_s pass the filter.
+            within_s: optional time budget in seconds. If set, the total path
+                cost (sum of edge max_transition_seconds) must be <= within_s.
 
         Returns:
-            True if to_camera is reachable from from_camera.
+            True if to_camera is reachable from from_camera within the budget.
         """
         if from_camera == to_camera:
             return True
 
-        visited: set[CameraId] = set()
-        queue: list[CameraId] = [from_camera]
+        import heapq
 
-        while queue:
-            current = queue.pop(0)
+        # (cumulative_cost, camera_id)
+        dist: dict[CameraId, float] = {from_camera: 0.0}
+        heap: list[tuple[float, CameraId]] = [(0.0, from_camera)]
+
+        while heap:
+            cost, current = heapq.heappop(heap)
             if current == to_camera:
-                return True
-            if current in visited:
+                if within_s is None or cost <= within_s:
+                    return True
                 continue
-            visited.add(current)
-
+            if cost > dist.get(current, float("inf")):
+                continue
             for edge in self._edges.get(current, []):
-                if edge.to_camera in visited:
-                    continue
-                if within_s is not None and edge.max_transition_seconds > within_s:
-                    continue
-                queue.append(edge.to_camera)
+                next_cam = edge.to_camera
+                edge_cost = edge.max_transition_seconds
+                new_cost = cost + edge_cost
+                if within_s is not None and new_cost > within_s:
+                    continue  # prune paths that exceed the budget
+                if new_cost < dist.get(next_cam, float("inf")):
+                    dist[next_cam] = new_cost
+                    heapq.heappush(heap, (new_cost, next_cam))
 
         return False
 
@@ -122,19 +129,13 @@ class CameraAdjacency:
         return [edge.to_camera for edge in self._edges.get(camera_id, [])]
 
     def get_max_transition(self, from_camera: CameraId, to_camera: CameraId) -> float | None:
-        """Get the maximum transition time between two adjacent cameras.
+        """Get the maximum transition time between two directly-connected cameras.
 
-        Checks both directions since physical camera connectivity is
-        bidirectional even though the graph edges are directed.
-
-        Returns None if the cameras are not directly connected.
+        Only checks the directed edge from from_camera → to_camera, consistent
+        with the directed graph semantics.  Returns None if no such edge exists.
         """
         for edge in self._edges.get(from_camera, []):
             if edge.to_camera == to_camera:
-                return edge.max_transition_seconds
-        # Check reverse direction
-        for edge in self._edges.get(to_camera, []):
-            if edge.to_camera == from_camera:
                 return edge.max_transition_seconds
         return None
 

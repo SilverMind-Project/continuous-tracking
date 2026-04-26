@@ -33,12 +33,15 @@ _SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # uuid.NAMESPACE
 
 
 def _stable_signal_id(
-    identity_id: str, signal_kind: str, window_start: datetime, window_end: datetime
+    identity_id: str, signal_kind: str, window_start: datetime, window_end: datetime | str
 ) -> str:
-    """Return a deterministic UUID5 for (identity, kind, window) so upserts are idempotent."""
-    key = (
-        f"{identity_id}\x00{signal_kind}\x00{window_start.isoformat()}\x00{window_end.isoformat()}"
-    )
+    """Return a deterministic UUID5 for (identity, kind, window) so upserts are idempotent.
+
+    ``window_end`` may be a datetime (closed window) or the string ``"open"``
+    for signals that track an ongoing state.
+    """
+    end_str = window_end.isoformat() if isinstance(window_end, datetime) else str(window_end)
+    key = f"{identity_id}\x00{signal_kind}\x00{window_start.isoformat()}\x00{end_str}"
     return str(uuid.uuid5(_SIGNAL_NS, key))
 
 
@@ -96,7 +99,7 @@ class DementiaSignalWorker:
                 after=now - self._cfg.window,
             )
 
-            for signal in self._compute_signals(identity_id, window, dwells, now):
+            for signal in await self._compute_signals(identity_id, window, dwells, now):
                 await self._signal_repo.upsert_signal(signal)
                 all_signals.append(signal)
 
@@ -110,7 +113,7 @@ class DementiaSignalWorker:
         )
         return list({p.identity_id for p in points})
 
-    def _compute_signals(
+    async def _compute_signals(
         self,
         identity_id: str,
         window: list[PersonTrajectoryPoint],
@@ -120,8 +123,8 @@ class DementiaSignalWorker:
         """Compute all signal types for one identity."""
         signals: list[DementiaSignal] = []
 
-        signals.extend(self._compute_pacing(identity_id, window, now))
-        signals.extend(self._compute_sundowning(identity_id, window, now))
+        signals.extend(await self._compute_pacing(identity_id, window, now))
+        signals.extend(await self._compute_sundowning(identity_id, window, now))
         signals.extend(self._compute_bathroom_dwell_anomaly(identity_id, dwells, now))
         signals.extend(self._compute_nighttime_movement(identity_id, window, now))
         signals.extend(self._compute_stillness_anomaly(identity_id, dwells, now))
@@ -131,7 +134,7 @@ class DementiaSignalWorker:
 
     # -- Signal computations ------------------------------------------------
 
-    def _compute_pacing(
+    async def _compute_pacing(
         self,
         identity_id: str,
         window: list[PersonTrajectoryPoint],
@@ -149,19 +152,21 @@ class DementiaSignalWorker:
         # Sort ascending so consecutive comparisons are meaningful.
         sorted_window = sorted(window, key=lambda p: p.observed_at)
 
-        # Count room transitions.
+        # Count room transitions and track unique rooms visited.
         room_changes = 0
-        unique_rooms = set()
+        unique_rooms: set[str] = {sorted_window[0].room_name}
         for i in range(1, len(sorted_window)):
             if sorted_window[i].room_name != sorted_window[i - 1].room_name:
                 room_changes += 1
-            unique_rooms.add(sorted_window[i].room_name)
+                unique_rooms.add(sorted_window[i].room_name)
 
         if room_changes < self._cfg.pacing_room_threshold:
             return []
 
         # Compute severity based on room transition rate.
-        window_duration = (now - sorted_window[0].observed_at).total_seconds()
+        window_duration = (
+            sorted_window[-1].observed_at - sorted_window[0].observed_at
+        ).total_seconds()
         if window_duration <= 0:
             return []
 
@@ -173,7 +178,7 @@ class DementiaSignalWorker:
         else:
             severity = "info"
 
-        z_score = self._compute_z_score(
+        z_score = await self._compute_z_score(
             value=room_changes,
             signal_kind="pacing",
             identity_id=identity_id,
@@ -203,7 +208,7 @@ class DementiaSignalWorker:
             )
         ]
 
-    def _compute_sundowning(
+    async def _compute_sundowning(
         self,
         identity_id: str,
         window: list[PersonTrajectoryPoint],
@@ -263,7 +268,7 @@ class DementiaSignalWorker:
         else:
             severity = "info"
 
-        z_score = self._compute_z_score(
+        z_score = await self._compute_z_score(
             value=index,
             signal_kind="sundowning_index",
             identity_id=identity_id,
@@ -343,7 +348,7 @@ class DementiaSignalWorker:
         w_end = now
         return [
             DementiaSignal(
-                signal_id=_stable_signal_id(identity_id, "bathroom_dwell_anomaly", w_start, w_end),
+                signal_id=_stable_signal_id(identity_id, "bathroom_dwell_anomaly", w_start, "open"),
                 identity_id=identity_id,
                 signal_kind="bathroom_dwell_anomaly",
                 severity=severity,
@@ -461,7 +466,7 @@ class DementiaSignalWorker:
                     still_signals.append(
                         DementiaSignal(
                             signal_id=_stable_signal_id(
-                                identity_id, "stillness_anomaly", dwell.entered_at, now
+                                identity_id, "stillness_anomaly", dwell.entered_at, "open"
                             ),
                             identity_id=identity_id,
                             signal_kind="stillness_anomaly",
@@ -474,6 +479,7 @@ class DementiaSignalWorker:
                                 "room_name": dwell.room_name,
                                 "duration_seconds": duration,
                                 "is_open": True,
+                                "window_end_marker": "open",
                             },
                         )
                     )
@@ -491,6 +497,9 @@ class DementiaSignalWorker:
         Flags when the most recent trajectory point is older than
         ``self._cfg.absence_threshold_minutes`` minutes, indicating the
         person has not been detected across any camera for that duration.
+
+        Uses a fixed ``window_end`` marker ("open") so repeated runs
+        produce the same signal_id and upsert is idempotent.
         """
         if not window:
             # No data at all in the observation window — cannot distinguish
@@ -510,9 +519,12 @@ class DementiaSignalWorker:
         else:
             severity = "info"
 
+        # Use a fixed sentinel for window_end so the signal_id is stable
+        # across runs, making upsert idempotent.
+        open_marker = "open"
         return [
             DementiaSignal(
-                signal_id=_stable_signal_id(identity_id, "absence", most_recent, now),
+                signal_id=_stable_signal_id(identity_id, "absence", most_recent, open_marker),
                 identity_id=identity_id,
                 signal_kind="absence",
                 severity=severity,
@@ -523,11 +535,12 @@ class DementiaSignalWorker:
                 context={
                     "last_seen_at": most_recent.isoformat(),
                     "gap_minutes": round(gap_minutes, 1),
+                    "window_end_marker": open_marker,
                 },
             )
         ]
 
-    def _compute_z_score(
+    async def _compute_z_score(
         self,
         value: float,
         signal_kind: str,
@@ -536,14 +549,32 @@ class DementiaSignalWorker:
     ) -> ZScoreResult:
         """Compute a z-score relative to a historical baseline.
 
-        Returns a :class:`ZScoreResult` with the baseline and computed
-        z-score.  If no baseline exists (first computation), both are
-        ``None``.
+        Queries the signal repo for historical signals of the same kind
+        and computes mean/std from the stored values.  If no baseline
+        exists (fewer than 2 prior signals), both are ``None``.
         """
-        # In a real implementation, this would query historical signal
-        # data to compute the baseline mean and std.  For now, we use
-        # a placeholder that returns None until baseline data accumulates.
-        return ZScoreResult(baseline=None, z_score=None)
+        try:
+            historical = await self._signal_repo.list_signals(
+                identity_id=identity_id,
+                signal_kind=signal_kind,
+                limit=100,
+            )
+        except Exception:
+            return ZScoreResult(baseline=None, z_score=None)
+
+        if len(historical) < 2:
+            return ZScoreResult(baseline=None, z_score=None)
+
+        values = [s.value for s in historical]
+        mean_val = sum(values) / len(values)
+        variance = sum((v - mean_val) ** 2 for v in values) / len(values)
+        std_val = math.sqrt(variance) if variance > 0 else 0.0
+
+        if std_val == 0:
+            return ZScoreResult(baseline=mean_val, z_score=0.0)
+
+        z = (value - mean_val) / std_val
+        return ZScoreResult(baseline=round(mean_val, 4), z_score=round(z, 4))
 
 
 # ---------------------------------------------------------------------------
