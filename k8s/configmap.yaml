@@ -46,9 +46,9 @@ data:
     server:
       health_addr: :8090
       shutdown_grace_s: 15
-    decode:
-      preferred: nvdec
-      software_threads: 2
+    go2rtc:
+      addr: http://localhost:1984
+      timeout_s: 10
     minio:
       endpoint: minio.cts.svc.cluster.local:9000
       bucket: cts-frames
@@ -59,6 +59,18 @@ data:
     cognitive_companion:
       base_url: http://cognitive-companion.cc.svc.cluster.local:8000
       reconcile_interval_s: 60
-    logging:
-      level: info
-      format: json
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cts-go2rtc-config
+  namespace: cts
+  labels:
+    app.kubernetes.io/name: rtsp-ingress
+    app.kubernetes.io/part-of: continuous-tracking
+data:
+  go2rtc.yaml: |
+    api:
+      listen: ":1984"
+    log:
+      level: warn

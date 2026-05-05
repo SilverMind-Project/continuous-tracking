@@ -1,0 +1,54 @@
+# YOLO26L person detector — ONNX Runtime with OpenVINO EP (Intel Arc GPU).
+#
+# Activated by: python triton-models/scripts/configure_gpu.py --vendor intel
+#
+# Model file: triton-models/person-detector/1/model.onnx
+# Export:     python triton-models/scripts/export_yolo.py --backend onnx --device xpu
+#
+# Output tensor "output0" shape: [batch, 300, 6]
+#   300 = maximum detections per image, 6 = x1,y1,x2,y2,conf,class_id
+#
+# Verify output shape matches [batch, 300, 6] before deploying — ONNX export
+# of NMS-free models may vary by ultralytics version. See export_yolo.py.
+
+name: "person-detector"
+platform: "onnxruntime_onnx"
+max_batch_size: 16
+
+dynamic_batching {
+  max_queue_delay_microseconds: 5000
+}
+
+input [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [3, 640, 640]
+  }
+]
+
+output [
+  {
+    name: "output0"
+    data_type: TYPE_FP32
+    dims: [300, 6]
+  }
+]
+
+optimization {
+  execution_accelerators {
+    gpu_execution_accelerator : [
+      {
+        name : "openvino"
+        parameters { key: "device_type" value: "GPU" }
+      }
+    ]
+  }
+}
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

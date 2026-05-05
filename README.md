@@ -37,26 +37,26 @@ IP Cameras (RTSP)
                                                        └──────────────────────────────┘
 ```
 
-**Infrastructure**: TimescaleDB + pgvector · Redis Streams · MinIO · NVIDIA Triton
+**Infrastructure**: TimescaleDB + pgvector · Redis Streams · MinIO · Triton Inference Server (NVIDIA or Intel Arc)
 
 ## Services
 
-| Service | Port | Description |
-|---|---|---|
-| `rtsp-ingress` | 8090 | RTSP pull, motion gating, JPEG upload, `frames.ready` publisher |
-| `tracking-orchestrator` | 8000 | ML inference, tracking, identity resolution, signal detection |
-| `triton` | 8001 (gRPC) | YOLO26L · SOLIDER-REID · RTMPose model server |
-| `redis` | 6379 | Redis Streams transport (AOF enabled) |
-| `postgres` | 5432 | TimescaleDB + pgvector (tracklets, gallery, signals, trajectories) |
-| `minio` | 9000 | JPEG keyframe object storage |
-| `cognitive-companion` | 8080 | BFF gateway, Vue admin UI, WebSocket live view |
+| Service                 | Port        | Description                                                        |
+| ----------------------- | ----------- | ------------------------------------------------------------------ |
+| `rtsp-ingress`          | 8090        | RTSP pull, motion gating, JPEG upload, `frames.ready` publisher    |
+| `tracking-orchestrator` | 8000        | ML inference, tracking, identity resolution, signal detection      |
+| `triton`                | 8001 (gRPC) | YOLO26L, SOLIDER-REID, RTMPose model server                        |
+| `redis`                 | 6379        | Redis Streams transport (AOF enabled)                              |
+| `postgres`              | 5432        | TimescaleDB + pgvector (tracklets, gallery, signals, trajectories) |
+| `minio`                 | 9000        | JPEG keyframe object storage                                       |
+| `cognitive-companion`   | 8080        | BFF gateway, Vue admin UI, WebSocket live view                     |
 
 ## Getting started
 
 ### Prerequisites
 
 - Docker Compose v2
-- An NVIDIA GPU with CUDA (for Triton inference — CPU-only dev is possible without model binaries)
+- A GPU: **NVIDIA** (CUDA) or **Intel Arc** (OpenVINO) — see Model setup section below
 - RTSP cameras on the local network
 
 ### 1. Start infrastructure
@@ -143,32 +143,42 @@ The service loads this file at startup and expands `${VAR}` placeholders in the 
 
 ### Supported camera fields
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | string | Unique camera ID (used in all metrics and streams) |
-| `rtsp_url` | string | Full RTSP URL (takes precedence over host/port/credentials) |
-| `host` | string | Camera IP or hostname |
-| `port` | int | RTSP port (default: 554) |
-| `username` | string | RTSP auth username |
-| `password` | string | RTSP auth password (use `${VAR}` placeholder) |
-| `stream_path` | string | URL path (default: `/`) |
-| `type` | string | Camera placement: `overhead`, `eye_level`, `doorway` |
-| `room_name` | string | Room this camera covers |
-| `enabled` | bool | Set `false` to temporarily disable without removing |
-| `frame_interval_ms` | int | Min ms between captured frames (default from `defaults`) |
-| `motion_threshold` | float | Fraction of pixels that must change to pass motion gate |
-| `reconnect_backoff_s` | float | Initial reconnect backoff (doubles with jitter, max 60 s) |
+| Field                | Type   | Description                                                  |
+| -------------------- | ------ | ------------------------------------------------------------ |
+| `id`                 | string | Unique camera ID (used in all metrics and streams)           |
+| `rtsp_url`           | string | Full RTSP URL (takes precedence over host/port/credentials)  |
+| `host`               | string | Camera IP or hostname                                        |
+| `port`               | int    | RTSP port (default: 554)                                     |
+| `username`           | string | RTSP auth username                                           |
+| `password`           | string | RTSP auth password (use `${VAR}` placeholder)                |
+| `stream_path`        | string | URL path (default: `/`)                                      |
+| `type`               | string | Camera placement: `overhead`, `eye_level`, `doorway`         |
+| `room_name`          | string | Room this camera covers                                      |
+| `enabled`            | bool   | Set `false` to temporarily disable without removing          |
+| `frame_interval_ms`  | int    | Min ms between captured frames (default from `defaults`)     |
+| `motion_threshold`   | float  | Fraction of pixels that must change to pass motion gate      |
+| `reconnect_backoff_s`| float  | Initial reconnect backoff (doubles with jitter, max 60 s)    |
 
-## Model setup (NVIDIA GPU required)
+## Model setup
 
-Model binaries are not in git. Run the export scripts on the target GPU machine:
+Model binaries are not in git. Both NVIDIA and Intel Arc GPUs are supported.
+
+**Step 1 — select GPU vendor config** (run once per machine):
 
 ```bash
-# YOLO26L person detector → TensorRT
+python triton-models/scripts/configure_gpu.py --vendor nvidia   # NVIDIA (default)
+python triton-models/scripts/configure_gpu.py --vendor intel    # Intel Arc
+```
+
+**Step 2 — export model weights** (same ONNX format for all vendors):
+
+```bash
 pip install ultralytics>=8.4.0
+
+# YOLO26L person detector → ONNX
 python triton-models/scripts/export_yolo.py \
     --weights yolo26l.pt \
-    --out triton-models/person-detector/1/model.plan
+    --out triton-models/person-detector/1/model.onnx
 
 # SOLIDER-REID body embedder → ONNX
 python triton-models/scripts/export_reid.py --help
@@ -177,7 +187,7 @@ python triton-models/scripts/export_reid.py --help
 python triton-models/scripts/export_pose.py --help
 ```
 
-See [triton-models/README.md](triton-models/README.md) for full instructions.
+See [triton-models/README.md](triton-models/README.md) for full instructions including output shape verification and Intel Arc container image.
 
 ## Development
 
@@ -218,29 +228,29 @@ pre-commit install            # ruff, mypy, golangci-lint, buf
 
 ## Key design decisions
 
-| Decision | Choice | Rationale |
-|---|---|---|
-| Identity model | Bayesian posterior, not single-assignment | Seniors with dementia have irregular gait; hard thresholds misidentify too often |
-| Transport | Redis Streams with consumer groups + XACK | At-least-once delivery with replay; survives orchestrator restarts |
-| Wire format | Protobuf (no JSON on streams) | ~3× smaller payloads; schema-enforced contracts |
-| Storage | TimescaleDB + pgvector HNSW | Time-series compression for trajectories; vector search for ReID gallery |
-| Person detector | YOLO26L NMS-Free | Baked-in NMS removes post-processing step; 43% faster CPU inference vs YOLO11 |
-| UI gateway | cognitive-companion as BFF | No direct browser access to CTS internal services; single auth boundary |
+| Decision        | Choice                                    | Rationale                                                                        |
+| --------------- | ----------------------------------------- | -------------------------------------------------------------------------------- |
+| Identity model  | Bayesian posterior, not single-assignment | Seniors with dementia have irregular gait; hard thresholds misidentify too often |
+| Transport       | Redis Streams with consumer groups + XACK | At-least-once delivery with replay; survives orchestrator restarts               |
+| Wire format     | Protobuf (no JSON on streams)             | ~3× smaller payloads; schema-enforced contracts                                  |
+| Storage         | TimescaleDB + pgvector HNSW               | Time-series compression for trajectories; vector search for ReID gallery         |
+| Person detector | YOLO26L NMS-Free, ONNX format             | Single ONNX file runs on NVIDIA (TRT EP) and Intel Arc (OpenVINO EP)             |
+| UI gateway      | cognitive-companion as BFF                | No direct browser access to CTS internal services; single auth boundary          |
 
 ## Milestone status
 
-| Milestone | Scope | Status |
-|---|---|---|
-| M1 | Proto contracts, repos, docker-compose, CI | Complete |
-| M2 | rtsp-ingress Go service | Complete |
-| M3 | Triton models + benchmark harness | Complete |
-| M4 | Tracking orchestrator skeleton | Complete |
-| M5 | Identity resolution + retroactive revision | Complete |
-| M6 | Trajectories, room dwells, keyframes | Complete |
-| M7 | Admin UI (cameras, calibration, privacy, adjacency) | Complete |
-| M8 | Dementia signals, dashboard | Complete |
-| M9 | Live view, identity corrections, runtime integration | Complete |
-| M10 | K8s manifests, observability, proto wire migration | In progress |
+| Milestone | Scope                                                | Status      |
+| --------- | ---------------------------------------------------- | ----------- |
+| M1        | Proto contracts, repos, docker-compose, CI           | Complete    |
+| M2        | rtsp-ingress Go service                              | Complete    |
+| M3        | Triton models + benchmark harness                    | Complete    |
+| M4        | Tracking orchestrator skeleton                       | Complete    |
+| M5        | Identity resolution + retroactive revision           | Complete    |
+| M6        | Trajectories, room dwells, keyframes                 | Complete    |
+| M7        | Admin UI (cameras, calibration, privacy, adjacency)  | Complete    |
+| M8        | Dementia signals, dashboard                          | Complete    |
+| M9        | Live view, identity corrections, runtime integration | Complete    |
+| M10       | K8s manifests, observability, proto wire migration   | In progress |
 
 ## Repository layout
 

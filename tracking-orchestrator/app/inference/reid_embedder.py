@@ -10,6 +10,7 @@ Triton model "reid-solider" output tensor "output" shape [batch, 768]:
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import numpy.typing as npt
 
@@ -26,16 +27,10 @@ _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 
 
 def _preprocess(crop: npt.NDArray[np.uint8]) -> npt.NDArray[np.float32]:
-    """Resize crop to 256x128, ImageNet-normalise, return CHW float32."""
-    h, w = crop.shape[:2]
-    scale_h = h / _CROP_H
-    scale_w = w / _CROP_W
-    row_idx = np.floor(np.arange(_CROP_H) * scale_h).astype(np.intp)
-    col_idx = np.floor(np.arange(_CROP_W) * scale_w).astype(np.intp)
-    resized = crop[row_idx[:, None], col_idx[None, :]]  # (_CROP_H, _CROP_W, 3)
-
-    chw = np.transpose(resized.astype(np.float32) / 255.0, (2, 0, 1))  # CHW
-    return (chw - _MEAN) / _STD  # normalised CHW float32
+    """Resize crop to 256x128 (HxW), ImageNet-normalise, return CHW float32."""
+    resized = cv2.resize(crop, (_CROP_W, _CROP_H), interpolation=cv2.INTER_LINEAR)
+    chw: npt.NDArray[np.float32] = np.asarray(resized, dtype=np.float32).transpose(2, 0, 1) / 255.0
+    return (chw - _MEAN) / _STD
 
 
 class ReidEmbedder:

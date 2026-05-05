@@ -36,6 +36,49 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
+        # -----------------------------------------------------------------
+        # go2rtc sidecar — owns all RTSP sessions; exposes JPEG frames at
+        # localhost:1984 (shared network namespace within the pod).
+        # -----------------------------------------------------------------
+        - name: go2rtc
+          image: ghcr.io/alexxit/go2rtc:1.9.14
+          ports:
+            - name: go2rtc-api
+              containerPort: 1984
+          env:
+            - name: GO2RTC_CONF
+              value: /config/go2rtc.yaml
+          volumeMounts:
+            - name: go2rtc-config
+              mountPath: /config
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /api
+              port: go2rtc-api
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api
+              port: go2rtc-api
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        # -----------------------------------------------------------------
+        # rtsp-ingress app — polls go2rtc for JPEG frames.
+        # -----------------------------------------------------------------
         - name: app
           image: ghcr.io/SilverMind-Project/rtsp-ingress:latest
           imagePullPolicy: IfNotPresent
@@ -45,6 +88,8 @@ spec:
           env:
             - name: ASSIGNED_CAMERAS
               value: "ALL"
+            - name: GO2RTC_ADDR
+              value: "http://localhost:1984"
             - name: HOSTNAME
               valueFrom:
                 fieldRef:
@@ -83,10 +128,10 @@ spec:
           resources:
             requests:
               cpu: 200m
-              memory: 256Mi
+              memory: 128Mi
             limits:
               cpu: "1"
-              memory: 1Gi
+              memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -96,6 +141,9 @@ spec:
         - name: config
           configMap:
             name: cts-ingress-config
+        - name: go2rtc-config
+          configMap:
+            name: cts-go2rtc-config
 ---
 apiVersion: v1
 kind: Service

@@ -31,6 +31,41 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Redis.Stream != "frames.ready" {
 		t.Errorf("redis stream: got %q", cfg.Redis.Stream)
 	}
+	if cfg.Go2RTC.Addr != "http://localhost:1984" {
+		t.Errorf("go2rtc addr: got %q, want %q", cfg.Go2RTC.Addr, "http://localhost:1984")
+	}
+	if cfg.Go2RTC.TimeoutSeconds != 10 {
+		t.Errorf("go2rtc timeout: got %d, want 10", cfg.Go2RTC.TimeoutSeconds)
+	}
+}
+
+func TestGo2RTCConfigFromYAML(t *testing.T) {
+	yaml := `
+go2rtc:
+  addr: http://go2rtc:1984
+  timeout_s: 5
+`
+	cfg, err := loadFromYAMLBytes([]byte(yaml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Go2RTC.Addr != "http://go2rtc:1984" {
+		t.Errorf("addr: got %q", cfg.Go2RTC.Addr)
+	}
+	if cfg.Go2RTC.TimeoutSeconds != 5 {
+		t.Errorf("timeout_s: got %d", cfg.Go2RTC.TimeoutSeconds)
+	}
+}
+
+func TestGo2RTCAddrEnvOverride(t *testing.T) {
+	t.Setenv("GO2RTC_ADDR", "http://custom-go2rtc:1984")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Go2RTC.Addr != "http://custom-go2rtc:1984" {
+		t.Errorf("go2rtc addr: got %q", cfg.Go2RTC.Addr)
+	}
 }
 
 func TestLoadEnvOverrides(t *testing.T) {
@@ -156,9 +191,9 @@ cameras:
 
 func TestBuildRTSPURLFromComponents(t *testing.T) {
 	tests := []struct {
-		name     string
-		cam      CameraConfig
-		wantURL  string
+		name    string
+		cam     CameraConfig
+		wantURL string
 	}{
 		{
 			name:    "with credentials",
@@ -371,7 +406,7 @@ cameras:
     enabled: true
 `
 	cfgFile := filepath.Join(dir, "settings.yaml")
-	if err := os.WriteFile(cfgFile, []byte(yamlContent), 0o644); err != nil {
+	if err := os.WriteFile(cfgFile, []byte(yamlContent), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

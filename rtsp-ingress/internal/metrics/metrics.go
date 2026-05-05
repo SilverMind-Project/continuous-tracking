@@ -14,12 +14,12 @@ var (
 		prometheus.CounterOpts{Name: "rtsp_frames_filtered_total"},
 		[]string{"camera_id", "cause"},
 	)
-	RTSPReconnectsTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{Name: "rtsp_reconnects_total"},
+	FetchErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{Name: "rtsp_fetch_errors_total"},
 		[]string{"camera_id"},
 	)
-	DecodeErrorsTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{Name: "rtsp_decode_errors_total"},
+	Go2RTCRegistrationErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{Name: "rtsp_go2rtc_registration_errors_total"},
 		[]string{"camera_id"},
 	)
 	PublishErrorsTotal = promauto.NewCounterVec(

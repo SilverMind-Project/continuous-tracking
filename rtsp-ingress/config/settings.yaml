@@ -4,11 +4,9 @@ server:
 
 assigned_cameras: ALL
 
-decode:
-  preferred: software
-  nvdec_device: 0
-  software_threads: 2
-  ffmpeg_binary: ffmpeg
+go2rtc:
+  addr: http://localhost:1984
+  timeout_s: 10
 
 minio:
   endpoint: minio:9000

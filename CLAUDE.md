@@ -22,11 +22,11 @@ This is a design-specification repository for a **continuous tracking system for
 
 ## Key Architecture Decisions (from phase-0)
 
-- **Runtime**: Go service (`rtsp-ingress`) for RTSP/frame handling + Python service (`tracking-orchestrator`) for ML logic + NVIDIA Triton for GPU inference batching.
+- **Runtime**: Go service (`rtsp-ingress`) for RTSP/frame handling + Python service (`tracking-orchestrator`) for ML logic + Triton Inference Server for GPU inference batching (NVIDIA or Intel Arc).
 - **Identity model**: Bayesian posterior over identities, not single-assignment. Gallery of embeddings per person (not one embedding). Retroactive revision protocol.
 - **Transport**: Redis Streams (not PubSub) with consumer groups, XACK, replay capability.
 - **Storage**: Postgres/TimescaleDB with pgvector (HNSW index). Repository pattern — no raw SQL in services.
-- **Models**: YOLO26L (detection, NMS-Free — output `[batch, 300, 6]`), SOLIDER-REID (768-dim body ReID), RTMPose (pose), ArcFace (face ID).
+- **Models**: YOLO26L (detection, NMS-Free — output `[batch, 300, 6]`), SOLIDER-REID (768-dim body ReID), RTMPose (pose), ArcFace (face ID). All three inference models use ONNX format; vendor differences are handled by Triton's execution provider selection (TensorRT/CUDA EP for NVIDIA, OpenVINO EP for Intel Arc).
 - **Dementia signals**: Pacing, sundowning, bathroom anomaly, stillness, nighttime movement, absence — computed from trajectory data against per-person baselines.
 - **Integration**: All external traffic routes through `cognitive-companion` as a BFF gateway. No direct UI access to CTS services.
 
@@ -34,18 +34,18 @@ This is a design-specification repository for a **continuous tracking system for
 
 The design defines 10 milestones (M1-M10) spanning 16+ weeks. Never implement out of order:
 
-| Milestone | Weeks | Scope |
-|-----------|-------|-------|
-| M1 | 1-2 | Protobuf contracts, repository interfaces, docker-compose, CI — **COMPLETE** |
-| M2 | 3-4 | rtsp-ingress (Go) — **COMPLETE** |
-| M3 | 5-6 | Triton models + benchmark harness — **COMPLETE** |
-| M4 | 7-8 | Tracking orchestrator skeleton (per-camera tracking, tracklets) — **COMPLETE** |
-| M5 | 9-10 | Identity resolution, retroactive revision — **COMPLETE** |
-| M6 | 11 | Trajectories, dwells, keyframes — **COMPLETE** |
-| M7 | 12-13 | Admin UI (cameras, calibration, privacy, adjacency) — **COMPLETE** |
-| M8 | 14-15 | Dementia signals, dashboard, keyframes — **COMPLETE** |
-| M9 | 16 | Live view, identity corrections, runtime integration — **COMPLETE** |
-| M10 | 16+ | K8s, observability, docs, performance hardening — **IN PROGRESS** (proto wire migration, metrics, LocationRepository, e2e gate, manifests, runbook landed; remaining stream proto migrations + perf hardening deferred) |
+| Milestone | Weeks | Scope                                                                                                                                                              |
+| --------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| M1        | 1-2   | Protobuf contracts, repository interfaces, docker-compose, CI — **COMPLETE**                                                                                       |
+| M2        | 3-4   | rtsp-ingress (Go) — **COMPLETE**                                                                                                                                   |
+| M3        | 5-6   | Triton models + benchmark harness — **COMPLETE**                                                                                                                   |
+| M4        | 7-8   | Tracking orchestrator skeleton (per-camera tracking, tracklets) — **COMPLETE**                                                                                     |
+| M5        | 9-10  | Identity resolution, retroactive revision — **COMPLETE**                                                                                                           |
+| M6        | 11    | Trajectories, dwells, keyframes — **COMPLETE**                                                                                                                     |
+| M7        | 12-13 | Admin UI (cameras, calibration, privacy, adjacency) — **COMPLETE**                                                                                                 |
+| M8        | 14-15 | Dementia signals, dashboard, keyframes — **COMPLETE**                                                                                                              |
+| M9        | 16    | Live view, identity corrections, runtime integration — **COMPLETE**                                                                                                |
+| M10       | 16+   | K8s, observability, docs, performance hardening — **IN PROGRESS**                                                                                          |
 
 ## Coding Rules (Derived from M4 Code Review)
 
@@ -95,6 +95,7 @@ These rules were extracted from bugs found during the M4 implementation review. 
 - **Layering**: core -> domain -> storage -> services -> transport -> routers (upward dependencies forbidden). Enforced by `import-linter`.
 - **Error taxonomy**: Standardized `ErrorCode` enum, no stack traces over the wire.
 - **CI gates**: ruff, mypy, import-linter, pytest (unit + testcontainers), go test -race, buf lint, docker build, helm template, replay suite, Playwright E2E.
+- **Image preprocessing**: Use `opencv-python-headless` (`cv2.resize` with `INTER_LINEAR`) for all letterbox and crop resizing in inference modules. Do not re-implement bilinear resize in NumPy.
 
 ## Quality Gate (Automated Checks)
 
@@ -106,6 +107,7 @@ make all-check    # Python + Go + proto (full repo gate)
 ```
 
 Pre-commit hooks mirror the CI checks (ruff, mypy, golangci-lint, buf). Install with:
+
 ```bash
 pre-commit install
 ```
@@ -115,6 +117,7 @@ pre-commit install
 **Always use the Python venv inside the project folder** (`tracking-orchestrator/.venv/`). Never rely on global system Python for running code, tests, linting, or type-checking. The Makefile targets (`make check`, `make lint`, `make test`, `make mypy`) and CI all use the project-local venv.
 
 For the tracking-orchestrator specifically:
+
 - All repository methods are async — tests must be `async def` with `await`
 - Domain types are frozen dataclasses; Pydantic models only at boundaries
 
@@ -122,6 +125,7 @@ For the tracking-orchestrator specifically:
 
 **M1 (Protobuf contracts, repository interfaces, docker-compose, CI) — COMPLETE.**
 Implemented files:
+
 - `proto/continuoustracking/v1/{tracking,frame}.proto` — message contracts
 - `proto/buf.yaml` — buf build config
 - `tracking-orchestrator/app/domain/__init__.py` — frozen dataclasses (Detection, Tracklet, GlobalTrack, IdentityRevision, GalleryEntry, CameraConfig, StreamConfig, PersonActivity)
@@ -283,14 +287,14 @@ Key implementation notes:
 
 **DoD verified**: All 29 new router tests pass. `make check` passes cleanly.
 
-## When Working with This Repo
+## Working Notes (post-M7)
 
 - **M1–M8 are implemented (committed).** M9 is complete — see status below. Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, `triton-models/`, and `cognitive-companion/`.
 - **Always reference phase-0 first.** It supersedes phases 1-5 where they conflict.
 - **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
 - **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.
 
-## M8 — Implemented. Dementia signals, dashboard, and keyframes.
+## M8 — Dementia signals, dashboard, and keyframes
 
 ### tracking-orchestrator
 
@@ -340,7 +344,7 @@ Key implementation notes:
 
 **DoD verified (cognitive-companion)**: ruff clean, pytest (852/852 tests).
 
-## M9 — Implemented. Live view, identity corrections, runtime integration.
+## M9 — Live view, identity corrections, runtime integration
 
 ### tracking-orchestrator (internal endpoints)
 
@@ -413,6 +417,9 @@ M10 hardens the system for production deployment. The coherent slice landed in t
 - **E2E DoD gate.** `cognitive-companion/backend/tests/e2e/test_cts_pipeline.py` drives the full path with `fakeredis`: producer → proto encode → Redis Streams → subscriber decode → `LocationWriter` → DB rows + WS broadcast + pipeline fire → `IdentityRevisionSubscriber` → `IdentityRewriter` stamps `superseded_by_revision_id` and inserts replacement rows. Asserts both halves of the DoD ("rule fires" and "UI reflects identity correction"). Legacy JSON-flat compatibility is covered by a sibling test.
 - **K8s manifests.** `k8s/` ships namespace, ConfigMap (with the wire-format toggles), Postgres + Redis StatefulSets (TimescaleDB image, AOF on), Triton Deployment (GPU node selector, `Recreate` strategy), rtsp-ingress + tracking-orchestrator Deployments with HPA on Redis-lag custom metric, NetworkPolicy enforcing the BFF gateway rule, and a PodDisruptionBudget.
 - **Operational docs.** `docs/runbook.md` (top-line dashboards, common incidents, capacity planning, DR), `docs/wire-format-migration.md` (rollout state machine, rollback procedure, deferred streams), `proto/README.md` (codegen + add-a-field workflow), `k8s/README.md` (apply order + ops notes).
+- **Intel Arc GPU support.** All three inference models (YOLO26L, SOLIDER-REID, RTMPose) can now run on Intel Arc GPUs via Triton's ONNX Runtime + OpenVINO execution provider. `triton-models/scripts/configure_gpu.py --vendor intel|nvidia` switches between config sets. `export_yolo.py` gains `--backend onnx --device xpu` for Arc. ReID and Pose ONNX files are vendor-neutral; only the Triton config changes. Intel Arc requires a Triton image with the OpenVINO backend (see `triton-models/README.md`).
+- **Inference preprocessing simplified.** Hand-rolled bilinear and nearest-neighbour resize (≈80 lines of NumPy index arithmetic across three files) replaced with `cv2.resize` from `opencv-python-headless`. Logic is equivalent, ~10 lines, and directly testable. `opencv-python-headless>=4.10.0` added to `tracking-orchestrator` dependencies.
+- **Export scripts cleaned up.** `export_pose.py` buggy fallback removed (it exported only the model backbone, losing the SimCC head). `export_yolo.py` gains `--backend tensorrt|onnx` and `--device` flags. `export_pose.py` gains `--device` for both NVIDIA (`cuda:0`) and Arc (`xpu`).
 
 ### DoD status
 

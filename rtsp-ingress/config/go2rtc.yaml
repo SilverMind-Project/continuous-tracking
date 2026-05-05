@@ -1,0 +1,12 @@
+# go2rtc configuration — RTSP proxy sidecar for rtsp-ingress.
+#
+# go2rtc handles all RTSP session management, reconnection, and H264 decoding.
+# rtsp-ingress registers streams via the HTTP API and polls JPEG frames.
+# Streams are added dynamically via PUT /api/streams — no static "streams:"
+# section is needed here.
+
+api:
+  listen: ":1984"
+
+log:
+  level: warn

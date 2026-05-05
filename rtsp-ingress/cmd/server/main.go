@@ -1,6 +1,6 @@
 // Command rtsp-ingress: RTSP camera stream ingress service.
-// Pulls frames off RTSP, gates on motion, uploads JPEGs to MinIO, and
-// publishes FrameReady messages to Redis Streams.
+// Pulls frames from RTSP cameras (via go2rtc), gates on motion, uploads JPEGs
+// to MinIO, and publishes FrameReady messages to Redis Streams.
 package main
 
 import (
@@ -20,11 +20,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/config"
-	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/decode"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/go2rtc"
 	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/media"
-	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/metrics"
 	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/reconciler"
-	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/rtsp"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/supervisor"
 )
 
 func main() {
@@ -38,7 +37,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Structured logger.
 	logger, err := zap.NewProduction()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create logger: %v\n", err)
@@ -49,6 +47,7 @@ func main() {
 	sugar := logger.Sugar()
 	sugar.Infow("rtsp-ingress starting",
 		"listen_addr", cfg.Server.ListenAddr,
+		"go2rtc_addr", cfg.Go2RTC.Addr,
 		"cameras", len(cfg.Cameras),
 	)
 
@@ -62,19 +61,14 @@ func main() {
 	}
 
 	// Redis client.
-	redisOpts := &redis.Options{
+	redisClient := redis.NewClient(&redis.Options{
 		Addr:     cfg.Redis.Address,
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
-	}
-	redisClient := redis.NewClient(redisOpts)
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// Health/ready state.
-	var ready bool
-	var readyMu sync.Mutex
 
 	// Media publisher (MinIO + Redis).
 	publisher := media.New(
@@ -88,10 +82,14 @@ func main() {
 		logger.Fatal("minio ensure bucket", zap.Error(err))
 	}
 
-	decoderFactory := decode.NewFactory(cfg.Decode.Preferred, cfg.Decode.FFmpegBinary)
+	// go2rtc HTTP API client.
+	g2r := go2rtc.New(go2rtc.Config{
+		Addr:           cfg.Go2RTC.Addr,
+		TimeoutSeconds: cfg.Go2RTC.TimeoutSeconds,
+	})
 
-	// Supervisor manages RTSP workers.
-	supervisor := newSupervisor(ctx, publisher, decoderFactory, cfg.MinIO.JPEGQuality, logger)
+	// Supervisor manages poll workers and go2rtc stream registrations.
+	sup := supervisor.New(ctx, g2r, publisher, logger)
 
 	// Reconciler fetches camera configs from Cognitive Companion.
 	rec := reconciler.New(
@@ -100,23 +98,24 @@ func main() {
 		cfg.AssignedCameras,
 		cfg.Cognitive.ReconcileInterval,
 		cfg.CameraDefaults,
-		supervisor,
+		sup,
 		logger,
 	)
 
-	// Initial camera list from config.
-	supervisor.Reconcile(cfg.Cameras)
-
-	// Start reconciler loop.
+	// Bootstrap from static config, then start reconciler loop.
+	sup.Reconcile(cfg.Cameras)
 	go func() {
 		if err := rec.Run(ctx); err != nil {
 			logger.Warn("reconciler stopped", zap.Error(err))
 		}
 	}()
 
+	// Health/ready state.
+	var ready bool
+	var readyMu sync.Mutex
+
 	// HTTP server.
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.HandleFunc("/readyz", readyzHandler(&ready, &readyMu))
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +136,7 @@ func main() {
 		}
 	}()
 
-	// Mark ready once reconciler succeeds and backends are reachable.
+	// Mark ready once backends are reachable.
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -148,7 +147,9 @@ func main() {
 				if len(cameras) == 0 {
 					cameras = cfg.Cameras
 				}
-				isReady := len(cameras) > 0 && minioClient.IsOnline() && redisClient.Ping(ctx).Err() == nil
+				isReady := len(cameras) > 0 &&
+					minioClient.IsOnline() &&
+					redisClient.Ping(ctx).Err() == nil
 				readyMu.Lock()
 				ready = isReady
 				readyMu.Unlock()
@@ -173,43 +174,8 @@ func main() {
 		sugar.Errorw("server shutdown error", "error", err)
 	}
 
-	supervisor.Stop(cfg.Server.ShutdownTimeout)
+	sup.Stop(cfg.Server.ShutdownTimeout)
 	sugar.Info("rtsp-ingress stopped")
-}
-
-// newSupervisor creates a Supervisor that manages RTSP workers.
-func newSupervisor(
-	parent context.Context,
-	pub *media.Publisher,
-	decoderFactory decode.Factory,
-	jpegQuality int,
-	log *zap.Logger,
-) *supervisor {
-	return &supervisor{
-		parent:         parent,
-		workers:        make(map[string]*workerHandle),
-		publisher:      pub,
-		decoderFactory: decoderFactory,
-		jpegQuality:    jpegQuality,
-		log:            log,
-	}
-}
-
-// supervisor manages a set of RTSP workers keyed by camera ID.
-type supervisor struct {
-	mu             sync.Mutex
-	wg             sync.WaitGroup
-	parent         context.Context
-	workers        map[string]*workerHandle
-	publisher      *media.Publisher
-	decoderFactory decode.Factory
-	jpegQuality    int
-	log            *zap.Logger
-}
-
-type workerHandle struct {
-	cancel context.CancelFunc
-	camera config.CameraConfig
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
@@ -225,82 +191,13 @@ func readyzHandler(ready *bool, readyMu *sync.Mutex) http.HandlerFunc {
 		readyMu.Lock()
 		rdy := *ready
 		readyMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
 		if !rdy {
-			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(`{"status":"not_ready"}`))
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
-	}
-}
-
-func (s *supervisor) Reconcile(cameras []config.CameraConfig) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	want := make(map[string]config.CameraConfig)
-	for _, c := range cameras {
-		if c.Enabled {
-			want[c.ID] = c
-		}
-	}
-
-	// Stop removed or disabled cameras.
-	for id, h := range s.workers {
-		next, keep := want[id]
-		if !keep || next != h.camera {
-			s.log.Info("stopping_worker", zap.String("camera_id", id))
-			h.cancel()
-			delete(s.workers, id)
-			continue
-		}
-	}
-
-	// Start new cameras.
-	for id, cam := range want {
-		if _, ok := s.workers[id]; !ok {
-			s.log.Info("starting_worker", zap.String("camera_id", id))
-			ctx, cancel := context.WithCancel(s.parent)
-			h := &workerHandle{cancel: cancel, camera: cam}
-			s.workers[id] = h
-			s.wg.Add(1)
-			metrics.ActiveWorkers.Inc()
-			go func(c config.CameraConfig) {
-				defer s.wg.Done()
-				defer metrics.ActiveWorkers.Dec()
-				w := rtsp.NewWorker(
-					c,
-					s.decoderFactory,
-					s.publisher,
-					s.jpegQuality,
-					s.log.With(zap.String("camera_id", c.ID)),
-				)
-				w.Run(ctx)
-			}(cam)
-		}
-	}
-}
-
-func (s *supervisor) Stop(timeout time.Duration) {
-	s.mu.Lock()
-	for _, h := range s.workers {
-		h.cancel()
-	}
-	s.workers = make(map[string]*workerHandle)
-	s.mu.Unlock()
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		s.wg.Wait()
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(timeout):
-		s.log.Warn("worker_shutdown_timeout", zap.Duration("timeout", timeout))
 	}
 }

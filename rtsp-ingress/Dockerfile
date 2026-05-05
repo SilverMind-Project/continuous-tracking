@@ -12,8 +12,7 @@ FROM debian:bookworm-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    curl \
-    ffmpeg && \
+    curl && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/rtsp-ingress /app/rtsp-ingress
 COPY rtsp-ingress/config /app/config

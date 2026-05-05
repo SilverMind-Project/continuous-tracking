@@ -130,9 +130,31 @@ services:
       - app
 
   # -----------------------------------------------------------------------
-  # RTSP Ingress (Go — RTSP frame capture, no-op for M1)
-  # Placeholder service that does not actually connect to RTSP sources.
-  # In M3+, this will be wired to real cameras.
+  # go2rtc (RTSP proxy sidecar for rtsp-ingress)
+  # Manages all RTSP sessions and exposes JPEG frames via HTTP API.
+  # rtsp-ingress reaches this service at http://go2rtc:1984.
+  # -----------------------------------------------------------------------
+  go2rtc:
+    image: ghcr.io/alexxit/go2rtc:1.9.14
+    container_name: cts-go2rtc
+    environment:
+      # Disable auto-discovery features not needed in this setup.
+      GO2RTC_CONF: /config/go2rtc.yaml
+    volumes:
+      - ./rtsp-ingress/config/go2rtc.yaml:/config/go2rtc.yaml:ro
+    ports:
+      - "1984:1984"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:1984/api"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - app
+
+  # -----------------------------------------------------------------------
+  # RTSP Ingress (Go — polls go2rtc for JPEG frames)
   # -----------------------------------------------------------------------
   rtsp-ingress:
     build:
@@ -149,6 +171,7 @@ services:
       MINIO_SECRET_KEY: minioadmin
       MINIO_USE_SSL: "false"
       MINIO_BUCKET: cts-frames
+      GO2RTC_ADDR: http://go2rtc:1984
       CAMERAS_JSON: "[]"
     ports:
       - "8090:8090"
@@ -156,6 +179,8 @@ services:
       redis:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      go2rtc:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]

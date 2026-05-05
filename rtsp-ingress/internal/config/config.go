@@ -20,7 +20,7 @@ type Config struct {
 	Redis           RedisConfig     `yaml:"redis"`
 	MinIO           MinIOConfig     `yaml:"minio"`
 	Cognitive       CognitiveConfig `yaml:"cognitive_companion"`
-	Decode          DecodeConfig    `yaml:"decode"`
+	Go2RTC          Go2RTCConfig    `yaml:"go2rtc"`
 	CameraDefaults  CameraDefaults  `yaml:"defaults"`
 	Cameras         []CameraConfig  `yaml:"cameras"`
 	AssignedCameras string          `yaml:"assigned_cameras"`
@@ -60,11 +60,10 @@ type CognitiveConfig struct {
 	ReconcileInterval        time.Duration `yaml:"-"`
 }
 
-type DecodeConfig struct {
-	Preferred       string `yaml:"preferred"`
-	NVDECDevice     int    `yaml:"nvdec_device"`
-	SoftwareThreads int    `yaml:"software_threads"`
-	FFmpegBinary    string `yaml:"ffmpeg_binary"`
+// Go2RTCConfig configures the go2rtc sidecar HTTP API connection.
+type Go2RTCConfig struct {
+	Addr           string `yaml:"addr"`
+	TimeoutSeconds int    `yaml:"timeout_s"`
 }
 
 type CameraDefaults struct {
@@ -156,11 +155,9 @@ func DefaultConfig() Config {
 			ReconcileIntervalSeconds: 60,
 			ReconcileInterval:        60 * time.Second,
 		},
-		Decode: DecodeConfig{
-			Preferred:       "software",
-			NVDECDevice:     0,
-			SoftwareThreads: 2,
-			FFmpegBinary:    "ffmpeg",
+		Go2RTC: Go2RTCConfig{
+			Addr:           "http://localhost:1984",
+			TimeoutSeconds: 10,
 		},
 		CameraDefaults: CameraDefaults{
 			FrameIntervalMs:         500,
@@ -281,11 +278,8 @@ func Load() (Config, error) {
 			cfg.Cognitive.ReconcileIntervalSeconds = n
 		}
 	}
-	if v := os.Getenv("DECODE_PREFERRED"); v != "" {
-		cfg.Decode.Preferred = v
-	}
-	if v := os.Getenv("FFMPEG_BINARY"); v != "" {
-		cfg.Decode.FFmpegBinary = v
+	if v := os.Getenv("GO2RTC_ADDR"); v != "" {
+		cfg.Go2RTC.Addr = v
 	}
 	if v := os.Getenv("CAMERAS_JSON"); v != "" {
 		var cameras []CameraConfig
@@ -363,8 +357,11 @@ func (c *Config) normalize() {
 	}
 	c.Cognitive.ReconcileInterval = time.Duration(c.Cognitive.ReconcileIntervalSeconds) * time.Second
 
-	if c.Decode.FFmpegBinary == "" {
-		c.Decode.FFmpegBinary = "ffmpeg"
+	if c.Go2RTC.Addr == "" {
+		c.Go2RTC.Addr = "http://localhost:1984"
+	}
+	if c.Go2RTC.TimeoutSeconds <= 0 {
+		c.Go2RTC.TimeoutSeconds = 10
 	}
 	if c.AssignedCameras == "" {
 		c.AssignedCameras = "ALL"
@@ -393,6 +390,7 @@ func (c *Config) applyCameraDefaults() {
 //   - Single or double quoted values
 //   - # comment lines
 func loadDotEnv(path string) error {
+	//nolint:gosec // .env path is operator-controlled (RTSP_DOTENV_PATH or config dir).
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil

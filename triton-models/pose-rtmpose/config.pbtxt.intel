@@ -1,0 +1,53 @@
+# RTMPose-m 2D pose estimator — ONNX Runtime with OpenVINO EP (Intel Arc GPU).
+#
+# Activated by: python triton-models/scripts/configure_gpu.py --vendor intel
+#
+# Model file: triton-models/pose-rtmpose/1/model.onnx  (same file as NVIDIA)
+# The ONNX model is vendor-neutral; only the execution provider changes.
+
+name: "pose-rtmpose"
+platform: "onnxruntime_onnx"
+max_batch_size: 16
+
+dynamic_batching {
+  max_queue_delay_microseconds: 5000
+}
+
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [3, 256, 192]
+  }
+]
+
+output [
+  {
+    name: "simcc_x"
+    data_type: TYPE_FP32
+    dims: [17, 384]
+  }
+  {
+    name: "simcc_y"
+    data_type: TYPE_FP32
+    dims: [17, 512]
+  }
+]
+
+optimization {
+  execution_accelerators {
+    gpu_execution_accelerator : [
+      {
+        name : "openvino"
+        parameters { key: "device_type" value: "GPU" }
+      }
+    ]
+  }
+}
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

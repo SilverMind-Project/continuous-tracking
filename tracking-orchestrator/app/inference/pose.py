@@ -16,6 +16,7 @@ Keypoints are returned in original-crop normalised coordinates [0, 1].
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import numpy.typing as npt
 
@@ -45,17 +46,12 @@ def _preprocess(
     scale = min(_INPUT_H / h, _INPUT_W / w)
     new_h = max(1, round(h * scale))
     new_w = max(1, round(w * scale))
-
-    row_idx = np.floor(np.arange(new_h) * h / new_h).astype(np.intp)
-    col_idx = np.floor(np.arange(new_w) * w / new_w).astype(np.intp)
-    resized = crop[row_idx[:, None], col_idx[None, :]]
-
+    resized = cv2.resize(crop, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
     pad_y = (_INPUT_H - new_h) // 2
     pad_x = (_INPUT_W - new_w) // 2
     canvas = np.full((_INPUT_H, _INPUT_W, 3), 114, dtype=np.uint8)
     canvas[pad_y : pad_y + new_h, pad_x : pad_x + new_w] = resized
-
-    chw = np.transpose(canvas.astype(np.float32) / 255.0, (2, 0, 1))
+    chw = canvas.astype(np.float32).transpose(2, 0, 1)
     return (chw - _MEAN) / _STD, pad_x, pad_y, scale
 
 

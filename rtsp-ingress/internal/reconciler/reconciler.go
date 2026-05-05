@@ -134,39 +134,25 @@ func (r *Reconciler) fetchCameras(ctx context.Context) ([]config.CameraConfig, e
 			Type:    s.CameraType,
 			Enabled: true,
 		}
-		if s.ConfigJSON != nil {
-			if v, ok := s.ConfigJSON["rtsp_url"].(string); ok {
-				cc.RTSPURL = v
-			}
-			if v, ok := s.ConfigJSON["rtsp_main_url"].(string); ok {
-				cc.RTSPMainURL = v
-			}
-			if v, ok := s.ConfigJSON["host"].(string); ok {
-				cc.Host = v
-			}
-			if v, ok := s.ConfigJSON["port"].(float64); ok {
-				cc.Port = int(v)
-			}
-			if v, ok := s.ConfigJSON["username"].(string); ok {
-				cc.Username = v
-			}
-			if v, ok := s.ConfigJSON["password"].(string); ok {
-				cc.Password = v
-			}
-			if v, ok := s.ConfigJSON["stream_path"].(string); ok {
-				cc.StreamPath = v
-			}
-			if v, ok := s.ConfigJSON["room_name"].(string); ok {
-				cc.RoomName = v
-			}
-			if v, ok := s.ConfigJSON["frame_interval_ms"].(float64); ok {
-				cc.FrameIntervalMs = int(v)
-			}
-			if v, ok := s.ConfigJSON["motion_threshold"].(float64); ok {
-				cc.MotionThreshold = v
-			}
-			if v, ok := s.ConfigJSON["reconnect_backoff_s"].(float64); ok {
-				cc.ReconnectBackoffSeconds = v
+		if len(s.ConfigJSON) > 0 {
+			var cj cameraConfigJSON
+			if err := json.Unmarshal(s.ConfigJSON, &cj); err != nil {
+				r.log.Warn("config_json_parse_error",
+					zap.String("camera_id", s.ID),
+					zap.Error(err),
+				)
+			} else {
+				cc.RTSPURL = cj.RTSPURL
+				cc.RTSPMainURL = cj.RTSPMainURL
+				cc.Host = cj.Host
+				cc.Port = cj.Port
+				cc.Username = cj.Username
+				cc.Password = cj.Password
+				cc.StreamPath = cj.StreamPath
+				cc.RoomName = cj.RoomName
+				cc.FrameIntervalMs = cj.FrameIntervalMs
+				cc.MotionThreshold = cj.MotionThreshold
+				cc.ReconnectBackoffSeconds = cj.ReconnectBackoffSeconds
 			}
 		}
 		cc.BuildRTSPURL()
@@ -243,10 +229,25 @@ func (r *Reconciler) LastCameras() []config.CameraConfig {
 }
 
 type sensorResponse struct {
-	ID         string         `json:"id"`
-	SensorType string         `json:"sensor_type"`
-	ConfigJSON map[string]any `json:"config_json"`
-	CameraType string         `json:"camera_type"`
+	ID         string          `json:"id"`
+	SensorType string          `json:"sensor_type"`
+	ConfigJSON json.RawMessage `json:"config_json"`
+	CameraType string          `json:"camera_type"`
+}
+
+// cameraConfigJSON mirrors the JSON keys accepted in sensor config_json.
+type cameraConfigJSON struct {
+	RTSPURL                 string  `json:"rtsp_url"`
+	RTSPMainURL             string  `json:"rtsp_main_url"`
+	Host                    string  `json:"host"`
+	Port                    int     `json:"port"`
+	Username                string  `json:"username"`
+	Password                string  `json:"password"`
+	StreamPath              string  `json:"stream_path"`
+	RoomName                string  `json:"room_name"`
+	FrameIntervalMs         int     `json:"frame_interval_ms"`
+	MotionThreshold         float64 `json:"motion_threshold"`
+	ReconnectBackoffSeconds float64 `json:"reconnect_backoff_s"`
 }
 
 func shardIndex(cameraID string, modulus int) int {

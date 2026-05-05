@@ -14,6 +14,7 @@ Only class 0 (person) is retained; all other classes are discarded.
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import numpy.typing as npt
 
@@ -31,56 +32,18 @@ def _resize_letterbox(
     image: npt.NDArray[np.uint8],
     target: int,
 ) -> tuple[npt.NDArray[np.float32], int, int, float]:
-    """Letterbox-resize image to target x target.
-
-    Returns (padded_float32_chw, pad_x, pad_y, scale) where pad_x/pad_y are
-    the number of pixels added on each side and scale is orig→input scaling.
-    Uses bilinear interpolation for higher-quality resizing.
-    """
+    """Letterbox-resize image to target x target, return (chw_fp32, pad_x, pad_y, scale)."""
     h, w = image.shape[:2]
     scale = target / max(h, w)
     new_h = max(1, round(h * scale))
     new_w = max(1, round(w * scale))
-
-    # Bilinear resize via index broadcasting (per-channel to avoid 3-D index
-    # ambiguity in numpy advanced indexing).
-    src_float = image.astype(np.float32).transpose(2, 0, 1)  # (3, h, w)
-    row_f = np.arange(new_h) * h / new_h
-    col_f = np.arange(new_w) * w / new_w
-
-    r0 = np.floor(row_f).astype(np.intp)
-    c0 = np.floor(col_f).astype(np.intp)
-    r1 = np.minimum(r0 + 1, h - 1)
-    c1 = np.minimum(c0 + 1, w - 1)
-
-    wr = (row_f - np.floor(row_f)).astype(np.float32)
-    wc = (col_f - np.floor(col_f)).astype(np.float32)
-
-    # (new_h, new_w) per channel
-    w00 = (1 - wr)[:, None] * (1 - wc)[None, :]
-    w10 = wr[:, None] * (1 - wc)[None, :]
-    w01 = (1 - wr)[:, None] * wc[None, :]
-    w11 = wr[:, None] * wc[None, :]
-
-    bilinear = np.stack(
-        [
-            src_float[c, r0[:, None], c0[None, :]] * w00
-            + src_float[c, r1[:, None], c0[None, :]] * w10
-            + src_float[c, r0[:, None], c1[None, :]] * w01
-            + src_float[c, r1[:, None], c1[None, :]] * w11
-            for c in range(3)
-        ],
-        axis=2,
-    )  # (new_h, new_w, 3)
-
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
     pad_y = (target - new_h) // 2
     pad_x = (target - new_w) // 2
     canvas = np.full((target, target, 3), 114, dtype=np.uint8)
-    canvas[pad_y : pad_y + new_h, pad_x : pad_x + new_w] = np.asarray(bilinear, dtype=np.uint8)
-
-    float_chw = np.asarray(canvas, dtype=np.float32) / 255.0
-    float_chw = np.transpose(float_chw, (2, 0, 1))  # HWC → CHW
-    return float_chw, pad_x, pad_y, scale
+    canvas[pad_y : pad_y + new_h, pad_x : pad_x + new_w] = resized
+    float_chw = canvas.astype(np.float32) / 255.0
+    return float_chw.transpose(2, 0, 1), pad_x, pad_y, scale
 
 
 def _decode_output(
