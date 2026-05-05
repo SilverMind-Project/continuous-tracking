@@ -1,18 +1,18 @@
-"""Export YOLO11m to TensorRT engine for Triton person-detector model.
+"""Export YOLO26L to TensorRT engine for Triton person-detector model.
 
 Usage (on the target GPU machine):
-    pip install ultralytics
+    pip install ultralytics>=8.4.0
     python triton-models/scripts/export_yolo.py \
-        --weights yolo11m.pt \
+        --weights yolo26l.pt \
         --out triton-models/person-detector/1/model.plan
 
-The Ultralytics export produces a TensorRT engine (.engine) which must be
-renamed to model.plan for Triton. Fine-tune the weights on indoor overhead
-footage before exporting (see Phase 0 section 0.4.1).
+YOLO26L uses a NMS-Free (end-to-end) architecture. The default export
+produces a TensorRT engine with baked-in NMS; no post-processing NMS is
+needed at inference time.
 
-Output tensor "output0" shape: [batch, 84, 8400]
-  84 = 4 (cx,cy,w,h in input-pixel space) + 80 COCO class scores
-  8400 = 6400 + 1600 + 400 (three detection scales: 80×80, 40×40, 20×20)
+Output tensor "output0" shape: [batch, 300, 6]
+  300 = maximum detections per image
+  6   = x1, y1, x2, y2 (letterbox pixel space), confidence, class_id
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def export(weights: Path, out: Path, batch: int, imgsz: int, device: int) -> Non
     try:
         from ultralytics import YOLO  # type: ignore[import-untyped]
     except ImportError as exc:
-        raise SystemExit("pip install ultralytics>=8.3.0") from exc
+        raise SystemExit("pip install ultralytics>=8.4.0") from exc
 
     model = YOLO(str(weights))
     result: Path = Path(
@@ -43,12 +43,12 @@ def export(weights: Path, out: Path, batch: int, imgsz: int, device: int) -> Non
     shutil.copy(result, out)
     print(f"Exported TensorRT engine → {out}")
     print(f"Input:  images  [batch={batch}, 3, {imgsz}, {imgsz}]")
-    print(f"Output: output0 [batch={batch}, 84, 8400]")
+    print(f"Output: output0 [batch={batch}, 300, 6]  (NMS-free)")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--weights", type=Path, default=Path("yolo11m.pt"))
+    parser.add_argument("--weights", type=Path, default=Path("yolo26l.pt"))
     parser.add_argument(
         "--out",
         type=Path,

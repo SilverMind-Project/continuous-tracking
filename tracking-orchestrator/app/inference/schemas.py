@@ -13,7 +13,7 @@ import numpy as np
 import numpy.typing as npt
 
 # ---------------------------------------------------------------------------
-# YOLO11m person detector output
+# YOLO26L person detector output
 # ---------------------------------------------------------------------------
 
 

@@ -1,17 +1,19 @@
-# YOLO11m person detector — TensorRT plan (NVIDIA GPU) or ONNX fallback.
+# YOLO26L person detector — TensorRT plan (NVIDIA GPU) or ONNX fallback.
 #
 # Authoritative tensor names from Ultralytics export:
-#   yolo11m.export(format="engine", imgsz=640, batch=16, device=0)
-#   Input "images": verified via netron or `onnx.load; [i.name for i in m.graph.input]`
-#   Output "output0": raw prediction tensor, shape [batch, 84, 8400]
-#     84 = 4 (cx,cy,w,h in input-pixel space) + 80 (COCO class scores)
-#     8400 = 80×80 + 40×40 + 20×20 anchor grid points at three scales
+#   YOLO(str("yolo26l.pt")).export(format="engine", imgsz=640, batch=16, device=0)
+#   Input "images": shape [batch, 3, 640, 640]
+#   Output "output0": NMS-free prediction tensor, shape [batch, 300, 6]
+#     300 = maximum detections per image (baked-in NMS)
+#     6   = x1, y1, x2, y2 (letterbox pixel space), confidence, class_id
+#
+# YOLO26L uses a NMS-Free end-to-end architecture; post-processing NMS is not
+# required. class_id 0 = person (COCO).
 #
 # For Intel Arc (OpenVINO): change platform to "openvino" and store
 #   1/model.xml + 1/model.bin exported from the ONNX via mo.py.
 #
 # Model name "person-detector" matches this directory name (Triton convention).
-# Phase-3 config.yaml references "person-detector-v11m" — update that key in M4.
 
 name: "person-detector"
 platform: "tensorrt_plan"
@@ -33,7 +35,7 @@ output [
   {
     name: "output0"
     data_type: TYPE_FP32
-    dims: [84, 8400]
+    dims: [300, 6]
   }
 ]
 

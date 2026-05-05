@@ -33,3 +33,45 @@ defaults:
   frame_interval_ms: 500
   motion_threshold: 0.02
   reconnect_backoff_s: 2.0
+
+# ---------------------------------------------------------------------------
+# cameras — static camera list (optional)
+# ---------------------------------------------------------------------------
+# Cameras can be defined here OR dynamically via the Cognitive Companion API.
+# Values support <ENV_VAR> placeholders; the service loads a .env file from
+# the same directory as this config file (or RTSP_DOTENV_PATH) before parsing.
+#
+# Two ways to specify the RTSP connection:
+#
+#   Option A — explicit RTSP URL (credentials may use <VAR> placeholders):
+#
+#   cameras:
+#     - id: cam-kitchen
+#       rtsp_url: rtsp://admin:<CAM_KITCHEN_PASSWORD>@192.168.1.101:554/stream1
+#       type: eye_level        # overhead | eye_level | doorway
+#       room_name: kitchen
+#       enabled: true
+#
+#   Option B — host / port / credentials (URL is built automatically):
+#
+#   cameras:
+#     - id: cam-bedroom-1
+#       host: 192.168.1.100
+#       port: 554              # default: 554
+#       username: admin
+#       password: <CAM_BEDROOM_PASSWORD>
+#       stream_path: /stream1  # default: /
+#       type: overhead
+#       room_name: bedroom
+#       enabled: true
+#
+# Secret values (passwords, API keys) should be stored in a .env file
+# alongside this config file:
+#
+#   .env
+#   ----
+#   CAM_BEDROOM_PASSWORD=s3cr3t
+#   CAM_KITCHEN_PASSWORD=another_secret
+#
+# The .env file is NOT committed to version control (add it to .gitignore).
+cameras: []

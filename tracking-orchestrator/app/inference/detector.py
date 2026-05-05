@@ -1,14 +1,15 @@
-"""YOLO11m person detector backed by Triton Inference Server.
+"""YOLO26L person detector backed by Triton Inference Server.
 
 Input images must be RGB uint8 numpy arrays, shape (H, W, 3).
 Preprocessing: letterbox resize to 640x640, divide by 255, CHW layout.
 
-YOLO11m output tensor "output0" shape [batch, 84, 8400]:
+YOLO26L uses a NMS-Free (end-to-end) architecture. Output tensor "output0"
+shape [batch, 300, 6]:
   dim 0: batch
-  dim 1: 84 = 4 (cx, cy, w, h in input-pixel space) + 80 COCO class scores
-  dim 2: 8400 anchor positions across three grid scales
+  dim 1: 300 maximum detections per image (post NMS baked into the model)
+  dim 2: 6 = x1, y1, x2, y2 (letterbox pixel space), confidence, class_id
 
-Only class 0 (person) is used; all other classes are discarded.
+Only class 0 (person) is retained; all other classes are discarded.
 """
 
 from __future__ import annotations
@@ -19,16 +20,11 @@ import numpy.typing as npt
 from app.inference.schemas import DetectionBox
 from app.inference.triton_client import TritonClientProtocol
 
-# YOLO11m input/output constants matching person-detector/config.pbtxt
+# YOLO26L input/output constants matching person-detector/config.pbtxt
 _MODEL_NAME = "person-detector"
 _INPUT_SIZE = 640
 _PERSON_CLASS = 0
 _CONF_THRESHOLD = 0.25
-_IOU_THRESHOLD = 0.45
-
-# ImageNet normalisation is NOT applied to YOLO — it expects [0, 1] input.
-_IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-_IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 
 def _resize_letterbox(
@@ -87,37 +83,6 @@ def _resize_letterbox(
     return float_chw, pad_x, pad_y, scale
 
 
-def _nms(
-    boxes: npt.NDArray[np.float32],
-    scores: npt.NDArray[np.float32],
-    iou_threshold: float,
-) -> list[int]:
-    """Pure-numpy NMS.  boxes: (N, 4) x1,y1,x2,y2; returns kept indices."""
-    if boxes.shape[0] == 0:
-        return []
-
-    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-    areas = (x2 - x1) * (y2 - y1)
-    order = np.argsort(scores)[::-1]
-
-    keep: list[int] = []
-    while order.size > 0:
-        i = int(order[0])
-        keep.append(i)
-        if order.size == 1:
-            break
-        rest = order[1:]
-        ix1 = np.maximum(x1[i], x1[rest])
-        iy1 = np.maximum(y1[i], y1[rest])
-        ix2 = np.minimum(x2[i], x2[rest])
-        iy2 = np.minimum(y2[i], y2[rest])
-        inter = np.maximum(0.0, ix2 - ix1) * np.maximum(0.0, iy2 - iy1)
-        iou = inter / (areas[i] + areas[rest] - inter + 1e-7)
-        order = rest[iou <= iou_threshold]
-
-    return keep
-
-
 def _decode_output(
     raw: npt.NDArray[np.float32],
     orig_h: int,
@@ -127,56 +92,53 @@ def _decode_output(
     scale: float,
     conf_threshold: float = _CONF_THRESHOLD,
 ) -> list[DetectionBox]:
-    """Decode YOLO11m output0 tensor (84, 8400) → DetectionBox list."""
-    preds = raw.T  # (8400, 84)
-    cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
-    person_score = preds[:, 4 + _PERSON_CLASS]  # class 0
+    """Decode YOLO26L NMS-free output0 tensor (300, 6) → DetectionBox list.
 
-    mask = person_score > conf_threshold
-    if not mask.any():
+    YOLO26L bakes NMS into the model, so no post-processing NMS is needed.
+    Columns: x1, y1, x2, y2 (letterbox pixel space), confidence, class_id.
+    Converts letterbox pixel coords to normalised original-image coordinates.
+    """
+    conf_col = raw[:, 4]
+    class_col = raw[:, 5]
+    mask = (conf_col > conf_threshold) & (class_col.round().astype(np.int32) == _PERSON_CLASS)
+    filtered = raw[mask]
+
+    if filtered.shape[0] == 0:
         return []
 
-    cx, cy, bw, bh = cx[mask], cy[mask], bw[mask], bh[mask]
-    scores = person_score[mask]
-
-    # cx,cy,w,h (input-pixel space) → x1,y1,x2,y2 (normalised original)
     new_w = round(orig_w * scale)
     new_h = round(orig_h * scale)
 
-    x1 = np.clip((cx - bw / 2 - pad_x) / new_w, 0.0, 1.0)
-    y1 = np.clip((cy - bh / 2 - pad_y) / new_h, 0.0, 1.0)
-    x2 = np.clip((cx + bw / 2 - pad_x) / new_w, 0.0, 1.0)
-    y2 = np.clip((cy + bh / 2 - pad_y) / new_h, 0.0, 1.0)
-
-    boxes = np.stack([x1, y1, x2, y2], axis=1).astype(np.float32)
-    kept = _nms(boxes, scores, _IOU_THRESHOLD)
+    x1 = np.clip((filtered[:, 0] - pad_x) / new_w, 0.0, 1.0)
+    y1 = np.clip((filtered[:, 1] - pad_y) / new_h, 0.0, 1.0)
+    x2 = np.clip((filtered[:, 2] - pad_x) / new_w, 0.0, 1.0)
+    y2 = np.clip((filtered[:, 3] - pad_y) / new_h, 0.0, 1.0)
+    scores = filtered[:, 4]
 
     return [
         DetectionBox(
-            x1=float(boxes[i, 0]),
-            y1=float(boxes[i, 1]),
-            x2=float(boxes[i, 2]),
-            y2=float(boxes[i, 3]),
+            x1=float(x1[i]),
+            y1=float(y1[i]),
+            x2=float(x2[i]),
+            y2=float(y2[i]),
             confidence=float(scores[i]),
         )
-        for i in kept
+        for i in range(filtered.shape[0])
     ]
 
 
 class PersonDetector:
-    """Async person detector using YOLO11m on Triton."""
+    """Async person detector using YOLO26L on Triton."""
 
     def __init__(
         self,
         client: TritonClientProtocol,
         model_name: str = _MODEL_NAME,
         conf_threshold: float = _CONF_THRESHOLD,
-        iou_threshold: float = _IOU_THRESHOLD,
     ) -> None:
         self._client = client
         self._model_name = model_name
         self._conf = conf_threshold
-        self._iou = iou_threshold
 
     async def detect_batch(
         self,
@@ -199,7 +161,7 @@ class PersonDetector:
             inputs=[("images", batch)],
             output_names=["output0"],
         )
-        raw_batch = outputs["output0"]  # (N, 84, 8400)
+        raw_batch = outputs["output0"]  # (N, 300, 6) — YOLO26L NMS-free format
 
         return [
             _decode_output(raw_batch[i], *meta[i], conf_threshold=self._conf)

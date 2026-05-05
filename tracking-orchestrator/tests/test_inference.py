@@ -12,7 +12,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from app.inference.detector import PersonDetector, _decode_output, _nms, _resize_letterbox
+from app.inference.detector import PersonDetector, _decode_output, _resize_letterbox
 from app.inference.pose import PoseEstimator, _decode_simcc, _preprocess
 from app.inference.reid_embedder import ReidEmbedder
 from app.inference.schemas import (
@@ -145,65 +145,37 @@ def test_pose_preprocess_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
-# NMS
-# ---------------------------------------------------------------------------
-
-
-def test_nms_single_box() -> None:
-    boxes = np.array([[0.1, 0.1, 0.5, 0.5]], dtype=np.float32)
-    scores = np.array([0.9], dtype=np.float32)
-    kept = _nms(boxes, scores, iou_threshold=0.5)
-    assert kept == [0]
-
-
-def test_nms_suppresses_duplicate() -> None:
-    boxes = np.array([[0.0, 0.0, 0.5, 0.5], [0.01, 0.01, 0.51, 0.51]], dtype=np.float32)
-    scores = np.array([0.9, 0.8], dtype=np.float32)
-    kept = _nms(boxes, scores, iou_threshold=0.5)
-    assert len(kept) == 1
-    assert kept[0] == 0
-
-
-def test_nms_keeps_non_overlapping() -> None:
-    boxes = np.array([[0.0, 0.0, 0.2, 0.2], [0.5, 0.5, 0.9, 0.9]], dtype=np.float32)
-    scores = np.array([0.9, 0.8], dtype=np.float32)
-    kept = _nms(boxes, scores, iou_threshold=0.5)
-    assert len(kept) == 2
-
-
-def test_nms_empty() -> None:
-    boxes = np.zeros((0, 4), dtype=np.float32)
-    scores = np.zeros(0, dtype=np.float32)
-    kept = _nms(boxes, scores, iou_threshold=0.5)
-    assert kept == []
-
-
-# ---------------------------------------------------------------------------
-# YOLO decode
+# YOLO26L decode
 # ---------------------------------------------------------------------------
 
 
 def _make_yolo_output(
     batch: int,
-    cx: float = 320.0,
-    cy: float = 240.0,
-    bw: float = 100.0,
-    bh: float = 150.0,
+    x1: float = 270.0,
+    y1: float = 165.0,
+    x2: float = 370.0,
+    y2: float = 315.0,
     conf: float = 0.9,
+    class_id: float = 0.0,
 ) -> npt.NDArray[np.float32]:
-    """Construct a fake YOLO output0 tensor [batch, 84, 8400] with one detection."""
-    out = np.zeros((batch, 84, 8400), dtype=np.float32)
-    # Place detection at anchor 0; class 0 (person)
-    out[:, 0, 0] = cx
-    out[:, 1, 0] = cy
-    out[:, 2, 0] = bw
-    out[:, 3, 0] = bh
-    out[:, 4, 0] = conf  # person class score
+    """Construct a fake YOLO26L NMS-free output0 tensor [batch, 300, 6].
+
+    Columns: x1, y1, x2, y2 (letterbox pixel space), confidence, class_id.
+    One person detection placed at row 0; remaining 299 rows are zero (filtered
+    out by conf threshold).
+    """
+    out = np.zeros((batch, 300, 6), dtype=np.float32)
+    out[:, 0, 0] = x1
+    out[:, 0, 1] = y1
+    out[:, 0, 2] = x2
+    out[:, 0, 3] = y2
+    out[:, 0, 4] = conf
+    out[:, 0, 5] = class_id
     return out
 
 
 def test_decode_output_finds_person() -> None:
-    raw = _make_yolo_output(1)[0]  # single sample (84, 8400)
+    raw = _make_yolo_output(1)[0]  # single sample (300, 6)
     boxes = _decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=80, scale=1.0)
     assert len(boxes) == 1
     b = boxes[0]
@@ -213,10 +185,25 @@ def test_decode_output_finds_person() -> None:
 
 
 def test_decode_output_empty_on_low_confidence() -> None:
-    raw = np.zeros((84, 8400), dtype=np.float32)
-    raw[4, 0] = 0.1  # below threshold
+    raw = np.zeros((300, 6), dtype=np.float32)
+    raw[0, 4] = 0.1  # below threshold
+    raw[0, 5] = 0.0  # class 0
     boxes = _decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=0, scale=1.0)
     assert boxes == []
+
+
+def test_decode_output_filters_non_person_class() -> None:
+    raw = _make_yolo_output(1, conf=0.9, class_id=1.0)[0]  # class 1 (not person)
+    boxes = _decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=0, scale=1.0)
+    assert boxes == []
+
+
+def test_decode_output_multiple_detections() -> None:
+    raw = np.zeros((300, 6), dtype=np.float32)
+    raw[0] = [100.0, 50.0, 200.0, 150.0, 0.9, 0.0]
+    raw[1] = [300.0, 200.0, 400.0, 350.0, 0.8, 0.0]
+    boxes = _decode_output(raw, orig_h=640, orig_w=640, pad_x=0, pad_y=0, scale=1.0)
+    assert len(boxes) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -4,9 +4,9 @@ Triton Inference Server model repository for the Continuous Tracking System.
 
 ## Directory layout
 
-```
+```text
 triton-models/
-├── person-detector/          YOLO11m person detector
+├── person-detector/          YOLO26L person detector (NMS-Free)
 │   ├── config.pbtxt          Triton model config (TensorRT)
 │   └── 1/
 │       └── model.plan        TensorRT engine — NOT in git (generate with scripts/)
@@ -19,7 +19,7 @@ triton-models/
 │   └── 1/
 │       └── model.onnx        ONNX model — NOT in git (generate with scripts/)
 └── scripts/
-    ├── export_yolo.py        YOLO11m → TensorRT .plan
+    ├── export_yolo.py        YOLO26L → TensorRT .plan
     ├── export_reid.py        SOLIDER-REID → ONNX
     └── export_pose.py        RTMPose-m → ONNX
 ```
@@ -31,22 +31,25 @@ and several hundred MB each. Generate them on the target machine with the script
 
 All three scripts must be run on a machine with an NVIDIA GPU.
 
-### 1. person-detector (YOLO11m → TensorRT)
+### 1. person-detector (YOLO26L → TensorRT)
 
 ```bash
-pip install ultralytics>=8.3.0
+pip install ultralytics>=8.4.0
 
 # Download or fine-tune weights first:
-#   yolo11m.pt  — Ultralytics pretrained
-#   yolo11m_cts.pt — fine-tuned on overhead indoor footage (preferred)
+#   yolo26l.pt  — Ultralytics pretrained (released Jan 2026)
+#   yolo26l_cts.pt — fine-tuned on overhead indoor footage (preferred)
 
 python triton-models/scripts/export_yolo.py \
-    --weights yolo11m_cts.pt \
+    --weights yolo26l_cts.pt \
     --out triton-models/person-detector/1/model.plan \
     --batch 16 --imgsz 640 --device 0
 ```
 
-The export compiles a TensorRT engine optimised for the exact GPU it runs on.
+YOLO26L uses a NMS-Free (end-to-end) architecture: the export bakes NMS into
+the TensorRT engine. Output tensor `output0` is `[batch, 300, 6]` where the 6
+columns are `x1, y1, x2, y2` (letterbox pixel space), `confidence`, `class_id`.
+
 Re-run this script if you move to a different GPU model.
 
 ### 2. reid-solider (SOLIDER-REID → ONNX)
@@ -94,11 +97,11 @@ curl -s http://localhost:8000/v2/models/pose-rtmpose/ready
 
 ## Performance target
 
-| Model          | Batch | p99 latency | Hardware             |
-|----------------|-------|-------------|----------------------|
-| person-detector | 8    | ≤ 12 ms     | RTX 4060 or equiv.  |
-| reid-solider    | 8    | ≤ 8 ms      | RTX 4060 or equiv.  |
-| pose-rtmpose    | 8    | ≤ 8 ms      | RTX 4060 or equiv.  |
+| Model           | Batch | p99 latency | Hardware            |
+|-----------------|-------|-------------|---------------------|
+| person-detector | 8     | ≤ 12 ms     | RTX 4060 or equiv.  |
+| reid-solider    | 8     | ≤ 8 ms      | RTX 4060 or equiv.  |
+| pose-rtmpose    | 8     | ≤ 8 ms      | RTX 4060 or equiv.  |
 
 Run `python tracking-orchestrator/scripts/benchmark_triton.py` after loading models.
 

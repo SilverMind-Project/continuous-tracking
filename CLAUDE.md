@@ -26,7 +26,7 @@ This is a design-specification repository for a **continuous tracking system for
 - **Identity model**: Bayesian posterior over identities, not single-assignment. Gallery of embeddings per person (not one embedding). Retroactive revision protocol.
 - **Transport**: Redis Streams (not PubSub) with consumer groups, XACK, replay capability.
 - **Storage**: Postgres/TimescaleDB with pgvector (HNSW index). Repository pattern — no raw SQL in services.
-- **Models**: YOLO11m (detection), SOLIDER-REID (768-dim body ReID), RTMPose (pose), ArcFace (face ID).
+- **Models**: YOLO26L (detection, NMS-Free — output `[batch, 300, 6]`), SOLIDER-REID (768-dim body ReID), RTMPose (pose), ArcFace (face ID).
 - **Dementia signals**: Pacing, sundowning, bathroom anomaly, stillness, nighttime movement, absence — computed from trajectory data against per-person baselines.
 - **Integration**: All external traffic routes through `cognitive-companion` as a BFF gateway. No direct UI access to CTS services.
 
@@ -140,9 +140,18 @@ Implemented files:
 
 **M2 — Implemented.** `rtsp-ingress/` Go service with full source code and 26 unit tests across 7 packages (config, motion, media, reconciler, rtsp, streams, cmd/server). All tests pass. See `rtsp-ingress/` for implementation details.
 
+**Post-M2 enhancements (camera config):**
+
+- `CameraConfig` now has yaml struct tags so cameras can be defined directly in `settings.yaml`.
+- New fields: `host`, `port`, `username`, `password`, `stream_path`. When `rtsp_url` is omitted the URL is built automatically from these fields (`net/url` encodes credentials per RFC 3986).
+- `.env` file support: before parsing YAML, the service loads `<config-dir>/.env` (or `RTSP_DOTENV_PATH`) so passwords can live outside version control.
+- `${VAR}` placeholder expansion in YAML content: any value can reference an environment variable; unresolved references fail loudly at startup.
+- Reconciler updated: the Cognitive Companion API `config_json` can now supply `host`, `port`, `username`, `password`, `stream_path`; `BuildRTSPURL()` is called after field mapping.
+- `README.md` created at repo root with architecture overview, getting-started guide, and camera config reference.
+
 **M3 — Implemented.** Triton model repository + inference client module. Implemented files:
 
-- `triton-models/person-detector/config.pbtxt` — YOLO11m TensorRT config (input: `images` [3,640,640], output: `output0` [84,8400], dynamic batching, `max_batch_size: 16`)
+- `triton-models/person-detector/config.pbtxt` — YOLO26L TensorRT config (input: `images` [3,640,640], output: `output0` [300,6] NMS-free, dynamic batching, `max_batch_size: 16`)
 - `triton-models/reid-solider/config.pbtxt` — SOLIDER-REID ONNX config (input: `input` [3,256,128], output: `output` [768])
 - `triton-models/pose-rtmpose/config.pbtxt` — RTMPose-m ONNX config (input: `input` [3,256,192], outputs: `simcc_x` [17,384], `simcc_y` [17,512])
 - `triton-models/{person-detector,reid-solider,pose-rtmpose}/1/.gitkeep` — placeholders for model binaries (generated with export scripts)
@@ -152,6 +161,8 @@ Implemented files:
 - `tracking-orchestrator/scripts/benchmark_triton.py` — p50/p99 sweep at batch [1,4,8,16] with DoD gate check (person-detector p99 ≤ 12ms at batch 8)
 - `tracking-orchestrator/notebooks/model_demo.ipynb` — end-to-end demo (JPEG → DetectionBox / Embedding / PoseResult) per model
 - `tracking-orchestrator/tests/test_inference.py` — 27 unit tests (mocked Triton, no GPU required); all pass under `make check`
+
+**Post-M3 model migration:** Detector migrated from YOLO11m to YOLO26L. Key changes: (1) Triton output tensor updated to `[300, 6]` (NMS-free end-to-end format: x1,y1,x2,y2,conf,class_id in letterbox pixel space). (2) `_decode_output` rewritten — no post-processing NMS required. (3) `_nms` helper removed. (4) `PersonDetector.__init__` drops `iou_threshold` parameter (no longer applicable). (5) Tests updated: `_make_yolo_output` generates `[batch,300,6]` tensors; NMS unit tests removed; two new class-filter tests added.
 
 **Outstanding DoD gate**: `tritonserver` loading all three models (`curl :8000/v2/models/ready`) and benchmark p99 ≤ 12ms at batch 8 require materialised `.plan`/`.onnx` files (run export scripts on the target GPU). The code scaffolding is complete and verified.
 

@@ -10,7 +10,7 @@ services are healthy at baseline.
 |---------|------|-------|--------------|
 | `rtsp-ingress` | 8090 | CTS | Pulls RTSP, gates on motion, uploads JPEG, publishes `frames.ready`. |
 | `tracking-orchestrator` | 8000 | CTS | Consumes `frames.ready`, runs Triton inference, emits `tracking.events`, `tracking.revisions`, `tracking.signals`, `scene.samples`. |
-| `triton` | 8001 (gRPC) | CTS | YOLO11m + SOLIDER-REID + RTMPose. |
+| `triton` | 8001 (gRPC) | CTS | YOLO26L + SOLIDER-REID + RTMPose. |
 | `redis` | 6379 | CTS | Streams transport. AOF on. |
 | `postgres` | 5432 | CTS | TimescaleDB + pgvector. Holds tracklets, gallery, signals, trajectories. |
 

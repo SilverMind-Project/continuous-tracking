@@ -135,25 +135,41 @@ func (r *Reconciler) fetchCameras(ctx context.Context) ([]config.CameraConfig, e
 			Enabled: true,
 		}
 		if s.ConfigJSON != nil {
-			if url, ok := s.ConfigJSON["rtsp_url"].(string); ok {
-				cc.RTSPURL = url
+			if v, ok := s.ConfigJSON["rtsp_url"].(string); ok {
+				cc.RTSPURL = v
 			}
-			if mainURL, ok := s.ConfigJSON["rtsp_main_url"].(string); ok {
-				cc.RTSPMainURL = mainURL
+			if v, ok := s.ConfigJSON["rtsp_main_url"].(string); ok {
+				cc.RTSPMainURL = v
 			}
-			if room, ok := s.ConfigJSON["room_name"].(string); ok {
-				cc.RoomName = room
+			if v, ok := s.ConfigJSON["host"].(string); ok {
+				cc.Host = v
 			}
-			if fi, ok := s.ConfigJSON["frame_interval_ms"].(float64); ok {
-				cc.FrameIntervalMs = int(fi)
+			if v, ok := s.ConfigJSON["port"].(float64); ok {
+				cc.Port = int(v)
 			}
-			if mt, ok := s.ConfigJSON["motion_threshold"].(float64); ok {
-				cc.MotionThreshold = mt
+			if v, ok := s.ConfigJSON["username"].(string); ok {
+				cc.Username = v
 			}
-			if rb, ok := s.ConfigJSON["reconnect_backoff_s"].(float64); ok {
-				cc.ReconnectBackoffSeconds = rb
+			if v, ok := s.ConfigJSON["password"].(string); ok {
+				cc.Password = v
+			}
+			if v, ok := s.ConfigJSON["stream_path"].(string); ok {
+				cc.StreamPath = v
+			}
+			if v, ok := s.ConfigJSON["room_name"].(string); ok {
+				cc.RoomName = v
+			}
+			if v, ok := s.ConfigJSON["frame_interval_ms"].(float64); ok {
+				cc.FrameIntervalMs = int(v)
+			}
+			if v, ok := s.ConfigJSON["motion_threshold"].(float64); ok {
+				cc.MotionThreshold = v
+			}
+			if v, ok := s.ConfigJSON["reconnect_backoff_s"].(float64); ok {
+				cc.ReconnectBackoffSeconds = v
 			}
 		}
+		cc.BuildRTSPURL()
 		if cc.FrameIntervalMs <= 0 {
 			cc.FrameIntervalMs = r.defaults.FrameIntervalMs
 		}
