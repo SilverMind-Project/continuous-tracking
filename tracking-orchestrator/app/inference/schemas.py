@@ -3,6 +3,8 @@
 These types sit at the inference layer boundary.  They are distinct from the
 domain types in app.domain — they carry raw model outputs that services
 translate into domain objects.
+
+``DetectionBox`` is re-exported from ``triton_shared.inference.schemas``.
 """
 
 from __future__ import annotations
@@ -12,24 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-# ---------------------------------------------------------------------------
-# YOLO26L person detector output
-# ---------------------------------------------------------------------------
-
-
-#: One person bounding box in normalised image coordinates [0, 1].
-@dataclass(frozen=True)
-class DetectionBox:
-    x1: float
-    y1: float
-    x2: float
-    y2: float
-    confidence: float
-
-    @property
-    def area(self) -> float:
-        return max(0.0, self.x2 - self.x1) * max(0.0, self.y2 - self.y1)
-
+from triton_shared.inference.schemas import DetectionBox  # noqa: F401 — re-export
 
 # ---------------------------------------------------------------------------
 # SOLIDER-REID output

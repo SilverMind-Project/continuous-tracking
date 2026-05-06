@@ -2010,6 +2010,7 @@ dependencies = [
     { name = "scipy" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
+    { name = "triton-shared" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -2057,6 +2058,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.14.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.0" },
     { name = "structlog", specifier = ">=24.4.0" },
+    { name = "triton-shared", directory = "../../triton-shared" },
     { name = "tritonclient", extras = ["all"], marker = "extra == 'triton'", specifier = ">=2.51.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
 ]
@@ -2064,6 +2066,26 @@ provides-extras = ["dev", "triton"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "fakeredis", specifier = ">=2.35.1" }]
+
+[[package]]
+name = "triton-shared"
+version = "0.1.0"
+source = { directory = "../../triton-shared" }
+dependencies = [
+    { name = "numpy" },
+    { name = "opencv-python-headless" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=2.0.0" },
+    { name = "opencv-python-headless", specifier = ">=4.10.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.0" },
+    { name = "tritonclient", extras = ["all"], marker = "extra == 'triton'", specifier = ">=2.51.0" },
+]
+provides-extras = ["triton", "dev"]
 
 [[package]]
 name = "tritonclient"

@@ -19,6 +19,7 @@ dependencies = [
     "protobuf>=5.29.0",
     "httpx>=0.27",
     "prometheus-client>=0.25.0",
+    "triton-shared",
 ]
 
 [project.optional-dependencies]
@@ -86,3 +87,6 @@ filterwarnings = ["error::DeprecationWarning"]
 dev = [
     "fakeredis>=2.35.1",
 ]
+
+[tool.uv.sources]
+triton-shared = { path = "../../triton-shared" }

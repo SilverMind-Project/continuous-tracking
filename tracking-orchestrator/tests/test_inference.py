@@ -12,7 +12,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from app.inference.detector import PersonDetector, _decode_output, _resize_letterbox
+from app.inference.detector import PersonDetector
 from app.inference.pose import PoseEstimator, _decode_simcc, _preprocess
 from app.inference.reid_embedder import ReidEmbedder
 from app.inference.schemas import (
@@ -24,6 +24,7 @@ from app.inference.schemas import (
     PoseResult,
 )
 from app.inference.triton_client import TritonClientProtocol
+from triton_shared.inference.detection import decode_output, letterbox_preprocess
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -95,16 +96,16 @@ def test_coco_keypoints_count() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_resize_letterbox_square_output() -> None:
+def testletterbox_preprocess_square_output() -> None:
     img = _make_image(480, 640)
-    tensor, _px, _py, _scale = _resize_letterbox(img, 640)
+    tensor, _px, _py, _scale = letterbox_preprocess(img, 640)
     assert tensor.shape == (3, 640, 640)
     assert tensor.dtype == np.float32
 
 
-def test_resize_letterbox_values_in_range() -> None:
+def testletterbox_preprocess_values_in_range() -> None:
     img = _make_image(100, 200)
-    tensor, *_ = _resize_letterbox(img, 640)
+    tensor, *_ = letterbox_preprocess(img, 640)
     assert float(tensor.min()) >= 0.0
     assert float(tensor.max()) <= 1.0
 
@@ -174,9 +175,9 @@ def _make_yolo_output(
     return out
 
 
-def test_decode_output_finds_person() -> None:
+def testdecode_output_finds_person() -> None:
     raw = _make_yolo_output(1)[0]  # single sample (300, 6)
-    boxes = _decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=80, scale=1.0)
+    boxes = decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=80, scale=1.0)
     assert len(boxes) == 1
     b = boxes[0]
     assert 0.0 <= b.x1 <= b.x2 <= 1.0
@@ -184,25 +185,25 @@ def test_decode_output_finds_person() -> None:
     assert b.confidence >= 0.25
 
 
-def test_decode_output_empty_on_low_confidence() -> None:
+def testdecode_output_empty_on_low_confidence() -> None:
     raw = np.zeros((300, 6), dtype=np.float32)
     raw[0, 4] = 0.1  # below threshold
     raw[0, 5] = 0.0  # class 0
-    boxes = _decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=0, scale=1.0)
+    boxes = decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=0, scale=1.0)
     assert boxes == []
 
 
-def test_decode_output_filters_non_person_class() -> None:
+def testdecode_output_filters_non_person_class() -> None:
     raw = _make_yolo_output(1, conf=0.9, class_id=1.0)[0]  # class 1 (not person)
-    boxes = _decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=0, scale=1.0)
+    boxes = decode_output(raw, orig_h=480, orig_w=640, pad_x=0, pad_y=0, scale=1.0)
     assert boxes == []
 
 
-def test_decode_output_multiple_detections() -> None:
+def testdecode_output_multiple_detections() -> None:
     raw = np.zeros((300, 6), dtype=np.float32)
     raw[0] = [100.0, 50.0, 200.0, 150.0, 0.9, 0.0]
     raw[1] = [300.0, 200.0, 400.0, 350.0, 0.8, 0.0]
-    boxes = _decode_output(raw, orig_h=640, orig_w=640, pad_x=0, pad_y=0, scale=1.0)
+    boxes = decode_output(raw, orig_h=640, orig_w=640, pad_x=0, pad_y=0, scale=1.0)
     assert len(boxes) == 2
 
 
