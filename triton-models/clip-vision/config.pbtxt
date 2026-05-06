@@ -1,0 +1,52 @@
+# CLIP ViT-L/14 vision encoder — ONNX Runtime backend.
+#
+# Works on NVIDIA GPUs (TensorRT EP auto-selected by ONNX Runtime) and
+# Intel Arc GPUs (activate OpenVINO EP via configure_gpu.py --vendor intel).
+#
+# Model file: triton-models/clip-vision/1/model.onnx
+# Export:     python triton-models/scripts/export_clip.py
+#
+# Input:  "input"   [batch, 3, 224, 224]  FP32  (CLIP-preprocessed image)
+# Output: "output"  [batch, 768]          FP32  (L2-normalize client-side)
+#
+# Preprocessing (client-side):
+#   1. Resize shortest side to 224 (bicubic)
+#   2. Center-crop to 224×224
+#   3. Convert to float32 [0, 1], CHW layout
+#   4. Normalize with CLIP mean/std:
+#      mean = [0.48145466, 0.4578275,  0.40821073]
+#      std  = [0.26862954, 0.26130258, 0.27577711]
+#
+# Postprocessing (client-side):
+#   L2-normalize the 768-dim output vector.
+
+name: "clip-vision"
+platform: "onnxruntime_onnx"
+max_batch_size: 16
+
+dynamic_batching {
+  max_queue_delay_microseconds: 5000
+}
+
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [3, 224, 224]
+  }
+]
+
+output [
+  {
+    name: "output"
+    data_type: TYPE_FP32
+    dims: [768]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

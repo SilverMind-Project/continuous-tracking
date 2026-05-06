@@ -1,0 +1,48 @@
+# CLIP ViT-L/14 vision encoder — ONNX Runtime with OpenVINO EP (Intel Arc GPU).
+#
+# Activated by: python triton-models/scripts/configure_gpu.py --vendor intel
+#
+# Model file: triton-models/clip-vision/1/model.onnx
+# Export:     python triton-models/scripts/export_clip.py
+
+name: "clip-vision"
+platform: "onnxruntime_onnx"
+max_batch_size: 16
+
+dynamic_batching {
+  max_queue_delay_microseconds: 5000
+}
+
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [3, 224, 224]
+  }
+]
+
+output [
+  {
+    name: "output"
+    data_type: TYPE_FP32
+    dims: [768]
+  }
+]
+
+optimization {
+  execution_accelerators {
+    gpu_execution_accelerator : [
+      {
+        name : "openvino"
+        parameters { key: "device_type" value: "GPU" }
+      }
+    ]
+  }
+}
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]
