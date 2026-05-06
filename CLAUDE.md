@@ -1,439 +1,430 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code agents working in this repository.
 
-## Repository Purpose
+---
 
-This is a design-specification repository for a **continuous tracking system for monitoring seniors with early dementia**. It contains 6 phase documents (7,387 lines total) that define the architecture, data model, and implementation plan for a system that:
+## What This System Does
 
-- Tracks motion and activities of seniors via RTSP camera streams
-- Performs person re-identification across cameras using face + body embeddings
-- Detects dementia-relevant patterns (pacing, sundowning, bathroom anomalies, stillness)
-- Integrates with an existing `cognitive-companion` system
+The **Continuous Tracking System (CTS)** monitors seniors with early dementia via RTSP cameras. It:
 
-## Document Order (Read in This Sequence)
+- Pulls camera streams via a go2rtc sidecar and uploads JPEG keyframes to MinIO
+- Tracks individuals frame-to-frame with BoT-SORT (Kalman filter + appearance embeddings)
+- Re-identifies people across cameras using a Bayesian posterior over identity candidates (ArcFace face recognition + SOLIDER-REID body appearance)
+- Detects dementia-relevant behavioural patterns: pacing, sundowning, bathroom anomaly, prolonged stillness, nighttime movement, unexplained absence
+- Streams results via Redis Streams (protobuf wire format) to `cognitive-companion`, a BFF gateway that serves the Vue admin UI
 
-1. **phase-0-design-review.md** (1,686 lines) — The load-bearing foundation. Critiques and revises phases 1-5. Contains the revised identity model, runtime partitioning, storage abstraction, message transport, dementia activity layer, privacy/audit, schema, UI deliverables, validation matrix, and 16-week implementation playbook (M1-M10). **Read this first.**
-2. **phase-1-architecture.md** (1,013 lines) — System architecture, identity model, database schema, layering rules.
-3. **phase-2-rtsp-ingestion.md** (1,014 lines) — Go service for RTSP ingest, frame decode, motion gating, MinIO upload.
-4. **phase-3-tracking-reid.md** (1,237 lines) — Tracking orchestrator (Python), BoT-SORT, cross-camera association, identity resolution with Bayesian posterior, retroactive revision.
-5. **phase-4-scene-semantic.md** (735 lines) — Scene analysis, semantic memory integration, VLM pipeline.
-6. **phase-5-backend-integration.md** (1,702 lines) — Cognitive companion integration, backend routers, Vue views, gateway contract, validation.
+---
 
-## Key Architecture Decisions (from phase-0)
+## Design Documents
 
-- **Runtime**: Go service (`rtsp-ingress`) for RTSP/frame handling + Python service (`tracking-orchestrator`) for ML logic + Triton Inference Server for GPU inference batching (NVIDIA or Intel Arc).
-- **Identity model**: Bayesian posterior over identities, not single-assignment. Gallery of embeddings per person (not one embedding). Retroactive revision protocol.
-- **Transport**: Redis Streams (not PubSub) with consumer groups, XACK, replay capability.
-- **Storage**: Postgres/TimescaleDB with pgvector (HNSW index). Repository pattern — no raw SQL in services.
-- **Models**: YOLO26L (detection, NMS-Free — output `[batch, 300, 6]`), SOLIDER-REID (768-dim body ReID), RTMPose (pose), ArcFace (face ID). All three inference models use ONNX format; vendor differences are handled by Triton's execution provider selection (TensorRT/CUDA EP for NVIDIA, OpenVINO EP for Intel Arc).
-- **Dementia signals**: Pacing, sundowning, bathroom anomaly, stillness, nighttime movement, absence — computed from trajectory data against per-person baselines.
-- **Integration**: All external traffic routes through `cognitive-companion` as a BFF gateway. No direct UI access to CTS services.
+Read the phase documents before making architectural decisions. Always reference phase-0 first — it supersedes phases 1–5 where they conflict.
 
-## Implementation Playbook
+| File | What it covers |
+| --- | --- |
+| `phase-0-design-review.md` | **Authoritative foundation.** Identity model, runtime partitioning, storage abstraction, message transport, dementia activity layer, schema. |
+| `phase-1-architecture.md` | System architecture, identity model, database schema, layering rules. |
+| `phase-2-rtsp-ingestion.md` | Go service for RTSP ingest, frame decode, motion gating, MinIO upload. |
+| `phase-3-tracking-reid.md` | Tracking orchestrator, BoT-SORT, cross-camera association, Bayesian identity resolution. |
+| `phase-4-scene-semantic.md` | Scene analysis, semantic memory integration, VLM pipeline. |
+| `phase-5-backend-integration.md` | Cognitive companion integration, backend routers, Vue views, gateway contract. |
 
-The design defines 10 milestones (M1-M10) spanning 16+ weeks. Never implement out of order:
+---
 
-| Milestone | Weeks | Scope                                                                                                                                                              |
-| --------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| M1        | 1-2   | Protobuf contracts, repository interfaces, docker-compose, CI — **COMPLETE**                                                                                       |
-| M2        | 3-4   | rtsp-ingress (Go) — **COMPLETE**                                                                                                                                   |
-| M3        | 5-6   | Triton models + benchmark harness — **COMPLETE**                                                                                                                   |
-| M4        | 7-8   | Tracking orchestrator skeleton (per-camera tracking, tracklets) — **COMPLETE**                                                                                     |
-| M5        | 9-10  | Identity resolution, retroactive revision — **COMPLETE**                                                                                                           |
-| M6        | 11    | Trajectories, dwells, keyframes — **COMPLETE**                                                                                                                     |
-| M7        | 12-13 | Admin UI (cameras, calibration, privacy, adjacency) — **COMPLETE**                                                                                                 |
-| M8        | 14-15 | Dementia signals, dashboard, keyframes — **COMPLETE**                                                                                                              |
-| M9        | 16    | Live view, identity corrections, runtime integration — **COMPLETE**                                                                                                |
-| M10       | 16+   | K8s, observability, docs, performance hardening — **IN PROGRESS**                                                                                          |
+## System Architecture
 
-## Coding Rules (Derived from M4 Code Review)
+```text
+IP Cameras (RTSP)
+       │
+       ▼
+ go2rtc (sidecar, port 1984)
+  ┌──────────────┐    HTTP /api/frame.jpeg
+  │  RTSP proxy  │◀──────────────────────────  rtsp-ingress (Go, port 8090)
+  │  multiplexer │                             ┌────────────────────────┐
+  └──────────────┘                             │  Motion gating         │
+                                               │  MinIO JPEG upload     │
+                                               │  frames.ready publish  │
+                                               └────────────────────────┘
+                                                         │ frames.ready (protobuf)
+                                                         ▼
+                                           tracking-orchestrator (Python, port 8000)
+                                           ┌──────────────────────────────┐
+                                           │ YOLO26L  person detection    │
+                                           │ SOLIDER-REID body embeds     │──▶ Triton (gRPC 8001)
+                                           │ RTMPose  pose estimation     │
+                                           │ BoT-SORT tracker             │
+                                           │ Bayesian identity resolver   │
+                                           │ Dementia signal worker       │
+                                           └──────────────────────────────┘
+                                                         │ tracking.events
+                                                         │ tracking.revisions
+                                                         │ tracking.signals
+                                                         ▼
+                                            cognitive-companion (Python/FastAPI, port 8080)
+                                            BFF gateway · WebSocket live view
+                                            Vue 3 admin UI · MCP tools
+```
 
-These rules were extracted from bugs found during the M4 implementation review. Apply them to all future milestone work.
+**Infrastructure**: TimescaleDB + pgvector · Redis Streams (AOF) · MinIO · Triton Inference Server
+
+**GPU support**: NVIDIA (TensorRT execution provider) and Intel Arc (OpenVINO execution provider). Switch with `python triton-models/scripts/configure_gpu.py --vendor nvidia|intel`.
+
+---
+
+## Repository Layout
+
+```text
+.
+├── rtsp-ingress/                  Go RTSP ingest service
+│   ├── cmd/server/                Entry point
+│   ├── internal/config/           Config loading (service settings from YAML + env vars)
+│   ├── internal/go2rtc/           go2rtc HTTP API client
+│   ├── internal/motion/           Motion gating (pixel diff)
+│   ├── internal/media/            MinIO upload + Redis Streams publish
+│   ├── internal/metrics/          Prometheus metrics
+│   ├── internal/poll/             Camera config polling worker
+│   ├── internal/reconciler/       Camera state reconciliation
+│   ├── internal/streams/          Stream lifecycle management
+│   └── internal/supervisor/       Runtime supervisor
+├── tracking-orchestrator/         Python ML orchestration service
+│   ├── app/domain/                Frozen dataclasses (Detection, Tracklet, GlobalTrack, …)
+│   ├── app/inference/             Triton gRPC client + YOLO26L/ReID/Pose wrappers
+│   ├── app/tracking/              BoT-SORT, identity resolver, cross-camera association
+│   ├── app/trajectory/            Trajectory writer + dementia signal detectors
+│   ├── app/transport/             Redis Streams codec (protobuf), publishers
+│   ├── app/storage/               Repository protocols, InMemory impls, Postgres impls
+│   ├── app/routers/               Internal FastAPI endpoints
+│   ├── app/observability/         Prometheus metrics
+│   ├── app/calibration/           Homography calibration state
+│   ├── app/sampling/              Keyframe sampler
+│   ├── app/pipeline/              Frame processing pipeline wiring
+│   ├── app/proto/                 Generated protobuf Python bindings (committed)
+│   └── migrations/                SQL migrations (0001–0005)
+├── proto/                         Protobuf contracts (frame, tracking, signals, scene)
+├── triton-models/                 Triton model configs + export scripts
+├── cognitive-companion/           BFF gateway (sibling repo — see its own CLAUDE.md)
+├── k8s/                           Kubernetes manifests
+└── docs/                          Runbook, wire-format spec
+```
+
+---
+
+## Code Architecture Patterns
+
+### Layering (strictly enforced by import-linter)
+
+```text
+core → domain → storage → services → transport → routers
+```
+
+Nothing above `storage` may import a concrete `Postgres*` class. Services depend only on `Protocol` interfaces. Import-linter runs at CI and in pre-commit hooks.
+
+### Storage: Protocol + InMemory + Postgres triplet
+
+Every persistent resource in `tracking-orchestrator` has three artifacts:
+
+1. **`Protocol`** in `storage/base.py` — the contract services depend on
+2. **`InMemory*`** in the same file — zero-dependency, used in all unit tests
+3. **`Postgres*`** in `storage/postgres/` — production asyncpg implementation
+
+```python
+# storage/base.py
+class TrackletRepository(Protocol):
+    async def save_tracklet(self, tracklet: Tracklet) -> None: ...
+    async def get_tracklet(self, tracklet_id: str) -> Tracklet | None: ...
+```
+
+Rules:
+
+- All repository methods are `async`.
+- Return domain types, never raw DB rows.
+- `Protocol` carries no state.
+- `InMemory` uses plain `dict`/`list`; never touches a DB.
+- `Postgres*` receives only an `asyncpg.Pool`; holds no other state.
+
+### Domain objects: frozen dataclasses
+
+Internal domain objects are `@dataclass(frozen=True)`. They carry no validation logic — validation happens at service boundaries via Pydantic v2. Never mutate a frozen dataclass; use a side-channel dict keyed by `id(obj)` for transport metadata (e.g., Redis message IDs).
+
+### Go: interface contracts
+
+Each subsystem in `rtsp-ingress/internal/` exports an interface as its public API. Tests inject a fake; production wires the real implementation. Define interfaces in the **consumer** package, not the provider.
+
+### RTSP ingest: go2rtc sidecar
+
+`rtsp-ingress` does **not** manage RTSP sessions directly. go2rtc owns all RTSP sessions. The flow per camera:
+
+1. `reconciler` fetches the enabled camera list from `GET /api/v1/cts/cameras` on cognitive-companion (polled every 60 s)
+2. `Supervisor.Reconcile()` calls `go2rtc.RegisterStream(ctx, cameraID, rtspURL)` — idempotent HTTP PUT to go2rtc `/api/streams`; heals go2rtc restarts
+3. `poll.Worker` ticks every `frame_interval_ms` ms and calls `go2rtc.FetchJPEG(ctx, cameraID)` — HTTP GET `/api/frame.jpeg`
+4. Frame passes motion gate, uploads to MinIO, publishes to `frames.ready`
+
+`rtsp-ingress/config/go2rtc.yaml` has **no `streams:` section** — all registrations are dynamic. Do not add `gortsplib` or `pion/rtp` to this codebase.
+
+### Identity resolution: Bayesian posterior
+
+The identity resolver maintains a posterior probability distribution over `{known_identities ∪ UNKNOWN}` for each tracklet. Evidence sources:
+
+- **Face anchors** (ArcFace similarity → likelihood update)
+- **ReID gallery** (SOLIDER-REID embedding → pgvector HNSW nearest-neighbour search)
+- **Temporal prior** (continuity from prior frame's assignment)
+
+A commit fires only when `prob ≥ threshold AND margin ≥ min_margin AND sensory_evidence_present`. The temporal prior alone cannot trigger a commit — face or ReID evidence must be present. Parameter: `commit_prob = 0.65`.
+
+Retroactive revision: when a committed identity is later overturned, an `IdentityRevision` is published to `tracking.revisions`, the `PersonLocationHistory` row in cognitive-companion is soft-deleted (`superseded_by_revision_id` stamped), and a replacement row is inserted.
+
+---
+
+## Approved Libraries
+
+### Python (`tracking-orchestrator/pyproject.toml`)
+
+| Library | Role |
+| --- | --- |
+| `fastapi` | HTTP router and dependency injection |
+| `pydantic v2` | Validation at all external boundaries (HTTP, config, Redis payloads) |
+| `asyncpg` | Async Postgres driver — `$1..$N` positional params always |
+| `redis[hiredis]` | Async Redis Streams client — consumer groups + XACK |
+| `aiobotocore` | Async S3-compatible client for MinIO |
+| `structlog` | Structured JSON logging — never `logging.getLogger` or `print` |
+| `numpy` | Frame data and embedding arithmetic |
+| `opencv-python-headless` | Image preprocessing — `cv2.resize(INTER_LINEAR)` for all letterbox/crop resizing |
+| `scipy` | Hungarian assignment (`linear_sum_assignment`) for tracking |
+| `protobuf` | Message contracts; generated bindings committed in `app/proto/` |
+| `prometheus-client` | Metrics exposition at `GET /metrics` |
+| `pytest` + `pytest-asyncio` | Test runner; all repo tests are `async def` |
+| `mypy` (strict) | Type checking on `domain/`, `storage/`, `services/`, `transport/` |
+| `ruff` | Lint + format |
+| `import-linter` | Layering enforcement |
+
+Do not introduce `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a **dev-only** dependency.
+
+### Go (`rtsp-ingress/go.mod`)
+
+| Library | Role |
+| --- | --- |
+| `minio/minio-go/v7` | S3-compatible object storage client |
+| `redis/go-redis/v9` | Redis Streams producer |
+| `prometheus/client_golang` | Metrics exposition |
+| `go.uber.org/zap` | Structured logging — `zap.L()` for global logger |
+| `google.golang.org/protobuf` | Protobuf runtime |
+| `golang.org/x/image` | Image format decoding in media processing |
+| `gopkg.in/yaml.v3` | Config file parsing |
+
+Do not add `bluenviron/gortsplib` or `pion/rtp` — RTSP is delegated to go2rtc.
+
+---
+
+## Redis Stream Wire Format
+
+All streams carry raw protobuf bytes — no JSON, no base64. Use `transport/codec.py`:
+
+```python
+from app.transport.codec import encode, decode
+
+# publish
+await redis.xadd("tracking.events", encode(event_msg, field="event"))
+
+# consume
+event = decode(fields, TrackingEvent, field="event")
+```
+
+| Stream | Field | Message type |
+| --- | --- | --- |
+| `frames.ready` | `"frame"` | `FrameReady` |
+| `tracking.events` | `"event"` | `TrackingEvent` |
+| `tracking.revisions` | `"revision"` | `IdentityRevision` |
+| `tracking.signals` | `"signal"` | `DementiaSignal` |
+| `scene.samples` | `"sample"` | `SceneSample` |
+
+Redis clients must set `decode_responses=False` so binary payloads round-trip unchanged.
+
+---
+
+## Database Schema
+
+Migrations in `tracking-orchestrator/migrations/`:
+
+| File | Contents |
+| --- | --- |
+| `0001_init.sql` | `tracklets`, `detections` (hypertable), `global_tracks`, `identity_revisions`, `gallery_entries` (pgvector HNSW), `tracking_events` |
+| `0002_m6_trajectory_keyframes.sql` | `person_trajectories` (hypertable), `room_dwells`, `tagged_keyframes` |
+| `0003_m8_signals.sql` | `dementia_signals` hypertable + continuous aggregate `dementia_signals_daily` |
+| `0004_nullable_embedding.sql` | Embedding column nullable |
+| `0005_fix_signal_identity_id_type.sql` | Type correction on `dementia_signals.identity_id` |
+
+---
+
+## Coding Rules
+
+These rules come from bugs caught during implementation and are non-negotiable.
 
 ### Python / asyncpg
 
-1. **Use `$N` placeholders in all asyncpg SQL.** asyncpg uses `$1, $2, ...` positional parameters. Never use `%s` (psycopg2 syntax) or `?` (sqlite3). `executemany` also requires `$N` style — one row's worth of placeholders per statement.
+**`$N` placeholders always.** asyncpg uses `$1, $2, …` positional params. Never use `%s` or `?`. `executemany` also requires `$N` style — one row's worth of placeholders per statement.
 
-2. **`datetime.now(UTC)` everywhere.** Never call `datetime.now()` without a timezone argument. Bare `datetime.now()` produces a timezone-naive object that conflicts with TimescaleDB's timestamptz columns and the domain model's aware datetimes. Always `from datetime import UTC` and use `datetime.now(UTC)`.
+**`datetime.now(UTC)` always.** `from datetime import UTC`. Bare `datetime.now()` produces timezone-naive objects that break TimescaleDB `timestamptz` columns.
 
-3. **Declare all instance attributes in `__init__`.** Every attribute a class owns must be declared in `__init__` with its correct `Optional[T] | None` type, even if its real value is set later (e.g., in an `initialize()` method). Attributes first assigned outside `__init__` cause `AttributeError` on any access before that method runs, and mypy cannot track them.
+**Declare all attributes in `__init__`.** Every attribute must be present in `__init__` with its correct `Optional[T] | None` type, even if set later. Attributes first assigned outside `__init__` cause `AttributeError` and mypy cannot track them.
 
-4. **Never mutate frozen dataclasses.** `@dataclass(frozen=True)` raises `FrozenInstanceError` at runtime on any `instance.attr = value` assignment — even if mypy is silenced with `# type: ignore`. For transport-layer metadata that must travel alongside a frozen message (e.g., Redis message IDs), maintain a side-channel `dict[int, T]` keyed by `id(obj)` on the owning transport object. Clean up entries after use.
+**Never mutate frozen dataclasses.** `@dataclass(frozen=True)` raises `FrozenInstanceError` on `instance.attr = value`. For transport metadata (e.g., Redis message IDs) alongside frozen domain objects, maintain a side-channel `dict[int, T]` keyed by `id(obj)`.
+
+**Stable signal IDs.** Dementia signals use `uuid.uuid5(NAMESPACE_URL, "{identity_id}\x00{signal_kind}\x00{window_start}\x00{window_end}")` so the same detection window always maps to the same UUID. This makes the `ON CONFLICT` upsert idempotent on retry.
 
 ### SQL correctness
 
-1. **PostgreSQL array concatenation uses `||` directly.** In `ON CONFLICT DO UPDATE SET`, to merge two existing array columns write `col = EXCLUDED.col || table.col`. The `array[...]` constructor syntax is for array literals only; `array[EXCLUDED.col || table.col]` is a syntax error.
+**PostgreSQL array concatenation is `||`.** In `ON CONFLICT DO UPDATE SET`, write `col = EXCLUDED.col || table.col`. The `array[...]` constructor is for array literals only — wrapping a `||` expression in it is a syntax error.
 
-2. **Conditional SQL injection: replace a unique anchor, not a suffix keyword.** When adding a `WHERE ... AND extra_clause` branch at runtime via `str.replace`, replace a unique substring that includes the insertion point (e.g., `"WHERE global_track_id = $1"` → `"WHERE global_track_id = $1\n    AND extra_clause"`). Never replace a trailing keyword like `"LIMIT 100"` and prepend `AND ...` — this inserts a predicate after `ORDER BY`, producing invalid SQL.
+**Anchor conditional SQL replacements.** When adding `AND extra_clause` to a query via `str.replace`, replace a unique substring that includes the insertion point. Never replace a trailing keyword like `LIMIT 100` and prepend `AND …` — that produces invalid SQL (predicate after `ORDER BY`).
 
-### Tracking / data-structure correctness
+**Match bind parameter count exactly.** Count `$1..$N` placeholders and verify the argument tuple has the same arity. Off-by-one raises `ValueError: bind parameter $N not found` at runtime.
 
-1. **Build `active_tracks` from `.items()`, not `enumerate(.values())`.** When you need to map a position index back to a dict key (e.g., after Hungarian assignment), you must capture the key at construction time. `enumerate(dict.values())` gives positions 0..N that diverge from key names after any deletion. Use `[(key, value) for key, value in dict.items() if ...]` and return keys from assignment functions, not positions.
+### Tracking / data structures
 
-2. **Use explicit reverse maps for cross-namespace ID lookups.** When two modules use different ID namespaces for the same logical entity (e.g., `local_track_id` strings from the tracker vs. UUID `tracklet_id`s in the tracklet manager), maintain an explicit `dict[local_id, uuid_id]` reverse map on the owning object. Document which namespace each dict is keyed by.
+**Use `.items()` when you need both key and value.** Build `active_tracks` with `[(key, val) for key, val in d.items() if …]` and return keys from assignment functions. `enumerate(dict.values())` gives positions that diverge from key names after any deletion.
 
-3. **Increment shared counters exactly once per code path.** A pattern like:
+**Explicit reverse maps for cross-namespace lookups.** When two modules use different ID namespaces for the same entity (e.g., `local_track_id` strings vs. UUID `tracklet_id`s), maintain an explicit `dict[local_id, uuid_id]` reverse map on the owning object.
 
-   ```python
-   state.count += 1          # unconditional increment
-   if state.count >= threshold:
-       ...
-   else:
-       state.count += 1      # BUG: second increment in the else branch
-   ```
+**One increment per code path.** An unconditional increment followed by a conditional second increment silently doubles the count on the non-threshold branch.
 
-   silently doubles the increment on the non-threshold path. Use a single increment before the branch.
+**Prefer method parameters over placeholder fields.** If a helper receives `embedding` as a parameter and the detection also has a placeholder `detection.embedding`, use the parameter — it carries the live Triton value.
 
-4. **Prefer method parameters over object fields when they carry the same semantic.** If a helper method receives `embedding` as a parameter and also has access to `detection.embedding` (a domain placeholder field), use the parameter — it carries the live value from Triton. Domain fields like `Detection.embedding` are zero-initialized placeholders until M5 identity resolution fills them in.
+**Sort trajectory windows ascending.** Dementia signal detectors need time-ordered points to compute distances and direction changes correctly.
 
-## Engineering Standards (from phase-0, section 0.18)
+### Go
 
-- **Python**: 3.12, `from __future__ import annotations`, strict mypy on domain/services/storage/transport, Pydantic v2 at boundaries, frozen dataclasses internally.
-- **Go**: 1.24+, `-race` mandatory, `go vet`, `staticcheck`, `golangci-lint`.
-- **Proto**: `buf lint`, `buf breaking` against last merged commit.
-- **Layering**: core -> domain -> storage -> services -> transport -> routers (upward dependencies forbidden). Enforced by `import-linter`.
-- **Error taxonomy**: Standardized `ErrorCode` enum, no stack traces over the wire.
-- **CI gates**: ruff, mypy, import-linter, pytest (unit + testcontainers), go test -race, buf lint, docker build, helm template, replay suite, Playwright E2E.
-- **Image preprocessing**: Use `opencv-python-headless` (`cv2.resize` with `INTER_LINEAR`) for all letterbox and crop resizing in inference modules. Do not re-implement bilinear resize in NumPy.
+**go2rtc owns all RTSP sessions.** Use `go2rtc.Client` — `RegisterStream`, `DeregisterStream`, `FetchJPEG`. Never open raw RTSP connections in Go.
 
-## Quality Gate (Automated Checks)
+**Wrap every error with context.** `fmt.Errorf("streams: register %q: %w", cfg.ID, err)`.
 
-All Python code must pass the full quality gate before committing. Run locally before every PR:
+**Check every error.** `go vet` and `golangci-lint` flag unchecked returns — treat them as compile errors.
+
+**`context.Context` first.** Every function that does I/O takes `ctx context.Context` as its first parameter and respects cancellation via `ctx.Err()`.
+
+---
+
+## Engineering Standards
+
+| Area | Standard |
+| --- | --- |
+| Python version | 3.12; `from __future__ import annotations` in every file |
+| Type checking | `mypy --strict` on `domain/`, `storage/`, `services/`, `transport/` |
+| Go version | 1.24+ (toolchain pinned in `.tool-versions`; install with `make go-install`) |
+| Go safety | `-race` mandatory in all test runs; `go vet`; `golangci-lint` |
+| Protobuf | `buf lint`; `buf breaking` against last merged commit; generated bindings committed |
+| Logging | `structlog` in Python (`get_logger(__name__)`); `zap.L()` in Go. Include `camera_id`, `tracklet_id`, `global_track_id` in every relevant log line. |
+| Timestamps | Always timezone-aware. Python: `datetime.now(UTC)`. Go: `time.Now().UTC()`. |
+| Image resize | `opencv-python-headless` `cv2.resize(INTER_LINEAR)`. Never hand-roll bilinear in NumPy. |
+| Secrets | In environment variables or `.env` files (never committed). YAML holds defaults; env overrides. |
+| SQL injection | asyncpg `$N` params only. Never build SQL with f-strings or `%`. |
+| Error taxonomy | Domain errors use the project's `ErrorCode` enum. No stack traces in API responses — log locally, return only code + message. |
+| Metrics | Prometheus via `prometheus-client` (Python) and `prometheus/client_golang` (Go). Register in the respective `metrics.py` / `metrics.go` files. |
+
+---
+
+## Testing Strategy
+
+### Python
+
+- Unit tests inject `InMemory*` implementations directly — never mock `asyncpg.Pool` or Redis.
+- All tests touching a repository are `async def` (configured with `asyncio_mode = "auto"`).
+- Triton calls are mocked via `TritonClientProtocol` — all inference tests run without a GPU.
+- Use `pytest.fixture` for shared domain objects; do not construct the same frozen dataclass inline in multiple tests.
+- Test only through the public API of the class under test — never assert on private `_attributes`.
+- Integration tests (real Postgres + Redis) are in `tests/integration/` and skipped by default.
+
+### Go (rtsp-ingress tests)
+
+- Table-driven tests (`t.Run`) for functions with multiple input/output cases.
+- Inject interfaces in constructors — tests replace the real implementation.
+- Always run with `-race`: `go test -race ./...`. Hard CI gate.
+- HTTP handler tests use `httptest.NewRecorder()`.
+- go2rtc calls are tested with `httptest.Server` serving mock responses.
+
+---
+
+## Quality Gate
+
+Run before every PR. CI runs the same checks.
 
 ```bash
-make check        # Python: ruff check + ruff format + mypy + pytest
-make all-check    # Python + Go + proto (full repo gate)
+make check        # Python: ruff check + ruff format --check + mypy + import-linter + pytest
+make all-check    # Python + Go (golangci-lint + go test -race + go build) + buf lint
 ```
 
-Pre-commit hooks mirror the CI checks (ruff, mypy, golangci-lint, buf). Install with:
+Install pre-commit hooks (ruff, mypy, golangci-lint, buf):
 
 ```bash
 pre-commit install
 ```
 
-**Rule: never write code that fails the quality gate.** Every new feature, fix, or test must be verified with `make check` (Python-only) or `make all-check` (full repo) before committing. The CI pipeline runs the same checks — local runs are the fast feedback loop.
-
-**Always use the Python venv inside the project folder** (`tracking-orchestrator/.venv/`). Never rely on global system Python for running code, tests, linting, or type-checking. The Makefile targets (`make check`, `make lint`, `make test`, `make mypy`) and CI all use the project-local venv.
-
-For the tracking-orchestrator specifically:
-
-- All repository methods are async — tests must be `async def` with `await`
-- Domain types are frozen dataclasses; Pydantic models only at boundaries
-
-## Current Progress
-
-**M1 (Protobuf contracts, repository interfaces, docker-compose, CI) — COMPLETE.**
-Implemented files:
-
-- `proto/continuoustracking/v1/{tracking,frame}.proto` — message contracts
-- `proto/buf.yaml` — buf build config
-- `tracking-orchestrator/app/domain/__init__.py` — frozen dataclasses (Detection, Tracklet, GlobalTrack, IdentityRevision, GalleryEntry, CameraConfig, StreamConfig, PersonActivity)
-- `tracking-orchestrator/app/storage/base.py` — 5 repository protocols + 5 InMemory implementations
-- `tracking-orchestrator/migrations/0001_init.sql` — full schema with TimescaleDB hypertables + pgvector HNSW
-- `tracking-orchestrator/app/main.py` — FastAPI app factory
-- `tracking-orchestrator/pyproject.toml` — dependencies + tool config
-- `tracking-orchestrator/tests/test_in_memory_repos.py` — repo tests
-- `rtsp-ingress/cmd/server/main.go` — health endpoint (M3+ stubs)
-- `rtsp-ingress/internal/{rtsp,motion,media,streams,reconciler}/` — stub packages
-- `docker-compose.yml` — TimescaleDB, Redis, MinIO, Triton, orchestrator, ingress
-- `.github/workflows/ci.yml` — Python/Go/proto CI
-- `.pre-commit-config.yaml` — ruff, mypy, golangci-lint, buf
-- `Makefile` — lint, format, test, docker, proto commands
-- `cognitive-companion/config/settings.yaml` — `cts.enabled: false` feature flag
-
-**M2 — Implemented.** `rtsp-ingress/` Go service with full source code and 26 unit tests across 7 packages (config, motion, media, reconciler, rtsp, streams, cmd/server). All tests pass. See `rtsp-ingress/` for implementation details.
-
-**Post-M2 enhancements (camera config):**
-
-- `CameraConfig` now has yaml struct tags so cameras can be defined directly in `settings.yaml`.
-- New fields: `host`, `port`, `username`, `password`, `stream_path`. When `rtsp_url` is omitted the URL is built automatically from these fields (`net/url` encodes credentials per RFC 3986).
-- `.env` file support: before parsing YAML, the service loads `<config-dir>/.env` (or `RTSP_DOTENV_PATH`) so passwords can live outside version control.
-- `${VAR}` placeholder expansion in YAML content: any value can reference an environment variable; unresolved references fail loudly at startup.
-- Reconciler updated: the Cognitive Companion API `config_json` can now supply `host`, `port`, `username`, `password`, `stream_path`; `BuildRTSPURL()` is called after field mapping.
-- `README.md` created at repo root with architecture overview, getting-started guide, and camera config reference.
-
-**M3 — Implemented.** Triton model repository + inference client module. Implemented files:
-
-- `triton-models/person-detector/config.pbtxt` — YOLO26L TensorRT config (input: `images` [3,640,640], output: `output0` [300,6] NMS-free, dynamic batching, `max_batch_size: 16`)
-- `triton-models/reid-solider/config.pbtxt` — SOLIDER-REID ONNX config (input: `input` [3,256,128], output: `output` [768])
-- `triton-models/pose-rtmpose/config.pbtxt` — RTMPose-m ONNX config (input: `input` [3,256,192], outputs: `simcc_x` [17,384], `simcc_y` [17,512])
-- `triton-models/{person-detector,reid-solider,pose-rtmpose}/1/.gitkeep` — placeholders for model binaries (generated with export scripts)
-- `triton-models/scripts/{export_yolo,export_reid,export_pose}.py` — model export scripts
-- `triton-models/README.md` — materialisation and verification instructions
-- `tracking-orchestrator/app/inference/{__init__,schemas,triton_client,detector,reid_embedder,pose}.py` — async Triton gRPC client + typed wrappers; `TritonClientProtocol` allows mock injection in tests
-- `tracking-orchestrator/scripts/benchmark_triton.py` — p50/p99 sweep at batch [1,4,8,16] with DoD gate check (person-detector p99 ≤ 12ms at batch 8)
-- `tracking-orchestrator/notebooks/model_demo.ipynb` — end-to-end demo (JPEG → DetectionBox / Embedding / PoseResult) per model
-- `tracking-orchestrator/tests/test_inference.py` — 27 unit tests (mocked Triton, no GPU required); all pass under `make check`
-
-**Post-M3 model migration:** Detector migrated from YOLO11m to YOLO26L. Key changes: (1) Triton output tensor updated to `[300, 6]` (NMS-free end-to-end format: x1,y1,x2,y2,conf,class_id in letterbox pixel space). (2) `_decode_output` rewritten — no post-processing NMS required. (3) `_nms` helper removed. (4) `PersonDetector.__init__` drops `iou_threshold` parameter (no longer applicable). (5) Tests updated: `_make_yolo_output` generates `[batch,300,6]` tensors; NMS unit tests removed; two new class-filter tests added.
-
-**Outstanding DoD gate**: `tritonserver` loading all three models (`curl :8000/v2/models/ready`) and benchmark p99 ≤ 12ms at batch 8 require materialised `.plan`/`.onnx` files (run export scripts on the target GPU). The code scaffolding is complete and verified.
-
-**M4 — Implemented.** Tracking orchestrator skeleton with per-camera tracking and tracklet lifecycle management. Implemented files:
-
-- `tracking-orchestrator/app/tracking/{__init__,tracker,tracklet_manager}.py` — BoT-SORT-like tracker (Kalman filter + IoU + embedding Hungarian assignment), tracklet-to-track bridging, ID lifecycle management
-- `tracking-orchestrator/app/pipeline/{__init__,frame_pipeline}.py` — `FrameProcessingPipeline` wiring transport → inference → tracking → tracklet management → persistence
-- `tracking-orchestrator/app/transport/redis_streams.py` — Redis Streams transport with consumer groups, XACK for at-least-once delivery
-- `tracking-orchestrator/app/storage/postgres/{__init__,tracking_repo,gallery_repo}.py` — Postgres/pgvector repository implementations
-- `tracking-orchestrator/app/main.py` — FastAPI app factory with asyncpg lifespan (Triton + Postgres + Redis)
-- `tracking-orchestrator/tests/test_tracker.py` — 36 unit tests (mocked Triton, no GPU required)
-- `tracking-orchestrator/tests/test_tracklet_manager.py` — 20 unit tests (tracklet lifecycle, gallery management)
-- `tracking-orchestrator/tests/test_pipeline.py` — 10 unit tests (pipeline wiring, event propagation)
-- `tracking-orchestrator/tests/test_transport.py` — 14 unit tests (Redis Streams, gallery repo helpers)
-- `tracking-orchestrator/pyproject.toml` — added `scipy>=1.14.0` dependency
-
-**DoD verified**: `make check` passes cleanly — ruff check, ruff format, mypy (21 files, 0 errors), import-lint, pytest (90/90 tests across 6 files).
-
-**Post-review fixes applied** (all latent runtime/logic bugs, no regressions):
-
-- `tracker.py`: `_associate` redesigned to return track ID strings instead of position indices; dead-code double-loop removed; `_track_id()` helper eliminated.
-- `tracklet_manager.py`: added `_local_to_tracklet` reverse map to resolve the UUID/local-ID key mismatch; fixed double `lost_count` increment; `_append_gallery` now uses the passed Triton embedding, not the placeholder `detection.embedding`.
-- `redis_streams.py`: replaced `frame._message_id = ...` mutation (crashes on frozen dataclass) with a `_pending_acks: dict[int, Any]` side-channel keyed by `id(frame)`.
-- `tracking_repo.py`: `_SQL_SAVE_DETECTIONS` changed from `VALUES %s` to asyncpg `VALUES ($1...$11)`; `_SQL_SAVE_GLOBAL_TRACK` array concat fixed (`EXCLUDED.col || table.col`, not `array[...]`); `list_identity_revisions` SQL replacement anchored to `WHERE` clause (not `LIMIT`); `datetime.now()` → `datetime.now(UTC)`.
-- `frame_pipeline.py`: `PerCameraTrackers` imported at module level; `self._tracker: PerCameraTrackers | None = None` declared in `__init__`.
-
-**M5 — Implemented.** Identity resolution with Bayesian posterior and retroactive revision. Implemented files:
-
-- `tracking-orchestrator/app/tracking/identity_resolver.py` — Bayesian identity resolver: posterior over {identities, UNKNOWN}, evidence from face anchors + ReID gallery + temporal prior, commit rule with prob+margin+evidence-gate. Retroactive revision protocol with rate limiting.
-- `tracking-orchestrator/app/tracking/camera_adjacency.py` — Camera adjacency graph with time-bounded reachability for cross-camera association.
-- `tracking-orchestrator/app/tracking/cross_camera.py` — Cross-camera associator: merges tracklets from adjacent cameras into GlobalTracks.
-- `tracking-orchestrator/app/transport/revision_publisher.py` — Publishes IdentityRevision messages to Redis Streams.
-- `tracking-orchestrator/app/storage/postgres/tracking_repo.py` — Updated to persist all IdentityRevision fields (tracklet_ids, previous/new identity, reason, evidence).
-- `tracking-orchestrator/app/storage/postgres/gallery_repo.py` — pgvector HNSW search for ReID.
-- `tracking-orchestrator/app/pipeline/frame_pipeline.py` — Full pipeline integration: detection → tracking → tracklet management → cross-camera association → identity resolution → persistence → event emission.
-- `tracking-orchestrator/app/domain/__init__.py` — M5 domain types: IdentityRevision, PosteriorDist, ResolveOutcome, IdentityDecision, IdentityCandidate, FaceAnchor, GlobalTrack, Tracklet.
-- `tracking-orchestrator/app/storage/base.py` — Repository protocols + in-memory implementations (InMemoryTrackingRepository, InMemoryGalleryRepository, InMemoryGlobalTrackRepository).
-- `tracking-orchestrator/tests/test_identity_resolver.py` — 25 unit tests (PosteriorDist + IdentityResolver, all pass).
-- `tracking-orchestrator/tests/test_camera_adjacency.py` — 12 unit tests (all pass).
-- `tracking-orchestrator/tests/test_cross_camera.py` — 7 unit tests (all pass).
-- `tracking-orchestrator/tests/test_revision_publisher.py` — 6 unit tests (RevisionPublisher connect, publish, integration).
-- `tracking-orchestrator/tests/test_in_memory_repos.py` — 15 unit tests (all repo protocols).
-- `tracking-orchestrator/tests/test_pipeline.py` — 5 unit tests (skeleton mode with mocked deps).
-- `tracking-orchestrator/migrations/0001_init.sql` — Updated identity_revisions table with tracklet_ids, previous/new identity, reason, evidence columns.
-
-**M5 parameter tuning**: `commit_prob` lowered from 0.85 to 0.65 and evidence-gate added to `_commit()`. The temporal prior (weight=0.6) alone can push the posterior above 0.85 for a single identity (~0.81) or two identities (~0.71), causing false commits. The evidence-gate requires the top identity to appear in the face or ReID likelihood distribution before the commit rule applies. This ensures the prior maintains existing assignments but cannot create new ones without sensory evidence.
-
-**M5 bug fix**: Fixed `_from_face_anchors` bug where the remainder-smoothing loop overwrote the best person_id's likelihood with the per_id value. This caused face evidence to be diluted to uniform when multiple identities existed.
-
-**DoD verified**: `make check` passes cleanly — ruff check, ruff format, mypy (25 files, 0 errors), import-lint, pytest (139/139 tests across 15 files).
-
-**Post-M5 code review fixes** (all 10 issues from `phase-M1-M5-code-review.md` — all FIXED):
-
-- `tracklet_manager.py` (#1 Critical): `_find_embedding_index` replaced placeholder `return 0` with linear search over `detections` by detection ID.
-- `tracking_repo.py` (#2 Medium): `save_tracking_event` serializes `capture_time` into `frame_data` JSONB; `get_tracking_event` parses it back.
-- `tracking_repo.py` (#3 Medium): `_SQL_LIST_IDENTITY_REVISIONS` SELECT includes `evidence`; row loop parses it.
-- `tracker.py` (#4 Medium): Mixed embedding history bias fixed — no-history tracks use `np.full(768, 0.5, dtype=np.float32)`.
-- `tracker.py` (#5 Low): `_embedding_distance` normalized to `[0, 1]` (`return (1.0 - cosine_sim) / 2.0`).
-- `tracker.py` (#6 Low): Embedding arrays use `dtype=np.float32`.
-- `redis_streams.py` (#7 Medium): `_pending_acks` stores `(message_id, time.monotonic())`; `_cleanup_stale_acks()` evicts entries older than 300s.
-- `tracklet_manager.py` (#8 Low): `_compute_quality` accepts `*, max_area: int = 1920 * 1080` parameter.
-- `gallery_repo.py` (#9 Medium): `search_similar` supports `camera_id` and `max_age_seconds` filters in both in-memory and Postgres impls.
-- `camera_adjacency.py` (#10 Low): `within_s` is correctly wired in both call sites in `cross_camera.py`.
-
-**DoD verified (post-review)**: pytest (163/163 tests pass), ruff + mypy clean.
-
-**M6 — Implemented.** Trajectories, room dwells, and keyframe sampling. Implemented files:
-
-- `tracking-orchestrator/migrations/0002_m6_trajectory_keyframes.sql` — `person_trajectories` (TimescaleDB hypertable), `room_dwells`, `tagged_keyframes` tables.
-- `tracking-orchestrator/app/domain/__init__.py` — Added M6 types: `PersonTrajectoryPoint`, `RoomDwell`, `TaggedKeyframe`, `PostureType`, `TagReason`.
-- `tracking-orchestrator/app/storage/base.py` — Added `TrajectoryRepository`, `KeyframeRepository` protocols and `InMemoryTrajectoryRepository`, `InMemoryKeyframeRepository` implementations.
-- `tracking-orchestrator/app/trajectory/trajectory_writer.py` — `TrajectoryWriter`: writes one `person_trajectories` row per committed identity decision; tracks current room per GlobalTrack; opens/closes `room_dwell` intervals on room transitions.
-- `tracking-orchestrator/app/sampling/keyframe_sampler.py` — `KeyframeSampler`: periodic sampling enforcing `keyframe_min_interval_s` per tracklet; `trigger_sample()` forces a sample on identity_changed/hazard/dwell_start without resetting the periodic timer.
-- `tracking-orchestrator/app/storage/postgres/trajectory_repo.py` — Postgres impl of `TrajectoryRepository`.
-- `tracking-orchestrator/app/storage/postgres/keyframe_repo.py` — Postgres impl of `KeyframeRepository`.
-- `tracking-orchestrator/app/transport/scene_publisher.py` — `SceneSamplesPublisher`: publishes `TaggedKeyframe` messages to the `scene.samples` Redis Stream (consumer group `scene-worker`).
-- `tracking-orchestrator/app/pipeline/frame_pipeline.py` — Updated to wire steps 7 (trajectory writer) and 8 (keyframe sampler) after identity resolution; `PipelineConfig` gains `sampler` and `camera_room_map`; `SceneSamplesPublisher` disconnected on stop.
-- `tracking-orchestrator/tests/test_trajectory_writer.py` — 10 unit tests (trajectory points, dwell lifecycle, room transitions, multi-track isolation).
-- `tracking-orchestrator/tests/test_keyframe_sampler.py` — 10 unit tests (interval enforcement, trigger override, timer independence, expiry duration, persistence).
-
-**DoD verified**: ruff check, ruff format, mypy (32 files, 0 errors), pytest (181/181 tests across 17 files).
-
-**Notes on M6 scope**: Floor-plane coordinates (`ground_x/y`) default to 0.0 — homography-based projection from pixel coords is M9. `posture` defaults to `"unknown"` — pose integration is M8.
-
-**M7 — Implemented.** Admin UI for cameras, calibration, privacy zones, and camera adjacency. All work lives in `cognitive-companion/` (the BFF gateway), not in `tracking-orchestrator/`. Implemented files:
-
-Backend (cognitive-companion):
-
-- `backend/core/upstream_errors.py` — `UpstreamError` exception with HTTP status forwarding
-- `backend/core/service_jwt.py` — EdDSA JWT generation for service-to-service auth (CTS upstream calls)
-- `backend/integrations/cts_ingress.py` — `IngressAdminClient`: RTSP test, snapshot proxy, health check, stream reload
-- `backend/integrations/cts_orchestrator.py` — `OrchestratorClient`: homography push/get, privacy zones push/get, adjacency push/get, calibration status
-- `backend/models/cts_camera.py` — `CtsCamera` SQLAlchemy model (id, name, rtsp_url, location, enabled, homography_json, privacy_zones_json, created_at, updated_at)
-- `backend/schemas/cts.py` — Pydantic schemas: `CtsCameraCreate`, `CtsCameraUpdate`, `CtsCameraOut`, `HomographyRequest`, `HomographyOut`, `PrivacyZoneRequest`, `PrivacyZoneOut`, `AdjacencyEdge`, `AdjacencyOut`
-- `backend/routers/cts.py` — Feature-flag status/features endpoints; `_cts_enabled()` guard returning 404 with `{"code": "cts.disabled"}` when `cts.enabled` is falsy
-- `backend/routers/cts_cameras.py` — Camera CRUD (9 endpoints): list, create, get, patch, delete, test-connect, snapshot, health, reload
-- `backend/routers/cts_calibration.py` — Calibration endpoints (6 endpoints): homography fit via `compute_homography()` (OpenCV RANSAC, min 4 points), privacy zones replace, adjacency replace
-- `backend/tests/routers/test_cts.py` — 8 tests (feature flag on/off, status, features)
-- `backend/tests/routers/test_cts_cameras.py` — 16 tests (CRUD, test-connect, snapshot, health, reload)
-- `backend/tests/routers/test_cts_calibration.py` — 5 tests (homography fit, privacy zones, adjacency)
-
-Frontend (cognitive-companion):
-
-- `frontend/src/services/cts.js` — CTS API client: cameras CRUD, snapshot (returns blob URL with lifecycle management), calibration, privacy zones, adjacency
-- `frontend/src/views/admin/CTSCamerasView.vue` — Camera roster table (enabled chip, calibrated icon, privacy zone count); Add/Edit/Delete dialogs; RTSP test dialog; snapshot preview dialog
-- `frontend/src/views/admin/CTSCalibrationView.vue` — Click-to-place homography calibration: snapshot with crosshair cursor, SVG point overlay, floor coordinate inputs, RANSAC fit, residual table, status chip
-- `frontend/src/views/admin/CTSPrivacyView.vue` — Per-camera privacy zone editor: zone cards with inline SVG polygon preview (normalized coords); Add/Edit/Delete dialog with vertex list editor
-- `frontend/src/views/admin/CTSAdjacencyView.vue` — Camera adjacency graph editor: from/to pairs with min/max transit window; inline validation; save pushes full graph to orchestrator
-- `frontend/src/router/index.js` — Added four CTS child routes under `/admin`: `cts/cameras`, `cts/calibration`, `cts/privacy`, `cts/adjacency`
-- `frontend/src/views/AdminView.vue` — Added "Tracking (CTS)" nav subheader with four list items
-
-Key implementation notes:
-
-- All CTS router handlers check `_cts_enabled()` first; returns 404 + `{"code": "cts.disabled"}` when off
-- `compute_homography()` in `cts_calibration.py` is a pure module-level function; raises `ValueError` for fewer than 4 point pairs
-- Snapshot endpoint proxies raw JPEG bytes from ingress; frontend creates a blob URL and revokes it on close
-- Router tests override `get_auth_context` (not `require_permission`); use `StaticPool` for in-memory SQLite; call `register_exception_handlers(app)` on every test app instance
-
-**DoD verified**: All 29 new router tests pass. `make check` passes cleanly.
-
-## Working Notes (post-M7)
-
-- **M1–M8 are implemented (committed).** M9 is complete — see status below. Remaining milestones build on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, `triton-models/`, and `cognitive-companion/`.
-- **Always reference phase-0 first.** It supersedes phases 1-5 where they conflict.
-- **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
-- **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.
-
-## M8 — Dementia signals, dashboard, and keyframes
-
-### tracking-orchestrator
-
-- `tracking-orchestrator/migrations/0003_m8_signals.sql` — `dementia_signals` TimescaleDB hypertable (identity_id, signal_kind, severity, value, baseline, z_score, window_start/end, context_json, emitted_at). Retention policy (365 days). Continuous aggregate `dementia_signals_daily` for baseline computation.
-- `tracking-orchestrator/app/domain/__init__.py` — Added M8 types: `DementiaSignal`, `DementiaSignalKind`, `DementiaSignalSeverity`.
-- `tracking-orchestrator/app/storage/base.py` — Added `DementiaSignalRepository` protocol and `InMemoryDementiaSignalRepository` implementation.
-- `tracking-orchestrator/app/storage/postgres/signal_repo.py` — `PostgresDementiaSignalRepository`: asyncpg impl with `$N` placeholders, upsert on conflict, filtered list query.
-- `tracking-orchestrator/app/trajectory/dementia_signals.py` — `DementiaSignalWorker` with 6 signal detectors: pacing, sundowning_index, bathroom_dwell_anomaly, nighttime_movement, stillness_anomaly, absence. `SignalConfig` for threshold tuning. All detectors sort trajectory windows ascending before comparing consecutive points.
-- `tracking-orchestrator/app/transport/signal_publisher.py` — `SignalPublisher`: publishes `DementiaSignal` messages to the `tracking.signals` Redis Stream.
-- `tracking-orchestrator/app/routers/dashboard.py` — 6 internal endpoints: `GET /internal/dashboard/signals`, `GET /internal/dashboard/trajectory`, `GET /internal/dashboard/dwell_summary`, `GET /internal/keyframes`, `GET /internal/keyframes/{sample_id}`, `POST /internal/keyframes/{sample_id}/retain`.
-- `tracking-orchestrator/app/main.py` — Dashboard router wired in.
-- `tracking-orchestrator/pyproject.toml` — Added `httpx>=0.27` (test dep), `B008` added to ruff ignore list (FastAPI Depends pattern).
-- `tracking-orchestrator/tests/test_dementia_signals.py` — 18 unit tests covering all 6 detectors with fixture trajectories/dwells.
-
-**DoD verified (tracking-orchestrator)**: ruff clean, mypy (40 files, 0 errors), import-lint, pytest (211/211 tests across 15 files).
-
-**Post-M8 verification fixes** (found during M1–M8 correctness review — all fixed):
-
-- `migrations/0003_m8_signals.sql`: Added `CREATE SCHEMA IF NOT EXISTS continuous_tracking;` before `CREATE TABLE` — schema must exist before schema-qualified table creation. Also fixed `uuid_generate_v4()` → `gen_random_uuid()` (consistent with 0001/0002; avoids requiring uuid-ossp extension).
-- `app/transport/signal_publisher.py`: Fixed mypy return-type errors — `xadd` returns `Any`; explicit `str()` casts added; `publish_batch` return changed from `# type: ignore` to `[str(mid) for mid in message_ids]`; `_serialize` annotated as `dict[str, object]`.
-- `app/routers/calibration.py`: Fixed RUF001 ambiguous Unicode `×` in Field description and validator message; deprecated `HTTP_422_UNPROCESSABLE_ENTITY` → `HTTP_422_UNPROCESSABLE_CONTENT` (Starlette deprecation becomes a test failure with `filterwarnings = ["error::DeprecationWarning"]`); added missing `Any` import.
-- `app/calibration/state.py`: Fixed RUF003 ambiguous `×` in comment; C416 unnecessary dict comprehension removed.
-- `tests/test_calibration_router.py`: Replaced `create_app()` fixture (triggered full FastAPI lifespan → Redis connection attempt → `ConnectionRefusedError`) with a minimal `FastAPI()` app wrapping only the calibration router; added `monkeypatch` to inject a fresh `CalibrationState` per test for isolation.
-- `app/storage/postgres/gallery_repo.py`: **Critical runtime bug** — `search_similar()` passed 6 arguments to `_SQL_SEARCH_SIMILAR` which has 7 placeholders (`$5` = IS NULL guard, `$6` = interval seconds, `$7` = LIMIT). asyncpg would raise `ValueError: bind parameter $7 not found` at runtime. Fixed by passing `max_age_seconds` twice and `limit` as `$7`.
-- `app/trajectory/dementia_signals.py` + `app/storage/postgres/signal_repo.py`: **Idempotency design flaw** — `signal_id=str(uuid.uuid4())` generated a fresh UUID every emission, so `ON CONFLICT (signal_id, emitted_at)` could never trigger (upsert was always a plain INSERT). Fixed by adding `_stable_signal_id()` helper using `uuid.uuid5(NAMESPACE_URL, "{identity_id}\x00{signal_kind}\x00{window_start}\x00{window_end}")` — the same window always hashes to the same UUID — and setting `emitted_at=window_end` explicitly at all 6 construction sites so both conflict-key columns are deterministic on retry.
-
-### cognitive-companion (BFF gateway)
-
-- `backend/models/cts_signal.py` — `DementiaSignal` SQLAlchemy ORM model.
-- `backend/services/cts/signal_store.py` — `SignalStore`: async persistence and read API. Bug fixed: `with self._db_factory() as db:` → `db = self._db_factory(); try/finally db.close()`. Bug fixed: `func.case()` → standalone `case()` (SQLAlchemy 2.x).
-- `backend/services/cts/subscriber.py` — `DementiaSignalSubscriber`: Redis Streams consumer for `tracking.signals`.
-- `backend/services/cts/stream_consumer.py` — `StreamConsumer` base class.
-- `backend/filters/builtin/dementia_signal.py` — `DementiaSignalFilter`: rule-engine context filter.
-- `backend/routers/cts_signals.py` — 5 endpoints. Bug fixed: `get_db` → `get_session` in `_get_signal_store`.
-- `backend/routers/cts_keyframes.py` — 3 endpoints. Bug fixed: catches `UpstreamError` not just `HTTPException`.
-- `backend/routers/cts_dashboard.py` — 3 proxy endpoints: `GET /cts/dashboard/signals`, `GET /cts/dashboard/trajectory`, `GET /cts/dashboard/dwell_summary`.
-- `backend/integrations/tracking_orchestrator_client.py` — Added `list_keyframes`, `get_keyframe`, `retain_keyframe`, `get_dashboard_signals`, `get_dashboard_trajectory`, `get_dashboard_dwell_summary`.
-- `backend/main.py` — `DementiaSignalSubscriber` wired into CTS startup/shutdown. `cts_dashboard` router included.
-- `backend/tests/services/test_signal_store.py` — 20 unit tests.
-- `backend/tests/services/test_dementia_signal_subscriber.py` — 10 unit tests.
-- `backend/tests/filters/test_dementia_signal_filter.py` — 20 unit tests.
-- `backend/tests/routers/test_cts_signals.py` — 14 router tests.
-- `backend/tests/routers/test_cts_keyframes.py` — 11 router tests.
-- `frontend/src/views/admin/CTSDashboardView.vue` — Per-person signal timeline, floor-plan trajectory SVG overlay, room dwell bar chart. Wired to `/cts/dashboard/*` proxy endpoints.
-- `frontend/src/services/cts.js` — Added `getDashboardSignals`, `getDashboardTrajectory`, `getDashboardDwellSummary`.
-- `backend/pyproject.toml` — Added `redis[hiredis]>=5.0`.
-
-**DoD verified (cognitive-companion)**: ruff clean, pytest (852/852 tests).
-
-## M9 — Live view, identity corrections, runtime integration
-
-### tracking-orchestrator (internal endpoints)
-
-- `tracking-orchestrator/app/routers/live.py` — Internal endpoints: `GET /internal/global_tracks`, `GET /internal/global_tracks/{id}`, `GET /internal/health`, `GET /internal/features`.
-- `tracking-orchestrator/app/routers/corrections.py` — `POST /internal/corrections`: applies manual identity override, synthesizes `IdentityRevision`, publishes to `tracking.revisions` Redis Stream.
-- `tracking-orchestrator/tests/test_live_router.py` — Orchestrator live router tests (global_tracks, health, features, 404).
-
-### cognitive-companion backend (runtime, subscribers, routers)
-
-- `backend/services/cts/runtime.py` — `CTSRuntime` + `CTSRuntimeConfig`: lifecycle manager owning all three subscribers (`TrackingEventSubscriber`, `IdentityRevisionSubscriber`, `DementiaSignalSubscriber`); `start()`, `stop()`, `status()`. Wired into `main.py`.
-- `backend/services/cts/tracking_event_subscriber.py` — Consumes `tracking.events` Redis Stream; decodes JSON payloads; delegates to `LocationWriter`.
-- `backend/services/cts/identity_revision_subscriber.py` — Consumes `tracking.revisions` Redis Stream; validates required fields; delegates to `IdentityRewriter`.
-- `backend/services/cts/location_writer.py` — Writes `PersonLocationState` and `PersonLocationHistory` rows; handles identity_id from detection events.
-- `backend/services/cts/identity_rewriter.py` — Applies `IdentityRevision` messages: stamps `superseded_by_revision_id` on old `PersonLocationHistory` row, inserts new row with revised identity, updates `PersonLocationState`; idempotent via revision_id check.
-- `backend/services/cts/source_authority.py` — Source authority service for CTS identity data.
-- `backend/steps/builtin/tracking_query.py` — Pipeline step `tracking_query`: reads `PersonLocationState` / `PersonLocationHistory` and recent dementia signals; emits `tracking_available`, `tracking_person_id`, `tracking_room_name`, `tracking_dwell_minutes`, `tracking_recent_signals`, `tracking_satisfied`.
-- `backend/routers/cts_live.py` — WebSocket endpoint at `/ws/cts`: authenticates via `X-API-Key`; requires `cts.enabled=True`; relays `cts_live_frame` (tracking events) and `cts_identity_revision` (identity rewrites).
-- `backend/routers/cts_identity.py` — Identity corrections API (4 endpoints): `GET /global_tracks` (active global tracks), `POST /corrections` (manual override, proxied to orchestrator), `POST /merges` (merge two identities), `GET /revisions` (audit log from `PersonLocationHistory`).
-- `backend/integrations/tracking_orchestrator_client.py` — Added `post_manual_correction`, `manual_identity_override`, `get_global_tracks`, `get_global_track`, `get_health`, `get_feature_flags`.
-- `backend/mcp/server.py` — Three MCP tools: `get_tracking_status()` (runtime summary), `get_person_location(person_id)` (current room, dwell time, confidence), `get_recent_dementia_signals(...)` (filtered signals).
-- `backend/core/database.py` — M9 column migrations: `superseded_by_revision_id` and `global_track_id` on `person_location_history`.
-- `backend/models/person.py` — `PersonLocationHistory` model updated with M9 columns.
-- `backend/tests/services/test_location_writer.py` — LocationWriter unit tests.
-- `backend/tests/services/test_identity_rewriter.py` — 5 tests (soft-delete + insert, state update, idempotency, no-op, clear-to-None).
-- `backend/tests/services/test_identity_revision_subscriber.py` — 4 tests (field parsing, validation, empty-string edge case, delegation).
-- `backend/tests/services/test_tracking_event_subscriber.py` — TrackingEventSubscriber tests (decode + handle + e2e).
-- `backend/tests/routers/test_cts_identity.py` — 4 test classes (disabled guard, global_tracks proxy, correction proxy, revisions audit log).
-
-### cognitive-companion frontend (Vue views, routes, service)
-
-- `frontend/src/views/admin/CTSLiveView.vue` — Multi-camera mosaic (1/4/9/16 layouts), bbox + id label + posture overlays, click-to-correct dialog, WebSocket connection to `/ws/cts`, toast notifications for identity revisions, "Manage corrections" link.
-- `frontend/src/views/admin/CTSIdentityCorrectionsView.vue` — Active global tracks table with "Correct" and "Merge" actions; revision audit log panel; dialog for both correction and merge modes.
-- `frontend/src/services/cts.js` — M9 methods: `getGlobalTracks`, `applyCorrection`, `mergeIdentities`, `getRevisions`, `openLiveSocket`.
-- `frontend/src/router/index.js` — Routes: `/admin/cts/live` → `CTSLiveView`, `/admin/cts/identity-corrections` → `CTSIdentityCorrectionsView`.
-- `frontend/src/views/AdminView.vue` — Admin sidebar: "Live View" and "Identity Corrections" menu items under "Tracking (CTS)" subheader.
-
-**DoD gates met:**
-
-- Toggling `cts.enabled=true` starts `CTSRuntime` and all three subscribers without other config changes.
-- A caregiver can open Live view, watch bboxes labeled with identities, click one, issue a manual override, and see the dashboard update within 2 seconds (WS toast from `IdentityRewriter`).
-- Manual identity override end-to-end: UI click → `OrchestratorClient.manual_identity_override` → `IdentityRevision` back to CC → DB rewrite (`superseded_by_revision_id` stamp + new row) → WS toast.
-
-**Known tech debt (post-M9, none blocks DoD):**
-
-- TD-001: `TrackingEvent` wire payload is a thin subset of the proto contract (high) — publisher omits `identity_id`, `floor_point`, `embedding`.
-- TD-002: Orchestrator internal endpoints called by `OrchestratorClient` were not implemented at M7 discovery (critical) — **resolved in M9**: `live.py` and `corrections.py` now exist.
-- TD-003: Revision stream consumer group pre-created by publisher (medium).
-- TD-004: Stream envelopes are JSON, not protobuf (medium).
-- TD-005: `PersonTrackingService` writes directly; no `LocationRepository` abstraction (medium).
-- TD-006: `cts.enabled=true` signal subscriber lifecycle (low) — **resolved in M9**: `CTSRuntime` adopted.
-
-## When Working with This Repo
-
-- **M1–M9 are implemented and fully verified.** All correctness bugs identified during the M1–M9 review pass have been fixed. The Python quality gate (`make check`) passes cleanly with zero ruff, mypy, or import-linter errors. Remaining milestone builds on the scaffolding in `tracking-orchestrator/`, `rtsp-ingress/`, `proto/`, `triton-models/`, and `cognitive-companion/`.
-- **Always reference phase-0 first.** It supersedes phases 1-5 where they conflict.
-- **The `cognitive-companion` project** is a dependent system. Its CLAUDE.md and README.md are required reading before starting implementation (per phase-0 section 0.27).
-- **Validation gates** (phase-0 section 0.31) define binary pass/fail criteria for each milestone. Each PR that adds code must satisfy the relevant gates.
-
-## M10 — Production hardening (in progress)
-
-M10 hardens the system for production deployment. The coherent slice landed in this PR is below; the remaining items are tracked as follow-ups.
-
-### Landed
-
-- **Python proto codegen.** `make proto-py` runs `protoc --python_out --pyi_out` against `proto/continuoustracking/v1/*.proto` and writes generated bindings into both `tracking-orchestrator/app/proto/` and `cognitive-companion/backend/integrations/proto/`. Generated files are committed; mypy + ruff exclude them. CI image must install `protobuf-compiler` (>= 25). See `proto/README.md`.
-- **Proto-only wire format (TD-004).** Every Redis Stream carries one named field whose value is the raw `Message.SerializeToString()` body — no codec discriminator, no JSON, no base64. `app/transport/codec.py` is a ten-line `encode` / `decode` pair. All four streams (`frames.ready`, `tracking.events`, `tracking.revisions`, `tracking.signals`) plus `scene.samples` use this envelope. See `docs/wire-format.md` for the per-stream contract. Since there were no production consumers, the dual-codec compatibility shim was removed entirely instead of being maintained.
-- **TD-001 partial.** `identity_id` / `floor_point` were already on the legacy wire; the proto path now carries them in the `Detection` and `IdentityRevision` sub-messages of `TrackingEvent`. The `embedding` field is intentionally left empty — gallery owns canonical per-person embeddings; shipping 768 floats per detection per frame would 10× the wire payload with no consumer.
-- **TD-005 LocationRepository.** `PersonTrackingService._update_location_state` now delegates all `PersonLocationState` / `PersonLocationHistory` writes to `SqlAlchemyLocationRepository` so the camera-event ingest path and the CTS `LocationWriter` share one canonical write surface. `_make_history_entry` removed (dead code).
-- **Prometheus metrics.** `tracking-orchestrator/app/observability/metrics.py` registers the metric set from phase-1 §1.9 / phase-3 §3.19 (frames consumed, events / revisions / signals published, posterior entropy histogram, identity commits, latency histograms, gallery and tracklet gauges). Producers and the identity resolver record against the global registry; `app/main.py` exposes `/metrics` for Prometheus scrape.
-- **E2E DoD gate.** `cognitive-companion/backend/tests/e2e/test_cts_pipeline.py` drives the full path with `fakeredis`: producer → proto encode → Redis Streams → subscriber decode → `LocationWriter` → DB rows + WS broadcast + pipeline fire → `IdentityRevisionSubscriber` → `IdentityRewriter` stamps `superseded_by_revision_id` and inserts replacement rows. Asserts both halves of the DoD ("rule fires" and "UI reflects identity correction"). Legacy JSON-flat compatibility is covered by a sibling test.
-- **K8s manifests.** `k8s/` ships namespace, ConfigMap (with the wire-format toggles), Postgres + Redis StatefulSets (TimescaleDB image, AOF on), Triton Deployment (GPU node selector, `Recreate` strategy), rtsp-ingress + tracking-orchestrator Deployments with HPA on Redis-lag custom metric, NetworkPolicy enforcing the BFF gateway rule, and a PodDisruptionBudget.
-- **Operational docs.** `docs/runbook.md` (top-line dashboards, common incidents, capacity planning, DR), `docs/wire-format-migration.md` (rollout state machine, rollback procedure, deferred streams), `proto/README.md` (codegen + add-a-field workflow), `k8s/README.md` (apply order + ops notes).
-- **Intel Arc GPU support.** All three inference models (YOLO26L, SOLIDER-REID, RTMPose) can now run on Intel Arc GPUs via Triton's ONNX Runtime + OpenVINO execution provider. `triton-models/scripts/configure_gpu.py --vendor intel|nvidia` switches between config sets. `export_yolo.py` gains `--backend onnx --device xpu` for Arc. ReID and Pose ONNX files are vendor-neutral; only the Triton config changes. Intel Arc requires a Triton image with the OpenVINO backend (see `triton-models/README.md`).
-- **Inference preprocessing simplified.** Hand-rolled bilinear and nearest-neighbour resize (≈80 lines of NumPy index arithmetic across three files) replaced with `cv2.resize` from `opencv-python-headless`. Logic is equivalent, ~10 lines, and directly testable. `opencv-python-headless>=4.10.0` added to `tracking-orchestrator` dependencies.
-- **Export scripts cleaned up.** `export_pose.py` buggy fallback removed (it exported only the model backbone, losing the SimCC head). `export_yolo.py` gains `--backend tensorrt|onnx` and `--device` flags. `export_pose.py` gains `--device` for both NVIDIA (`cuda:0`) and Arc (`xpu`).
-
-### DoD status
-
-- `cognitive-companion/backend/tests/e2e/test_cts_pipeline.py` passes in CI: feed a synthetic capture, assert pipeline fires, assert WS broadcasts the live frame, assert identity correction rewrites prior history rows.
-- All three subscribers start cleanly via `CTSRuntime` on `cts.enabled=true` (M9 carry-over).
-
-### Quality gate
-
-- `tracking-orchestrator`: `make all-check` green — ruff, ruff format, mypy strict, import-linter, pytest 255/255, Go race tests, buf lint.
-- `cognitive-companion`: `make check-all` green — ruff, mypy (core strict), pytest 1041/1041 including the M10 e2e gate.
-
-### Deferred to follow-up PRs
-
-- Protobuf migration for `tracking.revisions` / `tracking.signals` / `scene.samples`. Codec is generic; defining proto envelopes for these three messages is mechanical work.
-- OpenTelemetry tracing across Redis Streams boundaries. Skipped until an OTel collector target exists.
-- Performance hardening (HNSW `ef_search` tuning, Kalman P-matrix conditioning, WS backpressure). Wait for the Prometheus dashboards from this milestone to surface real hotspots before tuning blind.
-- Helm chart packaging on top of the raw manifests in `k8s/`.
+**Always use the project venv** at `tracking-orchestrator/.venv/`. The Makefile uses it automatically. Sync dependencies with:
+
+```bash
+cd tracking-orchestrator && uv sync --frozen --extra dev
+```
+
+---
+
+## Proto Codegen
+
+Generated bindings are **committed to the repo** — do not gitignore them. Regenerate after changing `.proto` files:
+
+```bash
+make proto          # Go (buf generate) + Python (protoc --python_out --pyi_out)
+make proto-lint     # buf lint only
+```
+
+Requires `protoc >= 25` (`apt install protobuf-compiler`) and the project Go toolchain (`make go-install`). The `proto-py` target writes to both `tracking-orchestrator/app/proto/` and `../cognitive-companion/backend/integrations/proto/`.
+
+---
+
+## Camera Configuration
+
+All cameras are managed through the cognitive-companion Admin UI (`/admin/cts/cameras`). There is no static camera list in `settings.yaml`.
+
+rtsp-ingress polls `GET /api/v1/cts/cameras` on cognitive-companion every 60 s (configurable via `cognitive_companion.reconcile_interval_s`). The reconciler maps each camera record to a `CameraConfig` and calls `Supervisor.Reconcile()`, which registers/deregisters streams with go2rtc idempotently.
+
+`CameraConfig` fields populated from the API response:
+
+| Field | Source |
+| --- | --- |
+| `ID` | `cts_cameras.id` |
+| `RTSPURL` | `cts_cameras.rtsp_url` — full RTSP URL stored in the database |
+| `RoomName` | `cts_cameras.location` |
+| `Enabled` | only enabled cameras are included (filtered Go-side) |
+| `FrameIntervalMs` | falls back to `defaults.frame_interval_ms` from settings.yaml |
+| `MotionThreshold` | falls back to `defaults.motion_threshold` |
+| `ReconnectBackoffSeconds` | falls back to `defaults.reconnect_backoff_s` |
+
+rtsp-ingress authenticates to cognitive-companion with the `COGNITIVE_API_KEY` environment variable (sent as `X-API-Key`). The key must have the `cts_ingress` permission defined in `cognitive-companion/config/auth.yaml`. The `CC_INGRESS_API_KEY` env var should hold the same secret on both services.
+
+RTSP credentials are stored in the cognitive-companion database as part of the full RTSP URL. They are never written to any config file on the rtsp-ingress side.
+
+The CLAUDE.md for the `rtsp-ingress` architecture note:
+
+```text
+RTSP ingest: go2rtc sidecar
+  1. reconciler fetches CameraConfig list from cognitive-companion API
+  2. Supervisor.Reconcile() calls go2rtc.RegisterStream() — idempotent PUT, heals restarts
+  3. poll.Worker ticks every frame_interval_ms and calls go2rtc.FetchJPEG()
+  4. Frame passes motion gate, uploads to MinIO, publishes to frames.ready
+```
+
+---
+
+## Known Tech Debt
+
+| ID | Severity | Description |
+| --- | --- | --- |
+| TD-003 | Medium | Revision stream consumer group pre-created by publisher instead of admin tooling |
+| TD-004 | Medium | `tracking.revisions`, `tracking.signals`, `scene.samples` not yet migrated to protobuf wire format |
+
+---
+
+## Working in This Repository
+
+- **cognitive-companion** is a dependent system in a sibling directory (`../cognitive-companion`). Its own CLAUDE.md is required reading before touching anything under `cognitive-companion/`.
+- **Model binaries are not in git.** Run the export scripts on the target GPU and place outputs in `triton-models/<model>/1/`. See `triton-models/README.md`.
+- **Never implement a feature that depends on another in-flight PR.** The layering is load-bearing.
+- **Validation gates** (phase-0 §0.31) define binary pass/fail criteria for each subsystem. Any PR touching a subsystem must satisfy the relevant gates.

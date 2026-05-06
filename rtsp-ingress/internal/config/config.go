@@ -1,14 +1,9 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
-	"path/filepath"
-	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -22,7 +17,6 @@ type Config struct {
 	Cognitive       CognitiveConfig `yaml:"cognitive_companion"`
 	Go2RTC          Go2RTCConfig    `yaml:"go2rtc"`
 	CameraDefaults  CameraDefaults  `yaml:"defaults"`
-	Cameras         []CameraConfig  `yaml:"cameras"`
 	AssignedCameras string          `yaml:"assigned_cameras"`
 }
 
@@ -72,55 +66,17 @@ type CameraDefaults struct {
 	ReconnectBackoffSeconds float64 `yaml:"reconnect_backoff_s"`
 }
 
-// CameraConfig describes a single RTSP camera stream.
-//
-// RTSP URL resolution order:
-//  1. If rtsp_url is non-empty it is used verbatim.
-//  2. Otherwise the URL is built from host + port + username + password +
-//     stream_path. Credentials are percent-encoded per RFC 3986.
-//
-// Values may contain ${ENV_VAR} placeholders; these are expanded from
-// environment variables (including any .env file loaded at startup).
+// CameraConfig describes a single RTSP camera stream as sourced from the
+// cognitive-companion API. RTSPURL must be set; the reconciler populates it
+// directly from the API response.
 type CameraConfig struct {
-	ID                      string  `yaml:"id"`
-	RTSPURL                 string  `yaml:"rtsp_url"`
-	RTSPMainURL             string  `yaml:"rtsp_main_url"`
-	Host                    string  `yaml:"host"`
-	Port                    int     `yaml:"port"`
-	Username                string  `yaml:"username"`
-	Password                string  `yaml:"password"`
-	StreamPath              string  `yaml:"stream_path"`
-	Type                    string  `yaml:"type"`
-	RoomName                string  `yaml:"room_name"`
-	FrameIntervalMs         int     `yaml:"frame_interval_ms"`
-	MotionThreshold         float64 `yaml:"motion_threshold"`
-	ReconnectBackoffSeconds float64 `yaml:"reconnect_backoff_s"`
-	Enabled                 bool    `yaml:"enabled"`
-}
-
-// BuildRTSPURL derives the RTSP URL from host/port/username/password/stream_path
-// when rtsp_url is not explicitly set. No-op if RTSPURL is already populated.
-func (c *CameraConfig) BuildRTSPURL() {
-	if c.RTSPURL != "" || c.Host == "" {
-		return
-	}
-	port := c.Port
-	if port == 0 {
-		port = 554
-	}
-	sp := c.StreamPath
-	if !strings.HasPrefix(sp, "/") {
-		sp = "/" + sp
-	}
-	u := &url.URL{
-		Scheme: "rtsp",
-		Host:   fmt.Sprintf("%s:%d", c.Host, port),
-		Path:   sp,
-	}
-	if c.Username != "" {
-		u.User = url.UserPassword(c.Username, c.Password)
-	}
-	c.RTSPURL = u.String()
+	ID                      string
+	RTSPURL                 string
+	RoomName                string
+	FrameIntervalMs         int
+	MotionThreshold         float64
+	ReconnectBackoffSeconds float64
+	Enabled                 bool
 }
 
 // DefaultConfig returns Config with sensible defaults, overridden by env vars.
@@ -168,22 +124,14 @@ func DefaultConfig() Config {
 	}
 }
 
-// LoadFromYAML reads config from YAML.
-//
-// Before unmarshalling, it loads a .env file (from RTSP_DOTENV_PATH or
-// <config-dir>/.env) and expands ${VAR} placeholders in the YAML content.
+// LoadFromYAML reads service settings (Redis, MinIO, go2rtc, etc.) from YAML.
+// Camera configuration is sourced exclusively from the cognitive-companion API
+// via the reconciler; there is no static camera list in the YAML.
 func LoadFromYAML(path string) (Config, error) {
 	cfg := DefaultConfig()
 	if path == "" {
 		cfg.normalize()
-		cfg.applyCameraDefaults()
 		return cfg, nil
-	}
-
-	// Load .env before reading config so ${VAR} placeholders resolve correctly.
-	dotenvPath := getenv("RTSP_DOTENV_PATH", filepath.Join(filepath.Dir(path), ".env"))
-	if err := loadDotEnv(dotenvPath); err != nil {
-		return Config{}, fmt.Errorf("load .env %s: %w", dotenvPath, err)
 	}
 
 	//nolint:gosec // The operator controls the config path via RTSP_CONFIG_PATH.
@@ -192,16 +140,10 @@ func LoadFromYAML(path string) (Config, error) {
 		return cfg, err
 	}
 
-	expanded, err := expandPlaceholders(string(data))
-	if err != nil {
-		return Config{}, fmt.Errorf("expand placeholders in %s: %w", path, err)
-	}
-
-	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("unmarshal %s: %w", path, err)
 	}
 	cfg.normalize()
-	cfg.applyCameraDefaults()
 	return cfg, nil
 }
 
@@ -281,13 +223,6 @@ func Load() (Config, error) {
 	if v := os.Getenv("GO2RTC_ADDR"); v != "" {
 		cfg.Go2RTC.Addr = v
 	}
-	if v := os.Getenv("CAMERAS_JSON"); v != "" {
-		var cameras []CameraConfig
-		if err := json.Unmarshal([]byte(v), &cameras); err != nil {
-			return Config{}, fmt.Errorf("decode CAMERAS_JSON: %w", err)
-		}
-		cfg.Cameras = cameras
-	}
 	if v := os.Getenv("DEFAULT_FRAME_INTERVAL_MS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.CameraDefaults.FrameIntervalMs = n
@@ -305,7 +240,6 @@ func Load() (Config, error) {
 	}
 
 	cfg.normalize()
-	cfg.applyCameraDefaults()
 	return cfg, nil
 }
 
@@ -366,90 +300,6 @@ func (c *Config) normalize() {
 	if c.AssignedCameras == "" {
 		c.AssignedCameras = "ALL"
 	}
-}
-
-func (c *Config) applyCameraDefaults() {
-	for i := range c.Cameras {
-		if c.Cameras[i].FrameIntervalMs <= 0 {
-			c.Cameras[i].FrameIntervalMs = c.CameraDefaults.FrameIntervalMs
-		}
-		if c.Cameras[i].MotionThreshold <= 0 {
-			c.Cameras[i].MotionThreshold = c.CameraDefaults.MotionThreshold
-		}
-		if c.Cameras[i].ReconnectBackoffSeconds <= 0 {
-			c.Cameras[i].ReconnectBackoffSeconds = c.CameraDefaults.ReconnectBackoffSeconds
-		}
-		c.Cameras[i].BuildRTSPURL()
-	}
-}
-
-// loadDotEnv reads a .env file and sets env vars for any key not already set.
-// Missing file is silently ignored (.env is optional). Supports:
-//   - KEY=VALUE
-//   - export KEY=VALUE
-//   - Single or double quoted values
-//   - # comment lines
-func loadDotEnv(path string) error {
-	//nolint:gosec // .env path is operator-controlled (RTSP_DOTENV_PATH or config dir).
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read: %w", err)
-	}
-	for lineNum, rawLine := range strings.Split(string(data), "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		line = strings.TrimPrefix(line, "export ")
-		eqIdx := strings.IndexByte(line, '=')
-		if eqIdx < 0 {
-			return fmt.Errorf("line %d: missing '='", lineNum+1)
-		}
-		key := strings.TrimSpace(line[:eqIdx])
-		val := strings.TrimSpace(line[eqIdx+1:])
-		if len(val) >= 2 && val[0] == val[len(val)-1] && (val[0] == '"' || val[0] == '\'') {
-			val = val[1 : len(val)-1]
-		}
-		if key == "" {
-			continue
-		}
-		if _, exists := os.LookupEnv(key); !exists {
-			if err := os.Setenv(key, val); err != nil {
-				return fmt.Errorf("setenv %s: %w", key, err)
-			}
-		}
-	}
-	return nil
-}
-
-var _placeholderRe = regexp.MustCompile(`\$\{([^}]+)\}`)
-
-// expandPlaceholders replaces ${VAR} tokens in s with the corresponding
-// environment variable values. Returns an error if any placeholder references
-// a variable that is not set.
-func expandPlaceholders(s string) (string, error) {
-	var missing []string
-	expanded := _placeholderRe.ReplaceAllStringFunc(s, func(match string) string {
-		key := match[2 : len(match)-1] // strip ${ and }
-		val, ok := os.LookupEnv(key)
-		if !ok {
-			missing = append(missing, key)
-			return match
-		}
-		return val
-	})
-	if len(missing) > 0 {
-		return "", fmt.Errorf("unresolved env placeholders: %s", strings.Join(missing, ", "))
-	}
-	return expanded, nil
-}
-
-// unmarshalYAML is a thin wrapper around yaml.Unmarshal used in tests.
-func unmarshalYAML(data []byte, v any) error {
-	return yaml.Unmarshal(data, v)
 }
 
 func getenv(key, fallback string) string {

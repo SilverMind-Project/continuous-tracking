@@ -48,7 +48,6 @@ func main() {
 	sugar.Infow("rtsp-ingress starting",
 		"listen_addr", cfg.Server.ListenAddr,
 		"go2rtc_addr", cfg.Go2RTC.Addr,
-		"cameras", len(cfg.Cameras),
 	)
 
 	// MinIO client.
@@ -102,8 +101,8 @@ func main() {
 		logger,
 	)
 
-	// Bootstrap from static config, then start reconciler loop.
-	sup.Reconcile(cfg.Cameras)
+	// Start reconciler loop — camera config comes exclusively from the
+	// cognitive-companion API; there is no static bootstrap list.
 	go func() {
 		if err := rec.Run(ctx); err != nil {
 			logger.Warn("reconciler stopped", zap.Error(err))
@@ -136,7 +135,8 @@ func main() {
 		}
 	}()
 
-	// Mark ready once backends are reachable.
+	// Mark ready once the reconciler has fetched at least one camera and
+	// the backing stores are reachable.
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -144,9 +144,6 @@ func main() {
 			select {
 			case <-ticker.C:
 				cameras := rec.LastCameras()
-				if len(cameras) == 0 {
-					cameras = cfg.Cameras
-				}
 				isReady := len(cameras) > 0 &&
 					minioClient.IsOnline() &&
 					redisClient.Ping(ctx).Err() == nil

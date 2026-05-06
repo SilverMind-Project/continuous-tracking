@@ -69,3 +69,4 @@ bin/
 .claude/
 .qwen/
 .kiro/
+.agents/

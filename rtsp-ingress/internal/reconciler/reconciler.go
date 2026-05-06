@@ -99,16 +99,16 @@ func (r *Reconciler) reconcileOnce(ctx context.Context) error {
 	return nil
 }
 
-// fetchCameras calls the Cognitive Companion Admin API to get enabled cameras.
+// fetchCameras fetches enabled cameras from the cognitive-companion CTS API.
 func (r *Reconciler) fetchCameras(ctx context.Context) ([]config.CameraConfig, error) {
-	url := fmt.Sprintf("%s/api/v1/sensors?sensor_type=camera&enabled=true", r.ccBaseURL)
+	url := fmt.Sprintf("%s/api/v1/cts/cameras", r.ccBaseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	if r.ccAPIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+r.ccAPIKey)
+		req.Header.Set("X-API-Key", r.ccAPIKey)
 	}
 
 	resp, err := r.httpClient.Do(req)
@@ -122,40 +122,22 @@ func (r *Reconciler) fetchCameras(ctx context.Context) ([]config.CameraConfig, e
 		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var sensors []sensorResponse
-	if err := json.NewDecoder(resp.Body).Decode(&sensors); err != nil {
+	var cameras []cameraResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cameras); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	result := make([]config.CameraConfig, 0, len(sensors))
-	for _, s := range sensors {
+	result := make([]config.CameraConfig, 0, len(cameras))
+	for _, c := range cameras {
+		if !c.Enabled {
+			continue
+		}
 		cc := config.CameraConfig{
-			ID:      s.ID,
-			Type:    s.CameraType,
-			Enabled: true,
+			ID:       c.ID,
+			RTSPURL:  c.RTSPURL,
+			RoomName: c.Location,
+			Enabled:  true,
 		}
-		if len(s.ConfigJSON) > 0 {
-			var cj cameraConfigJSON
-			if err := json.Unmarshal(s.ConfigJSON, &cj); err != nil {
-				r.log.Warn("config_json_parse_error",
-					zap.String("camera_id", s.ID),
-					zap.Error(err),
-				)
-			} else {
-				cc.RTSPURL = cj.RTSPURL
-				cc.RTSPMainURL = cj.RTSPMainURL
-				cc.Host = cj.Host
-				cc.Port = cj.Port
-				cc.Username = cj.Username
-				cc.Password = cj.Password
-				cc.StreamPath = cj.StreamPath
-				cc.RoomName = cj.RoomName
-				cc.FrameIntervalMs = cj.FrameIntervalMs
-				cc.MotionThreshold = cj.MotionThreshold
-				cc.ReconnectBackoffSeconds = cj.ReconnectBackoffSeconds
-			}
-		}
-		cc.BuildRTSPURL()
 		if cc.FrameIntervalMs <= 0 {
 			cc.FrameIntervalMs = r.defaults.FrameIntervalMs
 		}
@@ -228,26 +210,13 @@ func (r *Reconciler) LastCameras() []config.CameraConfig {
 	return cloneCameras(r.lastCameras)
 }
 
-type sensorResponse struct {
-	ID         string          `json:"id"`
-	SensorType string          `json:"sensor_type"`
-	ConfigJSON json.RawMessage `json:"config_json"`
-	CameraType string          `json:"camera_type"`
-}
-
-// cameraConfigJSON mirrors the JSON keys accepted in sensor config_json.
-type cameraConfigJSON struct {
-	RTSPURL                 string  `json:"rtsp_url"`
-	RTSPMainURL             string  `json:"rtsp_main_url"`
-	Host                    string  `json:"host"`
-	Port                    int     `json:"port"`
-	Username                string  `json:"username"`
-	Password                string  `json:"password"`
-	StreamPath              string  `json:"stream_path"`
-	RoomName                string  `json:"room_name"`
-	FrameIntervalMs         int     `json:"frame_interval_ms"`
-	MotionThreshold         float64 `json:"motion_threshold"`
-	ReconnectBackoffSeconds float64 `json:"reconnect_backoff_s"`
+// cameraResponse maps the CtsCameraOut schema returned by
+// GET /api/v1/cts/cameras in cognitive-companion.
+type cameraResponse struct {
+	ID       string `json:"id"`
+	RTSPURL  string `json:"rtsp_url"`
+	Location string `json:"location"`
+	Enabled  bool   `json:"enabled"`
 }
 
 func shardIndex(cameraID string, modulus int) int {

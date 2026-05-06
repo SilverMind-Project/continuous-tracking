@@ -4,59 +4,70 @@ A real-time monitoring system for seniors with early dementia. CTS watches RTSP 
 
 ## What it does
 
-- **Pulls RTSP streams** from IP cameras (overhead, eye-level, doorway) and uploads JPEG keyframes to object storage
+- **Pulls RTSP streams** via a go2rtc sidecar — rtsp-ingress registers cameras with go2rtc over HTTP and polls for pre-decoded JPEG frames; go2rtc owns all RTSP sessions
+- **Gates on motion** to avoid uploading static frames; uploads JPEG keyframes to MinIO
 - **Tracks people** frame-to-frame using BoT-SORT with Kalman filtering and appearance embeddings
-- **Re-identifies individuals** across cameras using a Bayesian posterior over identity candidates, combining face recognition (ArcFace) and body appearance (SOLIDER-REID)
+- **Re-identifies individuals** across cameras using a Bayesian posterior over identity candidates, combining ArcFace face recognition and SOLIDER-REID body appearance
 - **Detects dementia signals**: pacing, sundowning, bathroom anomaly, nighttime movement, prolonged stillness, unexplained absence
-- **Streams results** via Redis Streams to the cognitive-companion gateway which exposes them through a Vue admin UI
+- **Streams results** via Redis Streams (protobuf wire format) to the cognitive-companion gateway which exposes them through a Vue admin UI
 
 ## Architecture
 
 ```text
 IP Cameras (RTSP)
-       │
+       │  RTSP sessions owned by go2rtc
        ▼
- rtsp-ingress (Go)          ─── frames.ready stream ──▶  tracking-orchestrator (Python)
-  ┌─────────────────┐                                      ┌──────────────────────────────┐
-  │ Motion gating   │                                      │  YOLO26L (person detection)  │
-  │ JPEG encoding   │                                      │  SOLIDER-REID (body embeds)  │
-  │ MinIO upload    │                                      │  RTMPose (pose estimation)   │
-  └─────────────────┘                                      │  Bayesian identity resolver  │
-                                                           │  Dementia signal worker      │
+ go2rtc (sidecar, :1984)
+  ┌──────────────────────┐
+  │ RTSP session manager │◀── PUT /api/streams (register)      rtsp-ingress (Go, :8090)
+  │ H264 → JPEG decode   │◀── GET /api/frame.jpeg (poll)       ┌──────────────────────────┐
+  └──────────────────────┘                                      │ Motion gating            │
+                                                               │ MinIO JPEG upload        │
+                                                               │ frames.ready publisher   │
+                                                               └──────────────────────────┘
+                                                                         │ frames.ready (protobuf)
+                                                                         ▼
+                                                           tracking-orchestrator (Python, :8000)
+                                                           ┌──────────────────────────────┐
+                                                           │ YOLO26L  (person detection)  │
+                                                           │ SOLIDER-REID (body embeds)   │──▶ Triton (:8001)
+                                                           │ RTMPose  (pose estimation)   │
+                                                           │ BoT-SORT tracker             │
+                                                           │ Bayesian identity resolver   │
+                                                           │ Dementia signal worker       │
                                                            └──────────────────────────────┘
-                                                                  │  tracking.events
-                                                                  │  tracking.revisions
-                                                                  │  tracking.signals
-                                                                  ▼
-                                                     cognitive-companion (Python/FastAPI)
-                                                       ┌──────────────────────────────┐
-                                                       │  BFF gateway (all UI traffic)│
-                                                       │  WebSocket live view         │
-                                                       │  Admin UI (Vue 3)            │
-                                                       │  MCP tools for AI agents     │
-                                                       └──────────────────────────────┘
+                                                                         │ tracking.events
+                                                                         │ tracking.revisions
+                                                                         │ tracking.signals
+                                                                         ▼
+                                                            cognitive-companion (Python/FastAPI, :8080)
+                                                            BFF gateway · WebSocket live view
+                                                            Vue 3 admin UI · MCP tools
 ```
 
-**Infrastructure**: TimescaleDB + pgvector · Redis Streams · MinIO · Triton Inference Server (NVIDIA or Intel Arc)
+**Infrastructure**: TimescaleDB + pgvector · Redis Streams (AOF) · MinIO · Triton Inference Server (NVIDIA or Intel Arc)
 
 ## Services
 
-| Service                 | Port        | Description                                                        |
-| ----------------------- | ----------- | ------------------------------------------------------------------ |
-| `rtsp-ingress`          | 8090        | RTSP pull, motion gating, JPEG upload, `frames.ready` publisher    |
-| `tracking-orchestrator` | 8000        | ML inference, tracking, identity resolution, signal detection      |
-| `triton`                | 8001 (gRPC) | YOLO26L, SOLIDER-REID, RTMPose model server                        |
-| `redis`                 | 6379        | Redis Streams transport (AOF enabled)                              |
-| `postgres`              | 5432        | TimescaleDB + pgvector (tracklets, gallery, signals, trajectories) |
-| `minio`                 | 9000        | JPEG keyframe object storage                                       |
-| `cognitive-companion`   | 8080        | BFF gateway, Vue admin UI, WebSocket live view                     |
+| Service | Port | Description |
+| --- | --- | --- |
+| `go2rtc` | 1984 | RTSP proxy sidecar — owns all camera sessions, serves JPEG frames over HTTP |
+| `rtsp-ingress` | 8090 | Registers cameras with go2rtc, polls frames, motion gating, MinIO upload |
+| `tracking-orchestrator` | 8000 | ML inference, tracking, identity resolution, signal detection |
+| `triton` | 8001 (gRPC) | YOLO26L, SOLIDER-REID, RTMPose model server |
+| `redis` | 6379 | Redis Streams transport (AOF enabled) |
+| `postgres` | 5432 | TimescaleDB + pgvector (tracklets, gallery, signals, trajectories) |
+| `minio` | 9000 | JPEG keyframe object storage |
+| `cognitive-companion` | 8080 | BFF gateway, Vue admin UI, WebSocket live view |
+
+---
 
 ## Getting started
 
 ### Prerequisites
 
 - Docker Compose v2
-- A GPU: **NVIDIA** (CUDA) or **Intel Arc** (OpenVINO) — see Model setup section below
+- A GPU: **NVIDIA** (CUDA / TensorRT) or **Intel Arc** (OpenVINO) — see [Model setup](#model-setup)
 - RTSP cameras on the local network
 
 ### 1. Start infrastructure
@@ -67,23 +78,13 @@ docker compose up -d postgres redis minio
 
 ### 2. Configure cameras
 
-Copy the example config and edit with your camera details:
+See [Camera configuration](#camera-configuration) below. For a quick start, copy the example config:
 
 ```bash
 cp rtsp-ingress/config/settings.yaml rtsp-ingress/config/settings.local.yaml
 ```
 
-Create a `.env` file **in the same directory** for secrets (never commit this):
-
-```bash
-# rtsp-ingress/config/.env
-CAM_BEDROOM_PASSWORD=your_camera_password
-CAM_KITCHEN_PASSWORD=another_password
-```
-
-Then configure cameras in `settings.local.yaml` (see [Camera configuration](#camera-configuration) below).
-
-### 3. Start services
+### 3. Start all services
 
 ```bash
 docker compose up -d
@@ -97,67 +98,83 @@ cts:
   enabled: true
 ```
 
-Then restart cognitive-companion. This starts the Redis Stream subscribers and exposes the admin UI at `http://localhost:8080/admin`.
+Restart cognitive-companion. This starts the Redis Stream subscribers and exposes the admin UI at `http://localhost:8080/admin`.
+
+---
 
 ## Camera configuration
 
-Cameras can be configured statically in `rtsp-ingress/config/settings.yaml` or dynamically via the cognitive-companion Admin API. Static config is useful for development.
+All cameras are managed through the cognitive-companion Admin UI. There is no static camera list in config files.
 
-### Option A — host + credentials (URL built automatically)
+### How cameras reach go2rtc
 
-```yaml
-cameras:
-  - id: cam-bedroom-1
-    host: 192.168.1.100
-    port: 554              # default: 554
-    username: admin
-    password: ${CAM_BEDROOM_PASSWORD}   # resolved from .env
-    stream_path: /stream1
-    type: overhead         # overhead | eye_level | doorway
-    room_name: bedroom
-    enabled: true
+rtsp-ingress polls `GET /api/v1/cts/cameras` on cognitive-companion every 60 s and reconciles the running set of streams:
+
+```text
+  cognitive-companion database (cts_cameras table)
+         │
+         │  GET /api/v1/cts/cameras  (every 60 s)
+         ▼
+  rtsp-ingress reconciler
+         │
+         ▼ PUT /api/streams  (idempotent, heals go2rtc restarts)
+  go2rtc
+  - owns the RTSP session
+  - decodes H264 to JPEG
+         │
+         ▼ GET /api/frame.jpeg  (polled every frame_interval_ms)
+  rtsp-ingress poll worker
+  - applies motion gate
+  - uploads to MinIO
+  - publishes to frames.ready stream
 ```
 
-### Option B — explicit RTSP URL
+go2rtc's own config (`rtsp-ingress/config/go2rtc.yaml`) has no `streams:` section; all registrations are made at runtime via HTTP. go2rtc reconnects to cameras automatically if sessions drop.
 
-```yaml
-cameras:
-  - id: cam-kitchen
-    rtsp_url: rtsp://admin:${CAM_KITCHEN_PASSWORD}@192.168.1.101:554/h264/ch1/main/av_stream
-    type: eye_level
-    room_name: kitchen
-    enabled: true
-```
+### Adding cameras
 
-### .env file for secrets
+1. Go to `http://localhost:8080/admin/cts/cameras` and click **Add Camera**.
+2. Fill in the fields:
 
-Place a `.env` file alongside your config file (defaults to `rtsp-ingress/config/.env`):
+| Field | Required | Description |
+| --- | --- | --- |
+| `id` | yes | Stable slug, e.g. `kitchen-cam-1`. Used in all metrics and streams. |
+| `name` | yes | Human-readable display name. |
+| `rtsp_url` | yes | Full RTSP URL including credentials, e.g. `rtsp://admin:secret@192.168.1.10:554/stream1`. |
+| `location` | no | Room or location label shown in the UI. |
+| `enabled` | yes | Uncheck to suspend a camera without deleting it. |
+
+3. rtsp-ingress picks up the new camera within one reconcile interval (default 60 s). Use the **Test RTSP** button to verify connectivity before saving.
+
+### Service credentials
+
+rtsp-ingress authenticates to cognitive-companion with the `CC_INGRESS_API_KEY` environment variable. Set this to a key that has the `cts_ingress` permission defined in `cognitive-companion/config/auth.yaml`.
 
 ```bash
-CAM_BEDROOM_PASSWORD=s3cr3t
-CAM_KITCHEN_PASSWORD=another_secret
-MINIO_SECRET_KEY=prodkey
+# rtsp-ingress environment
+CC_INGRESS_API_KEY=<generate a random secret>
+COGNITIVE_API_KEY=${CC_INGRESS_API_KEY}
+
+# cognitive-companion environment
+CC_INGRESS_API_KEY=<same secret>
 ```
 
-The service loads this file at startup and expands `${VAR}` placeholders in the YAML before parsing. Values already set in the process environment take precedence over the `.env` file. Set `RTSP_DOTENV_PATH` to override the default location.
+Camera RTSP credentials (username, password) are stored in the cognitive-companion database, not in any config file on the ingress side. The full RTSP URL travels over the internal API call from cognitive-companion to rtsp-ingress, where it is passed to go2rtc. TLS between the services is configured in `cognitive-companion/config/settings.yaml` under `cts.upstream.rtsp_ingress`.
 
-### Supported camera fields
+### Default frame-capture settings
 
-| Field                | Type   | Description                                                  |
-| -------------------- | ------ | ------------------------------------------------------------ |
-| `id`                 | string | Unique camera ID (used in all metrics and streams)           |
-| `rtsp_url`           | string | Full RTSP URL (takes precedence over host/port/credentials)  |
-| `host`               | string | Camera IP or hostname                                        |
-| `port`               | int    | RTSP port (default: 554)                                     |
-| `username`           | string | RTSP auth username                                           |
-| `password`           | string | RTSP auth password (use `${VAR}` placeholder)                |
-| `stream_path`        | string | URL path (default: `/`)                                      |
-| `type`               | string | Camera placement: `overhead`, `eye_level`, `doorway`         |
-| `room_name`          | string | Room this camera covers                                      |
-| `enabled`            | bool   | Set `false` to temporarily disable without removing          |
-| `frame_interval_ms`  | int    | Min ms between captured frames (default from `defaults`)     |
-| `motion_threshold`   | float  | Fraction of pixels that must change to pass motion gate      |
-| `reconnect_backoff_s`| float  | Initial reconnect backoff (doubles with jitter, max 60 s)    |
+Camera-level overrides are not yet exposed in the UI. The service-wide defaults in `rtsp-ingress/config/settings.yaml` apply to every camera:
+
+```yaml
+defaults:
+  frame_interval_ms: 500    # Min ms between captured frames
+  motion_threshold: 0.02    # Fraction of pixels that must change
+  reconnect_backoff_s: 2.0  # Initial reconnect backoff (doubles with jitter, max 60 s)
+```
+
+Override any default at deploy time with the environment variables `DEFAULT_FRAME_INTERVAL_MS`, `DEFAULT_MOTION_THRESHOLD`, or `DEFAULT_RECONNECT_BACKOFF_S`.
+
+---
 
 ## Model setup
 
@@ -166,113 +183,147 @@ Model binaries are not in git. Both NVIDIA and Intel Arc GPUs are supported.
 **Step 1 — select GPU vendor config** (run once per machine):
 
 ```bash
-python triton-models/scripts/configure_gpu.py --vendor nvidia   # NVIDIA (default)
-python triton-models/scripts/configure_gpu.py --vendor intel    # Intel Arc
+python triton-models/scripts/configure_gpu.py --vendor nvidia   # NVIDIA TensorRT (default)
+python triton-models/scripts/configure_gpu.py --vendor intel    # Intel Arc OpenVINO
 ```
 
-**Step 2 — export model weights** (same ONNX format for all vendors):
+**Step 2 — export model weights:**
 
 ```bash
 pip install ultralytics>=8.4.0
 
-# YOLO26L person detector → ONNX
+# YOLO26L person detector
 python triton-models/scripts/export_yolo.py \
     --weights yolo26l.pt \
+    --backend onnx \
     --out triton-models/person-detector/1/model.onnx
 
-# SOLIDER-REID body embedder → ONNX
+# SOLIDER-REID body embedder
 python triton-models/scripts/export_reid.py --help
 
-# RTMPose-m pose estimator → ONNX
+# RTMPose-m pose estimator
 python triton-models/scripts/export_pose.py --help
 ```
 
-See [triton-models/README.md](triton-models/README.md) for full instructions including output shape verification and Intel Arc container image.
+See [triton-models/README.md](triton-models/README.md) for output shape verification, benchmark targets, and the Intel Arc container image.
+
+---
 
 ## Development
 
-### Python (tracking-orchestrator)
+### Python — tracking-orchestrator
 
 ```bash
+# Install dependencies into .venv (uses uv)
 cd tracking-orchestrator
-uv sync --extra dev          # install deps into .venv
+uv sync --frozen --extra dev
 
-make check                   # ruff + mypy + pytest (from repo root)
-make lint                    # ruff check only
-make mypy                    # type check only
-make test                    # pytest only
+# From repo root:
+make check          # ruff + mypy + import-linter + pytest (full Python gate)
+make lint           # ruff check only
+make format         # ruff format
+make mypy           # type check only
+make test           # pytest only
+make import-lint    # layering check only
 ```
 
-All tests run without a GPU — Triton calls are mocked via `TritonClientProtocol`.
+All tests run without a GPU — Triton calls are mocked via `TritonClientProtocol`. Always use the project venv at `tracking-orchestrator/.venv/`; the Makefile targets use it automatically.
 
-### Go (rtsp-ingress)
+### Go — rtsp-ingress
 
 ```bash
-cd rtsp-ingress
-go test ./... -race           # full test suite with race detector
-go vet ./...
-golangci-lint run
+# Install the pinned Go toolchain (Go 1.24, stored in ./tools/)
+make go-install
+
+make go-check       # golangci-lint + go test -race + go build (full Go gate)
+make go-test        # go test -race ./... only
+make go-lint        # golangci-lint only
+make go-build       # go build only
 ```
+
+The race detector (`-race`) is mandatory — it is a hard CI gate.
+
+### Protobuf
+
+```bash
+make proto          # Generate Go (buf generate) + Python (protoc) bindings
+make proto-lint     # buf lint only
+```
+
+Requires `protoc >= 25` (`apt install protobuf-compiler`) and `make go-install`. Generated bindings are **committed** — do not gitignore them.
 
 ### Full quality gate
 
 ```bash
-make all-check               # Python + Go + proto buf lint
+make all-check      # Python (ruff + mypy + import-linter + pytest) + Go (lint + test + build) + buf lint
 ```
 
-### Pre-commit hooks
+Install pre-commit hooks (ruff, mypy, golangci-lint, buf):
 
 ```bash
-pre-commit install            # ruff, mypy, golangci-lint, buf
+pre-commit install
 ```
+
+### Docker
+
+```bash
+make infra-up       # Start all infrastructure services (postgres, redis, minio, triton, go2rtc)
+make app-up         # Build and start all services including rtsp-ingress and tracking-orchestrator
+make docker-down    # Stop everything and remove volumes
+```
+
+---
 
 ## Key design decisions
 
-| Decision        | Choice                                    | Rationale                                                                        |
-| --------------- | ----------------------------------------- | -------------------------------------------------------------------------------- |
-| Identity model  | Bayesian posterior, not single-assignment | Seniors with dementia have irregular gait; hard thresholds misidentify too often |
-| Transport       | Redis Streams with consumer groups + XACK | At-least-once delivery with replay; survives orchestrator restarts               |
-| Wire format     | Protobuf (no JSON on streams)             | ~3× smaller payloads; schema-enforced contracts                                  |
-| Storage         | TimescaleDB + pgvector HNSW               | Time-series compression for trajectories; vector search for ReID gallery         |
-| Person detector | YOLO26L NMS-Free, ONNX format             | Single ONNX file runs on NVIDIA (TRT EP) and Intel Arc (OpenVINO EP)             |
-| UI gateway      | cognitive-companion as BFF                | No direct browser access to CTS internal services; single auth boundary          |
+| Decision | Choice | Rationale |
+| --- | --- | --- |
+| RTSP ingest | go2rtc sidecar + HTTP poll | Offloads session management and H264 decoding; rtsp-ingress polls `/api/frame.jpeg` instead of managing RTSP directly |
+| Camera config → go2rtc | Dynamic HTTP registration (`PUT /api/streams`) | go2rtc needs no static config file; rtsp-ingress reconciles at runtime from settings.yaml or the cognitive-companion API |
+| Identity model | Bayesian posterior, not single-assignment | Seniors with dementia have irregular gait; hard thresholds misidentify too often |
+| Transport | Redis Streams with consumer groups + XACK | At-least-once delivery with replay; survives orchestrator restarts |
+| Wire format | Protobuf (no JSON on streams) | ~3× smaller payloads; schema-enforced contracts |
+| Storage | TimescaleDB + pgvector HNSW | Time-series compression for trajectories; vector search for ReID gallery |
+| Person detector | YOLO26L NMS-Free, ONNX format | Single ONNX file runs on NVIDIA (TRT EP) and Intel Arc (OpenVINO EP) |
+| UI gateway | cognitive-companion as BFF | No direct browser access to CTS internal services; single auth boundary |
 
-## Milestone status
-
-| Milestone | Scope                                                | Status      |
-| --------- | ---------------------------------------------------- | ----------- |
-| M1        | Proto contracts, repos, docker-compose, CI           | Complete    |
-| M2        | rtsp-ingress Go service                              | Complete    |
-| M3        | Triton models + benchmark harness                    | Complete    |
-| M4        | Tracking orchestrator skeleton                       | Complete    |
-| M5        | Identity resolution + retroactive revision           | Complete    |
-| M6        | Trajectories, room dwells, keyframes                 | Complete    |
-| M7        | Admin UI (cameras, calibration, privacy, adjacency)  | Complete    |
-| M8        | Dementia signals, dashboard                          | Complete    |
-| M9        | Live view, identity corrections, runtime integration | Complete    |
-| M10       | K8s manifests, observability, proto wire migration   | In progress |
+---
 
 ## Repository layout
 
 ```text
 .
 ├── rtsp-ingress/              Go RTSP ingest service
-│   ├── config/settings.yaml  Default configuration
-│   ├── internal/config/       Config loading + .env + placeholder expansion
-│   ├── internal/rtsp/         RTSP session management and frame capture
+│   ├── config/
+│   │   ├── settings.yaml      Default config (cameras, redis, minio, go2rtc addr)
+│   │   └── go2rtc.yaml        go2rtc config (API listen addr only — no static streams)
+│   ├── internal/config/       Config loading + .env + ${VAR} expansion
+│   ├── internal/go2rtc/       go2rtc HTTP API client (register, deregister, fetch JPEG)
 │   ├── internal/motion/       Motion gating (pixel diff)
-│   └── internal/media/        MinIO upload + Redis publish
+│   ├── internal/media/        MinIO upload + Redis Streams publish
+│   ├── internal/metrics/      Prometheus metrics
+│   ├── internal/poll/         Per-camera JPEG polling worker
+│   ├── internal/reconciler/   Polls cognitive-companion API; calls Supervisor.Reconcile
+│   ├── internal/streams/      Stream lifecycle bookkeeping
+│   └── internal/supervisor/   Registers streams with go2rtc; starts/stops poll workers
 ├── tracking-orchestrator/     Python ML service
+│   ├── app/domain/            Frozen dataclasses (Detection, Tracklet, GlobalTrack, …)
 │   ├── app/inference/         Triton gRPC client + YOLO26L/ReID/Pose wrappers
-│   ├── app/tracking/          BoT-SORT, identity resolver, cross-camera assoc
+│   ├── app/tracking/          BoT-SORT, identity resolver, cross-camera association
 │   ├── app/trajectory/        Trajectory writer + dementia signal detectors
-│   └── app/transport/         Redis Streams codec (protobuf)
+│   ├── app/transport/         Redis Streams codec (protobuf), publishers
+│   ├── app/storage/           Repository protocols + InMemory + Postgres impls
+│   ├── app/routers/           Internal FastAPI endpoints
+│   ├── app/proto/             Generated protobuf Python bindings (committed)
+│   └── migrations/            SQL migrations (0001–0005)
 ├── triton-models/             Triton model configs + export scripts
 ├── proto/                     Protobuf contracts (frame, tracking, signals, scene)
 ├── cognitive-companion/       BFF gateway, Vue admin UI, MCP tools
 ├── k8s/                       Kubernetes manifests
 └── docs/                      Runbook, wire-format spec
 ```
+
+---
 
 ## Docs
 
