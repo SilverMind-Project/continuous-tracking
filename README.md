@@ -32,10 +32,10 @@ IP Cameras (RTSP)
                                                            │ YOLO26L  (person detection)  │
                                                            │ SOLIDER-REID (body embeds)   │──▶ Triton (:8001)
                                                            │ RTMPose  (pose estimation)   │
-                                                           │ BoT-SORT tracker             │
-                                                           │ Bayesian identity resolver   │
-                                                           │ Dementia signal worker       │
-                                                           └──────────────────────────────┘
+                                                           │ BoT-SORT tracker             │    YOLO26L · CLIP
+                                                           │ Bayesian identity resolver   │    Florence-2
+                                                           │ Dementia signal worker       │    SOLIDER-REID · RTMPose
+                                                           └──────────────────────────────┘    (all INT8 ONNX)
                                                                          │ tracking.events
                                                                          │ tracking.revisions
                                                                          │ tracking.signals
@@ -43,6 +43,10 @@ IP Cameras (RTSP)
                                                             cognitive-companion (Python/FastAPI, :8080)
                                                             BFF gateway · WebSocket live view
                                                             Vue 3 admin UI · MCP tools
+                                                            ┌──────────────────────────────┐
+                                                            │ scene-analysis-service (:8300)│──▶ Triton (:8001)
+                                                            │ YOLO26L · CLIP · Florence-2  │
+                                                            └──────────────────────────────┘
 ```
 
 **Infrastructure**: TimescaleDB + pgvector · Redis Streams (AOF) · MinIO · Triton Inference Server (NVIDIA or Intel Arc)
@@ -54,7 +58,8 @@ IP Cameras (RTSP)
 | `go2rtc` | 1984 | RTSP proxy sidecar — owns all camera sessions, serves JPEG frames over HTTP |
 | `rtsp-ingress` | 8090 | Registers cameras with go2rtc, polls frames, motion gating, MinIO upload |
 | `tracking-orchestrator` | 8000 | ML inference, tracking, identity resolution, signal detection |
-| `triton` | 8001 (gRPC) | YOLO26L, SOLIDER-REID, RTMPose model server |
+| `triton` | 8001 (gRPC) | YOLO26L, CLIP ViT-L/14, Florence-2, SOLIDER-REID, RTMPose (all INT8 ONNX) |
+| `scene-analysis-service` | 8300 | Scene analysis (shares Triton with CTS) |
 | `redis` | 6379 | Redis Streams transport (AOF enabled) |
 | `postgres` | 5432 | TimescaleDB + pgvector (tracklets, gallery, signals, trajectories) |
 | `minio` | 9000 | JPEG keyframe object storage |
@@ -178,25 +183,39 @@ Override any default at deploy time with the environment variables `DEFAULT_FRAM
 
 ## Model setup
 
-Model binaries are not in git. Both NVIDIA and Intel Arc GPUs are supported.
+Model binaries are not in git. All models use **INT8 quantization** for
+reduced size and faster inference. Both NVIDIA and Intel Arc GPUs are
+supported through Triton's ONNX Runtime backend.
 
 **Step 1 — select GPU vendor config** (run once per machine):
 
 ```bash
-python triton-models/scripts/configure_gpu.py --vendor nvidia   # NVIDIA TensorRT (default)
+python triton-models/scripts/configure_gpu.py --vendor nvidia   # NVIDIA TensorRT/CUDA (default)
 python triton-models/scripts/configure_gpu.py --vendor intel    # Intel Arc OpenVINO
 ```
 
-**Step 2 — export model weights:**
+**Step 2 — export / download models:**
 
 ```bash
-pip install ultralytics>=8.4.0
+# YOLO26L person detector (export + quantize)
+uv run --with ultralytics --with torch --with onnx --with onnxruntime --with sympy \
+    python triton-models/scripts/export_yolo.py --weights yolo26l.pt
+uv run --with onnxruntime --with onnx --with sympy \
+    python triton-models/scripts/quantize_int8.py \
+    --input triton-models/person-detector/1/model.onnx \
+    --output triton-models/person-detector/1/model_int8.onnx
 
-# YOLO26L person detector
-python triton-models/scripts/export_yolo.py \
-    --weights yolo26l.pt \
-    --backend onnx \
-    --out triton-models/person-detector/1/model.onnx
+# CLIP ViT-L/14 vision encoder (export + quantize)
+uv run --with open_clip_torch --with torch --with onnx --with onnxruntime --with sympy \
+    python triton-models/scripts/export_clip.py
+uv run --with onnxruntime --with onnx --with sympy \
+    python triton-models/scripts/quantize_int8.py \
+    --input triton-models/clip-vision/1/model.onnx \
+    --output triton-models/clip-vision/1/model_int8.onnx
+
+# Florence-2-large (download INT8 from onnx-community)
+uv run --with huggingface_hub \
+    python triton-models/scripts/download_florence.py
 
 # SOLIDER-REID body embedder
 python triton-models/scripts/export_reid.py --help
@@ -204,6 +223,22 @@ python triton-models/scripts/export_reid.py --help
 # RTMPose-m pose estimator
 python triton-models/scripts/export_pose.py --help
 ```
+
+### Model inventory
+
+| Model | Triton name | Format | Size (INT8) | Output shape |
+|-------|-------------|--------|-------------|-------------|
+| YOLO26L | `person-detector` | ONNX | 24 MB | [N, 300, 6] NMS-free |
+| CLIP ViT-L/14 | `clip-vision` | ONNX | 293 MB | [N, 768] |
+| Florence-2-large | `florence-2` | Python (ORT) | 794 MB | [1, max_len] |
+| SOLIDER-REID | `reid-solider` | ONNX | — | [N, 768] |
+| RTMPose-m | `pose-rtmpose` | ONNX | — | [N, 17, 384] + [N, 17, 512] |
+
+### Shared with scene-analysis-service
+
+The same Triton instance serves both CTS and `scene-analysis-service`.
+YOLO26L, CLIP, and Florence-2 models are shared. The `triton-shared/` package
+provides the common Triton client and inference utilities used by both services.
 
 See [triton-models/README.md](triton-models/README.md) for output shape verification, benchmark targets, and the Intel Arc container image.
 
@@ -284,7 +319,9 @@ make docker-down    # Stop everything and remove volumes
 | Transport | Redis Streams with consumer groups + XACK | At-least-once delivery with replay; survives orchestrator restarts |
 | Wire format | Protobuf (no JSON on streams) | ~3× smaller payloads; schema-enforced contracts |
 | Storage | TimescaleDB + pgvector HNSW | Time-series compression for trajectories; vector search for ReID gallery |
-| Person detector | YOLO26L NMS-Free, ONNX format | Single ONNX file runs on NVIDIA (TRT EP) and Intel Arc (OpenVINO EP) |
+| Person detector | YOLO26L NMS-Free, ONNX format, INT8 | Single ONNX file runs on NVIDIA (TRT EP) and Intel Arc (OpenVINO EP) |
+| Model serving | Triton Inference Server, all models ONNX | 5 models across 2 services (CTS + SAS); GPU vendor config in Triton, not client code |
+| Shared client | `triton-shared/` package | Common Triton gRPC client + pre/post-processing used by CTS and SAS |
 | UI gateway | cognitive-companion as BFF | No direct browser access to CTS internal services; single auth boundary |
 
 ---
@@ -316,11 +353,18 @@ make docker-down    # Stop everything and remove volumes
 │   ├── app/routers/           Internal FastAPI endpoints
 │   ├── app/proto/             Generated protobuf Python bindings (committed)
 │   └── migrations/            SQL migrations (0001–0005)
-├── triton-models/             Triton model configs + export scripts
+├── triton-models/             Triton model configs + export/download scripts
+│   ├── person-detector/       YOLO26L ONNX (INT8)
+│   ├── clip-vision/           CLIP ViT-L/14 ONNX (INT8)
+│   ├── florence-2/            Florence-2-large Python backend (INT8)
+│   ├── reid-solider/          SOLIDER-REID ONNX
+│   ├── pose-rtmpose/          RTMPose-m ONNX
+│   └── scripts/               export, download, quantize, configure_gpu
 ├── proto/                     Protobuf contracts (frame, tracking, signals, scene)
 ├── cognitive-companion/       BFF gateway, Vue admin UI, MCP tools
 ├── k8s/                       Kubernetes manifests
-└── docs/                      Runbook, wire-format spec
+├── docs/                      Runbook, wire-format spec
+└── ../triton-shared/          Shared Triton client + inference utilities
 ```
 
 ---

@@ -20,6 +20,7 @@
 
 name: "person-detector"
 platform: "onnxruntime_onnx"
+default_model_filename: "model_int8.onnx"
 max_batch_size: 16
 
 dynamic_batching {

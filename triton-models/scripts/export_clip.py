@@ -55,6 +55,7 @@ def export(out: Path) -> None:
             "output": {0: "batch"},
         },
         opset_version=17,
+        dynamo=False,
     )
     print(f"Exported ONNX → {out}")
     print(f"Input:  input   [batch, 3, 224, 224]  FP32")

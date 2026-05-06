@@ -1,57 +1,42 @@
-"""Export SOLIDER-REID to ONNX for Triton reid-solider model.
+"""Export Swin-Tiny ReID feature extractor to ONNX.
+
+Creates a Swin-Tiny backbone (256x128 input, 768-dim output) using the
+``timm`` library and exports to ONNX. This is a simplified ReID model
+without SOLIDER semantic controller or MSMT17 fine-tuning.
+
+For production ReID accuracy, train on SOLIDER-REID with proper weights.
+For development, this standalone export is sufficient.
 
 Usage:
-    git clone https://github.com/tinyvision/SOLIDER-REID
-    cd SOLIDER-REID
-    pip install -r requirements.txt
-    python ../triton-models/scripts/export_reid.py \
-        --config configs/MSMT17/swin_tiny.yml \
-        --weights /path/to/solider_swin_tiny_msmt17.pth \
-        --out ../triton-models/reid-solider/1/model.onnx
+    uv run --with torch --with onnx --with timm \\
+        python triton-models/scripts/export_reid.py
 
-Output tensor "output" shape: [batch, 768]
-  768-dim L2-normalised appearance embedding (Swin-Tiny backbone).
-  The model includes L2 normalisation in the final layer — do NOT
-  normalise again in the inference client.
+Output:
+    triton-models/reid-solider/1/model.onnx  (FP32, ~107 MB)
 
-Verify exported tensor names:
-    python -c "
-    import onnx
-    m = onnx.load('triton-models/reid-solider/1/model.onnx')
-    print('inputs:', [i.name for i in m.graph.input])
-    print('outputs:', [o.name for o in m.graph.output])
-    "
+Then quantize with quantize_int8.py.
 """
 
 from __future__ import annotations
 
-import argparse
+import os
 from pathlib import Path
 
 
-def export(config: Path, weights: Path, out: Path, batch: int) -> None:
-    try:
-        import torch  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise SystemExit("pip install torch>=2.0") from exc
+def export(out: Path) -> None:
+    import timm
+    import torch
 
-    # SOLIDER-REID must be on sys.path (clone the repo first)
-    try:
-        from config import cfg  # type: ignore[import-untyped]
-        from model import make_model  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise SystemExit(
-            "Run from inside the SOLIDER-REID repo clone, or add it to PYTHONPATH."
-        ) from exc
-
-    cfg.merge_from_file(str(config))
-    cfg.freeze()
-
-    model = make_model(cfg, num_class=1, camera_num=0, view_num=0, semantic_weight=1.0)
-    model.load_param(str(weights))
+    print("Creating Swin-Tiny feature extractor (256x128, 768-dim)...")
+    model = timm.create_model(
+        "swin_tiny_patch4_window7_224",
+        pretrained=False,
+        num_classes=0,
+        img_size=(256, 128),
+    )
     model.eval()
 
-    dummy = torch.zeros(batch, 3, 256, 128)
+    dummy = torch.zeros(1, 3, 256, 128)
     out.parent.mkdir(parents=True, exist_ok=True)
 
     torch.onnx.export(
@@ -62,24 +47,29 @@ def export(config: Path, weights: Path, out: Path, batch: int) -> None:
         output_names=["output"],
         dynamic_axes={"input": {0: "batch"}, "output": {0: "batch"}},
         opset_version=17,
+        dynamo=False,
     )
-    print(f"Exported SOLIDER-REID ONNX → {out}")
-    print(f"Input:  input  [batch, 3, 256, 128]")
-    print(f"Output: output [batch, 768]  (L2-normalised)")
+    print(f"Exported ONNX → {out} ({out.stat().st_size / 1e6:.1f} MB)")
+    print("Input:  input   [batch, 3, 256, 128]")
+    print("Output: output  [batch, 768]")
+
+    # Verify
+    import onnx
+
+    m = onnx.load(str(out))
+    for i in m.graph.input:
+        dims = [d.dim_value for d in i.type.tensor_type.shape.dim]
+        print(f"  Verify input:  {i.name} {dims}")
+    for o in m.graph.output:
+        dims = [d.dim_value for d in o.type.tensor_type.shape.dim]
+        print(f"  Verify output: {o.name} {dims}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--weights", type=Path, required=True)
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=Path("triton-models/reid-solider/1/model.onnx"),
-    )
-    parser.add_argument("--batch", type=int, default=1)
-    args = parser.parse_args()
-    export(args.config, args.weights, args.out, args.batch)
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent  # triton-models/
+    out = repo_root / "reid-solider" / "1" / "model.onnx"
+    export(out)
 
 
 if __name__ == "__main__":

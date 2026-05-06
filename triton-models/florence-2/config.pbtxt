@@ -1,0 +1,59 @@
+# Florence-2-large scene description — Python backend.
+#
+# Uses ONNX Runtime to orchestrate the autoregressive generation loop:
+#   vision_encoder → encoder_model → decoder_model_merged (autoregressive)
+#
+# GPU vendor support:
+#   NVIDIA: ONNX Runtime with CUDAExecutionProvider
+#   Intel Arc: ONNX Runtime with OpenVINOExecutionProvider
+#     (activate via configure_gpu.py --vendor intel)
+#
+# Model files (downloaded from onnx-community/Florence-2-large):
+#   triton-models/florence-2/1/
+#     model.py
+#     vision_encoder_int8.onnx
+#     encoder_model_int8.onnx
+#     decoder_model_merged_int8.onnx
+#     embed_tokens_int8.onnx
+#     tokenizer.json
+#     tokenizer_config.json
+#     generation_config.json
+#
+# Input:
+#   pixel_values  [1, 3, height, width]  FP32   Preprocessed image
+#   input_ids     [1, seq_len]           INT64  Tokenized task prompt
+#
+# Output:
+#   output_ids    [1, max_len]           INT64  Generated token IDs
+
+name: "florence-2"
+backend: "python"
+max_batch_size: 1
+
+input [
+  {
+    name: "pixel_values"
+    data_type: TYPE_FP32
+    dims: [1, 3, -1, -1]
+  },
+  {
+    name: "input_ids"
+    data_type: TYPE_INT64
+    dims: [1, -1]
+  }
+]
+
+output [
+  {
+    name: "output_ids"
+    data_type: TYPE_INT64
+    dims: [1, -1]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]
