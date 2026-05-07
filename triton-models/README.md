@@ -45,6 +45,12 @@ triton-models/
 │   └── 1/
 │       ├── model.onnx        FP32 ONNX — 52 MB
 │       └── model_int8.onnx   INT8 ONNX — 13 MB  ← active
+├── embeddinggemma-300m/      Gemma 3 300M sentence embeddings (ONNX Runtime)
+│   ├── config.pbtxt
+│   └── 1/
+│       ├── model_quantized.onnx          ONNX graph (INT8, 568 KB)
+│       ├── model_quantized.onnx_data     external weights (INT8, 309 MB)
+│       └── tokenizer.json               tokenizer (20 MB)
 └── scripts/
     ├── configure_gpu.py      Activate NVIDIA or Intel Arc configs
     ├── export_yolo.py        YOLO26L .pt → ONNX
@@ -68,8 +74,9 @@ MB each. Generate them with the export/download/quantize scripts.
 | Florence-2-large | `florence-2` | Python (ORT) | — | **794 MB** | `pixel_values` [1,3,H,W] + `input_ids` [1,seq] | `output_ids` [1,max_len] |
 | Swin-Tiny ReID | `reid-solider` | ONNX Runtime | 107 MB | **29 MB** | `input` [N,3,256,128] | `output` [N,768] |
 | RTMPose-m | `pose-rtmpose` | ONNX Runtime | 52 MB | **13 MB** | `input` [N,3,256,192] | `simcc_x` [N,17,384], `simcc_y` [N,17,512] |
+| embeddinggemma-300m | `embeddinggemma-300m` | ONNX Runtime | 1,230 MB | **309 MB** | `input_ids` [N,2048], `attention_mask` [N,2048] | `sentence_embedding` [N,768] |
 
-**Total model repo: ~1.15 GB** (INT8 active + FP32 backups).
+**Total model repo: ~1.48 GB** (INT8 active + FP32 backups).
 
 ## GPU vendor support
 
@@ -80,6 +87,7 @@ MB each. Generate them with the export/download/quantize scripts.
 | florence-2 | CUDAExecutionProvider | OpenVINOExecutionProvider |
 | reid-solider | TensorRT EP (auto) | OpenVINO EP |
 | pose-rtmpose | TensorRT EP (auto) | OpenVINO EP |
+| embeddinggemma-300m | TensorRT EP (auto) | OpenVINO EP |
 
 **NVIDIA**: Triton's ONNX Runtime auto-selects `TensorrtExecutionProvider`
 then `CUDAExecutionProvider`. On first load it builds and caches a TRT engine.
@@ -212,6 +220,26 @@ python -c "import onnx; m=onnx.load('triton-models/pose-rtmpose/1/model_int8.onn
 SimCC head with split_ratio=2.0: argmax over 384 x-bins (192×2) and
 512 y-bins (256×2) gives pixel coordinates.
 
+#### embeddinggemma-300m (Gemma 3 300M sentence embeddings)
+
+```bash
+# Download INT8 ONNX model + tokenizer from onnx-community
+uv run --with huggingface_hub \
+    python triton-models/scripts/download_embeddinggemma.py
+```
+
+Pre-quantized INT8 from `onnx-community/embeddinggemma-300m-ONNX`. No export
+or quantization step needed — the model is downloaded directly. The ONNX model
+uses external data (`.onnx` graph + `.onnx_data` weights); both files must be
+present in the model version directory.
+
+Client-side: tokenization + L2 normalization via
+`triton-shared/triton_shared/inference/text_embedding.py` and
+`triton-shared/triton_shared/models/embedder.py`.
+
+Used by the **Knowledge Repository** RAG pipeline in cognitive-companion for
+document chunk embedding and senior query vector search.
+
 ### Step 3 — start Triton and verify
 
 ```bash
@@ -222,7 +250,7 @@ docker compose up triton
 # See "Intel Arc container" section below
 ```
 
-Wait for all five models to report READY:
+Wait for all six models to report READY:
 
 ```bash
 curl -s http://localhost:8000/v2/models/person-detector/ready
@@ -230,6 +258,7 @@ curl -s http://localhost:8000/v2/models/clip-vision/ready
 curl -s http://localhost:8000/v2/models/florence-2/ready
 curl -s http://localhost:8000/v2/models/reid-solider/ready
 curl -s http://localhost:8000/v2/models/pose-rtmpose/ready
+curl -s http://localhost:8000/v2/models/embeddinggemma-300m/ready
 ```
 
 Run the benchmark to verify latency targets:
@@ -247,6 +276,7 @@ python tracking-orchestrator/scripts/benchmark_triton.py
 | reid-solider | 8 | ≤ 8 ms | ~6 ms | ~9 ms |
 | pose-rtmpose | 8 | ≤ 8 ms | ~6 ms | ~9 ms |
 | florence-2 | 1 | ≤ 2 s | ~1.5 s | ~2 s |
+| embeddinggemma-300m | 16 | ≤ 100 ms | ~80 ms | ~120 ms |
 
 NVIDIA numbers use the cached TRT engine (after first-load compilation).
 Intel Arc numbers use OpenVINO EP on Arc A770 16 GB.
@@ -266,11 +296,13 @@ RUN pip install openvino>=2024.2
 Refer to the [Triton OpenVINO backend docs](https://github.com/triton-inference-server/openvino_backend)
 for the current recommended base image and driver versions.
 
-## Shared with scene-analysis-service
+## Shared with cognitive-companion and scene-analysis-service
 
 The `person-detector`, `clip-vision`, and `florence-2` models are shared with
-`scene-analysis-service` (SAS). SAS uses the same Triton instance and the
-shared `triton-shared/` client library for inference.
+`scene-analysis-service` (SAS). The `embeddinggemma-300m` model is used by
+`cognitive-companion` for the Knowledge Repository RAG pipeline (document
+chunk embedding and senior query vector search).
 
-Both services use identical gRPC client code — GPU vendor differences are
-handled entirely by Triton configs.
+All services use the same Triton instance and the shared `triton-shared/`
+client library for inference. GPU vendor differences are handled entirely by
+Triton configs.

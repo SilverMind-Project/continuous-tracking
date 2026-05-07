@@ -8,13 +8,11 @@ from __future__ import annotations
 
 import numpy as np
 import numpy.typing as npt
-
 from triton_shared.client import TritonClientProtocol
 from triton_shared.inference.detection import (
     DETECTOR_CONF_THRESHOLD,
     DETECTOR_INPUT_SIZE,
     DETECTOR_MODEL_NAME,
-    DETECTOR_PERSON_CLASS,
     decode_output,
     letterbox_preprocess,
 )

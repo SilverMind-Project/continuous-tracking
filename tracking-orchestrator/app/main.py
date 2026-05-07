@@ -1,12 +1,15 @@
 """FastAPI application factory for the tracking orchestrator.
 
 Mirrors the cognitive-companion pattern: create_app() returns the app,
-lifespan manages service lifecycle (pipeline start/stop).
+lifespan manages service lifecycle (pipeline start/stop, DB migrations).
 """
+
+from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -25,6 +28,7 @@ from .routers.calibration import router as calibration_router
 from .routers.corrections import router as corrections_router
 from .routers.dashboard import router as dashboard_router
 from .routers.live import router as live_router
+from .storage.migrations import MigrationRunner
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.global_track_repo import PostgresGlobalTrackRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
@@ -36,6 +40,16 @@ logger = get_logger(__name__)
 
 # Module-level pipeline singleton, initialized in lifespan.
 _pipeline: FrameProcessingPipeline | None = None
+
+MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
+
+
+def _normalize_dsn(dsn: str) -> str:
+    """Strip ``+asyncpg`` SQLAlchemy scheme prefix if present."""
+    if dsn.startswith("postgresql+asyncpg://"):
+        return dsn.replace("+asyncpg", "", 1)
+    return dsn
+
 
 # Module-level asyncpg pool so shutdown can close it.
 _pool: Any = None  # asyncpg.Pool | None
@@ -73,11 +87,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         import asyncpg  # type: ignore[import-untyped]
 
         _pool = await asyncpg.create_pool(
-            dsn=database_url,
+            dsn=_normalize_dsn(database_url),
             min_size=2,
             max_size=20,
             command_timeout=10.0,
         )
+        runner = MigrationRunner(_pool, MIGRATIONS_DIR)
+        await runner.migrate()
         tracking_repo = PostgresTrackingRepository(_pool)
         gallery_repo = PostgresGalleryRepository(_pool)
         global_track_repo = PostgresGlobalTrackRepository(_pool)

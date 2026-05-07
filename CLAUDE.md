@@ -77,7 +77,7 @@ IP Cameras (RTSP)
                                             Vue 3 admin UI · MCP tools
 ```
 
-**Infrastructure**: TimescaleDB + pgvector · Redis Streams (AOF) · MinIO · Triton Inference Server
+**Infrastructure**: TimescaleDB + pgvectorscale (StreamingDiskANN) · Redis Streams (AOF) · MinIO · Triton Inference Server
 
 **GPU support**: NVIDIA (TensorRT/CUDA execution provider) and Intel Arc (OpenVINO execution provider). Switch with `python triton-models/scripts/configure_gpu.py --vendor nvidia|intel`. All models use INT8-quantized ONNX for efficiency.
 
@@ -106,14 +106,15 @@ IP Cameras (RTSP)
 │   ├── app/tracking/              BoT-SORT, identity resolver, cross-camera association
 │   ├── app/trajectory/            Trajectory writer + dementia signal detectors
 │   ├── app/transport/             Redis Streams codec (protobuf), publishers
-│   ├── app/storage/               Repository protocols, InMemory impls, Postgres impls
+│   ├── app/cli.py                 ``cts-db`` migration CLI (migrate / rollback / status)
+│   ├── app/storage/               Repository protocols, InMemory impls, Postgres impls, MigrationRunner
 │   ├── app/routers/               Internal FastAPI endpoints
 │   ├── app/observability/         Prometheus metrics
 │   ├── app/calibration/           Homography calibration state
 │   ├── app/sampling/              Keyframe sampler
 │   ├── app/pipeline/              Frame processing pipeline wiring
 │   ├── app/proto/                 Generated protobuf Python bindings (committed)
-│   └── migrations/                SQL migrations (0001–0005)
+│   └── migrations/                SQL migrations (0001–0005, .up.sql/.down.sql pairs)
 ├── triton-models/                 Triton model configs + export/download scripts
 │   ├── person-detector/           YOLO26L ONNX (INT8)
 │   ├── clip-vision/               CLIP ViT-L/14 ONNX (INT8)
@@ -123,8 +124,9 @@ IP Cameras (RTSP)
 │   └── scripts/                   export, download, quantize, configure_gpu
 ├── proto/                         Protobuf contracts (frame, tracking, signals, scene)
 ├── cognitive-companion/           BFF gateway (sibling repo — see its own CLAUDE.md)
-├── k8s/                           Kubernetes manifests
+├── k8s/                           Legacy K8s (migrated to ../kubernetes/continuous-tracking/)
 ├── docs/                          Runbook, wire-format spec
+├── ../kubernetes/                 Unified monorepo K8s manifests (nanai namespace)
 └── triton-shared/                 Shared Triton client + inference utilities (sibling)
 ```
 
@@ -147,6 +149,8 @@ Every persistent resource in `tracking-orchestrator` has three artifacts:
 1. **`Protocol`** in `storage/base.py` — the contract services depend on
 2. **`InMemory*`** in the same file — zero-dependency, used in all unit tests
 3. **`Postgres*`** in `storage/postgres/` — production asyncpg implementation
+
+The shared PostgreSQL instance (`timescale/timescaledb-ha:pg18`) hosts the `continuous_tracking` database alongside `cognitive_companion` and `semantic_memory`. The database is created and extensions installed by `scripts/db/init-databases.sh` (mounted at `/docker-entrypoint-initdb.d/`). Per-app SQL migrations are managed by `MigrationRunner` (`app/storage/migrations.py`), which uses `pg_try_advisory_lock` for multi-replica safety and an `.up.sql` / `.down.sql` convention for explicit rollback.
 
 ```python
 # storage/base.py
@@ -263,17 +267,27 @@ Redis clients must set `decode_responses=False` so binary payloads round-trip un
 
 ---
 
-## Database Schema
+## Database Migrations
 
-Migrations in `tracking-orchestrator/migrations/`:
+Migrations live in `tracking-orchestrator/migrations/` as numbered `.up.sql` / `.down.sql` pairs. The `MigrationRunner` (`app/storage/migrations.py`) tracks applied state in `_schema_version` and uses `pg_try_advisory_lock` so only one replica runs migrations at a time.
+
+Migrations run automatically at orchestrator startup (backward-compatible) and can also be invoked standalone:
+
+```bash
+cts-db migrate          # apply pending up migrations
+cts-db rollback -n 1    # roll back last migration
+cts-db status           # show applied / pending
+```
 
 | File | Contents |
 | --- | --- |
-| `0001_init.sql` | `tracklets`, `detections` (hypertable), `global_tracks`, `identity_revisions`, `gallery_entries` (pgvector HNSW), `tracking_events` |
-| `0002_m6_trajectory_keyframes.sql` | `person_trajectories` (hypertable), `room_dwells`, `tagged_keyframes` |
-| `0003_m8_signals.sql` | `dementia_signals` hypertable + continuous aggregate `dementia_signals_daily` |
-| `0004_nullable_embedding.sql` | Embedding column nullable |
-| `0005_fix_signal_identity_id_type.sql` | Type correction on `dementia_signals.identity_id` |
+| `0001_init` | `tracklets`, `detections` (hypertable), `global_tracks`, `identity_revisions`, `gallery_entries` (pgvector HNSW), `tracking_events` |
+| `0002_m6_trajectory_keyframes` | `person_trajectories` (hypertable), `room_dwells`, `tagged_keyframes` |
+| `0003_m8_signals` | `dementia_signals` hypertable + continuous aggregate `dementia_signals_daily` |
+| `0004_nullable_embedding` | Embedding column nullable |
+| `0005_fix_signal_identity_id_type` | Type correction on `dementia_signals.identity_id` |
+
+**DATABASE_URL**: asyncpg expects a plain `postgresql://` DSN. If a `postgresql+asyncpg://` (SQLAlchemy-style) URL is provided, the `_normalize_dsn()` helper strips the `+asyncpg` prefix automatically.
 
 ---
 

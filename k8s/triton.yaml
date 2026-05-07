@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: triton
-  namespace: cts
+  namespace: nanai
   labels:
     app.kubernetes.io/name: triton
     app.kubernetes.io/component: inference
@@ -78,7 +78,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: triton
-  namespace: cts
+  namespace: nanai
 spec:
   selector:
     app.kubernetes.io/name: triton
@@ -97,7 +97,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: triton-models
-  namespace: cts
+  namespace: nanai
 spec:
   accessModes: ["ReadOnlyMany"]
   resources:

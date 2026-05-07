@@ -1,28 +1,14 @@
 # Continuous Tracking System — local development environment
-# Services: TimescaleDB, Redis, MinIO, tracking-orchestrator, rtsp-ingress
+# Services: Redis, MinIO, tracking-orchestrator, rtsp-ingress
+#
+# PostgreSQL is provided by the shared ../docker-compose.db.yml (included below).
+
+include:
+  - path: ../db/docker-compose.db.yml
+    env_file:
+      - ../db/.env
 
 services:
-  # -----------------------------------------------------------------------
-  # TimescaleDB (Postgres + hypertimescale)
-  # -----------------------------------------------------------------------
-  timescaledb:
-    image: timescale/timescaledb-ha:pg17
-    container_name: cts-timescaledb
-    environment:
-      POSTGRES_USER: cts
-      POSTGRES_PASSWORD: cts
-      POSTGRES_DB: continuous_tracking
-    ports:
-      - "5432:5432"
-    volumes:
-      - tsdata:/var/lib/postgresql/data
-      - ./tracking-orchestrator/migrations:/docker-entrypoint-initdb.d/001-init
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cts -d continuous_tracking"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   # -----------------------------------------------------------------------
   # Redis (Streams transport)
   # -----------------------------------------------------------------------
@@ -103,8 +89,10 @@ services:
       context: ./tracking-orchestrator
       dockerfile: Dockerfile
     container_name: cts-orchestrator
+    networks:
+      - nanai
     environment:
-      DATABASE_URL: postgresql+asyncpg://cts:cts@timescaledb:5432/continuous_tracking
+      DATABASE_URL: postgresql+asyncpg://${CTS_DB_USER:-cts_user}:${CTS_DB_PASSWORD:?err}@postgres:5432/continuous_tracking
       REDIS_URL: redis://redis:6379/0
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: minioadmin
@@ -115,7 +103,7 @@ services:
     ports:
       - "8500:8500"
     depends_on:
-      timescaledb:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -190,7 +178,11 @@ services:
     profiles:
       - app
 
+networks:
+  nanai:
+    name: nanai
+    external: true
+
 volumes:
-  tsdata:
   redisdata:
   miniodata:

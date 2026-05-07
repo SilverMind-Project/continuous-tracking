@@ -29,6 +29,12 @@ _MODELS = [
         "script": "download_florence.py",
         "description": "Florence-2-large scene description (INT8, ~794 MB)",
     },
+    {
+        "name": "embeddinggemma-300m",
+        "repo": "onnx-community/embeddinggemma-300m-ONNX",
+        "script": "download_embeddinggemma.py",
+        "description": "embeddinggemma-300m sentence embeddings (INT8, ~330 MB)",
+    },
 ]
 
 
@@ -70,6 +76,8 @@ def main() -> None:
     print("         python triton-models/scripts/quantize_int8.py --input ... --output ...")
     print("  3. Select GPU vendor:")
     print("     python triton-models/scripts/configure_gpu.py --vendor nvidia|intel")
+    print("  4. Verify embedding dimension matches CC settings:")
+    print("     grep 'dim:' cognitive-companion/config/settings.yaml")
 
 
 if __name__ == "__main__":

@@ -1,15 +1,6 @@
 # Continuous Tracking System (CTS)
 
-A real-time monitoring system for seniors with early dementia. CTS watches RTSP camera streams, tracks individuals across multiple cameras, detects dementia-relevant behavioural patterns, and surfaces alerts through the [cognitive-companion](../cognitive-companion) BFF.
-
-## What it does
-
-- **Pulls RTSP streams** via a go2rtc sidecar — rtsp-ingress registers cameras with go2rtc over HTTP and polls for pre-decoded JPEG frames; go2rtc owns all RTSP sessions
-- **Gates on motion** to avoid uploading static frames; uploads JPEG keyframes to MinIO
-- **Tracks people** frame-to-frame using BoT-SORT with Kalman filtering and appearance embeddings
-- **Re-identifies individuals** across cameras using a Bayesian posterior over identity candidates, combining ArcFace face recognition and SOLIDER-REID body appearance
-- **Detects dementia signals**: pacing, sundowning, bathroom anomaly, nighttime movement, prolonged stillness, unexplained absence
-- **Streams results** via Redis Streams (protobuf wire format) to the cognitive-companion gateway which exposes them through a Vue admin UI
+Multi-camera RTSP tracking for seniors with early dementia. Tracks individuals with BoT-SORT + Bayesian identity resolution, detects dementia-relevant behavioural patterns, and surfaces results via Redis Streams to the [cognitive-companion](../cognitive-companion) BFF.
 
 ## Architecture
 
@@ -49,7 +40,7 @@ IP Cameras (RTSP)
                                                             └──────────────────────────────┘
 ```
 
-**Infrastructure**: TimescaleDB + pgvector · Redis Streams (AOF) · MinIO · Triton Inference Server (NVIDIA or Intel Arc)
+**Infrastructure**: TimescaleDB + pgvectorscale (StreamingDiskANN) · Redis Streams (AOF) · MinIO · Triton Inference Server (NVIDIA or Intel Arc)
 
 ## Services
 
@@ -61,7 +52,7 @@ IP Cameras (RTSP)
 | `triton` | 8001 (gRPC) | YOLO26L, CLIP ViT-L/14, Florence-2, SOLIDER-REID, RTMPose (all INT8 ONNX) |
 | `scene-analysis-service` | 8300 | Scene analysis (shares Triton with CTS) |
 | `redis` | 6379 | Redis Streams transport (AOF enabled) |
-| `postgres` | 5432 | TimescaleDB + pgvector (tracklets, gallery, signals, trajectories) |
+| `postgres` | 5432 | TimescaleDB + pgvectorscale (shared instance; tracklets, gallery, signals, trajectories) |
 | `minio` | 9000 | JPEG keyframe object storage |
 | `cognitive-companion` | 8080 | BFF gateway, Vue admin UI, WebSocket live view |
 
@@ -78,7 +69,8 @@ IP Cameras (RTSP)
 ### 1. Start infrastructure
 
 ```bash
-docker compose up -d postgres redis minio
+# The shared Postgres instance is included from ../docker-compose.db.yml
+docker compose up -d redis minio
 ```
 
 ### 2. Configure cameras
@@ -318,7 +310,7 @@ make docker-down    # Stop everything and remove volumes
 | Identity model | Bayesian posterior, not single-assignment | Seniors with dementia have irregular gait; hard thresholds misidentify too often |
 | Transport | Redis Streams with consumer groups + XACK | At-least-once delivery with replay; survives orchestrator restarts |
 | Wire format | Protobuf (no JSON on streams) | ~3× smaller payloads; schema-enforced contracts |
-| Storage | TimescaleDB + pgvector HNSW | Time-series compression for trajectories; vector search for ReID gallery |
+| Storage | TimescaleDB + pgvectorscale (StreamingDiskANN) | Time-series compression for trajectories; high-performance vector search for ReID gallery |
 | Person detector | YOLO26L NMS-Free, ONNX format, INT8 | Single ONNX file runs on NVIDIA (TRT EP) and Intel Arc (OpenVINO EP) |
 | Model serving | Triton Inference Server, all models ONNX | 5 models across 2 services (CTS + SAS); GPU vendor config in Triton, not client code |
 | Shared client | `triton-shared/` package | Common Triton gRPC client + pre/post-processing used by CTS and SAS |
@@ -362,7 +354,7 @@ make docker-down    # Stop everything and remove volumes
 │   └── scripts/               export, download, quantize, configure_gpu
 ├── proto/                     Protobuf contracts (frame, tracking, signals, scene)
 ├── cognitive-companion/       BFF gateway, Vue admin UI, MCP tools
-├── k8s/                       Kubernetes manifests
+├── k8s/                       Kubernetes manifests (migrated to ../kubernetes/continuous-tracking/ for unified deployment)
 ├── docs/                      Runbook, wire-format spec
 └── ../triton-shared/          Shared Triton client + inference utilities
 ```

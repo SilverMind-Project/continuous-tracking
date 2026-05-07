@@ -1,0 +1,61 @@
+# embeddinggemma-300m — ONNX Runtime backend.
+#
+# Sentence embedding model for the Knowledge Repository RAG pipeline.
+# Outputs 768-dim embeddings that are mean-pooled and L2-normalized
+# client-side (see triton-shared/triton_shared/inference/text_embedding.py).
+#
+# Model source: onnx-community/embeddinggemma-300m-ONNX
+# Download:     python triton-models/scripts/download_embeddinggemma.py
+#
+# Input:  "input_ids"       [batch, seq_len]  INT64  (tokenized text)
+#         "attention_mask"   [batch, seq_len]  INT64  (1 = real token, 0 = pad)
+# Output: "sentence_embedding" [batch, 768]  FP32  (pre-pooled by the model)
+#
+# Preprocessing (client-side, triton-shared):
+#   1. Tokenize text with the shipped tokenizer.json (HuggingFace tokenizers)
+#   2. Truncate to max_seq_len (2048), pad to the right
+#   3. Build attention_mask: 1 for real tokens, 0 for padding
+#
+# Postprocessing (client-side, triton-shared):
+#   1. L2-normalize the sentence_embedding vector
+#
+# MRL (Matryoshka Representation Learning): the 768-dim output can be
+# truncated to 512, 256, or 128 dims and re-normalized for smaller index
+# sizes. Default is 768.
+
+name: "embeddinggemma-300m"
+platform: "onnxruntime_onnx"
+default_model_filename: "model_quantized.onnx"
+max_batch_size: 16
+
+dynamic_batching {
+  max_queue_delay_microseconds: 5000
+}
+
+input [
+  {
+    name: "input_ids"
+    data_type: TYPE_INT64
+    dims: [-1, 2048]
+  },
+  {
+    name: "attention_mask"
+    data_type: TYPE_INT64
+    dims: [-1, 2048]
+  }
+]
+
+output [
+  {
+    name: "sentence_embedding"
+    data_type: TYPE_FP32
+    dims: [768]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

@@ -27,7 +27,9 @@
       "Bash(go build *)",
       "Bash(go doc *)",
       "Bash(make mypy *)",
-      "Bash(tracking-orchestrator/.venv/bin/ruff format *)"
+      "Bash(tracking-orchestrator/.venv/bin/ruff format *)",
+      "Bash(make test *)",
+      "Bash(make import-lint *)"
     ]
   }
 }

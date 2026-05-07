@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import numpy as np
 import numpy.typing as npt
 import pytest
+from triton_shared.inference.detection import decode_output, letterbox_preprocess
 
 from app.inference.detector import PersonDetector
 from app.inference.pose import PoseEstimator, _decode_simcc, _preprocess
@@ -24,7 +25,6 @@ from app.inference.schemas import (
     PoseResult,
 )
 from app.inference.triton_client import TritonClientProtocol
-from triton_shared.inference.detection import decode_output, letterbox_preprocess
 
 # ---------------------------------------------------------------------------
 # Helpers

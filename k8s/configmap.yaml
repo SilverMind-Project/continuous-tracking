@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cts-orchestrator-config
-  namespace: cts
+  namespace: nanai
   labels:
     app.kubernetes.io/name: tracking-orchestrator
     app.kubernetes.io/part-of: continuous-tracking
@@ -19,14 +19,14 @@ data:
       signals_stream: tracking.signals
       scene_samples_stream: scene.samples
     triton:
-      url: triton.cts.svc.cluster.local:8001
+      url: triton.nanai.svc.cluster.local:8001
       ensemble_model: perception_ensemble
       batch_size: 8
     redis:
-      url: redis://redis.cts.svc.cluster.local:6379/0
+      url: redis://redis.nanai.svc.cluster.local:6379/0
       stream_maxlen: 100000
     minio:
-      endpoint: minio.cts.svc.cluster.local:9000
+      endpoint: minio.nanai.svc.cluster.local:9000
       bucket: cts-frames
     observability:
       metrics_port: 9090
@@ -37,7 +37,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cts-ingress-config
-  namespace: cts
+  namespace: nanai
   labels:
     app.kubernetes.io/name: rtsp-ingress
     app.kubernetes.io/part-of: continuous-tracking
@@ -50,10 +50,10 @@ data:
       addr: http://localhost:1984
       timeout_s: 10
     minio:
-      endpoint: minio.cts.svc.cluster.local:9000
+      endpoint: minio.nanai.svc.cluster.local:9000
       bucket: cts-frames
     redis:
-      addr: redis.cts.svc.cluster.local:6379
+      addr: redis.nanai.svc.cluster.local:6379
       stream: frames.ready
       maxlen_approx: 100000
     cognitive_companion:
@@ -64,7 +64,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cts-go2rtc-config
-  namespace: cts
+  namespace: nanai
   labels:
     app.kubernetes.io/name: rtsp-ingress
     app.kubernetes.io/part-of: continuous-tracking
