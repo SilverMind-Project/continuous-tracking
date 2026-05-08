@@ -91,4 +91,4 @@ dev = [
 ]
 
 [tool.uv.sources]
-triton-shared = { path = "../../triton-shared" }
+triton-shared = { git = "https://github.com/SilverMind-Project/triton-shared" }

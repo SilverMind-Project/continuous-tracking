@@ -1,6 +1,7 @@
 # Continuous Tracking System — local development environment
-# Services: Redis, MinIO, tracking-orchestrator, rtsp-ingress
+# Services: Redis, tracking-orchestrator, rtsp-ingress
 #
+# MinIO is provided externally (minio.nanai.khoofia.com).
 # PostgreSQL is provided by the shared ../docker-compose.db.yml (included below).
 
 include:
@@ -15,9 +16,11 @@ services:
   redis:
     image: redis:7-alpine
     container_name: cts-redis
+    networks:
+      - nanai
     ports:
       - "6379:6379"
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --bind 0.0.0.0 --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redisdata:/data
     healthcheck:
@@ -27,27 +30,6 @@ services:
       retries: 10
 
   # -----------------------------------------------------------------------
-  # MinIO (object storage for frames)
-  # -----------------------------------------------------------------------
-  minio:
-    image: minio/minio:latest
-    container_name: cts-minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - miniodata:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # -----------------------------------------------------------------------
   # Triton Inference Server (GPU model serving)
   # Reserved for M3+. Kept behind an explicit profile so normal local
   # development does not try to start a noisy placeholder.
@@ -55,15 +37,22 @@ services:
   triton:
     image: nvcr.io/nvidia/tritonserver:24.04-py3
     container_name: cts-triton
+    networks:
+      nanai:
+        aliases:
+          - triton
     command: >
       tritonserver
       --model-repository=/models
+      --grpc-port=8701
+      --http-port=8700
+      --metrics-port=8702
       --exit-on-error=false
-      --load-model=nonexistent
+      --strict-model-config=false
     ports:
-      - "8000:8000"
-      - "8001:8001"
-      - "8002:8002"
+      - "8700:8700"
+      - "8701:8701"
+      - "8702:8702"
     volumes:
       - ./triton-models:/models
     deploy:
@@ -86,19 +75,19 @@ services:
   # -----------------------------------------------------------------------
   tracking-orchestrator:
     build:
-      context: ./tracking-orchestrator
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: continuous-tracking/tracking-orchestrator/Dockerfile
     container_name: cts-orchestrator
     networks:
       - nanai
     environment:
       DATABASE_URL: postgresql+asyncpg://${CTS_DB_USER:-cts_user}:${CTS_DB_PASSWORD:?err}@postgres:5432/continuous_tracking
       REDIS_URL: redis://redis:6379/0
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_USE_SSL: "false"
-      TRITON_ENDPOINT: triton:8001
+      TRITON_ENDPOINT: triton:8701
       CTS_ENABLED: "true"
     ports:
       - "8500:8500"
@@ -106,8 +95,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8500/health"]
@@ -125,6 +112,8 @@ services:
   go2rtc:
     image: ghcr.io/alexxit/go2rtc:1.9.14
     container_name: cts-go2rtc
+    networks:
+      - nanai
     environment:
       # Disable auto-discovery features not needed in this setup.
       GO2RTC_CONF: /config/go2rtc.yaml
@@ -149,24 +138,26 @@ services:
       context: .
       dockerfile: rtsp-ingress/Dockerfile
     container_name: cts-rtsp-ingress
+    networks:
+      - nanai
     environment:
       REDIS_ADDRESS: redis:6379
       REDIS_DB: "0"
       REDIS_STREAM: frames.ready
       REDIS_MAXLEN_APPROX: "100000"
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_USE_SSL: "false"
-      MINIO_BUCKET: cts-frames
+      MINIO_BUCKET: ${MINIO_BUCKET}
       GO2RTC_ADDR: http://go2rtc:1984
       CAMERAS_JSON: "[]"
+      COGNITIVE_BASE_URL: http://cc-backend:8000
+      COGNITIVE_API_KEY: ${CC_INGRESS_API_KEY:?err}
     ports:
       - "8090:8090"
     depends_on:
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
       go2rtc:
         condition: service_healthy
@@ -178,11 +169,10 @@ services:
     profiles:
       - app
 
+volumes:
+  redisdata:
+
 networks:
   nanai:
     name: nanai
     external: true
-
-volumes:
-  redisdata:
-  miniodata:

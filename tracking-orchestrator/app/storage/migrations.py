@@ -154,13 +154,53 @@ class MigrationRunner:
     # Apply / rollback
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _no_transaction(sql: str) -> bool:
+        """Return True if the migration declares it must run outside a transaction."""
+        for line in sql.splitlines():
+            stripped = line.strip()
+            if stripped == "-- migrate:no-transaction":
+                return True
+            if stripped and not stripped.startswith("--"):
+                break
+        return False
+
+    @staticmethod
+    def _split_statements(sql: str) -> list[str]:
+        """Split a SQL file into individual statements for non-transactional execution.
+
+        asyncpg sends multi-statement strings via the simple query protocol,
+        which PostgreSQL wraps in an implicit transaction — breaking DDL like
+        CREATE MATERIALIZED VIEW ... WITH (timescaledb.continuous).  Executing
+        one statement at a time avoids that implicit transaction.
+        """
+        stmts = []
+        for raw in sql.split(";"):
+            stmt = raw.strip()
+            # Drop pure-comment blocks that have no executable SQL
+            non_comment = "\n".join(
+                line for line in stmt.splitlines() if not line.strip().startswith("--")
+            ).strip()
+            if non_comment:
+                stmts.append(stmt)
+        return stmts
+
     async def _apply_up(self, conn: Any, base_name: str) -> None:
         path = self._up_files()[base_name]
         sql = path.read_text()
         logger.info("Applying migration", filename=path.name, base=base_name)
-        async with conn.transaction():
-            await conn.execute(sql)
+        if self._no_transaction(sql):
+            # Execute each statement individually so none runs inside an implicit
+            # transaction (required for CREATE MATERIALIZED VIEW WITH timescaledb.continuous).
+            for stmt in self._split_statements(sql):
+                await conn.execute(stmt)
             await conn.execute("INSERT INTO _schema_version (filename) VALUES ($1)", base_name)
+        else:
+            async with conn.transaction():
+                await conn.execute(sql)
+                await conn.execute(
+                    "INSERT INTO _schema_version (filename) VALUES ($1)", base_name
+                )
         logger.info("Migration applied", filename=path.name)
 
     async def _apply_down(self, conn: Any, base_name: str) -> None:
@@ -170,7 +210,14 @@ class MigrationRunner:
             return
         sql = down.read_text()
         logger.info("Rolling back migration", filename=down.name, base=base_name)
-        async with conn.transaction():
-            await conn.execute(sql)
+        if self._no_transaction(sql):
+            for stmt in self._split_statements(sql):
+                await conn.execute(stmt)
             await conn.execute("DELETE FROM _schema_version WHERE filename = $1", base_name)
+        else:
+            async with conn.transaction():
+                await conn.execute(sql)
+                await conn.execute(
+                    "DELETE FROM _schema_version WHERE filename = $1", base_name
+                )
         logger.info("Migration rolled back", filename=down.name)

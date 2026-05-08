@@ -8,7 +8,7 @@ Usage:
     cd continuous-tracking
     uv run --extra triton tracking-orchestrator/scripts/benchmark_triton.py
     uv run --extra triton tracking-orchestrator/scripts/benchmark_triton.py \\
-        --url localhost:8001 --warmup 20 --iters 200
+        --url localhost:8701 --warmup 20 --iters 200
 
 Exit code 1 if any model exceeds its batch-8 p99 DoD target.
 
@@ -187,7 +187,7 @@ def _check_dod(results: list[LatencyStats]) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", default="localhost:8001", help="Triton gRPC URL")
+    parser.add_argument("--url", default="localhost:8701", help="Triton gRPC URL")
     parser.add_argument("--warmup", type=int, default=10, help="Warmup iterations")
     parser.add_argument("--iters", type=int, default=100, help="Measurement iterations")
     args = parser.parse_args()

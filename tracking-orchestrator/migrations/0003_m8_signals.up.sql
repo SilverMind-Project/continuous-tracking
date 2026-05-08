@@ -1,5 +1,7 @@
+-- migrate:no-transaction
 -- Migration 0003: M8 dementia signals table
 -- Requires TimescaleDB (already enabled in 0001_init.sql).
+-- CREATE MATERIALIZED VIEW ... WITH (timescaledb.continuous) cannot run inside a transaction.
 
 CREATE SCHEMA IF NOT EXISTS continuous_tracking;
 
@@ -55,7 +57,7 @@ GROUP BY identity_id, signal_kind, day;
 
 SELECT add_continuous_aggregate_policy(
     'continuous_tracking.dementia_signals_daily',
-    start_offset      => INTERVAL '2 days',
+    start_offset      => INTERVAL '3 days',
     end_offset        => INTERVAL '1 hour',
     schedule_interval => INTERVAL '15 minutes',
     if_not_exists     => TRUE

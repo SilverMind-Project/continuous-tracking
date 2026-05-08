@@ -50,7 +50,7 @@ IP Cameras (RTSP)
                                            tracking-orchestrator (Python, port 8000)
                                            ┌──────────────────────────────┐
                                            │ YOLO26L  person detection    │
-                                           │ SOLIDER-REID body embeds     │──▶ Triton (gRPC 8001)
+                                           │ SOLIDER-REID body embeds     │──▶ Triton (gRPC 8701)
                                            │ RTMPose  pose estimation     │
                                            │ BoT-SORT tracker             │    YOLO26L · CLIP · Florence-2
                                            │ Bayesian identity resolver   │    SOLIDER-REID · RTMPose
@@ -65,7 +65,7 @@ IP Cameras (RTSP)
                                             Vue 3 admin UI · MCP tools
                                             ┌──────────────────────────────┐
                                             │ scene-analysis-service       │
-                                            │ (sibling, shares Triton)     │──▶ Triton (gRPC 8001)
+                                            │ (sibling, shares Triton)     │──▶ Triton (gRPC 8701)
                                             │ YOLO26L · CLIP · Florence-2  │
                                             └──────────────────────────────┘
                                                          │ tracking.events

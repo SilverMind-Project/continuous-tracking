@@ -22,6 +22,7 @@ from .inference.reid_embedder import ReidEmbedder
 from .inference.triton_client import TritonGrpcClient
 from .pipeline import FrameProcessingPipeline
 from .pipeline.frame_pipeline import PipelineConfig
+from .transport.redis_streams import TransportConfig
 from .routers import corrections as corrections_router_mod
 from .routers import live as live_router_mod
 from .routers.calibration import router as calibration_router
@@ -67,7 +68,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _pipeline, _pool, _triton_client, _frame_fetcher
 
     # Startup: initialize pipeline and start background tasks
-    config = PipelineConfig()
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    config = PipelineConfig(transport=TransportConfig(redis_url=redis_url))
     _pipeline = FrameProcessingPipeline(config)
 
     # Read database URL from environment, not from never-populated app.state.config.
