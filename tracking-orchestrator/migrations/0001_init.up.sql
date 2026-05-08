@@ -1,5 +1,6 @@
--- M1: Initial schema for the continuous tracking system.
--- Targets TimescaleDB with pgvector for ANN search.
+-- Initial schema for the continuous tracking system.
+-- Targets TimescaleDB with pgvectorscale for vector ANN search.
+-- Rolled up from 0001–0005 (May 2026) with all corrections applied.
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS timescaledb;
@@ -75,13 +76,15 @@ CREATE TABLE detections (
 );
 
 CREATE INDEX idx_detections_embedding ON detections
-    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)
+    USING diskann (embedding vector_cosine_ops)
     WHERE embedding IS NOT NULL;
 
 CREATE INDEX idx_detections_global_track ON detections(global_track_id)
     WHERE global_track_id IS NOT NULL;
 
 CREATE INDEX idx_detections_event_time ON detections(event_time DESC);
+
+CREATE INDEX idx_detections_event_id ON detections(event_id);
 
 -- ---------------------------------------------------------------------------
 -- Tracklets: short-lived trajectories within a single camera
@@ -129,6 +132,8 @@ CREATE TABLE global_tracks (
 
 CREATE INDEX idx_global_tracks_state ON global_tracks(state) WHERE state = 'active';
 
+CREATE INDEX idx_global_tracks_tracklet_ids ON global_tracks USING gin(tracklet_ids);
+
 -- ---------------------------------------------------------------------------
 -- Identity revisions: Bayesian posterior updates
 -- ---------------------------------------------------------------------------
@@ -166,20 +171,26 @@ CREATE TABLE identities (
 
 CREATE INDEX idx_identities_active ON identities(is_active) WHERE is_active = true;
 
+-- reid_gallery.embedding is nullable: the pipeline uses NULL when ReID is unavailable.
 CREATE TABLE reid_gallery (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     identity_id       UUID NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
-    embedding         vector(768) NOT NULL,
+    embedding         vector(768),
     quality           REAL NOT NULL DEFAULT 1.0,
     origin_tracklet_id UUID REFERENCES tracklets(tracklet_id) ON DELETE SET NULL,
     seen_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-    face_confirmed    BOOLEAN NOT NULL DEFAULT false
+    face_confirmed    BOOLEAN NOT NULL DEFAULT false,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- pgvectorscale StreamingDiskANN for scalable vector search.
 CREATE INDEX idx_reid_gallery_embedding ON reid_gallery
-    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+    USING diskann (embedding vector_cosine_ops);
 
 CREATE INDEX idx_reid_gallery_identity_time ON reid_gallery(identity_id, seen_at DESC);
+
+CREATE INDEX idx_reid_gallery_origin_tracklet ON reid_gallery(origin_tracklet_id);
 
 -- ---------------------------------------------------------------------------
 -- Person activities: dementia activity layer records
@@ -231,6 +242,134 @@ CREATE TABLE stream_assignments (
 CREATE UNIQUE INDEX idx_assignments_stream_id ON stream_assignments(stream_id);
 
 -- ---------------------------------------------------------------------------
+-- Person trajectories: confirmed ground-plane positions over time
+-- ---------------------------------------------------------------------------
+CREATE TABLE person_trajectories (
+    id                  BIGSERIAL,
+    observed_at         TIMESTAMPTZ NOT NULL,
+    identity_id         UUID NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    global_track_id     UUID NOT NULL REFERENCES global_tracks(global_track_id) ON DELETE CASCADE,
+    room_name           TEXT NOT NULL DEFAULT '',
+    ground_x            DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    ground_y            DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    posture             TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (posture IN ('standing', 'sitting', 'walking', 'lying', 'unknown')),
+    identity_confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    PRIMARY KEY (id, observed_at)
+);
+
+SELECT create_hypertable('person_trajectories', 'observed_at', if_not_exists => TRUE);
+
+CREATE INDEX idx_person_trajectories_identity ON person_trajectories (identity_id, observed_at DESC);
+CREATE INDEX idx_person_trajectories_global_track ON person_trajectories (global_track_id);
+
+-- ---------------------------------------------------------------------------
+-- Room dwells: contiguous time a person spent in a room
+-- ---------------------------------------------------------------------------
+CREATE TABLE room_dwells (
+    id               BIGSERIAL PRIMARY KEY,
+    identity_id      UUID NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    global_track_id  UUID REFERENCES global_tracks(global_track_id) ON DELETE SET NULL,
+    room_name        TEXT NOT NULL,
+    entered_at       TIMESTAMPTZ NOT NULL,
+    exited_at        TIMESTAMPTZ,
+    duration_seconds INTEGER,
+    entry_confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    primary_posture  TEXT NOT NULL DEFAULT 'unknown',
+    activity_summary JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX idx_room_dwells_identity ON room_dwells (identity_id, entered_at DESC);
+CREATE INDEX idx_room_dwells_global_track ON room_dwells (global_track_id, entered_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Tagged keyframes: periodic + triggered frame samples with annotations
+-- ---------------------------------------------------------------------------
+CREATE TABLE tagged_keyframes (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tracklet_id     UUID REFERENCES tracklets(tracklet_id) ON DELETE SET NULL,
+    global_track_id UUID REFERENCES global_tracks(global_track_id) ON DELETE SET NULL,
+    camera_id       TEXT NOT NULL,
+    minio_key       TEXT NOT NULL,
+    captured_at     TIMESTAMPTZ NOT NULL,
+    annotations     JSONB NOT NULL DEFAULT '{}',
+    tag_reason      TEXT NOT NULL
+        CHECK (tag_reason IN ('periodic', 'identity_changed', 'hazard', 'dwell_start', 'fall', 'dementia_signal')),
+    expires_at      TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX idx_tagged_keyframes_tracklet ON tagged_keyframes (tracklet_id, captured_at DESC);
+CREATE INDEX idx_tagged_keyframes_global_track ON tagged_keyframes (global_track_id, captured_at DESC);
+CREATE INDEX idx_tagged_keyframes_expires ON tagged_keyframes (expires_at);
+
+-- ---------------------------------------------------------------------------
+-- Dementia signals: dementia-relevant behavioural patterns
+-- ---------------------------------------------------------------------------
+CREATE TABLE dementia_signals (
+    signal_id        UUID        NOT NULL DEFAULT gen_random_uuid(),
+    identity_id      UUID        NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    signal_kind      VARCHAR(64) NOT NULL,
+    severity         VARCHAR(16) NOT NULL CHECK (severity IN ('info', 'warning', 'emergency')),
+    value            FLOAT       NOT NULL,
+    baseline         FLOAT,
+    z_score          FLOAT,
+    window_start     TIMESTAMPTZ NOT NULL,
+    window_end       TIMESTAMPTZ NOT NULL,
+    context_json     JSONB       NOT NULL DEFAULT '{}',
+    emitted_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (signal_id, emitted_at)
+);
+
+SELECT create_hypertable(
+    'dementia_signals',
+    'emitted_at',
+    chunk_time_interval => INTERVAL '7 days',
+    if_not_exists       => TRUE
+);
+
+CREATE INDEX idx_dementia_signals_identity_kind
+    ON dementia_signals (identity_id, signal_kind, emitted_at DESC);
+
+CREATE INDEX idx_dementia_signals_severity
+    ON dementia_signals (severity, emitted_at DESC)
+    WHERE severity IN ('warning', 'emergency');
+
+-- Retention: keep 365 days of signal history.
+SELECT add_retention_policy(
+    'dementia_signals',
+    INTERVAL '365 days',
+    if_not_exists => TRUE
+);
+
+-- ---------------------------------------------------------------------------
+-- Daily baseline aggregate for dementia signal z-score computation
+-- ---------------------------------------------------------------------------
+
+-- migrate:no-transaction
+-- CREATE MATERIALIZED VIEW WITH (timescaledb.continuous) cannot run inside
+-- a transaction block.
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS dementia_signals_daily
+WITH (timescaledb.continuous) AS
+SELECT
+    identity_id,
+    signal_kind,
+    time_bucket(INTERVAL '1 day', emitted_at) AS day,
+    count(*)            AS signal_count,
+    avg(value)          AS mean_value,
+    stddev_pop(value)   AS sd_value
+FROM dementia_signals
+GROUP BY identity_id, signal_kind, day;
+
+SELECT add_continuous_aggregate_policy(
+    'dementia_signals_daily',
+    start_offset      => INTERVAL '3 days',
+    end_offset        => INTERVAL '1 hour',
+    schedule_interval => INTERVAL '15 minutes',
+    if_not_exists     => TRUE
+);
+
+-- ---------------------------------------------------------------------------
 -- Updated_at trigger (generic)
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION _update_updated_at() RETURNS TRIGGER AS $$
@@ -249,6 +388,8 @@ CREATE TRIGGER trg_tracklets_updated_at BEFORE UPDATE ON tracklets
 CREATE TRIGGER trg_global_tracks_updated_at BEFORE UPDATE ON global_tracks
     FOR EACH ROW EXECUTE FUNCTION _update_updated_at();
 CREATE TRIGGER trg_identities_updated_at BEFORE UPDATE ON identities
+    FOR EACH ROW EXECUTE FUNCTION _update_updated_at();
+CREATE TRIGGER trg_reid_gallery_updated_at BEFORE UPDATE ON reid_gallery
     FOR EACH ROW EXECUTE FUNCTION _update_updated_at();
 CREATE TRIGGER trg_stream_assignments_updated_at BEFORE UPDATE ON stream_assignments
     FOR EACH ROW EXECUTE FUNCTION _update_updated_at();

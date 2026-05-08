@@ -18,16 +18,7 @@ The **Continuous Tracking System (CTS)** monitors seniors with early dementia vi
 
 ## Design Documents
 
-Read the phase documents before making architectural decisions. Always reference phase-0 first — it supersedes phases 1–5 where they conflict.
-
-| File | What it covers |
-| --- | --- |
-| `phase-0-design-review.md` | **Authoritative foundation.** Identity model, runtime partitioning, storage abstraction, message transport, dementia activity layer, schema. |
-| `phase-1-architecture.md` | System architecture, identity model, database schema, layering rules. |
-| `phase-2-rtsp-ingestion.md` | Go service for RTSP ingest, frame decode, motion gating, MinIO upload. |
-| `phase-3-tracking-reid.md` | Tracking orchestrator, BoT-SORT, cross-camera association, Bayesian identity resolution. |
-| `phase-4-scene-semantic.md` | Scene analysis, semantic memory integration, VLM pipeline. |
-| `phase-5-backend-integration.md` | Cognitive companion integration, backend routers, Vue views, gateway contract. |
+Design documents are tracked externally. The canonical reference for architecture decisions is this CLAUDE.md and the code itself.
 
 ---
 
@@ -454,7 +445,9 @@ RTSP ingest: go2rtc sidecar
 | ID | Severity | Description |
 | --- | --- | --- |
 | TD-003 | Medium | Revision stream consumer group pre-created by publisher instead of admin tooling |
-| TD-004 | Medium | `tracking.revisions`, `tracking.signals`, `scene.samples` not yet migrated to protobuf wire format |
+| TD-005 | Low | PoseEstimator (pose-rtmpose) is implemented but not wired into the pipeline |
+| TD-006 | Low | `tracking.responses` stream (FrameResponse proto) has publisher but no consumer |
+| TD-007 | Low | `PersonTrackingService` (CC) and CTS identity resolver run parallel identity paths; face anchors from person-identification-service are now integrated (Phase 2, May 2026) but not yet validated end-to-end |
 
 ---
 

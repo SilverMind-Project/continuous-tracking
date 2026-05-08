@@ -42,11 +42,14 @@ from ..domain import (
     TrackingEvent,
 )
 from ..inference.detector import PersonDetector
+from ..inference.face_id_client import FaceIdentificationClient, FaceResult
 from ..inference.schemas import DetectionBox, Embedding
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..storage.base import (
+    DementiaSignalRepository,
     GalleryRepository,
     GlobalTrackRepository,
+    InMemoryDementiaSignalRepository,
     InMemoryGalleryRepository,
     InMemoryGlobalTrackRepository,
     InMemoryKeyframeRepository,
@@ -63,6 +66,7 @@ from ..tracking.floor_projector import FloorProjector
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.tracker import PerCameraTrackers, TrackerConfig
 from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
+from ..trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
 from ..trajectory.trajectory_writer import TrajectoryWriter
 from ..transport.redis_streams import (
     FrameReady,
@@ -71,6 +75,7 @@ from ..transport.redis_streams import (
 )
 from ..transport.revision_publisher import RevisionPublisher
 from ..transport.scene_publisher import SceneSamplesPublisher
+from ..transport.signal_publisher import SignalPublisher
 
 logger = get_logger(__name__)
 
@@ -105,6 +110,21 @@ def _crop_detection(
     return np.ascontiguousarray(image[y1:y2, x1:x2])
 
 
+def _bbox_iou(a: list[float], b: list[float]) -> float:
+    """Intersection-over-Union of two normalised [x1,y1,x2,y2] boxes."""
+    x_left = max(a[0], b[0])
+    y_top = max(a[1], b[1])
+    x_right = min(a[2], b[2])
+    y_bottom = min(a[3], b[3])
+    if x_right <= x_left or y_bottom <= y_top:
+        return 0.0
+    inter = (x_right - x_left) * (y_bottom - y_top)
+    area_a = max(0.0, (a[2] - a[0]) * (a[3] - a[1]))
+    area_b = max(0.0, (b[2] - b[0]) * (b[3] - b[1]))
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
 # ---------------------------------------------------------------------------
 # Pipeline configuration
 # ---------------------------------------------------------------------------
@@ -129,6 +149,33 @@ class PipelineConfig:
     sampler: SamplerConfig = field(default_factory=SamplerConfig)
     # Camera-to-room mapping (camera_id -> room_name); resolved from stream assignments.
     camera_room_map: dict[str, str] = field(default_factory=dict)
+    # Dementia signal computation interval (seconds).
+    signal_interval_s: int = 60
+    signal_enabled: bool = True
+    # Face identification via person-identification-service (ArcFace).
+    face_id_url: str = ""
+    face_id_cooldown_s: float = 5.0
+    face_id_timeout_s: float = 2.0
+    face_id_min_confidence: float = 0.4
+    face_id_enabled: bool = True
+    # Per-camera overrides: camera_id -> enabled flag and optional higher threshold.
+    # Top-down cameras should set enabled=false; face-level cameras with
+    # difficult angles can raise min_confidence above the global default.
+    face_id_camera_configs: dict[str, FaceIdCameraConfig] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FaceIdCameraConfig:
+    """Per-camera face identification configuration.
+
+    If *enabled* is False, face identification is skipped entirely for
+    this camera (e.g. top-down surveillance cameras where faces are
+    never visible).  If *min_confidence* is not None it overrides the
+    global ``face_id_min_confidence`` for this camera.
+    """
+
+    enabled: bool = True
+    min_confidence: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +223,14 @@ class FrameProcessingPipeline:
         self._camera_locks: dict[str, asyncio.Lock] = {}
         # Track previously active global track IDs for close_track wiring (Issue #23).
         self._prev_active_gt_ids: set[str] = set()
+        # Dementia signal worker
+        self._signal_publisher: SignalPublisher | None = None
+        self._signal_worker: DementiaSignalWorker | None = None
+        self._signal_repo: DementiaSignalRepository | None = None
+        self._stop_event = asyncio.Event()
+        # Face identification (via person-identification-service)
+        self._face_id_client: FaceIdentificationClient | None = None
+        self._last_face_id_call: dict[str, datetime] = {}
 
     @property
     def is_running(self) -> bool:
@@ -209,6 +264,8 @@ class FrameProcessingPipeline:
         trajectory_repo: TrajectoryRepository | None = None,
         # Keyframe repository (required for keyframe sampler)
         keyframe_repo: KeyframeRepository | None = None,
+        # Signal repository (required for dementia signal worker)
+        signal_repo: DementiaSignalRepository | None = None,
         # Frame image source + ReID embedder for the real inference path.
         frame_fetcher: FrameImageFetcher | None = None,
         reid_embedder: ReidEmbedderProtocol | None = None,
@@ -293,11 +350,35 @@ class FrameProcessingPipeline:
         )
         await self._scene_publisher.connect()
 
+        # Signal worker — computes dementia signals from trajectory/dwell data.
+        self._signal_repo = signal_repo or InMemoryDementiaSignalRepository()
+        if self._config.signal_enabled:
+            self._signal_publisher = SignalPublisher(
+                redis_url=self._config.transport.redis_url,
+            )
+            await self._signal_publisher.connect()
+            self._signal_worker = DementiaSignalWorker(
+                trajectory_repo=trajectory_repo or InMemoryTrajectoryRepository(),
+                signal_repo=self._signal_repo,
+                cfg=SignalConfig(),
+            )
+
+        # Face identification client — calls person-identification-service.
+        if self._config.face_id_enabled and self._config.face_id_url:
+            self._face_id_client = FaceIdentificationClient(
+                base_url=self._config.face_id_url,
+                timeout_s=self._config.face_id_timeout_s,
+                min_confidence=self._config.face_id_min_confidence,
+            )
+            await self._face_id_client.connect()
+
         logger.info(
             "Pipeline initialized",
             detector=bool(detector),
             m5_components=True,
             m6_components=True,
+            signal_worker=bool(self._signal_worker),
+            face_id=bool(self._face_id_client),
         )
 
     async def start(self) -> None:
@@ -305,16 +386,20 @@ class FrameProcessingPipeline:
         if self._running:
             return
 
+        self._stop_event.clear()
         self._running = True
         self._tasks = [
             asyncio.create_task(self._consume_loop()),
         ]
+        if self._signal_worker is not None:
+            self._tasks.append(asyncio.create_task(self._signal_loop()))
         self._frame_semaphore = asyncio.Semaphore(max(1, self._config.max_concurrent_frames))
         logger.info("Pipeline started")
 
     async def stop(self) -> None:
         """Stop the pipeline and wait for tasks to complete."""
         self._running = False
+        self._stop_event.set()
 
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -333,6 +418,12 @@ class FrameProcessingPipeline:
 
         if self._scene_publisher:
             await self._scene_publisher.disconnect()
+
+        if self._signal_publisher:
+            await self._signal_publisher.disconnect()
+
+        if self._face_id_client:
+            await self._face_id_client.disconnect()
 
         self._tasks.clear()
         logger.info("Pipeline stopped")
@@ -364,6 +455,31 @@ class FrameProcessingPipeline:
                 await asyncio.sleep(1)
 
         logger.info("Consume loop stopped")
+
+    async def _signal_loop(self) -> None:
+        """Periodic dementia signal computation loop."""
+        assert self._signal_worker is not None
+        assert self._signal_publisher is not None
+
+        logger.info(
+            "Signal loop started",
+            interval_s=self._config.signal_interval_s,
+        )
+
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.sleep(self._config.signal_interval_s)
+                if self._stop_event.is_set():
+                    break
+                signals = await self._signal_worker.run_once(now=datetime.now(UTC))
+                if signals:
+                    await self._signal_publisher.publish_batch(signals)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("Signal loop error, will retry on next cycle")
+
+        logger.info("Signal loop stopped")
 
     async def _handle_frame(self, frame: FrameReady) -> None:
         """Process and ACK one frame under global and per-camera concurrency gates."""
@@ -515,12 +631,24 @@ class FrameProcessingPipeline:
         else:
             detection_count = 0
 
+        # ---- Step 4b: Face identification (rate-limited call to person-identification-service) ----
+        face_anchors: list[FaceAnchor] = []
+        if self._face_id_client is not None and domain_detections:
+            now = datetime.now(UTC)
+            if self._should_call_face_id(frame.camera_id, now):
+                face_anchors = await self._identify_faces(
+                    image=image,
+                    frame_width=frame.width,
+                    frame_height=frame.height,
+                    camera_id=frame.camera_id,
+                    domain_detections=domain_detections,
+                )
+
         # ---- M5: Cross-camera association ----
         active_tracklets = (
             self._tracklet_manager.get_active_tracklets() if self._tracklet_manager else []
         )
         active_global_tracks: list[GlobalTrack] = []
-        face_anchors: list[FaceAnchor] = []
         new_revisions: list[IdentityRevision] = []
         from ..domain import ResolveOutcome
 
@@ -710,3 +838,121 @@ class FrameProcessingPipeline:
             camera_id=frame.camera_id,
             frame_index=frame.frame_index,
         )
+
+    # ------------------------------------------------------------------
+    # Face identification helpers
+    # ------------------------------------------------------------------
+
+    def _get_face_id_config(self, camera_id: str) -> FaceIdCameraConfig:
+        """Return the effective face-id config for *camera_id*.
+
+        Per-camera overrides take precedence; falls back to a default-enabled
+        config when no override is defined.
+        """
+        return self._config.face_id_camera_configs.get(
+            camera_id, FaceIdCameraConfig()
+        )
+
+    def _should_call_face_id(self, camera_id: str, now: datetime) -> bool:
+        """Return True if enough time has passed since the last call for this camera.
+
+        Also returns False when face-id is disabled for this specific camera
+        (e.g. top-down surveillance views).
+        """
+        cam_cfg = self._get_face_id_config(camera_id)
+        if not cam_cfg.enabled:
+            return False
+        last = self._last_face_id_call.get(camera_id)
+        if last is None:
+            return True
+        return (now - last).total_seconds() >= self._config.face_id_cooldown_s
+
+    async def _identify_faces(
+        self,
+        image: npt.NDArray[np.uint8],
+        frame_width: int,
+        frame_height: int,
+        camera_id: str,
+        domain_detections: list[Detection],
+    ) -> list[FaceAnchor]:
+        """Call person-identification-service and build FaceAnchors.
+
+        Associates face detections with YOLO person detections via bbox IoU,
+        maps to tracklets via the local_track lookup, and returns
+        FaceAnchors for the identity resolver.
+
+        If no face_id_client is configured, or the call fails, an empty
+        list is returned (graceful degradation).
+        """
+        if self._face_id_client is None:
+            return []
+
+        cam_cfg = self._get_face_id_config(camera_id)
+        if not cam_cfg.enabled:
+            return []
+
+        face_results = await self._face_id_client.identify(
+            image,
+            orig_width=frame_width,
+            orig_height=frame_height,
+        )
+
+        if not face_results:
+            return []
+
+        # Effective per-camera confidence threshold.
+        min_conf = (
+            cam_cfg.min_confidence
+            if cam_cfg.min_confidence is not None
+            else self._config.face_id_min_confidence
+        )
+
+        # Associate each face with the best-matching YOLO detection via IoU.
+        face_anchors: list[FaceAnchor] = []
+        assigned_detections: set[int] = set()
+
+        for face in face_results:
+            if face.person_id == "unknown":
+                continue
+            if face.confidence < min_conf:
+                continue
+
+            best_det_idx = -1
+            best_iou = 0.0
+            for i, det in enumerate(domain_detections):
+                if i in assigned_detections:
+                    continue
+                iou = _bbox_iou(face.bbox_normalized, [det.bbox.x_min, det.bbox.y_min, det.bbox.x_max, det.bbox.y_max])
+                if iou > best_iou:
+                    best_iou = iou
+                    best_det_idx = i
+
+            # Minimum IoU threshold for face-to-person association.
+            if best_det_idx < 0 or best_iou < 0.1:
+                continue
+
+            assigned_detections.add(best_det_idx)
+
+            # Map detection → local_track → tracklet_id
+            det = domain_detections[best_det_idx]
+            tracklet_id = ""
+            if self._tracklet_manager is not None:
+                tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(
+                    det.detection_id
+                )
+
+            if not tracklet_id:
+                continue
+
+            face_anchors.append(
+                FaceAnchor(
+                    person_id=face.person_id,
+                    confidence=face.confidence,
+                    tracklet_id=tracklet_id,
+                    camera_id=camera_id,
+                    captured_at=datetime.now(UTC),
+                )
+            )
+
+        self._last_face_id_call[camera_id] = datetime.now(UTC)
+        return face_anchors

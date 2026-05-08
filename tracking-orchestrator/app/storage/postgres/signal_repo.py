@@ -16,7 +16,7 @@ from ...domain import DementiaSignal
 from ..base import DementiaSignalRepository
 
 _SQL_UPSERT_SIGNAL = """
-INSERT INTO continuous_tracking.dementia_signals
+INSERT INTO dementia_signals
     (signal_id, identity_id, signal_kind, severity, value,
      baseline, z_score, window_start, window_end, context_json, emitted_at)
 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)

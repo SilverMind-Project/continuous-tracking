@@ -6,20 +6,21 @@ Usage::
     cts-db rollback -n 1    # roll back last migration
     cts-db status           # show applied and pending
 
-Requires ``DATABASE_URL`` (or ``CTS_DATABASE_URL``) in the environment.
+Reads ``database.url`` from ``config/settings.yaml`` (or the path set via
+``ORCHESTRATOR_CONFIG_PATH``).
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from pathlib import Path
 
 import asyncpg  # type: ignore[import-untyped]
 from structlog import get_logger
 
+from .config import settings
 from .storage.migrations import MigrationRunner
 
 logger = get_logger(__name__)
@@ -38,9 +39,9 @@ def _normalize_dsn(dsn: str) -> str:
 
 
 async def _run(args: argparse.Namespace) -> int:
-    dsn = os.environ.get("DATABASE_URL") or os.environ.get("CTS_DATABASE_URL")
+    dsn = settings.get("database.url", "")
     if not dsn:
-        print("DATABASE_URL or CTS_DATABASE_URL must be set", file=sys.stderr)
+        print("database.url must be configured in config/settings.yaml", file=sys.stderr)
         return 1
 
     dsn = _normalize_dsn(dsn)

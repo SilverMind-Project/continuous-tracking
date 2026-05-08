@@ -57,7 +57,6 @@ class TransportConfig:
     batch_max_size: int = 8
     xack_timeout_ms: int = 5000
     ack_ttl_seconds: int = 300
-    max_retries: int = 3
 
 
 # ---------------------------------------------------------------------------

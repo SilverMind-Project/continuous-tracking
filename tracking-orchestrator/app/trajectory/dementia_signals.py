@@ -182,7 +182,6 @@ class DementiaSignalWorker:
             value=room_changes,
             signal_kind="pacing",
             identity_id=identity_id,
-            baseline_key="pacing_baseline",
         )
 
         w_start = sorted_window[0].observed_at
@@ -272,7 +271,6 @@ class DementiaSignalWorker:
             value=index,
             signal_kind="sundowning_index",
             identity_id=identity_id,
-            baseline_key="sundowning_baseline",
         )
 
         w_start = sorted_window[0].observed_at
@@ -545,7 +543,6 @@ class DementiaSignalWorker:
         value: float,
         signal_kind: str,
         identity_id: str,
-        baseline_key: str,
     ) -> ZScoreResult:
         """Compute a z-score relative to a historical baseline.
 

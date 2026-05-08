@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/jpeg"
 	"math"
+	"math/rand"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -148,8 +149,9 @@ func retry(ctx context.Context, attempts int, fn func() error) error {
 		if i == attempts-1 {
 			break
 		}
+		jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
 		select {
-		case <-time.After(backoff):
+		case <-time.After(backoff + jitter):
 		case <-ctx.Done():
 			return ctx.Err()
 		}

@@ -21,7 +21,7 @@ IP Cameras (RTSP)
                                                            tracking-orchestrator (Python, :8000)
                                                            ┌──────────────────────────────┐
                                                            │ YOLO26L  (person detection)  │
-                                                           │ SOLIDER-REID (body embeds)   │──▶ Triton (:8001)
+                                                           │ SOLIDER-REID (body embeds)   │──▶ Triton (:8701)
                                                            │ RTMPose  (pose estimation)   │
                                                            │ BoT-SORT tracker             │    YOLO26L · CLIP
                                                            │ Bayesian identity resolver   │    Florence-2
@@ -35,7 +35,7 @@ IP Cameras (RTSP)
                                                             BFF gateway · WebSocket live view
                                                             Vue 3 admin UI · MCP tools
                                                             ┌──────────────────────────────┐
-                                                            │ scene-analysis-service (:8300)│──▶ Triton (:8001)
+                                                            │ scene-analysis-service (:8300)│──▶ Triton (:8701)
                                                             │ YOLO26L · CLIP · Florence-2  │
                                                             └──────────────────────────────┘
 ```
@@ -49,7 +49,7 @@ IP Cameras (RTSP)
 | `go2rtc` | 1984 | RTSP proxy sidecar — owns all camera sessions, serves JPEG frames over HTTP |
 | `rtsp-ingress` | 8090 | Registers cameras with go2rtc, polls frames, motion gating, MinIO upload |
 | `tracking-orchestrator` | 8000 | ML inference, tracking, identity resolution, signal detection |
-| `triton` | 8001 (gRPC) | YOLO26L, CLIP ViT-L/14, Florence-2, SOLIDER-REID, RTMPose (all INT8 ONNX) |
+| `triton` | 8701 (gRPC) | YOLO26L, CLIP ViT-L/14, Florence-2, SOLIDER-REID, RTMPose (all INT8 ONNX) |
 | `scene-analysis-service` | 8300 | Scene analysis (shares Triton with CTS) |
 | `redis` | 6379 | Redis Streams transport (AOF enabled) |
 | `postgres` | 5432 | TimescaleDB + pgvectorscale (shared instance; tracklets, gallery, signals, trajectories) |

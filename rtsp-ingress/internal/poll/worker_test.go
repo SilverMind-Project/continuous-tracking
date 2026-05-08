@@ -121,7 +121,7 @@ func solidJPEG(t *testing.T, w, h int, c color.Color) []byte {
 func makeCam(intervalMs int) config.CameraConfig {
 	return config.CameraConfig{
 		ID:              "cam-test",
-		Type:            "overhead",
+		RTSPURL:         "rtsp://localhost:8554/test",
 		RoomName:        "living-room",
 		FrameIntervalMs: intervalMs,
 		MotionThreshold: 0.01,

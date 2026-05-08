@@ -2,11 +2,14 @@
 
 Mirrors the cognitive-companion pattern: create_app() returns the app,
 lifespan manages service lifecycle (pipeline start/stop, DB migrations).
+
+Configuration is read from ``config/settings.yaml`` (overridable via
+``ORCHESTRATOR_CONFIG_PATH``) with ``${VAR}`` / ``${VAR:-default}``
+env-var interpolation — see :mod:`app.config`.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,13 +20,16 @@ from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from structlog import get_logger
 
+from .config import settings
 from .inference.detector import PersonDetector
 from .inference.reid_embedder import ReidEmbedder
 from .inference.triton_client import TritonGrpcClient
 from .pipeline import FrameProcessingPipeline
-from .pipeline.frame_pipeline import PipelineConfig
+from .pipeline.frame_pipeline import FaceIdCameraConfig, PipelineConfig
 from .transport.redis_streams import TransportConfig
+
 from .routers import corrections as corrections_router_mod
+from .routers import dashboard as dashboard_router_mod
 from .routers import live as live_router_mod
 from .routers.calibration import router as calibration_router
 from .routers.corrections import router as corrections_router
@@ -33,6 +39,7 @@ from .storage.migrations import MigrationRunner
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.global_track_repo import PostgresGlobalTrackRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
+from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.tracking_repo import PostgresTrackingRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
 from .transport.minio_frames import MinioFrameConfig, MinioFrameFetcher
@@ -52,6 +59,91 @@ def _normalize_dsn(dsn: str) -> str:
     return dsn
 
 
+async def _fetch_cc_camera_configs(cc_url: str, api_key: str = "") -> dict[str, FaceIdCameraConfig]:
+    """Fetch per-camera face-id configs from cognitive-companion's camera API.
+
+    Returns an empty dict if CC is unreachable (graceful degradation).
+    CC is the primary source for per-camera face-id settings (enabled flag
+    and min_confidence). The ``FACE_ID_CAMERA_CONFIDENCE`` env var provides
+    a deployment-level fallback for cameras not in CC.
+    """
+    if not cc_url:
+        return {}
+    try:
+        import httpx
+    except ImportError:
+        logger.warning("httpx not installed; cannot fetch camera configs from CC")
+        return {}
+
+    url = cc_url.rstrip("/") + "/api/v1/cts/cameras"
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            cameras: list[dict] = resp.json()
+    except Exception:
+        logger.warning("Failed to fetch camera configs from CC", exc_info=True)
+        return {}
+
+    cfgs: dict[str, FaceIdCameraConfig] = {}
+    for cam in cameras:
+        cam_id = cam.get("id", "")
+        if not cam_id:
+            continue
+        enabled = cam.get("face_id_enabled", True)
+        min_conf = cam.get("face_id_min_confidence")
+        cfgs[cam_id] = FaceIdCameraConfig(
+            enabled=enabled if isinstance(enabled, bool) else True,
+            min_confidence=float(min_conf) if min_conf is not None else None,
+        )
+
+    # Apply FACE_ID_CAMERA_CONFIDENCE env var as fallback for cameras
+    # that were not found in CC's camera list.
+    _apply_confidence_fallback(cfgs)
+
+    logger.info("Fetched face-id configs from CC", camera_count=len(cfgs))
+    return cfgs
+
+
+def _apply_confidence_fallback(cfgs: dict[str, FaceIdCameraConfig]) -> None:
+    """Apply ``FACE_ID_CAMERA_CONFIDENCE`` env var as a fallback.
+
+    Only affects cameras already present in *cfgs* (from CC).  If a camera
+    has no ``min_confidence`` set in CC, the env-var value fills the gap.
+    The env var format is ``cam_id:confidence,cam_id:confidence,...``.
+    """
+    import os
+
+    cam_conf = os.environ.get("FACE_ID_CAMERA_CONFIDENCE", "")
+    if not cam_conf:
+        return
+
+    for pair in cam_conf.split(","):
+        pair = pair.strip()
+        if ":" not in pair:
+            continue
+        cam_id, conf_str = pair.split(":", 1)
+        try:
+            conf = float(conf_str)
+        except ValueError:
+            logger.warning("Invalid FACE_ID_CAMERA_CONFIDENCE entry", entry=pair)
+            continue
+
+        existing = cfgs.get(cam_id.strip())
+        if existing is not None:
+            # Only fill if CC didn't set a value.
+            if existing.min_confidence is None:
+                cfgs[cam_id.strip()] = FaceIdCameraConfig(
+                    enabled=existing.enabled,
+                    min_confidence=conf,
+                )
+        # Cameras not in CC are not added — CC is the authoritative camera list.
+
+
 # Module-level asyncpg pool so shutdown can close it.
 _pool: Any = None  # asyncpg.Pool | None
 _triton_client: TritonGrpcClient | None = None
@@ -67,23 +159,41 @@ def get_pipeline() -> FrameProcessingPipeline | None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _pipeline, _pool, _triton_client, _frame_fetcher
 
-    # Startup: initialize pipeline and start background tasks
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-    config = PipelineConfig(transport=TransportConfig(redis_url=redis_url))
+    # -------------------------------------------------------------------
+    # Startup: build config, connect services, start pipeline
+    # -------------------------------------------------------------------
+
+    redis_url = settings.get("redis.url", "redis://localhost:6379/0")
+    face_id_url = settings.get("face_id.url", "")
+
+    # Per-camera face-id config: CC is the primary source.
+    cc_url = settings.get("cognitive_companion.url", "")
+    cc_api_key = settings.get("cognitive_companion.api_key", "")
+    face_id_camera_configs = await _fetch_cc_camera_configs(cc_url, cc_api_key)
+
+    config = PipelineConfig(
+        transport=TransportConfig(redis_url=redis_url),
+        face_id_url=face_id_url,
+        face_id_cooldown_s=float(settings.get("face_id.cooldown_s", "5.0")),
+        face_id_timeout_s=float(settings.get("face_id.timeout_s", "2.0")),
+        face_id_min_confidence=float(settings.get("face_id.min_confidence", "0.4")),
+        face_id_enabled=bool(face_id_url),
+        face_id_camera_configs=face_id_camera_configs,
+    )
     _pipeline = FrameProcessingPipeline(config)
 
-    # Read database URL from environment, not from never-populated app.state.config.
-    database_url = os.environ.get("DATABASE_URL") or os.environ.get("CTS_DATABASE_URL")
+    # -- Database --
+    database_url = settings.get("database.url", "")
 
     if not database_url:
-        env = os.environ.get("CTS_ENV", "")
-        if env not in ("dev", "development", "test"):
+        env = settings.get("env", "production")
+        if env in ("dev", "development", "test"):
+            logger.info("No database.url; using in-memory storage for this environment.")
+        else:
             logger.warning(
-                "DATABASE_URL/CTS_DATABASE_URL not set; running with in-memory storage. "
+                "No database.url configured; running with in-memory storage. "
                 "State will be lost on restart.",
             )
-        else:
-            logger.info("DATABASE_URL not set; using in-memory storage for this environment.")
 
     if database_url:
         import asyncpg  # type: ignore[import-untyped]
@@ -101,14 +211,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         global_track_repo = PostgresGlobalTrackRepository(_pool)
         trajectory_repo = PostgresTrajectoryRepository(_pool)
         keyframe_repo = PostgresKeyframeRepository(_pool)
+        signal_repo = PostgresDementiaSignalRepository(_pool)
     else:
         tracking_repo = None
         gallery_repo = None
         global_track_repo = None
         trajectory_repo = None
         keyframe_repo = None
+        signal_repo = None
 
-    triton_url = os.environ.get("TRITON_GRPC_URL") or os.environ.get("TRITON_URL")
+    # -- Triton --
+    triton_url = settings.get("triton.url", "")
     detector = None
     reid_embedder = None
     if triton_url:
@@ -116,23 +229,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await _triton_client.__aenter__()
         detector = PersonDetector(
             _triton_client,
-            conf_threshold=config.detector_confidence,
+            conf_threshold=float(settings.get("pipeline.detector_confidence", "0.25")),
         )
         reid_embedder = ReidEmbedder(_triton_client)
 
-    minio_endpoint = os.environ.get("MINIO_ENDPOINT_URL") or os.environ.get("S3_ENDPOINT_URL")
-    minio_bucket = os.environ.get("MINIO_BUCKET") or os.environ.get("CTS_FRAME_BUCKET")
-    minio_access_key = os.environ.get("MINIO_ACCESS_KEY") or os.environ.get("AWS_ACCESS_KEY_ID")
-    minio_secret_key = os.environ.get("MINIO_SECRET_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
+    # -- MinIO --
+    minio_endpoint = settings.get("minio.endpoint", "")
+    minio_bucket = settings.get("minio.bucket", "")
+    minio_access_key = settings.get("minio.access_key", "")
+    minio_secret_key = settings.get("minio.secret_key", "")
     if minio_endpoint and minio_bucket and minio_access_key and minio_secret_key:
+        secure_str = settings.get("minio.secure", "false")
+        secure = str(secure_str).lower() in {"1", "true", "yes"}
         _frame_fetcher = MinioFrameFetcher(
             MinioFrameConfig(
                 endpoint_url=minio_endpoint,
                 bucket=minio_bucket,
                 access_key_id=minio_access_key,
                 secret_access_key=minio_secret_key,
-                region_name=os.environ.get("AWS_REGION", "us-east-1"),
-                secure=os.environ.get("MINIO_SECURE", "0").lower() in {"1", "true", "yes"},
+                region_name=settings.get("minio.region", "us-east-1"),
+                secure=secure,
             )
         )
         await _frame_fetcher.connect()
@@ -141,6 +257,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "Triton configured without MinIO frame storage; inference will run on blank frames.",
         )
 
+    # -- Wire everything and start --
     await _pipeline.initialize(
         detector=detector,
         tracking_repo=tracking_repo,
@@ -148,14 +265,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         global_track_repo=global_track_repo,
         trajectory_repo=trajectory_repo,
         keyframe_repo=keyframe_repo,
+        signal_repo=signal_repo,
         frame_fetcher=_frame_fetcher,
         reid_embedder=reid_embedder,
     )
     await _pipeline.start()
 
-    # Wire the corrections + live routers to share the pipeline's repositories
-    # and revision publisher so manual overrides produce real revisions on the
-    # same stream the automatic ones do.
+    # Wire router modules to share the pipeline's repositories.
     if _pipeline.tracking_repo is not None and _pipeline.global_track_repo is not None:
         corrections_router_mod.set_context(
             tracking_repo=_pipeline.tracking_repo,
@@ -164,9 +280,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         live_router_mod.set_context(global_track_repo=_pipeline.global_track_repo)
 
+    if signal_repo is not None and trajectory_repo is not None and keyframe_repo is not None:
+        dashboard_router_mod.set_repos(
+            signal=signal_repo,
+            trajectory=trajectory_repo,
+            keyframe=keyframe_repo,
+        )
+
     yield
 
-    # Shutdown: stop pipeline and close the DB pool.
+    # -------------------------------------------------------------------
+    # Shutdown
+    # -------------------------------------------------------------------
     if _pipeline is not None:
         await _pipeline.stop()
         _pipeline = None

@@ -1,0 +1,57 @@
+# Tracking Orchestrator — settings
+# Environment variables are interpolated with ${VAR} or ${VAR:-default} syntax.
+
+# Redis Streams transport
+redis:
+  url: "${REDIS_URL:-redis://localhost:6379/0}"
+  events_stream: "${CTS_EVENTS_STREAM:-tracking.events}"
+  revisions_stream: "${CTS_REVISIONS_STREAM:-tracking.revisions}"
+  signals_stream: "${CTS_SIGNALS_STREAM:-tracking.signals}"
+  scene_samples_stream: "${CTS_SCENE_SAMPLES_STREAM:-scene.samples}"
+  stream_maxlen: "${CTS_STREAM_MAXLEN:-100000}"
+
+# PostgreSQL database
+database:
+  url: "${DATABASE_URL:-}"
+
+# Triton Inference Server
+triton:
+  url: "${TRITON_GRPC_URL:-}"
+  person_detector_model: "${TRITON_DETECTOR_MODEL:-person-detector}"
+  reid_model: "${TRITON_REID_MODEL:-reid-solider}"
+
+# MinIO / S3-compatible object storage
+minio:
+  endpoint: "${MINIO_ENDPOINT_URL:-}"
+  bucket: "${MINIO_BUCKET:-${CTS_FRAME_BUCKET:-cts-frames}}"
+  access_key: "${MINIO_ACCESS_KEY:-${AWS_ACCESS_KEY_ID:-}}"
+  secret_key: "${MINIO_SECRET_KEY:-${AWS_SECRET_ACCESS_KEY:-}}"
+  region: "${AWS_REGION:-us-east-1}"
+  secure: "${MINIO_SECURE:-false}"
+
+# Face identification via person-identification-service (ArcFace)
+# Per-camera overrides (enabled/disabled, min_confidence) are fetched from
+# cognitive-companion at startup.  FACE_ID_CAMERA_CONFIDENCE env var
+# provides a deployment-level fallback for cameras not in CC.
+face_id:
+  url: "${PERSON_ID_SERVICE_URL:-}"
+  cooldown_s: "${FACE_ID_COOLDOWN_S:-5.0}"
+  timeout_s: "${FACE_ID_TIMEOUT_S:-2.0}"
+  min_confidence: "${FACE_ID_MIN_CONFIDENCE:-0.4}"
+
+# Dementia signal computation
+signal:
+  interval_s: "${SIGNAL_INTERVAL_S:-60}"
+
+# Pipeline tuning
+pipeline:
+  detector_confidence: "${DETECTOR_CONFIDENCE:-0.25}"
+  max_concurrent_frames: "${MAX_CONCURRENT_FRAMES:-4}"
+
+# Cognitive Companion — camera config source and API gateway
+cognitive_companion:
+  url: "${CC_API_URL:-}"
+  api_key: "${CC_INGRESS_API_KEY:-}"
+
+# Environment label (dev / staging / production)
+env: "${CTS_ENV:-production}"

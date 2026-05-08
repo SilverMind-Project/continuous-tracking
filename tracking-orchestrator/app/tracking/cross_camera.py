@@ -47,9 +47,6 @@ class CrossCamConfig:
     # Minimum combined score to link two tracklets.
     min_link_score: float = 0.55
 
-    # Maximum number of candidate pairs to evaluate per frame.
-    max_candidates: int = 100
-
 
 @dataclass
 class TrackletPairScore:

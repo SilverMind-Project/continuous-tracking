@@ -453,3 +453,10 @@ class TrackletManager:
         if state:
             return state.tracklet
         return None
+
+    def get_tracklet_id_for_detection(self, detection_id: str) -> str:
+        """Return the tracklet ID that contains the given detection, or ``""``."""
+        for tracklet_id, state in self._active.items():
+            if any(d.detection_id == detection_id for d in state.detections):
+                return tracklet_id
+        return ""

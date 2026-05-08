@@ -104,8 +104,8 @@ _SQL_LIST_GALLERY_FOR_TRACKLETS = """
 class PostgresGalleryRepository(GalleryRepository):
     """Postgres implementation of the GalleryRepository.
 
-    Uses pgvector's HNSW index for ANN search. The index must be created
-    by the migration (see migrations/0001_init.sql).
+    Uses pgvectorscale's StreamingDiskANN index for ANN search. The index
+    must be created by the migration (see migrations/0001_init.up.sql).
     """
 
     def __init__(self, pool: asyncpg.Pool) -> None:

@@ -68,7 +68,7 @@ class TestBasePublisher:
         publisher._redis = mock_redis_instance
         await publisher.disconnect()
         assert not publisher.is_connected
-        mock_redis_instance.close.assert_awaited_once()
+        mock_redis_instance.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_disconnect_when_not_connected(self, publisher: BasePublisher) -> None:
