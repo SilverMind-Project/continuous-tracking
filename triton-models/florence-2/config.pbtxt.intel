@@ -1,14 +1,13 @@
 # Florence-2-large scene description — Python backend (Intel Arc GPU).
 #
-# Activated by: python triton-models/scripts/configure_gpu.py --vendor intel
-#
-# Same model as config.pbtxt but the Python backend in model.py reads
-# the execution_accelerators config and sets OpenVINOExecutionProvider
-# for ONNX Runtime on Intel Arc GPUs.
+# The Python model orchestrates native ONNX Runtime sub-models via BLS.
+# GPU acceleration is handled by the sub-model configs (florence-2-vision,
+# florence-2-embed, florence-2-encoder, florence-2-decoder).
+# The Python model itself does not use ONNX Runtime directly.
 
 name: "florence-2"
 backend: "python"
-max_batch_size: 1
+max_batch_size: 0
 
 input [
   {
@@ -30,17 +29,6 @@ output [
     dims: [1, -1]
   }
 ]
-
-optimization {
-  execution_accelerators {
-    gpu_execution_accelerator : [
-      {
-        name : "openvino"
-        parameters { key: "device_type" value: "GPU" }
-      }
-    ]
-  }
-}
 
 instance_group [
   {

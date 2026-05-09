@@ -272,11 +272,8 @@ cts-db status           # show applied / pending
 
 | File | Contents |
 | --- | --- |
-| `0001_init` | `tracklets`, `detections` (hypertable), `global_tracks`, `identity_revisions`, `gallery_entries` (pgvector HNSW), `tracking_events` |
-| `0002_m6_trajectory_keyframes` | `person_trajectories` (hypertable), `room_dwells`, `tagged_keyframes` |
-| `0003_m8_signals` | `dementia_signals` hypertable + continuous aggregate `dementia_signals_daily` |
-| `0004_nullable_embedding` | Embedding column nullable |
-| `0005_fix_signal_identity_id_type` | Type correction on `dementia_signals.identity_id` |
+| `0001_init` | All transactional DDL: tables, hypertables, indexes, triggers (rolled up from 0001–0005) |
+| `0002_continuous_aggregates` | `dementia_signals_daily` continuous aggregate + refresh policy (non-transactional) |
 
 **DATABASE_URL**: asyncpg expects a plain `postgresql://` DSN. If a `postgresql+asyncpg://` (SQLAlchemy-style) URL is provided, the `_normalize_dsn()` helper strips the `+asyncpg` prefix automatically.
 

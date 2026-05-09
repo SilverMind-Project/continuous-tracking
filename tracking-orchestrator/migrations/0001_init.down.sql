@@ -1,9 +1,5 @@
 -- Rollback: drop all continuous-tracking objects in reverse dependency order.
 
--- Continuous aggregate first (cannot drop hypertable with dependent cagg).
-SELECT remove_continuous_aggregate_policy('dementia_signals_daily', if_not_exists => TRUE);
-DROP MATERIALIZED VIEW IF EXISTS dementia_signals_daily;
-
 DROP TRIGGER IF EXISTS trg_stream_assignments_updated_at ON stream_assignments;
 DROP TRIGGER IF EXISTS trg_reid_gallery_updated_at ON reid_gallery;
 DROP TRIGGER IF EXISTS trg_identities_updated_at ON identities;

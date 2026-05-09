@@ -1,16 +1,15 @@
 """Florence-2-large autoregressive scene description — Triton Python backend.
 
-Orchestrates the ONNX models from onnx-community/Florence-2-large:
+Uses Business Logic Scripting (BLS) to call native ONNX Runtime backend models:
 
-  1. vision_encoder_int8.onnx     image → visual features
-  2. embed_tokens_int8.onnx        token IDs → embeddings
-  3. encoder_model_int8.onnx       text + visual → encoder hidden states
-  4. decoder_model_merged_int8.onnx  autoregressive decode loop
+  1. florence-2-vision   — pixel_values → image_features
+  2. florence-2-embed    — input_ids → inputs_embeds
+  3. florence-2-encoder  — attention_mask + inputs_embeds → last_hidden_state
+  4. florence-2-decoder  — autoregressive decode with KV cache
 
-GPU support: NVIDIA (CUDAExecutionProvider) or Intel Arc (OpenVINOExecutionProvider).
-
-The backend auto-detects ONNX I/O names at load time so it works with
-different export formats without code changes.
+All ONNX models are INT8 QDQ-quantized (from onnx-community/Florence-2-large)
+and run on GPU via Triton's native onnxruntime backend (CUDA EP or OpenVINO EP).
+The Python model handles only the generation loop orchestration.
 """
 
 from __future__ import annotations
@@ -21,131 +20,83 @@ from typing import Any
 
 import numpy as np
 
-# Triton Python backend API — available inside the Triton container.
-# pyright: reportMissingImports=false
 import triton_python_backend_utils as pb_utils  # type: ignore[import-not-found]
+
+# ---------------------------------------------------------------------------
+# Model architecture constants (Florence-2-large)
+# ---------------------------------------------------------------------------
+_NUM_LAYERS = 12
+_NUM_HEADS = 16
+_HEAD_DIM = 64
+
+_KV_KINDS = ("decoder.key", "decoder.value", "encoder.key", "encoder.value")
+
+
+def _past_kv_name(layer: int, kind: str) -> str:
+    return f"past_key_values.{layer}.{kind}"
+
+
+def _present_kv_name(layer: int, kind: str) -> str:
+    return f"present.{layer}.{kind}"
+
+
+_PAST_KV_INPUTS = [_past_kv_name(i, k) for i in range(_NUM_LAYERS) for k in _KV_KINDS]
+_PRESENT_KV_OUTPUTS = [_present_kv_name(i, k) for i in range(_NUM_LAYERS) for k in _KV_KINDS]
+_DECODER_REQUESTED_OUTPUTS = ["logits"] + _PRESENT_KV_OUTPUTS
+
+
+def _tensor_to_numpy(tensor: Any) -> np.ndarray:
+    """Convert a pb_utils Tensor to a CPU numpy array.
+
+    BLS child-model responses may store tensors on GPU.  ``.as_numpy()``
+    alone can fail in that case — we fall back to the PyTorch DLPack bridge.
+    """
+    try:
+        return tensor.as_numpy()
+    except Exception:
+        pass
+
+    import torch
+
+    return torch.from_dlpack(tensor).cpu().numpy()
 
 
 class TritonPythonModel:
-    """Florence-2-large Python backend model for Triton Inference Server."""
+    """Florence-2-large Python orchestrator backed by native ONNX Runtime models."""
 
     def initialize(self, args: dict[str, Any]) -> None:
-        """Load ONNX models and tokenizer at startup."""
-        model_dir = os.path.dirname(__file__)
-        model_dir = args.get("model_repository", model_dir)
-        model_path = os.path.join(
-            args["model_repository"], str(args["model_version"]), ""
-        )
+        model_path = os.path.join(args["model_repository"], str(args["model_version"]), "")
 
-        self._max_new_tokens = 1024
-
-        # Detect execution provider from instance group kind.
-        # Intel configs set the OpenVINO accelerator; NVIDIA uses CUDA.
-        self._providers = self._resolve_providers(args)
-
-        # Load ONNX sessions.
-        import onnxruntime as ort
-
-        sess_opts = ort.SessionOptions()
-        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-
-        self._vision = ort.InferenceSession(
-            os.path.join(model_path, "vision_encoder_int8.onnx"),
-            sess_options=sess_opts,
-            providers=self._providers,
-        )
-        self._embed = ort.InferenceSession(
-            os.path.join(model_path, "embed_tokens_int8.onnx"),
-            sess_options=sess_opts,
-            providers=self._providers,
-        )
-        self._encoder = ort.InferenceSession(
-            os.path.join(model_path, "encoder_model_int8.onnx"),
-            sess_options=sess_opts,
-            providers=self._providers,
-        )
-        self._decoder = ort.InferenceSession(
-            os.path.join(model_path, "decoder_model_merged_int8.onnx"),
-            sess_options=sess_opts,
-            providers=self._providers,
-        )
-
-        # Discover ONNX I/O names.
-        self._vision_input = self._vision.get_inputs()[0].name
-        self._vision_output = self._vision.get_outputs()[0].name
-
-        self._embed_input = self._embed.get_inputs()[0].name
-        self._embed_output = self._embed.get_outputs()[0].name
-
-        # Encoder: map inputs by name.
-        enc_inputs = {i.name: i for i in self._encoder.get_inputs()}
-        self._enc_embeds_input = self._find_input(enc_inputs, ["inputs_embeds", "input_ids"])
-        self._enc_visual_input = self._find_input(
-            enc_inputs, ["visual_features", "encoder_hidden_states", "pixel_values"]
-        )
-        self._enc_output = self._encoder.get_outputs()[0].name
-
-        # Decoder: map inputs by name.
-        dec_inputs = {i.name: i for i in self._decoder.get_inputs()}
-        self._dec_input_ids = self._find_input(dec_inputs, ["input_ids", "decoder_input_ids"])
-        self._dec_enc_hidden = self._find_input(
-            dec_inputs, ["encoder_hidden_states", "encoder_attention_mask"]
-        )
-        self._dec_past = self._find_input(
-            dec_inputs,
-            [
-                "past_key_values",
-                "past_key_values.0.key",
-                "past_key_values.0.decoder.key",
-            ],
-        )
-        dec_outputs = {o.name: o for o in self._decoder.get_outputs()}
-        self._dec_logits = self._find_output(dec_outputs, ["logits"])
-        self._dec_present = self._find_output(
-            dec_outputs,
-            [
-                "present_key_values",
-                "present_key_values.0.key",
-                "present_key_values.0.decoder.key",
-            ],
-        )
-
-        # Load generation config for EOS token ID.
         gen_config_path = os.path.join(model_path, "generation_config.json")
-        self._eos_token_id = 2  # Florence-2 default
+        self._eos_token_id = 2
+        self._max_new_tokens = 1024
         if os.path.exists(gen_config_path):
             with open(gen_config_path) as f:
                 gen_cfg = json.load(f)
             self._eos_token_id = gen_cfg.get("eos_token_id", 2)
             self._max_new_tokens = gen_cfg.get("max_new_tokens", 1024)
 
-        print(f"Florence-2 loaded with providers: {self._providers}")
-        print(f"  Vision input:  {self._vision_input} -> {self._vision_output}")
-        print(f"  Embed input:   {self._embed_input} -> {self._embed_output}")
-        print(f"  Encoder:       embeds={self._enc_embeds_input}, "
-              f"visual={self._enc_visual_input} -> {self._enc_output}")
-        print(f"  Decoder:       ids={self._dec_input_ids}, "
-              f"enc_hidden={self._dec_enc_hidden}, "
-              f"past={self._dec_past} -> {self._dec_logits}, {self._dec_present}")
+        print(f"Florence-2 BLS orchestrator initialized")
         print(f"  EOS token:     {self._eos_token_id}")
         print(f"  Max new tokens: {self._max_new_tokens}")
+        print(f"  Decoder layers: {_NUM_LAYERS}")
+        print(f"  Sub-models: florence-2-vision, florence-2-embed, "
+              f"florence-2-encoder, florence-2-decoder")
 
     def execute(self, requests: list[Any]) -> list[Any]:
-        """Run the Florence-2 generation pipeline for each request."""
         responses: list[Any] = []
         for request in requests:
             responses.append(self._process_request(request))
         return responses
 
     def finalize(self) -> None:
-        pass  # ONNX sessions auto-cleanup
+        pass
 
     # ------------------------------------------------------------------
-    # Internal: generation pipeline
+    # Request processing
     # ------------------------------------------------------------------
 
     def _process_request(self, request: Any) -> Any:
-        """Run full Florence-2 generation for a single request."""
         pixel_values = pb_utils.get_input_tensor_by_name(request, "pixel_values")
         input_ids = pb_utils.get_input_tensor_by_name(request, "input_ids")
 
@@ -155,8 +106,8 @@ class TritonPythonModel:
                 error=pb_utils.TritonError("Missing pixel_values or input_ids"),
             )
 
-        pv = pb_utils.to_numpy(pixel_values).astype(np.float32)  # (1, 3, H, W)
-        ids = pb_utils.to_numpy(input_ids).astype(np.int64)  # (1, seq_len)
+        pv = pixel_values.as_numpy().astype(np.float32)
+        ids = input_ids.as_numpy().astype(np.int64)
 
         try:
             output_ids = self._generate(pv, ids)
@@ -166,57 +117,56 @@ class TritonPythonModel:
                 error=pb_utils.TritonError(f"Generation failed: {exc}"),
             )
 
-        out_tensor = pb_utils.Tensor("output_ids", output_ids)
-        return pb_utils.InferenceResponse(output_tensors=[out_tensor])
+        return pb_utils.InferenceResponse(
+            output_tensors=[pb_utils.Tensor("output_ids", output_ids)]
+        )
+
+    # ------------------------------------------------------------------
+    # Generation pipeline
+    # ------------------------------------------------------------------
 
     def _generate(
         self,
-        pixel_values: np.ndarray,
-        input_ids: np.ndarray,
+        pixel_values: np.ndarray,  # (1, 3, H, W)  FP32
+        input_ids: np.ndarray,     # (1, T)        INT64
     ) -> np.ndarray:
-        """Run the autoregressive generation loop.
+        """Run the autoregressive generation loop via BLS.
 
         Returns:
             (1, output_len) int64 array of generated token IDs (includes input_ids).
         """
         # 1. Vision encode.
-        vis_out = self._vision.run(
-            [self._vision_output], {self._vision_input: pixel_values}
-        )
-        visual_features = vis_out[0]  # (1, num_visual_tokens, hidden)
+        image_features = self._call_vision(pixel_values)       # (1, N_vis, 1024)
 
-        # 2. Embed tokens.
-        emb_out = self._embed.run(
-            [self._embed_output], {self._embed_input: input_ids}
-        )
-        inputs_embeds = emb_out[0]  # (1, seq_len, hidden)
+        # 2. Embed prompt tokens.
+        prompt_embeds = self._call_embed(input_ids)            # (1, T, 1024)
 
-        # 3. Encode (cross-attention: text + visual features).
-        enc_inputs = {
-            self._enc_embeds_input: inputs_embeds,
-            self._enc_visual_input: visual_features,
-        }
-        enc_out = self._encoder.run([self._enc_output], enc_inputs)
-        encoder_hidden_states = enc_out[0]  # (1, src_len, hidden)
+        # 3. Concatenate visual + text embeddings.
+        combined_embeds = np.concatenate(
+            [image_features, prompt_embeds], axis=1
+        )                                                      # (1, N_vis+T, 1024)
+        enc_seq_len = combined_embeds.shape[1]
+        attention_mask = np.ones((1, enc_seq_len), dtype=np.int64)
 
-        # 4. Autoregressive decode loop.
-        generated_ids = list(input_ids[0])
-        past_key_values = None
+        # 4. Encode (text attends to visual features via the merged embeddings).
+        encoder_hidden_states = self._call_encoder(
+            attention_mask, combined_embeds
+        )                                                      # (1, N_vis+T, 1024)
+
+        # 5. Autoregressive decode loop.
+        generated_ids: list[int] = list(input_ids[0])
         current_token = np.array([[generated_ids[-1]]], dtype=np.int64)
+        past_kv = self._empty_kv_cache()
 
         for _ in range(self._max_new_tokens):
-            dec_inputs: dict[str, np.ndarray] = {
-                self._dec_input_ids: current_token,
-                self._dec_enc_hidden: encoder_hidden_states,
-            }
-            if self._dec_past and past_key_values is not None:
-                dec_inputs[self._dec_past] = past_key_values
+            token_embed = self._call_embed(current_token)     # (1, 1, 1024)
 
-            dec_outs = self._decoder.run(
-                [self._dec_logits, self._dec_present], dec_inputs
+            logits, past_kv = self._call_decoder(
+                encoder_attention_mask=attention_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                inputs_embeds=token_embed,
+                past_kv=past_kv,
             )
-            logits = dec_outs[0]  # (1, 1, vocab_size)
-            past_key_values = dec_outs[1] if len(dec_outs) > 1 else None
 
             next_token = int(np.argmax(logits[0, -1]))
             generated_ids.append(next_token)
@@ -228,43 +178,110 @@ class TritonPythonModel:
         return np.array([generated_ids], dtype=np.int64)
 
     # ------------------------------------------------------------------
-    # Internal: helpers
+    # BLS calls to native ONNX Runtime models
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _find_input(inputs: dict[str, Any], candidates: list[str]) -> str | None:
-        """Return the first candidate name that exists in the ONNX inputs."""
-        for name in candidates:
-            if name in inputs:
-                return name
-        return list(inputs.keys())[0] if inputs else None
+    def _call_vision(self, pixel_values: np.ndarray) -> np.ndarray:
+        """florence-2-vision: pixel_values → image_features."""
+        request = pb_utils.InferenceRequest(
+            model_name="florence-2-vision",
+            requested_output_names=["image_features"],
+            inputs=[pb_utils.Tensor("pixel_values", pixel_values)],
+        )
+        response = request.exec()
+        if response.has_error():
+            raise RuntimeError(f"Vision encode failed: {response.error().message()}")
+        tensor = pb_utils.get_output_tensor_by_name(response, "image_features")
+        return _tensor_to_numpy(tensor).astype(np.float32)
 
-    @staticmethod
-    def _find_output(outputs: dict[str, Any], candidates: list[str]) -> str | None:
-        """Return the first candidate name that exists in the ONNX outputs."""
-        for name in candidates:
-            if name in outputs:
-                return name
-        return list(outputs.keys())[0] if outputs else None
+    def _call_embed(self, input_ids: np.ndarray) -> np.ndarray:
+        """florence-2-embed: input_ids → inputs_embeds."""
+        request = pb_utils.InferenceRequest(
+            model_name="florence-2-embed",
+            requested_output_names=["inputs_embeds"],
+            inputs=[pb_utils.Tensor("input_ids", input_ids.astype(np.int64))],
+        )
+        response = request.exec()
+        if response.has_error():
+            raise RuntimeError(f"Token embedding failed: {response.error().message()}")
+        tensor = pb_utils.get_output_tensor_by_name(response, "inputs_embeds")
+        return _tensor_to_numpy(tensor).astype(np.float32)
 
-    @staticmethod
-    def _resolve_providers(args: dict[str, Any]) -> list[str]:
-        """Resolve ONNX Runtime execution providers from model config."""
-        # Check if the instance group has an OpenVINO accelerator (Intel Arc).
-        try:
-            instance_groups = args.get("model_config", {}).get("instance_group", [])
-            for group in instance_groups:
-                accelerators = group.get("optimization", {}).get(
-                    "execution_accelerators", {}
-                ).get("gpu_execution_accelerator", [])
-                for acc in accelerators:
-                    if acc.get("name") == "openvino":
-                        return [
-                            ("OpenVINOExecutionProvider", {"device_type": "GPU"}),
-                            "CPUExecutionProvider",
-                        ]
-        except (KeyError, TypeError, AttributeError):
-            pass
+    def _call_encoder(
+        self,
+        attention_mask: np.ndarray,
+        inputs_embeds: np.ndarray,
+    ) -> np.ndarray:
+        """florence-2-encoder: attention_mask + inputs_embeds → last_hidden_state."""
+        request = pb_utils.InferenceRequest(
+            model_name="florence-2-encoder",
+            requested_output_names=["last_hidden_state"],
+            inputs=[
+                pb_utils.Tensor("attention_mask", attention_mask.astype(np.int64)),
+                pb_utils.Tensor("inputs_embeds", inputs_embeds.astype(np.float32)),
+            ],
+        )
+        response = request.exec()
+        if response.has_error():
+            raise RuntimeError(f"Encoder failed: {response.error().message()}")
+        tensor = pb_utils.get_output_tensor_by_name(response, "last_hidden_state")
+        return _tensor_to_numpy(tensor).astype(np.float32)
 
-        # Default: CUDA, then CPU fallback.
-        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    def _call_decoder(
+        self,
+        encoder_attention_mask: np.ndarray,
+        encoder_hidden_states: np.ndarray,
+        inputs_embeds: np.ndarray,
+        past_kv: dict[str, np.ndarray],
+    ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+        """florence-2-decoder: full decode step with KV cache.
+
+        Returns (logits, new_past_kv).
+        """
+        inputs = [
+            pb_utils.Tensor("encoder_attention_mask", encoder_attention_mask.astype(np.int64)),
+            pb_utils.Tensor("encoder_hidden_states", encoder_hidden_states.astype(np.float32)),
+            pb_utils.Tensor("inputs_embeds", inputs_embeds.astype(np.float32)),
+        ]
+        for name in _PAST_KV_INPUTS:
+            inputs.append(pb_utils.Tensor(name, past_kv[name].astype(np.float32)))
+        inputs.append(
+            pb_utils.Tensor("use_cache_branch", np.array([True], dtype=np.bool_))
+        )
+
+        request = pb_utils.InferenceRequest(
+            model_name="florence-2-decoder",
+            requested_output_names=_DECODER_REQUESTED_OUTPUTS,
+            inputs=inputs,
+        )
+        response = request.exec()
+        if response.has_error():
+            raise RuntimeError(f"Decoder failed: {response.error().message()}")
+
+        logits_tensor = pb_utils.get_output_tensor_by_name(response, "logits")
+        logits = _tensor_to_numpy(logits_tensor).astype(np.float32)
+
+        new_past_kv: dict[str, np.ndarray] = {}
+        for present_name in _PRESENT_KV_OUTPUTS:
+            tensor = pb_utils.get_output_tensor_by_name(response, present_name)
+            if tensor is None:
+                raise RuntimeError(f"Missing decoder output: {present_name}")
+            # present.0.decoder.key → past_key_values.0.decoder.key
+            _, layer_kind = present_name.split(".", 1)
+            input_name = f"past_key_values.{layer_kind}"
+            new_past_kv[input_name] = _tensor_to_numpy(tensor).astype(np.float32)
+
+        return logits, new_past_kv
+
+    # ------------------------------------------------------------------
+    # KV cache helpers
+    # ------------------------------------------------------------------
+
+    def _empty_kv_cache(self) -> dict[str, np.ndarray]:
+        """Create empty (seq_len=0) KV cache tensors for the first decoder step."""
+        empty_self = np.zeros((1, _NUM_HEADS, 0, _HEAD_DIM), dtype=np.float32)
+        empty_cross = np.zeros((1, _NUM_HEADS, 0, _HEAD_DIM), dtype=np.float32)
+        kv: dict[str, np.ndarray] = {}
+        for name in _PAST_KV_INPUTS:
+            kv[name] = empty_cross.copy() if ".encoder." in name else empty_self.copy()
+        return kv

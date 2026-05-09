@@ -35,12 +35,17 @@ services:
   # development does not try to start a noisy placeholder.
   # -----------------------------------------------------------------------
   triton:
-    image: nvcr.io/nvidia/tritonserver:24.04-py3
+    build:
+      context: ./triton-models
+      dockerfile: Dockerfile
+    image: cts-triton:26.04-py3
     container_name: cts-triton
     networks:
       nanai:
         aliases:
           - triton
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
     command: >
       tritonserver
       --model-repository=/models
@@ -48,13 +53,23 @@ services:
       --http-port=8700
       --metrics-port=8702
       --exit-on-error=false
-      --strict-model-config=false
+      --cuda-memory-pool-byte-size=0:2147483648
     ports:
       - "8700:8700"
       - "8701:8701"
       - "8702:8702"
     volumes:
-      - ./triton-models:/models
+      - hf-cache:/root/.cache/huggingface
+      - ./triton-models/person-detector:/models/person-detector
+      - ./triton-models/clip-vision:/models/clip-vision
+      - ./triton-models/florence-2:/models/florence-2
+      - ./triton-models/florence-2-vision:/models/florence-2-vision
+      - ./triton-models/florence-2-embed:/models/florence-2-embed
+      - ./triton-models/florence-2-encoder:/models/florence-2-encoder
+      - ./triton-models/florence-2-decoder:/models/florence-2-decoder
+      - ./triton-models/reid-solider:/models/reid-solider
+      - ./triton-models/pose-rtmpose:/models/pose-rtmpose
+      - ./triton-models/embeddinggemma-300m:/models/embeddinggemma-300m
     deploy:
       resources:
         reservations:
@@ -67,8 +82,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    profiles:
-      - gpu
 
   # -----------------------------------------------------------------------
   # Tracking Orchestrator (Python — ML pipeline)
@@ -101,8 +114,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    profiles:
-      - app
 
   # -----------------------------------------------------------------------
   # go2rtc (RTSP proxy sidecar for rtsp-ingress)
@@ -127,8 +138,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    profiles:
-      - app
 
   # -----------------------------------------------------------------------
   # RTSP Ingress (Go — polls go2rtc for JPEG frames)
@@ -166,10 +175,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    profiles:
-      - app
 
 volumes:
+  hf-cache:
   redisdata:
 
 networks:

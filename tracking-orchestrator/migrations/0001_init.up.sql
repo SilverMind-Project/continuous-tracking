@@ -342,34 +342,6 @@ SELECT add_retention_policy(
 );
 
 -- ---------------------------------------------------------------------------
--- Daily baseline aggregate for dementia signal z-score computation
--- ---------------------------------------------------------------------------
-
--- migrate:no-transaction
--- CREATE MATERIALIZED VIEW WITH (timescaledb.continuous) cannot run inside
--- a transaction block.
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS dementia_signals_daily
-WITH (timescaledb.continuous) AS
-SELECT
-    identity_id,
-    signal_kind,
-    time_bucket(INTERVAL '1 day', emitted_at) AS day,
-    count(*)            AS signal_count,
-    avg(value)          AS mean_value,
-    stddev_pop(value)   AS sd_value
-FROM dementia_signals
-GROUP BY identity_id, signal_kind, day;
-
-SELECT add_continuous_aggregate_policy(
-    'dementia_signals_daily',
-    start_offset      => INTERVAL '3 days',
-    end_offset        => INTERVAL '1 hour',
-    schedule_interval => INTERVAL '15 minutes',
-    if_not_exists     => TRUE
-);
-
--- ---------------------------------------------------------------------------
 -- Updated_at trigger (generic)
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION _update_updated_at() RETURNS TRIGGER AS $$

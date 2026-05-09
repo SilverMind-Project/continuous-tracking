@@ -1,14 +1,17 @@
-# Florence-2-large scene description — Python backend.
+# Florence-2-large scene description — Python backend (BLS orchestrator).
 #
-# Uses ONNX Runtime to orchestrate the autoregressive generation loop:
-#   vision_encoder → encoder_model → decoder_model_merged (autoregressive)
+# Uses Business Logic Scripting to call native ONNX Runtime sub-models:
+#   florence-2-vision   — pixel_values → image_features
+#   florence-2-embed    — input_ids → inputs_embeds
+#   florence-2-encoder  — attention_mask + inputs_embeds → last_hidden_state
+#   florence-2-decoder  — autoregressive decode with KV cache
 #
 # GPU vendor support:
 #   NVIDIA: ONNX Runtime with CUDAExecutionProvider
 #   Intel Arc: ONNX Runtime with OpenVINOExecutionProvider
 #     (activate via configure_gpu.py --vendor intel)
 #
-# Model files (downloaded from onnx-community/Florence-2-large):
+# ONNX model files (INT8 QDQ, from onnx-community/Florence-2-large):
 #   triton-models/florence-2/1/
 #     model.py
 #     vision_encoder_int8.onnx
@@ -28,7 +31,7 @@
 
 name: "florence-2"
 backend: "python"
-max_batch_size: 1
+max_batch_size: 0
 
 input [
   {

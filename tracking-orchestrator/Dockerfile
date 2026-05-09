@@ -12,7 +12,8 @@ ENV UV_COMPILE_BYTECODE=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    curl && \
+    curl \
+    git && \
     rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 

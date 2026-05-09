@@ -1,0 +1,16 @@
+# Florence-2 vision encoder — ONNX Runtime backend.
+# INT8 QDQ-quantized from onnx-community/Florence-2-large.
+#
+# Input:  pixel_values   [batch, 3, height, width]  FP32
+# Output: image_features  [batch, num_features, 1024]  FP32
+
+name: "florence-2-vision"
+platform: "onnxruntime_onnx"
+max_batch_size: 0
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

@@ -1,0 +1,24 @@
+# Florence-2 autoregressive decoder (merged with KV cache) — ONNX Runtime backend.
+# INT8 QDQ-quantized from onnx-community/Florence-2-large.
+#
+# Inputs:
+#   encoder_attention_mask  [batch, enc_seq_len]           INT64
+#   encoder_hidden_states   [batch, enc_seq_len, 1024]     FP32
+#   inputs_embeds           [batch, dec_seq_len, 1024]     FP32
+#   past_key_values.{0..11}.{decoder,encoder}.{key,value}  [batch, 16, past_len, 64]  FP32
+#   use_cache_branch        [1]                            BOOL
+#
+# Outputs:
+#   logits                  [batch, dec_seq_len, 51289]    FP32
+#   present.{0..11}.{decoder,encoder}.{key,value}          [batch, 16, past_len+dec_seq_len, 64]  FP32
+
+name: "florence-2-decoder"
+platform: "onnxruntime_onnx"
+max_batch_size: 0
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

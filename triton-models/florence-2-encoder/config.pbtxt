@@ -1,0 +1,17 @@
+# Florence-2 text encoder — ONNX Runtime backend.
+# INT8 QDQ-quantized from onnx-community/Florence-2-large.
+#
+# Input:  attention_mask     [batch, seq_len]         INT64
+# Input:  inputs_embeds      [batch, seq_len, 1024]   FP32
+# Output: last_hidden_state  [batch, seq_len, 1024]   FP32
+
+name: "florence-2-encoder"
+platform: "onnxruntime_onnx"
+max_batch_size: 0
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

@@ -1,22 +1,22 @@
 """Download embeddinggemma-300m ONNX model from onnx-community for Triton.
 
-Downloads the INT8-quantized ONNX model, external weight data, and tokenizer
+Downloads the FP32 ONNX model, external weight data, and tokenizer
 from ``onnx-community/embeddinggemma-300m-ONNX`` on HuggingFace Hub.
 
-The quantized variant (``model_quantized.onnx`` + ``model_quantized.onnx_data``)
-is ~309 MB and uses dynamic INT8 quantization — the best size-to-accuracy
-trade-off for sentence embeddings. FP32 (1.23 GB) and FP16 (617 MB) variants
-are also available but not downloaded by default.
+The FP32 variant (``model.onnx`` + ``model.onnx_data``) is ~1.23 GB and uses
+full precision — the most portable format that works across all GPU vendors
+and ONNX Runtime versions. QDQ-quantized and FP16 variants are also available
+but not downloaded by default.
 
 Usage:
     uv run --with huggingface_hub python triton-models/scripts/download_embeddinggemma.py
 
 Output (written to triton-models/embeddinggemma-300m/1/):
-    model_quantized.onnx         — ONNX graph (INT8, 568 KB)
-    model_quantized.onnx_data    — external weights (INT8, 309 MB)
-    tokenizer.json               — HuggingFace tokenizer (20 MB)
-    tokenizer_config.json        — tokenizer metadata
-    special_tokens_map.json      — special token mapping
+    model.onnx              — ONNX graph (FP32)
+    model.onnx_data         — external weights (FP32, ~1.23 GB)
+    tokenizer.json          — HuggingFace tokenizer (20 MB)
+    tokenizer_config.json   — tokenizer metadata
+    special_tokens_map.json — special token mapping
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ _REPO = "onnx-community/embeddinggemma-300m-ONNX"
 
 # ONNX model files (graph + external data). Both must be present for Triton.
 _ONNX_FILES = [
-    "onnx/model_quantized.onnx",
-    "onnx/model_quantized.onnx_data",
+    "onnx/model.onnx",
+    "onnx/model.onnx_data",
 ]
 
 # Tokenizer files needed for client-side tokenization (triton-shared).

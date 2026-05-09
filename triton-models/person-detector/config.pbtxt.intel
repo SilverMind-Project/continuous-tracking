@@ -13,18 +13,14 @@
 
 name: "person-detector"
 platform: "onnxruntime_onnx"
-default_model_filename: "model_int8.onnx"
-max_batch_size: 16
-
-dynamic_batching {
-  max_queue_delay_microseconds: 5000
-}
+default_model_filename: "model_qdq.onnx"
+max_batch_size: 0
 
 input [
   {
     name: "images"
     data_type: TYPE_FP32
-    dims: [3, 640, 640]
+    dims: [16, 3, 640, 640]
   }
 ]
 
@@ -32,7 +28,7 @@ output [
   {
     name: "output0"
     data_type: TYPE_FP32
-    dims: [300, 6]
+    dims: [16, 300, 6]
   }
 ]
 

@@ -1,0 +1,16 @@
+# Florence-2 token embedding — ONNX Runtime backend.
+# INT8 QDQ-quantized from onnx-community/Florence-2-large.
+#
+# Input:  input_ids     [batch, seq_len]   INT64
+# Output: inputs_embeds  [batch, seq_len, 1024]  FP32
+
+name: "florence-2-embed"
+platform: "onnxruntime_onnx"
+max_batch_size: 0
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

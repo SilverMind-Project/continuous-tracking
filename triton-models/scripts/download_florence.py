@@ -1,17 +1,21 @@
 """Download Florence-2-large ONNX files from onnx-community for Triton.
 
-Downloads INT8 ONNX model files and the tokenizer from
+Downloads QDQ-quantized ONNX model files and the tokenizer from
 ``onnx-community/Florence-2-large`` on HuggingFace Hub.
+
+QDQ format (QuantizeLinear → Op → DequantizeLinear) uses standard FP32
+ops internally, making it portable across NVIDIA (CUDA EP), Intel Arc
+(OpenVINO EP), and CPU (CPU EP).
 
 Usage:
     pip install huggingface_hub
     python triton-models/scripts/download_florence.py
 
 Output (written to triton-models/florence-2/1/):
-    vision_encoder_int8.onnx
-    encoder_model_int8.onnx
-    decoder_model_merged_int8.onnx
-    embed_tokens_int8.onnx
+    vision_encoder_quantized.onnx
+    encoder_model_quantized.onnx
+    decoder_model_merged_quantized.onnx
+    embed_tokens_quantized.onnx
     tokenizer.json
     tokenizer_config.json
     special_tokens_map.json
@@ -25,7 +29,7 @@ from pathlib import Path
 
 _REPO = "onnx-community/Florence-2-large"
 
-# ONNX model files to download (INT8 variants for performance).
+# INT8 QDQ-quantized ONNX model files (portable across GPU vendors).
 _ONNX_FILES = [
     "onnx/vision_encoder_int8.onnx",
     "onnx/encoder_model_int8.onnx",
@@ -51,7 +55,7 @@ def download(out_dir: Path) -> None:
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Downloading ONNX model files from {_REPO}...")
+    print(f"Downloading INT8 QDQ ONNX model files from {_REPO}...")
     for filename in _ONNX_FILES:
         local_path = hf_hub_download(
             repo_id=_REPO,

@@ -25,7 +25,11 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent  # triton-models/
 
-_MODELS = ["person-detector", "reid-solider", "pose-rtmpose", "clip-vision", "florence-2"]
+_MODELS = [
+	    "person-detector", "reid-solider", "pose-rtmpose", "clip-vision",
+	    "florence-2",
+	    "florence-2-vision", "florence-2-embed", "florence-2-encoder", "florence-2-decoder",
+	]
 
 
 def configure(vendor: str, repo: Path, dry_run: bool) -> None:
