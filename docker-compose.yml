@@ -1,13 +1,12 @@
 # Continuous Tracking System — local development environment
 # Services: Redis, tracking-orchestrator, rtsp-ingress
 #
+# Prerequisites (start these first):
+#   - Shared PostgreSQL:  cd ../db && docker compose up -d
+#
 # MinIO is provided externally (minio.nanai.khoofia.com).
-# PostgreSQL is provided by the shared ../docker-compose.db.yml (included below).
-
-include:
-  - path: ../db/docker-compose.db.yml
-    env_file:
-      - ../db/.env
+# The shared PostgreSQL instance must be started independently to avoid
+# container-name conflicts.
 
 services:
   # -----------------------------------------------------------------------
@@ -105,8 +104,6 @@ services:
     ports:
       - "8500:8500"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
