@@ -272,7 +272,9 @@ class TestPipelineSkeleton:
             detections = publish_kwargs["detections"]
             assert len(detections) == 1
             assert detections[0].embedding == [1.0] * 768
-            assert publish_kwargs["detection_count"] == 1
+            assert publish_kwargs["frame_width"] == 200
+            assert publish_kwargs["frame_height"] == 100
+            assert publish_kwargs["capture_time_unix_ns"] == 1700000000000000000
 
             await pipeline.stop()
 
@@ -302,3 +304,110 @@ class TestPipelineSkeleton:
         finally:
             calibration_state.adjacency_edges = old_edges
             calibration_state.version = old_version
+
+
+class TestFullPipelineIntegration:
+    """End-to-end tests exercising the full pipeline with all real components.
+
+    Uses InMemory repositories so no Redis or Postgres is needed.  The
+    detector and ReID embedder are mocked but all tracking, cross-camera,
+    identity resolution, and trajectory writing components are real.
+    """
+
+    @pytest.mark.asyncio
+    async def test_full_pipeline_tracking_and_event_emission(self) -> None:
+        """Process frames and verify tracking events are published."""
+        pipeline = FrameProcessingPipeline(PipelineConfig(signal_enabled=False))
+        with _mock_redis_deps() as (mock_transport, mock_rev, _mock_scene):
+            # Realistic detector: one person in each frame.
+            mock_detector = AsyncMock()
+            mock_detector.detect = AsyncMock(
+                side_effect=lambda img: [
+                    DetectionBox(x1=0.3, y1=0.2, x2=0.5, y2=0.6, confidence=0.95)
+                ]
+            )
+
+            mock_reid = AsyncMock()
+            mock_reid.embed_batch = AsyncMock(return_value=[np.ones(768, dtype=np.float32)])
+
+            await pipeline.initialize(detector=mock_detector, reid_embedder=mock_reid)
+
+            # Send several frames from the same camera so a confirmed track
+            # is established (min_hits=3).
+            for i in range(5):
+                frame = FrameReady(
+                    camera_id="cam-1",
+                    minio_key=f"frames/cam-1/{i}.jpg",
+                    frame_index=i,
+                    capture_time_unix_ns=1700000000000000000 + i * 200_000_000,
+                    received_time_unix_ns=1700000000100000000 + i * 200_000_000,
+                    width=640,
+                    height=480,
+                )
+                await pipeline._process_frame(frame)
+
+            # After 5 frames, tracking events should have been published.
+            assert mock_transport.publish_event.call_count >= 1
+
+            # Verify frame_ref fields are populated (Phase 1 fix #2).
+            last_kwargs = mock_transport.publish_event.call_args.kwargs
+            assert last_kwargs["frame_width"] == 640
+            assert last_kwargs["frame_height"] == 480
+            assert last_kwargs["capture_time_unix_ns"] > 0
+
+            # Tracklet manager should have active tracklets.
+            active = pipeline._tracklet_manager.get_active_tracklets()
+            assert len(active) == 1
+
+            await pipeline.stop()
+
+    @pytest.mark.asyncio
+    async def test_pipeline_empty_frame_skeleton_mode(self) -> None:
+        """Skeleton mode (no detector) produces zero-detection events."""
+        pipeline = FrameProcessingPipeline(PipelineConfig(signal_enabled=False))
+        with _mock_redis_deps() as (mock_transport, _mock_rev, _mock_scene):
+            await pipeline.initialize()  # no detector → skeleton mode
+
+            frame = FrameReady(
+                camera_id="cam-1",
+                minio_key="frames/cam-1/0.jpg",
+                frame_index=0,
+                capture_time_unix_ns=1700000000000000000,
+                received_time_unix_ns=1700000000100000000,
+                width=640,
+                height=480,
+            )
+            await pipeline._process_frame(frame)
+
+            assert mock_transport.publish_event.call_count == 1
+            kwargs = mock_transport.publish_event.call_args.kwargs
+            assert kwargs.get("detections") is None
+            assert kwargs["frame_width"] == 640
+            assert kwargs["frame_height"] == 480
+
+            await pipeline.stop()
+
+    @pytest.mark.asyncio
+    async def test_pipeline_graceful_degradation_on_minio_miss(self) -> None:
+        """Pipeline does not crash when MinIO fetch fails (empty image fallback)."""
+        pipeline = FrameProcessingPipeline(PipelineConfig(signal_enabled=False))
+        with _mock_redis_deps() as (mock_transport, _mock_rev, _mock_scene):
+            mock_detector = AsyncMock()
+            mock_detector.detect = AsyncMock(return_value=[])
+            await pipeline.initialize(detector=mock_detector)
+
+            # No frame_fetcher is set — falls back to blank image.
+            frame = FrameReady(
+                camera_id="cam-1",
+                minio_key="frames/cam-1/missing.jpg",
+                frame_index=0,
+                capture_time_unix_ns=1700000000000000000,
+                received_time_unix_ns=1700000000100000000,
+                width=0,
+                height=0,
+            )
+            await pipeline._process_frame(frame)
+
+            # Should produce an event with zero detections, not crash.
+            assert mock_transport.publish_event.call_count == 1
+            await pipeline.stop()

@@ -231,6 +231,8 @@ class FrameProcessingPipeline:
         # Face identification (via person-identification-service)
         self._face_id_client: FaceIdentificationClient | None = None
         self._last_face_id_call: dict[str, datetime] = {}
+        # Floor projection (homography-based, hot-reloaded from calibration state).
+        self._floor_projector: FloorProjector | None = None
 
     @property
     def is_running(self) -> bool:
@@ -313,12 +315,14 @@ class FrameProcessingPipeline:
         # ---- M5: Cross-camera + identity resolution ----
         self._adjacency = CameraAdjacency()
 
+        self._floor_projector = FloorProjector(calibration_state)
+
         self._cross_camera = CrossCameraAssociator(
             gallery=gallery,
             adjacency=self._adjacency,
             global_track_repo=self._global_track_repo,
             config=self._config.cross_cam,
-            floor_projector=FloorProjector(calibration_state),
+            floor_projector=self._floor_projector,
         )
         self._sync_adjacency()
 
@@ -534,6 +538,7 @@ class FrameProcessingPipeline:
                 adjacency=new_adjacency,
                 global_track_repo=self._global_track_repo,
                 config=self._config.cross_cam,
+                floor_projector=self._floor_projector,
             )
 
     async def _process_frame(self, frame: FrameReady) -> None:
@@ -627,10 +632,6 @@ class FrameProcessingPipeline:
                 frame_index=frame.frame_index,
             )
 
-            detection_count = len(local_tracks)
-        else:
-            detection_count = 0
-
         # ---- Step 4b: Face identification (rate-limited call to person-identification-service) ----
         face_anchors: list[FaceAnchor] = []
         if self._face_id_client is not None and domain_detections:
@@ -703,15 +704,41 @@ class FrameProcessingPipeline:
         if outcome.decisions and self._trajectory_writer:
             traj_time = datetime.now(UTC)
             room_name = self._config.camera_room_map.get(frame.camera_id, "")
+
+            # Build a lookup from global_track_id → best bbox for the
+            # current camera, using the tracklet's last_bbox (updated by
+            # the tracklet manager in step 4).
+            gt_bbox: dict[str, BoundingBox] = {}
+            if active_tracklets and self._floor_projector:
+                for tracklet in active_tracklets:
+                    if tracklet.camera_id != frame.camera_id:
+                        continue
+                    bbox = getattr(tracklet, "last_bbox", None)
+                    if bbox is None:
+                        continue
+                    for gt in active_global_tracks:
+                        if tracklet.tracklet_id in gt.tracklet_ids:
+                            gt_bbox[gt.global_track_id] = bbox
+                            break
+
             for decision in outcome.decisions:
                 if decision.identity_id is None:
                     continue
+                # Project the tracklet's footpoint through the per-camera
+                # homography, falling back to uncalibrated (0,0) when no
+                # homography is configured for this camera.
+                bbox = gt_bbox.get(decision.global_track_id)
+                floor_point = (
+                    self._floor_projector.project(frame.camera_id, bbox)
+                    if bbox is not None and self._floor_projector is not None
+                    else FloorPoint(0, 0)
+                )
                 _top_id, top_prob = decision.posterior.top_identity()
                 await self._trajectory_writer.write(
                     identity_id=decision.identity_id,
                     global_track_id=decision.global_track_id,
                     room_name=room_name,
-                    floor_point=FloorPoint(0, 0),  # homography-based projection added in M9
+                    floor_point=floor_point,
                     captured_at=traj_time,
                     identity_confidence=top_prob,
                 )
@@ -781,11 +808,13 @@ class FrameProcessingPipeline:
             camera_id=frame.camera_id,
             event_time=datetime.now(UTC),
             frame_index=frame.frame_index,
-            detection_count=detection_count,
             detections=domain_detections if detections else None,
             minio_key=frame.minio_key,
             room_name=self._config.camera_room_map.get(frame.camera_id, ""),
             identities=identities or None,
+            frame_width=frame.width,
+            frame_height=frame.height,
+            capture_time_unix_ns=frame.capture_time_unix_ns,
         )
 
         if new_revisions:
@@ -828,9 +857,11 @@ class FrameProcessingPipeline:
             camera_id=frame.camera_id,
             event_time=event_time,
             frame_index=frame.frame_index,
-            detection_count=0,
             minio_key=frame.minio_key,
             room_name=self._config.camera_room_map.get(frame.camera_id, ""),
+            frame_width=frame.width,
+            frame_height=frame.height,
+            capture_time_unix_ns=frame.capture_time_unix_ns,
         )
 
         logger.debug(

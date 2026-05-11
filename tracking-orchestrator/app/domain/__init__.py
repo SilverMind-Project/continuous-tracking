@@ -488,7 +488,6 @@ class PersonActivity:
 
 DementiaSignalKind = Literal[
     "pacing",
-    "room_revisit_rate",
     "bathroom_dwell_anomaly",
     "sundowning_index",
     "nighttime_movement",

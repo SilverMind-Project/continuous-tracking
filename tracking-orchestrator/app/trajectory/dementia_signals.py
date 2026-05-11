@@ -8,7 +8,6 @@ z-score relative to the person's historical baseline.
 Signal types
 ------------
 - **pacing**: >N room entries in 30 min traversing 2-3 unique rooms
-- **room_revisit_rate**: entries per hour vs 7-day baseline
 - **bathroom_dwell_anomaly**: current dwell > 2 std of 30-day mean
 - **sundowning_index**: activity 17:00-22:00 vs 12:00-17:00 baseline
 - **nighttime_movement**: room transitions 01:00-05:00
@@ -146,11 +145,17 @@ class DementiaSignalWorker:
         ``self._cfg.pacing_room_threshold`` times within the pacing window
         (default 30 minutes), visiting at least 2 unique rooms.
         """
-        if len(window) < 3:
+        # Narrow to the pacing analysis window (e.g. last 30 min) rather
+        # than using the full 24 h observation window, so the count resets
+        # as the window slides forward.
+        pacing_cutoff = now - self._cfg.pacing_window
+        pacing_points = [p for p in window if p.observed_at >= pacing_cutoff]
+
+        if len(pacing_points) < 3:
             return []
 
         # Sort ascending so consecutive comparisons are meaningful.
-        sorted_window = sorted(window, key=lambda p: p.observed_at)
+        sorted_window = sorted(pacing_points, key=lambda p: p.observed_at)
 
         # Count room transitions and track unique rooms visited.
         room_changes = 0
@@ -230,20 +235,25 @@ class DementiaSignalWorker:
         evening_points = 0
 
         for i in range(1, len(sorted_window)):
-            hour = sorted_window[i].observed_at.hour
-            is_afternoon = 12 <= hour < 17
-            is_evening = 17 <= hour < 22
+            p_prev = sorted_window[i - 1]
+            p_curr = sorted_window[i]
 
-            if sorted_window[i].room_name != sorted_window[i - 1].room_name:
-                if is_afternoon:
-                    afternoon_transitions += 1
-                if is_evening:
-                    evening_transitions += 1
-
-            if is_afternoon:
+            # Point counting uses each point's own timestamp.
+            curr_hour = p_curr.observed_at.hour
+            if 12 <= curr_hour < 17:
                 afternoon_points += 1
-            if is_evening:
+            elif 17 <= curr_hour < 22:
                 evening_points += 1
+
+            if p_curr.room_name != p_prev.room_name:
+                # Classify the transition by its midpoint so a change near
+                # the 17:00 boundary is not misattributed to the wrong period.
+                midpoint = p_prev.observed_at + (p_curr.observed_at - p_prev.observed_at) / 2
+                mid_hour = midpoint.hour
+                if 12 <= mid_hour < 17:
+                    afternoon_transitions += 1
+                elif 17 <= mid_hour < 22:
+                    evening_transitions += 1
 
         if afternoon_points < 2 or evening_points < 2:
             return []
@@ -315,7 +325,7 @@ class DementiaSignalWorker:
         # Calculate mean and std of all bathroom dwells.
         durations = [d.duration_seconds or 0 for d in bathroom_dwells]
         mean_dur = sum(durations) / len(durations)
-        variance = sum((d - mean_dur) ** 2 for d in durations) / len(durations)
+        variance = sum((d - mean_dur) ** 2 for d in durations) / (len(durations) - 1)
         std_dur = math.sqrt(variance) if variance > 0 else 0
 
         # Check for open (current) bathroom dwell.
@@ -564,7 +574,9 @@ class DementiaSignalWorker:
 
         values = [s.value for s in historical]
         mean_val = sum(values) / len(values)
-        variance = sum((v - mean_val) ** 2 for v in values) / len(values)
+        # Sample variance (N-1 denominator) so the z-score is not inflated
+        # for small baselines (the <2 guard ensures len(values) >= 2).
+        variance = sum((v - mean_val) ** 2 for v in values) / (len(values) - 1)
         std_val = math.sqrt(variance) if variance > 0 else 0.0
 
         if std_val == 0:
@@ -594,12 +606,14 @@ class SignalConfig:
         self,
         window_hours: int = 24,
         pacing_room_threshold: int = 5,
+        pacing_window_minutes: int = 30,
         nighttime_transition_threshold: int = 2,
         stillness_threshold_minutes: int = 30,
         absence_threshold_minutes: int = 30,
     ) -> None:
         self.window = timedelta(hours=window_hours)
         self.pacing_room_threshold = pacing_room_threshold
+        self.pacing_window = timedelta(minutes=pacing_window_minutes)
         self.nighttime_transition_threshold = nighttime_transition_threshold
         self.stillness_threshold_minutes = stillness_threshold_minutes
         self.absence_threshold_minutes = absence_threshold_minutes

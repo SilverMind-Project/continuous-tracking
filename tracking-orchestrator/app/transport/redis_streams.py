@@ -59,32 +59,17 @@ class TransportConfig:
     ack_ttl_seconds: int = 300
 
 
-# ---------------------------------------------------------------------------
-# FrameReady domain shape (mirrors frame.proto::FrameReady).  We keep a
-# frozen dataclass so the rest of the codebase doesn't import the proto
-# class directly.  Conversion happens at the transport boundary.
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class FrameReady:
-    """Domain shape for an inbound frame from rtsp-ingress."""
-
-    camera_id: str
-    minio_key: str
-    frame_index: int
-    capture_time_unix_ns: int
-    received_time_unix_ns: int
-    width: int
-    height: int
-    sample_fps: float = 0.0
+# Re-export proto FrameReady so callers use the wire type directly without
+# a redundant conversion layer.  The proto class is constructed identically
+# (all fields are optional kwargs) and accessed via the same attribute names.
+FrameReady = frame_pb2.FrameReady
 
 
 @dataclass
 class FrameBatch:
     """A batch of frames ready for processing."""
 
-    frames: list[FrameReady] = field(default_factory=list)
+    frames: list = field(default_factory=list)  # list[frame_pb2.FrameReady]
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -182,7 +167,7 @@ class RedisStreamsTransport:
             )
 
     async def consume_frames(self, count: int = 1) -> AsyncIterator[FrameReady]:
-        """Yield FrameReady messages via XREADGROUP."""
+        """Yield FrameReady proto messages via XREADGROUP."""
         if self._redis is None:
             logger.warning("Cannot consume: not connected to Redis")
             return
@@ -201,8 +186,10 @@ class RedisStreamsTransport:
 
         for _stream_name, messages in streams:
             for message_id, fields in messages:
-                frame = self._deserialize_frame(fields)
-                if frame is None:
+                try:
+                    frame = proto_decode(fields, frame_pb2.FrameReady, field=FIELD_FRAME)
+                except Exception:
+                    logger.exception("Failed to deserialize FrameReady")
                     continue
                 self._pending_acks[id(frame)] = (message_id, time.monotonic())
                 metrics.metrics.frames_consumed_total.labels(camera_id=frame.camera_id).inc()
@@ -229,11 +216,15 @@ class RedisStreamsTransport:
         camera_id: str,
         event_time: datetime,
         frame_index: int,
-        detection_count: int,
+        *,
         detections: list[Detection] | None = None,
         minio_key: str = "",
         room_name: str = "",
         identities: dict[str, tuple[str, float]] | None = None,
+        frame_width: int = 0,
+        frame_height: int = 0,
+        capture_time_unix_ns: int = 0,
+        detection_count: int = 0,  # noqa: ARG002  deprecated; derived from len(detections)
     ) -> str:
         """Publish a ``TrackingEvent`` proto to ``tracking.events``.
 
@@ -241,21 +232,19 @@ class RedisStreamsTransport:
             camera_id: the camera that produced this event.
             event_time: wall-clock time of the event.
             frame_index: the source frame index.
-            detection_count: number of detections in this event (kept for
-                back-compat with internal counters; defaults to len(detections)).
             detections: per-person detections to embed in the proto.
             minio_key: MinIO key of the frame for downstream review.
-            room_name: resolved room name for the camera (currently
-                propagated separately by :class:`KeyframeSampler`; reserved
-                for inclusion when a future proto revision lifts it).
+            room_name: resolved room name for the camera.
             identities: mapping ``global_track_id -> (identity_id, confidence)``
                 for detections that resolved to a committed identity. Each
                 entry becomes an ``IdentityRevision`` sub-message.
+            frame_width: source frame pixel width.
+            frame_height: source frame pixel height.
+            capture_time_unix_ns: source frame capture timestamp in unix ns.
 
         Returns:
             The Redis message ID of the published event (decoded).
         """
-        del detection_count  # derived from len(detections); kept for back-compat callers
         if self._redis is None:
             logger.error("Cannot publish: not connected to Redis")
             return ""
@@ -270,6 +259,9 @@ class RedisStreamsTransport:
             room_name=room_name,
             detections=detections or [],
             identities=identities or {},
+            frame_width=frame_width,
+            frame_height=frame_height,
+            capture_time_unix_ns=capture_time_unix_ns,
         )
 
         message_id_bytes = await self._redis.xadd(
@@ -322,24 +314,6 @@ class RedisStreamsTransport:
             else str(message_id_bytes)
         )
 
-    def _deserialize_frame(self, fields: dict[Any, Any]) -> FrameReady | None:
-        """Decode a ``FrameReady`` proto from a Redis-Streams field dict."""
-        try:
-            message = proto_decode(fields, frame_pb2.FrameReady, field=FIELD_FRAME)
-        except Exception as exc:  # proto parse / lookup can raise non-ValueError types
-            logger.error("Failed to deserialize FrameReady", error=str(exc))
-            return None
-        return FrameReady(
-            camera_id=message.camera_id,
-            minio_key=message.minio_key,
-            frame_index=int(message.frame_index),
-            capture_time_unix_ns=int(message.capture_time_unix_ns),
-            received_time_unix_ns=int(message.received_time_unix_ns),
-            width=int(message.width),
-            height=int(message.height),
-            sample_fps=float(message.sample_fps),
-        )
-
     async def stream_length(self, stream: str | None = None) -> int:
         if self._redis is None:
             return 0
@@ -373,6 +347,9 @@ def _build_tracking_event_pb(
     room_name: str,
     detections: list[Detection],
     identities: dict[str, tuple[str, float]],
+    frame_width: int = 0,
+    frame_height: int = 0,
+    capture_time_unix_ns: int = 0,
 ) -> tracking_pb2.TrackingEvent:
     """Build a TrackingEvent proto from domain types.
 
@@ -389,6 +366,9 @@ def _build_tracking_event_pb(
     )
     event.frame_ref.minio_key = minio_key
     event.frame_ref.frame_index = frame_index
+    event.frame_ref.width = frame_width
+    event.frame_ref.height = frame_height
+    event.frame_ref.capture_time_unix_ns = capture_time_unix_ns
 
     for det in detections:
         d = event.detections.add(

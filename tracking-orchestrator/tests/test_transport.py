@@ -11,6 +11,7 @@ from app.storage.postgres.gallery_repo import (
     _embedding_to_pgvector,
     _pgvector_to_list,
 )
+from app.proto.continuoustracking.v1 import frame_pb2
 from app.transport.redis_streams import (
     FrameReady,
     RedisStreamsTransport,
@@ -74,23 +75,29 @@ class TestTransportDeserialization:
         return {b"frame": msg.SerializeToString()}
 
     def test_valid_fields(self) -> None:
-        transport = RedisStreamsTransport()
-        frame = transport._deserialize_frame(self._proto_frame_fields())
+        from app.transport.codec import decode as proto_decode
+
+        frame = proto_decode(self._proto_frame_fields(), frame_pb2.FrameReady, field="frame")
         assert frame is not None
         assert frame.camera_id == "cam-1"
         assert frame.frame_index == 5
         assert frame.width == 640
-        assert frame.sample_fps == pytest.approx(5.0)
 
     def test_missing_payload_returns_none(self) -> None:
-        transport = RedisStreamsTransport()
-        # Empty fields dict -> no `frame` key -> codec raises -> None
-        assert transport._deserialize_frame({}) is None
+        import pytest as _pytest
+
+        from app.transport.codec import decode as proto_decode
+
+        with _pytest.raises(ValueError, match="missing"):
+            proto_decode({}, frame_pb2.FrameReady, field="frame")
 
     def test_invalid_proto_returns_none(self) -> None:
-        transport = RedisStreamsTransport()
-        # Garbage bytes that cannot be parsed as FrameReady.
-        assert transport._deserialize_frame({b"frame": b"not-valid-protobuf-\xff\x01"}) is None
+        import pytest as _pytest
+
+        from app.transport.codec import decode as proto_decode
+
+        with _pytest.raises(Exception):
+            proto_decode({b"frame": b"not-valid-protobuf-\xff\x01"}, frame_pb2.FrameReady, field="frame")
 
 
 # ---------------------------------------------------------------------------

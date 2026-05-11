@@ -49,7 +49,6 @@ type MinIOConfig struct {
 type CognitiveConfig struct {
 	BaseURL                  string        `yaml:"base_url"`
 	APIKey                   string        `yaml:"api_key"`
-	JWTSecret                string        `yaml:"jwt_secret"`
 	ReconcileIntervalSeconds int           `yaml:"reconcile_interval_s"`
 	ReconcileInterval        time.Duration `yaml:"-"`
 }
@@ -107,7 +106,6 @@ func DefaultConfig() Config {
 		Cognitive: CognitiveConfig{
 			BaseURL:                  "http://localhost:8000",
 			APIKey:                   "",
-			JWTSecret:                "",
 			ReconcileIntervalSeconds: 60,
 			ReconcileInterval:        60 * time.Second,
 		},
@@ -211,9 +209,6 @@ func Load() (Config, error) {
 	}
 	if v := os.Getenv("COGNITIVE_API_KEY"); v != "" {
 		cfg.Cognitive.APIKey = v
-	}
-	if v := os.Getenv("COGNITIVE_JWT_SECRET"); v != "" {
-		cfg.Cognitive.JWTSecret = v
 	}
 	if v := os.Getenv("COGNITIVE_RECONCILE_INTERVAL_S"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
