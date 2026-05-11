@@ -44,6 +44,7 @@ class MinioFrameFetcher:
             aws_access_key_id=self._config.access_key_id,
             aws_secret_access_key=self._config.secret_access_key,
             region_name=self._config.region_name,
+            verify=self._config.secure,
             use_ssl=self._config.secure,
         )
         self._client = await self._client_cm.__aenter__()
