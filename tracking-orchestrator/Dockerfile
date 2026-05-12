@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# Build context is the nanai monorepo root so triton-shared is reachable.
+# Build context is the monorepo root so triton-shared is reachable.
 # We mirror the on-disk layout so uv.sources path "../../triton-shared"
 # resolves correctly: /work/continuous-tracking/tracking-orchestrator/../../triton-shared
 #                   = /work/triton-shared/

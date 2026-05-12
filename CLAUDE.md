@@ -117,7 +117,7 @@ IP Cameras (RTSP)
 ├── cognitive-companion/           BFF gateway (sibling repo — see its own CLAUDE.md)
 ├── k8s/                           Legacy K8s (migrated to ../kubernetes/continuous-tracking/)
 ├── docs/                          Runbook, wire-format spec
-├── ../kubernetes/                 Unified monorepo K8s manifests (nanai namespace)
+├── ../kubernetes/                 Unified K8s manifests (nanai namespace)
 └── triton-shared/                 Shared Triton client + inference utilities (sibling)
 ```
 
