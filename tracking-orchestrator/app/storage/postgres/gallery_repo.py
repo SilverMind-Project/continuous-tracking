@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _SQL_UPSERT_IDENTITY = """
-    INSERT INTO identities (identity_id, display_name, metadata, is_active)
+    INSERT INTO continuous_tracking.identities (identity_id, display_name, metadata, is_active)
     VALUES ($1, $2, $3::jsonb, $4)
     ON CONFLICT (identity_id) DO UPDATE SET
         display_name = EXCLUDED.display_name,
@@ -31,20 +31,20 @@ _SQL_UPSERT_IDENTITY = """
 
 _SQL_GET_IDENTITY = """
     SELECT identity_id, display_name, metadata, is_active, enrolled_at
-    FROM identities
+    FROM continuous_tracking.identities
     WHERE identity_id = $1
 """
 
 _SQL_LIST_IDENTITIES = """
     SELECT identity_id, display_name, metadata, is_active, enrolled_at
-    FROM identities
+    FROM continuous_tracking.identities
     WHERE is_active = $1
     ORDER BY enrolled_at DESC
 """
 
 _SQL_UPSERT_GALLERY_ENTRY = """
-    INSERT INTO reid_gallery (id, identity_id, embedding, quality, origin_tracklet_id,
-                              seen_at, face_confirmed)
+    INSERT INTO continuous_tracking.reid_gallery
+        (id, identity_id, embedding, quality, origin_tracklet_id, seen_at, face_confirmed)
     VALUES ($1, $2, $3::vector, $4, $5, $6, $7)
     ON CONFLICT (id) DO UPDATE SET
         embedding = EXCLUDED.embedding,
@@ -56,15 +56,15 @@ _SQL_UPSERT_GALLERY_ENTRY = """
 
 _SQL_GET_GALLERY_ENTRY = """
     SELECT id, identity_id, embedding, quality, origin_tracklet_id, seen_at, face_confirmed
-    FROM reid_gallery
+    FROM continuous_tracking.reid_gallery
     WHERE id = $1
 """
 
 _SQL_LIST_GALLERY_ENTRIES = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
            rg.seen_at, rg.face_confirmed
-    FROM reid_gallery rg
-    INNER JOIN identities i ON rg.identity_id = i.identity_id
+    FROM continuous_tracking.reid_gallery rg
+    INNER JOIN continuous_tracking.identities i ON rg.identity_id = i.identity_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
       AND ($2 IS TRUE OR i.is_active = TRUE)
     ORDER BY rg.seen_at DESC
@@ -76,13 +76,13 @@ _SQL_SEARCH_SIMILAR = """
            rg.origin_tracklet_id, rg.seen_at, rg.face_confirmed,
            t.camera_id,
            1.0 - (rg.embedding <=> $3::vector) AS similarity
-    FROM reid_gallery rg
-    LEFT JOIN tracklets t ON rg.origin_tracklet_id = t.tracklet_id
+    FROM continuous_tracking.reid_gallery rg
+    LEFT JOIN continuous_tracking.tracklets t ON rg.origin_tracklet_id = t.tracklet_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
       AND ($2 IS TRUE
            OR (
                SELECT is_active
-               FROM identities
+               FROM continuous_tracking.identities
                WHERE identity_id = rg.identity_id
            ))
       AND ($4::text IS NULL OR t.camera_id = $4)
@@ -94,7 +94,7 @@ _SQL_SEARCH_SIMILAR = """
 _SQL_LIST_GALLERY_FOR_TRACKLETS = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
            rg.seen_at, rg.face_confirmed
-    FROM reid_gallery rg
+    FROM continuous_tracking.reid_gallery rg
     WHERE rg.origin_tracklet_id = ANY($1::text[])
     ORDER BY rg.seen_at DESC
     LIMIT $2

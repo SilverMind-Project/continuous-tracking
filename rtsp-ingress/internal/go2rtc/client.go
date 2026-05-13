@@ -8,6 +8,7 @@ package go2rtc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -103,6 +104,41 @@ func (c *Client) DeregisterStream(ctx context.Context, name string) error {
 	return nil
 }
 
+// ProbeStream tests whether an RTSP URL is reachable by temporarily
+// registering it with go2rtc and attempting to fetch a single JPEG frame.
+// The temporary stream is always deregistered; callers can rely on
+// ProbeStream having no lasting side effects.
+//
+// Returns nil when a frame was successfully retrieved. Returns an error
+// (possibly wrapping *APIError) when registration or frame fetch fails.
+func (c *Client) ProbeStream(ctx context.Context, rtspURL string) error {
+	name := fmt.Sprintf("probe-%d", time.Now().UnixNano())
+
+	if err := c.RegisterStream(ctx, name, rtspURL); err != nil {
+		return fmt.Errorf("register stream: %w", err)
+	}
+
+	// Always clean up the temporary stream. Use a background context so
+	// the deregister isn't cancelled when the caller's context expires.
+	defer func() { _ = c.DeregisterStream(context.Background(), name) }()
+
+	// Give go2rtc a moment to establish the RTSP session before
+	// requesting a frame; the probeCtx deadline bounds the total wait.
+	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	select {
+	case <-probeCtx.Done():
+		return probeCtx.Err()
+	case <-time.After(2 * time.Second):
+	}
+
+	if _, err := c.FetchJPEG(probeCtx, name); err != nil {
+		return fmt.Errorf("fetch frame: %w", err)
+	}
+	return nil
+}
+
 // FetchJPEG fetches a JPEG frame from go2rtc for the named stream.
 //
 // Returns the raw JPEG bytes (caller owns the slice).
@@ -132,4 +168,39 @@ func (c *Client) FetchJPEG(ctx context.Context, name string) ([]byte, error) {
 		return nil, fmt.Errorf("read frame body: %w", err)
 	}
 	return data, nil
+}
+
+// ListStreams returns the set of streams currently registered in go2rtc.
+// The returned map keys are stream names; each value is the raw stream
+// info object from go2rtc (producers, consumers, state, etc.).
+func (c *Client) ListStreams(ctx context.Context) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/streams", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list streams: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+
+	var streams map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&streams); err != nil {
+		return nil, fmt.Errorf("decode streams response: %w", err)
+	}
+	return streams, nil
+}
+
+// ReloadStream forces go2rtc to reconnect an existing RTSP stream by
+// deregistering it and re-registering with the same URL.
+func (c *Client) ReloadStream(ctx context.Context, name, rtspURL string) error {
+	// Deregister first (ignore "not found" — the goal is a fresh session).
+	_ = c.DeregisterStream(ctx, name)
+	return c.RegisterStream(ctx, name, rtspURL)
 }

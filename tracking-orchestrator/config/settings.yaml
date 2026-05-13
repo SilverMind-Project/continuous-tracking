@@ -1,6 +1,12 @@
 # Tracking Orchestrator — settings
 # Environment variables are interpolated with ${VAR} or ${VAR:-default} syntax.
 
+# Deployment timezone — must match cognitive-companion's app.timezone so that
+# time-of-day signals (sundowning, nighttime movement) are computed in local
+# time rather than UTC.  IANA tz database name, e.g. "America/New_York".
+app:
+  timezone: "${CTS_TIMEZONE:-America/New_York}"
+
 # Redis Streams transport
 redis:
   url: "${REDIS_URL:-redis://localhost:6379/0}"

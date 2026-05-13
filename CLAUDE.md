@@ -105,7 +105,7 @@ IP Cameras (RTSP)
 │   ├── app/sampling/              Keyframe sampler
 │   ├── app/pipeline/              Frame processing pipeline wiring
 │   ├── app/proto/                 Generated protobuf Python bindings (committed)
-│   └── migrations/                SQL migrations (0001–0005, .up.sql/.down.sql pairs)
+│   └── migrations/                SQL migrations (0001–0002, .up.sql/.down.sql pairs, rolled up)
 ├── triton-models/                 Triton model configs + export/download scripts
 │   ├── person-detector/           YOLO26L ONNX (INT8)
 │   ├── clip-vision/               CLIP ViT-L/14 ONNX (INT8)
@@ -141,7 +141,7 @@ Every persistent resource in `tracking-orchestrator` has three artifacts:
 2. **`InMemory*`** in the same file — zero-dependency, used in all unit tests
 3. **`Postgres*`** in `storage/postgres/` — production asyncpg implementation
 
-The shared PostgreSQL instance (`timescale/timescaledb-ha:pg18`) hosts the `continuous_tracking` database alongside `cognitive_companion` and `semantic_memory`. The database is created and extensions installed by `scripts/db/init-databases.sh` (mounted at `/docker-entrypoint-initdb.d/`). Per-app SQL migrations are managed by `MigrationRunner` (`app/storage/migrations.py`), which uses `pg_try_advisory_lock` for multi-replica safety and an `.up.sql` / `.down.sql` convention for explicit rollback.
+The shared PostgreSQL instance (`timescale/timescaledb-ha:pg18`) hosts the `continuous_tracking` database alongside `cognitive_companion` and `semantic_memory`. The database and a dedicated `continuous_tracking` schema are created by `../db/db/init-databases.sh` (mounted at `/docker-entrypoint-initdb.d/`). Every table, index, trigger, and function lives in the `continuous_tracking` schema — nothing goes to `public`. Per-app SQL migrations are managed by `MigrationRunner` (`app/storage/migrations.py`), which uses `pg_try_advisory_lock` for multi-replica safety and an `.up.sql` / `.down.sql` convention for explicit rollback.
 
 ```python
 # storage/base.py
@@ -260,7 +260,9 @@ Redis clients must set `decode_responses=False` so binary payloads round-trip un
 
 ## Database Migrations
 
-Migrations live in `tracking-orchestrator/migrations/` as numbered `.up.sql` / `.down.sql` pairs. The `MigrationRunner` (`app/storage/migrations.py`) tracks applied state in `_schema_version` and uses `pg_try_advisory_lock` so only one replica runs migrations at a time.
+Migrations live in `tracking-orchestrator/migrations/` as numbered `.up.sql` / `.down.sql` pairs. The `MigrationRunner` (`app/storage/migrations.py`) tracks applied state in `continuous_tracking._schema_version` and uses `pg_try_advisory_lock` so only one replica runs migrations at a time.
+
+**Schema convention**: Every DDL object (tables, indexes, triggers, functions, materialized views) belongs to the `continuous_tracking` schema. `0001_init.up.sql` opens with `SET search_path = continuous_tracking, public;` so unqualified `CREATE TABLE` / `CREATE INDEX` / TimescaleDB function calls all land in the correct schema. All Python-side SQL in `storage/postgres/` explicitly qualifies table references (e.g., `FROM continuous_tracking.dementia_signals`).
 
 Migrations run automatically at orchestrator startup (backward-compatible) and can also be invoked standalone:
 
@@ -273,7 +275,7 @@ cts-db status           # show applied / pending
 | File | Contents |
 | --- | --- |
 | `0001_init` | All transactional DDL: tables, hypertables, indexes, triggers (rolled up from 0001–0005) |
-| `0002_continuous_aggregates` | `dementia_signals_daily` continuous aggregate + refresh policy (non-transactional) |
+| `0002_continuous_aggregates` | `continuous_tracking.dementia_signals_daily` continuous aggregate + refresh policy (non-transactional) |
 
 **DATABASE_URL**: asyncpg expects a plain `postgresql://` DSN. If a `postgresql+asyncpg://` (SQLAlchemy-style) URL is provided, the `_normalize_dsn()` helper strips the `+asyncpg` prefix automatically.
 
@@ -296,6 +298,8 @@ These rules come from bugs caught during implementation and are non-negotiable.
 **Stable signal IDs.** Dementia signals use `uuid.uuid5(NAMESPACE_URL, "{identity_id}\x00{signal_kind}\x00{window_start}\x00{window_end}")` so the same detection window always maps to the same UUID. This makes the `ON CONFLICT` upsert idempotent on retry.
 
 ### SQL correctness
+
+**Schema-qualify every table reference.** All tables, views, and materialized views live in the `continuous_tracking` schema. Every SQL statement in `storage/postgres/` must write `continuous_tracking.<table>` (e.g. `FROM continuous_tracking.dementia_signals`, `INSERT INTO continuous_tracking.global_tracks`). Never rely on `search_path` to resolve unqualified names — the Python application queries span many sessions and the search_path is only set during migration execution.
 
 **PostgreSQL array concatenation is `||`.** In `ON CONFLICT DO UPDATE SET`, write `col = EXCLUDED.col || table.col`. The `array[...]` constructor is for array literals only — wrapping a `||` expression in it is a syntax error.
 

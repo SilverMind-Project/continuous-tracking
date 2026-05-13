@@ -18,7 +18,7 @@ from ..base import KeyframeRepository
 logger = get_logger(__name__)
 
 _SQL_INSERT_KEYFRAME = """
-INSERT INTO tagged_keyframes
+INSERT INTO continuous_tracking.tagged_keyframes
     (id, tracklet_id, global_track_id, camera_id,
      minio_key, captured_at, annotations, tag_reason, expires_at)
 VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9)
@@ -28,19 +28,19 @@ ON CONFLICT (id) DO NOTHING
 _SQL_LIST_KEYFRAMES = """
 SELECT id, tracklet_id, global_track_id, camera_id,
        minio_key, captured_at, annotations, tag_reason, expires_at
-FROM tagged_keyframes
+FROM continuous_tracking.tagged_keyframes
 WHERE TRUE
 """
 
 _SQL_GET_KEYFRAME = """
 SELECT id, tracklet_id, global_track_id, camera_id,
        minio_key, captured_at, annotations, tag_reason, expires_at
-FROM tagged_keyframes
+FROM continuous_tracking.tagged_keyframes
 WHERE id = $1::uuid
 """
 
 _SQL_UPDATE_RETENTION = """
-UPDATE tagged_keyframes
+UPDATE continuous_tracking.tagged_keyframes
 SET expires_at = $2
 WHERE id = $1::uuid
 """

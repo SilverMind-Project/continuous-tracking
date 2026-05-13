@@ -53,9 +53,11 @@ from ..storage.base import (
     InMemoryGalleryRepository,
     InMemoryGlobalTrackRepository,
     InMemoryKeyframeRepository,
+    InMemorySettingsRepository,
     InMemoryTrackingRepository,
     InMemoryTrajectoryRepository,
     KeyframeRepository,
+    SettingsRepository,
     TrackingRepository,
     TrajectoryRepository,
 )
@@ -152,6 +154,8 @@ class PipelineConfig:
     # Dementia signal computation interval (seconds).
     signal_interval_s: int = 60
     signal_enabled: bool = True
+    # IANA timezone name used for time-of-day signal computations.
+    timezone: str = "UTC"
     # Face identification via person-identification-service (ArcFace).
     face_id_url: str = ""
     face_id_cooldown_s: float = 5.0
@@ -205,6 +209,9 @@ class FrameProcessingPipeline:
         self._repo: TrackingRepository | None = None
         self._gallery_repo: GalleryRepository | None = None
         self._global_track_repo: GlobalTrackRepository | None = None
+        self._settings_repo: SettingsRepository | None = None
+        # Cameras whose FK row we've already ensured this process lifetime.
+        self._seen_cameras: set[str] = set()
         self._cross_camera: CrossCameraAssociator | None = None
         self._identity_resolver: IdentityResolver | None = None
         self._revision_publisher: RevisionPublisher | None = None
@@ -268,6 +275,8 @@ class FrameProcessingPipeline:
         keyframe_repo: KeyframeRepository | None = None,
         # Signal repository (required for dementia signal worker)
         signal_repo: DementiaSignalRepository | None = None,
+        # Settings repository (used to upsert FK-anchoring camera rows).
+        settings_repo: SettingsRepository | None = None,
         # Frame image source + ReID embedder for the real inference path.
         frame_fetcher: FrameImageFetcher | None = None,
         reid_embedder: ReidEmbedderProtocol | None = None,
@@ -294,6 +303,8 @@ class FrameProcessingPipeline:
         gallery = gallery_repo or InMemoryGalleryRepository()
         self._gallery_repo = gallery
         self._global_track_repo = global_track_repo or InMemoryGlobalTrackRepository()
+        self._settings_repo = settings_repo or InMemorySettingsRepository()
+        self._seen_cameras = set()
 
         # Detector
         self._detector = detector
@@ -364,7 +375,7 @@ class FrameProcessingPipeline:
             self._signal_worker = DementiaSignalWorker(
                 trajectory_repo=trajectory_repo or InMemoryTrajectoryRepository(),
                 signal_repo=self._signal_repo,
-                cfg=SignalConfig(),
+                cfg=SignalConfig(tz_name=self._config.timezone),
             )
 
         # Face identification client — calls person-identification-service.
@@ -495,6 +506,7 @@ class FrameProcessingPipeline:
         async with self._frame_semaphore, camera_lock:
             start = time.monotonic()
             try:
+                await self._ensure_camera_row(frame.camera_id)
                 await self._process_frame(frame)
                 await self._transport.ack_frame(frame)
                 latency_us = int((time.monotonic() - start) * 1e6)
@@ -515,6 +527,26 @@ class FrameProcessingPipeline:
                     success=False,
                     error_code="processing_error",
                 )
+
+    async def _ensure_camera_row(self, camera_id: str) -> None:
+        """Lazily seed an FK-anchor row in ``cameras`` on first sight per process.
+
+        The orchestrator's ``cameras`` table backs foreign keys from
+        tracking_events, tracklets, detections, keyframes, and trajectories.
+        Camera metadata (RTSP URL, name, location) is owned by
+        cognitive-companion; the orchestrator only needs a row to exist.
+
+        We ``get`` first and only ``save`` when absent — a blind upsert with a
+        bare ``CameraConfig(camera_id=...)`` would stomp any real metadata
+        written by a future CC sync. The per-camera lock in ``_handle_frame``
+        serialises this check, so ``_seen_cameras`` is race-free per camera.
+        """
+        if camera_id in self._seen_cameras or self._settings_repo is None:
+            return
+        existing = await self._settings_repo.get_camera_config(camera_id)
+        if existing is None:
+            await self._settings_repo.save_camera_config(CameraConfig(camera_id=camera_id))
+        self._seen_cameras.add(camera_id)
 
     def _sync_adjacency(self) -> None:
         """Hot-reload operator-pushed calibration adjacency into the associator."""

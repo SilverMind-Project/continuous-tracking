@@ -24,11 +24,27 @@ from __future__ import annotations
 import math
 import uuid
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from ..domain import DementiaSignal, DementiaSignalSeverity, PersonTrajectoryPoint, RoomDwell
 from ..storage.base import DementiaSignalRepository, TrajectoryRepository
 
 _SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # uuid.NAMESPACE_URL
+
+
+def _stillness_severity(duration_seconds: int) -> DementiaSignalSeverity:
+    """Escalate stillness severity with duration.
+
+    30-59 min → info (unusual but could be reading/watching TV)
+    60-119 min → warning (concerning; may indicate a fall or confusion)
+    120+ min → emergency (prolonged immobility; fall or incapacitation likely)
+    """
+    minutes = duration_seconds // 60
+    if minutes >= 120:
+        return "emergency"
+    if minutes >= 60:
+        return "warning"
+    return "info"
 
 
 def _stable_signal_id(
@@ -238,8 +254,8 @@ class DementiaSignalWorker:
             p_prev = sorted_window[i - 1]
             p_curr = sorted_window[i]
 
-            # Point counting uses each point's own timestamp.
-            curr_hour = p_curr.observed_at.hour
+            # Convert UTC timestamps to local time before comparing hours.
+            curr_hour = p_curr.observed_at.astimezone(self._cfg.tz).hour
             if 12 <= curr_hour < 17:
                 afternoon_points += 1
             elif 17 <= curr_hour < 22:
@@ -249,7 +265,7 @@ class DementiaSignalWorker:
                 # Classify the transition by its midpoint so a change near
                 # the 17:00 boundary is not misattributed to the wrong period.
                 midpoint = p_prev.observed_at + (p_curr.observed_at - p_prev.observed_at) / 2
-                mid_hour = midpoint.hour
+                mid_hour = midpoint.astimezone(self._cfg.tz).hour
                 if 12 <= mid_hour < 17:
                     afternoon_transitions += 1
                 elif 17 <= mid_hour < 22:
@@ -317,7 +333,7 @@ class DementiaSignalWorker:
         Checks if any current (open) or recent bathroom dwell exceeds
         two standard deviations above the historical mean.
         """
-        bathroom_dwells = [d for d in dwells if d.room_name == "bathroom"]
+        bathroom_dwells = [d for d in dwells if "bath" in d.room_name.lower()]
 
         if len(bathroom_dwells) < 2:
             return []
@@ -388,8 +404,13 @@ class DementiaSignalWorker:
         if the count exceeds the configured threshold.
         """
         night_transitions = 0
+        # Nighttime window: 22:00–06:00 local time (spans midnight).
+        # Convert each point to local time before comparing hours.
         night_points = sorted(
-            [p for p in window if 1 <= p.observed_at.hour < 5],
+            [
+                p for p in window
+                if (h := p.observed_at.astimezone(self._cfg.tz).hour) >= 22 or h < 6
+            ],
             key=lambda p: p.observed_at,
         )
 
@@ -456,7 +477,7 @@ class DementiaSignalWorker:
                             ),
                             identity_id=identity_id,
                             signal_kind="stillness_anomaly",
-                            severity="warning",
+                            severity=_stillness_severity(duration),
                             value=float(duration),
                             window_start=dwell.entered_at,
                             window_end=w_end,
@@ -478,7 +499,7 @@ class DementiaSignalWorker:
                             ),
                             identity_id=identity_id,
                             signal_kind="stillness_anomaly",
-                            severity="warning",
+                            severity=_stillness_severity(duration),
                             value=float(duration),
                             window_start=dwell.entered_at,
                             window_end=now,
@@ -610,6 +631,7 @@ class SignalConfig:
         nighttime_transition_threshold: int = 2,
         stillness_threshold_minutes: int = 30,
         absence_threshold_minutes: int = 30,
+        tz_name: str = "UTC",
     ) -> None:
         self.window = timedelta(hours=window_hours)
         self.pacing_room_threshold = pacing_room_threshold
@@ -617,3 +639,4 @@ class SignalConfig:
         self.nighttime_transition_threshold = nighttime_transition_threshold
         self.stillness_threshold_minutes = stillness_threshold_minutes
         self.absence_threshold_minutes = absence_threshold_minutes
+        self.tz = ZoneInfo(tz_name)

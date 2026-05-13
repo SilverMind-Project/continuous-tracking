@@ -6,6 +6,8 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+SET search_path = continuous_tracking, public;
+
 -- ---------------------------------------------------------------------------
 -- Cameras: physical camera configuration
 -- ---------------------------------------------------------------------------

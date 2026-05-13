@@ -95,7 +95,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${CTS_DB_USER:-cts_user}:${CTS_DB_PASSWORD:?err}@postgres:5432/continuous_tracking
       REDIS_URL: redis://redis:6379/0
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ENDPOINT_URL: ${MINIO_ENDPOINT_URL:-http://${MINIO_ENDPOINT}}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_USE_SSL: "false"
@@ -125,8 +125,18 @@ services:
     environment:
       # Disable auto-discovery features not needed in this setup.
       GO2RTC_CONF: /config/go2rtc.yaml
+    # go2rtc persists dynamic stream registrations (PUT /api/streams) back to
+    # GO2RTC_CONF, so /config must be writable. The repo file is bind-mounted
+    # read-only at /seed and copied into the named volume on first start
+    # (cp -n preserves dynamic registrations across restarts; wipe the
+    # go2rtc-config volume to pick up edits to the seed file).
+    entrypoint:
+      - /bin/sh
+      - -c
+      - 'cp -n /seed/go2rtc.yaml /config/go2rtc.yaml && exec /usr/local/bin/go2rtc -config /config/go2rtc.yaml'
     volumes:
-      - ./rtsp-ingress/config/go2rtc.yaml:/config/go2rtc.yaml:ro
+      - ./rtsp-ingress/config/go2rtc.yaml:/seed/go2rtc.yaml:ro
+      - go2rtc-config:/config
     ports:
       - "1984:1984"
     restart: unless-stopped
@@ -176,6 +186,7 @@ services:
 volumes:
   hf-cache:
   redisdata:
+  go2rtc-config:
 
 networks:
   nanai:

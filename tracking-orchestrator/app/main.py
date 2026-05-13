@@ -39,6 +39,7 @@ from .storage.migrations import MigrationRunner
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.global_track_repo import PostgresGlobalTrackRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
+from .storage.postgres.settings_repo import PostgresSettingsRepository
 from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.tracking_repo import PostgresTrackingRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
@@ -179,6 +180,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         face_id_min_confidence=float(settings.get("face_id.min_confidence", "0.4")),
         face_id_enabled=bool(face_id_url),
         face_id_camera_configs=face_id_camera_configs,
+        timezone=settings.get("app.timezone", "UTC"),
     )
     _pipeline = FrameProcessingPipeline(config)
 
@@ -203,6 +205,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             min_size=2,
             max_size=20,
             command_timeout=10.0,
+            server_settings={"search_path": "continuous_tracking, public"},
         )
         runner = MigrationRunner(_pool, MIGRATIONS_DIR)
         await runner.migrate()
@@ -212,6 +215,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         trajectory_repo = PostgresTrajectoryRepository(_pool)
         keyframe_repo = PostgresKeyframeRepository(_pool)
         signal_repo = PostgresDementiaSignalRepository(_pool)
+        settings_repo = PostgresSettingsRepository(_pool)
     else:
         tracking_repo = None
         gallery_repo = None
@@ -219,6 +223,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         trajectory_repo = None
         keyframe_repo = None
         signal_repo = None
+        settings_repo = None
 
     # -- Triton --
     triton_url = settings.get("triton.url", "")
@@ -266,6 +271,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         trajectory_repo=trajectory_repo,
         keyframe_repo=keyframe_repo,
         signal_repo=signal_repo,
+        settings_repo=settings_repo,
         frame_fetcher=_frame_fetcher,
         reid_embedder=reid_embedder,
     )

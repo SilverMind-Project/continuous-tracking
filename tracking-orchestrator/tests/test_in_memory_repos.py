@@ -259,6 +259,17 @@ async def test_save_and_get_camera_config(
     assert fetched.name == "Kitchen"
 
 
+async def test_save_camera_config_is_idempotent(
+    settings_repo: InMemorySettingsRepository,
+) -> None:
+    """Repeated saves with the same id keep a single row (upsert semantics)."""
+    await settings_repo.save_camera_config(CameraConfig(camera_id="c1", name="first"))
+    await settings_repo.save_camera_config(CameraConfig(camera_id="c1", name="second"))
+    cameras = await settings_repo.list_camera_configs()
+    assert len(cameras) == 1
+    assert cameras[0].name == "second"
+
+
 async def test_save_and_get_stream_config(
     settings_repo: InMemorySettingsRepository,
 ) -> None:

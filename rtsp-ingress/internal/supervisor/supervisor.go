@@ -4,6 +4,7 @@ package supervisor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -131,6 +132,86 @@ func (s *Supervisor) Reconcile(cameras []config.CameraConfig) {
 			}(cam)
 		}
 	}
+}
+
+// Snapshot fetches a JPEG frame for the given camera from go2rtc.
+func (s *Supervisor) Snapshot(ctx context.Context, cameraID string) ([]byte, error) {
+	return s.go2rtc.FetchJPEG(ctx, cameraID)
+}
+
+// StreamHealth probes whether a stream is healthy by fetching a single JPEG
+// frame via go2rtc and measuring the round-trip latency.
+func (s *Supervisor) StreamHealth(ctx context.Context, cameraID string) map[string]any {
+	start := time.Now()
+	_, err := s.go2rtc.FetchJPEG(ctx, cameraID)
+	elapsed := time.Since(start)
+
+	result := map[string]any{
+		"camera_id":  cameraID,
+		"healthy":    err == nil,
+		"latency_ms": elapsed.Milliseconds(),
+	}
+	s.mu.Lock()
+	_, running := s.workers[cameraID]
+	s.mu.Unlock()
+	result["worker_running"] = running
+
+	if err != nil {
+		result["error"] = err.Error()
+	}
+	return result
+}
+
+// ReloadStream forces go2rtc to reconnect to the RTSP source and eagerly
+// restarts the poll worker for the given camera. Returns an error when the
+// camera is not managed by this ingress instance.
+func (s *Supervisor) ReloadStream(ctx context.Context, cameraID string) error {
+	s.mu.Lock()
+	h, ok := s.workers[cameraID]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("camera %q is not managed by this ingress instance", cameraID)
+	}
+	cam := h.camera
+	s.mu.Unlock()
+
+	// Force a fresh go2rtc RTSP session.
+	_ = s.go2rtc.DeregisterStream(ctx, cameraID)
+	if err := s.go2rtc.RegisterStream(ctx, cameraID, cam.RTSPURL); err != nil {
+		return fmt.Errorf("re-register stream: %w", err)
+	}
+
+	s.log.Info("reloading_stream", zap.String("camera_id", cameraID))
+
+	// Stop the existing worker.
+	s.mu.Lock()
+	if h, ok := s.workers[cameraID]; ok {
+		h.cancel()
+		delete(s.workers, cameraID)
+	}
+
+	// Start a fresh worker immediately — don't wait for the next reconcile.
+	workerCtx, cancel := context.WithCancel(s.parent)
+	s.workers[cameraID] = &workerHandle{cancel: cancel, camera: cam}
+	s.mu.Unlock()
+
+	s.wg.Add(1)
+	metrics.ActiveWorkers.Inc()
+	go func(c config.CameraConfig) {
+		defer s.wg.Done()
+		defer metrics.ActiveWorkers.Dec()
+		gate := motion.New(c.MotionThreshold)
+		w := poll.NewWorker(
+			c,
+			s.go2rtc,
+			gate,
+			s.publisher,
+			s.log.With(zap.String("camera_id", c.ID)),
+		)
+		w.Run(workerCtx)
+	}(cam)
+
+	return nil
 }
 
 // Stop cancels all running workers and waits for them to finish, up to timeout.

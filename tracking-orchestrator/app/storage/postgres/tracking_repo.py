@@ -29,14 +29,15 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _SQL_SAVE_TRACKING_EVENT = """
-    INSERT INTO tracking_events (event_id, event_time, camera_id, frame_index, frame_data)
+    INSERT INTO continuous_tracking.tracking_events
+        (event_id, event_time, camera_id, frame_index, frame_data)
     VALUES ($1, $2, $3, $4, $5::jsonb)
     ON CONFLICT DO NOTHING
 """
 
 _SQL_GET_TRACKING_EVENT = """
     SELECT te.event_id, te.event_time, te.camera_id, te.frame_index, te.frame_data
-    FROM tracking_events te
+    FROM continuous_tracking.tracking_events te
     WHERE te.event_id = $1
 """
 
@@ -44,13 +45,13 @@ _SQL_GET_DETECTIONS_FOR_EVENT = """
     SELECT detection_id, event_id, camera_id, bbox, embedding,
            confidence, tracklet_id, global_track_id,
            floor_point, capture_time, event_time AS det_event_time
-    FROM detections
+    FROM continuous_tracking.detections
     WHERE event_id = $1
     ORDER BY detection_id
 """
 
 _SQL_SAVE_DETECTIONS = """
-    INSERT INTO detections (
+    INSERT INTO continuous_tracking.detections (
         detection_id, event_id, camera_id, bbox, embedding,
         confidence, tracklet_id, global_track_id,
         floor_point, capture_time, event_time
@@ -60,53 +61,63 @@ _SQL_SAVE_DETECTIONS = """
 """
 
 _SQL_SAVE_TRACKLET = """
-    INSERT INTO tracklets (tracklet_id, camera_id, detection_ids, started_at, ended_at, state)
+    INSERT INTO continuous_tracking.tracklets
+        (tracklet_id, camera_id, detection_ids, started_at, ended_at, state)
     VALUES ($1, $2, $3, $4, $5, $6)
     ON CONFLICT (tracklet_id) DO UPDATE SET
         detection_ids = EXCLUDED.detection_ids,
-        ended_at = COALESCE(EXCLUDED.ended_at, tracklets.ended_at),
-        state = CASE WHEN EXCLUDED.state = 'terminated' THEN 'terminated' ELSE tracklets.state END,
+        ended_at = COALESCE(EXCLUDED.ended_at, continuous_tracking.tracklets.ended_at),
+        state = CASE
+            WHEN EXCLUDED.state = 'terminated' THEN 'terminated'
+            ELSE continuous_tracking.tracklets.state
+        END,
         updated_at = now()
 """
 
 _SQL_GET_TRACKLET = """
     SELECT tracklet_id, camera_id, detection_ids, started_at, ended_at, state
-    FROM tracklets
+    FROM continuous_tracking.tracklets
     WHERE tracklet_id = $1
 """
 
 _SQL_SAVE_GLOBAL_TRACK = """
-    INSERT INTO global_tracks (global_track_id, camera_ids, tracklet_ids, started_at,
-                               last_seen_at, state)
+    INSERT INTO continuous_tracking.global_tracks
+        (global_track_id, camera_ids, tracklet_ids, started_at, last_seen_at, state)
     VALUES ($1, $2, $3, $4, $5, $6)
     ON CONFLICT (global_track_id) DO UPDATE SET
         camera_ids = (
             SELECT array_agg(DISTINCT v)
             FROM (
-                SELECT unnest(EXCLUDED.camera_ids || global_tracks.camera_ids) AS v
+                SELECT unnest(
+                    EXCLUDED.camera_ids || continuous_tracking.global_tracks.camera_ids
+                ) AS v
             ) sub
             WHERE v <> ''
         ),
         tracklet_ids = (
             SELECT array_agg(DISTINCT v)
             FROM (
-                SELECT unnest(EXCLUDED.tracklet_ids || global_tracks.tracklet_ids) AS v
+                SELECT unnest(
+                    EXCLUDED.tracklet_ids || continuous_tracking.global_tracks.tracklet_ids
+                ) AS v
             ) sub
             WHERE v <> ''
         ),
-        last_seen_at = GREATEST(EXCLUDED.last_seen_at, global_tracks.last_seen_at),
+        last_seen_at = GREATEST(
+            EXCLUDED.last_seen_at, continuous_tracking.global_tracks.last_seen_at
+        ),
         state = EXCLUDED.state,
         updated_at = now()
 """
 
 _SQL_GET_GLOBAL_TRACK = """
     SELECT global_track_id, camera_ids, tracklet_ids, started_at, last_seen_at, state
-    FROM global_tracks
+    FROM continuous_tracking.global_tracks
     WHERE global_track_id = $1
 """
 
 _SQL_SAVE_IDENTITY_REVISION = """
-    INSERT INTO identity_revisions (revision_id, revision_time, global_track_id,
+    INSERT INTO continuous_tracking.identity_revisions (revision_id, revision_time, global_track_id,
                                     tracklet_ids, candidates, map_identity_id,
                                     posterior_entropy, previous_identity_id,
                                     new_identity_id, reason, evidence)
@@ -118,7 +129,7 @@ _SQL_LIST_IDENTITY_REVISIONS = """
     SELECT revision_id, revision_time, global_track_id, tracklet_ids, candidates,
            map_identity_id, posterior_entropy, previous_identity_id,
            new_identity_id, reason, evidence
-    FROM identity_revisions
+    FROM continuous_tracking.identity_revisions
     WHERE global_track_id = $1
     ORDER BY revision_time DESC
     LIMIT 100

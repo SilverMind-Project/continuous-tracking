@@ -411,3 +411,101 @@ class TestFullPipelineIntegration:
             # Should produce an event with zero detections, not crash.
             assert mock_transport.publish_event.call_count == 1
             await pipeline.stop()
+
+
+class TestCameraRowUpsert:
+    """The pipeline must seed an FK-anchor row in ``cameras`` on first sight."""
+
+    def _frame(self, camera_id: str, frame_index: int = 0) -> FrameReady:
+        return FrameReady(
+            camera_id=camera_id,
+            minio_key=f"frames/{camera_id}/{frame_index}.jpg",
+            frame_index=frame_index,
+            capture_time_unix_ns=1700000000000000000,
+            received_time_unix_ns=1700000000100000000,
+            width=640,
+            height=480,
+        )
+
+    @pytest.mark.asyncio
+    async def test_first_frame_per_camera_upserts_row(self) -> None:
+        """Every new ``camera_id`` triggers exactly one upsert; subsequent
+        frames from the same camera don't repeat the call."""
+        pipeline = FrameProcessingPipeline(PipelineConfig(signal_enabled=False))
+        with _mock_redis_deps():
+            await pipeline.initialize()
+            assert pipeline._settings_repo is not None
+
+            spy = AsyncMock(wraps=pipeline._settings_repo.save_camera_config)
+            pipeline._settings_repo.save_camera_config = spy  # type: ignore[method-assign]
+
+            await pipeline._handle_frame(self._frame("cam-a"))
+            await pipeline._handle_frame(self._frame("cam-a", frame_index=1))
+            await pipeline._handle_frame(self._frame("cam-b"))
+
+            assert spy.await_count == 2
+            seen = {call.args[0].camera_id for call in spy.await_args_list}
+            assert seen == {"cam-a", "cam-b"}
+            cameras = await pipeline._settings_repo.list_camera_configs()
+            assert {c.camera_id for c in cameras} == {"cam-a", "cam-b"}
+
+            await pipeline.stop()
+
+    @pytest.mark.asyncio
+    async def test_existing_camera_row_is_not_overwritten(self) -> None:
+        """A pre-existing row (e.g. from a future CC sync) must not be stomped
+        by the bare placeholder ``CameraConfig`` the lazy-seed path constructs."""
+        from app.domain import CameraConfig
+
+        pipeline = FrameProcessingPipeline(PipelineConfig(signal_enabled=False))
+        with _mock_redis_deps():
+            await pipeline.initialize()
+            assert pipeline._settings_repo is not None
+
+            # Simulate a prior process having written real camera metadata.
+            await pipeline._settings_repo.save_camera_config(
+                CameraConfig(
+                    camera_id="cam-pre",
+                    name="Kitchen",
+                    rtsp_url="rtsp://10.0.0.5/stream",
+                    location="kitchen",
+                )
+            )
+            save_spy = AsyncMock(wraps=pipeline._settings_repo.save_camera_config)
+            pipeline._settings_repo.save_camera_config = save_spy  # type: ignore[method-assign]
+
+            await pipeline._handle_frame(self._frame("cam-pre"))
+
+            save_spy.assert_not_awaited()
+            cfg = await pipeline._settings_repo.get_camera_config("cam-pre")
+            assert cfg is not None
+            assert cfg.name == "Kitchen"
+            assert cfg.rtsp_url == "rtsp://10.0.0.5/stream"
+            await pipeline.stop()
+
+    @pytest.mark.asyncio
+    async def test_upsert_runs_before_process_frame(self) -> None:
+        """The FK anchor must land before any tracking row is written."""
+        pipeline = FrameProcessingPipeline(PipelineConfig(signal_enabled=False))
+        with _mock_redis_deps():
+            await pipeline.initialize()
+            assert pipeline._settings_repo is not None
+
+            order: list[str] = []
+
+            original_save = pipeline._settings_repo.save_camera_config
+
+            async def record_save(cfg: object) -> None:
+                order.append("ensure_camera")
+                await original_save(cfg)  # type: ignore[arg-type]
+
+            async def record_process(frame: FrameReady) -> None:
+                order.append("process_frame")
+
+            pipeline._settings_repo.save_camera_config = record_save  # type: ignore[assignment, method-assign]
+            pipeline._process_frame = record_process  # type: ignore[assignment, method-assign]
+
+            await pipeline._handle_frame(self._frame("cam-z"))
+
+            assert order == ["ensure_camera", "process_frame"]
+            await pipeline.stop()

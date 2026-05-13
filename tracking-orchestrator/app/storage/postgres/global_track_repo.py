@@ -12,7 +12,7 @@ from ...domain import GlobalTrack, IdentityCandidate
 from ..base import GlobalTrackRepository
 
 _SQL_SAVE = """
-INSERT INTO global_tracks (
+INSERT INTO continuous_tracking.global_tracks (
     global_track_id, camera_ids, tracklet_ids, started_at,
     last_seen_at, current_identity_id, state
 )
@@ -21,20 +21,25 @@ ON CONFLICT (global_track_id) DO UPDATE SET
     camera_ids = (
         SELECT array_agg(DISTINCT v)
         FROM (
-            SELECT unnest(EXCLUDED.camera_ids || global_tracks.camera_ids) AS v
+            SELECT unnest(EXCLUDED.camera_ids || continuous_tracking.global_tracks.camera_ids) AS v
         ) sub
         WHERE v <> ''
     ),
     tracklet_ids = (
         SELECT array_agg(DISTINCT v)
         FROM (
-            SELECT unnest(EXCLUDED.tracklet_ids || global_tracks.tracklet_ids) AS v
+            SELECT unnest(
+                EXCLUDED.tracklet_ids || continuous_tracking.global_tracks.tracklet_ids
+            ) AS v
         ) sub
         WHERE v <> ''
     ),
-    started_at = LEAST(EXCLUDED.started_at, global_tracks.started_at),
-    last_seen_at = GREATEST(EXCLUDED.last_seen_at, global_tracks.last_seen_at),
-    current_identity_id = COALESCE(EXCLUDED.current_identity_id, global_tracks.current_identity_id),
+    started_at = LEAST(EXCLUDED.started_at, continuous_tracking.global_tracks.started_at),
+    last_seen_at = GREATEST(EXCLUDED.last_seen_at, continuous_tracking.global_tracks.last_seen_at),
+    current_identity_id = COALESCE(
+        EXCLUDED.current_identity_id,
+        continuous_tracking.global_tracks.current_identity_id
+    ),
     state = EXCLUDED.state,
     updated_at = now()
 """
@@ -42,14 +47,14 @@ ON CONFLICT (global_track_id) DO UPDATE SET
 _SQL_GET = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
        last_seen_at, current_identity_id, state
-FROM global_tracks
+FROM continuous_tracking.global_tracks
 WHERE global_track_id = $1
 """
 
 _SQL_LIST_ACTIVE = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
        last_seen_at, current_identity_id, state
-FROM global_tracks
+FROM continuous_tracking.global_tracks
 WHERE state = 'active'
 ORDER BY last_seen_at DESC
 """
@@ -57,14 +62,14 @@ ORDER BY last_seen_at DESC
 _SQL_GET_BY_TRACKLET = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
        last_seen_at, current_identity_id, state
-FROM global_tracks
+FROM continuous_tracking.global_tracks
 WHERE $1::uuid = ANY(tracklet_ids)
 ORDER BY state = 'active' DESC, last_seen_at DESC
 LIMIT 1
 """
 
 _SQL_ASSIGN_IDENTITY = """
-UPDATE global_tracks
+UPDATE continuous_tracking.global_tracks
 SET current_identity_id = $2, updated_at = now()
 WHERE global_track_id = $1
 """
@@ -162,7 +167,7 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
                 merged.state,
             )
             await conn.execute(
-                "UPDATE global_tracks SET state = 'closed', updated_at = now() "
+                "UPDATE continuous_tracking.global_tracks SET state = 'closed', updated_at = now() "
                 "WHERE global_track_id = $1",
                 from_id,
             )

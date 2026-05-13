@@ -5,7 +5,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -117,6 +119,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.HandleFunc("/readyz", readyzHandler(&ready, &readyMu))
+	mux.HandleFunc("/internal/test-connection", testConnectionHandler(g2r))
+	mux.HandleFunc("GET /internal/streams", listStreamsHandler(rec, g2r))
+	mux.HandleFunc("GET /internal/streams/{id}/snapshot", snapshotHandler(sup))
+	mux.HandleFunc("GET /internal/streams/{id}/health", streamHealthHandler(sup))
+	mux.HandleFunc("POST /internal/streams/{id}/reload", reloadStreamHandler(sup))
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		promhttp.Handler().ServeHTTP(w, r)
 	})
@@ -196,5 +203,174 @@ func readyzHandler(ready *bool, readyMu *sync.Mutex) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
+	}
+}
+
+// testConnectionHandler probes an RTSP URL by temporarily registering it with
+// go2rtc and fetching a single frame. The temporary stream is always cleaned up.
+func testConnectionHandler(g2r *go2rtc.Client) http.HandlerFunc {
+	type request struct {
+		RTSPURL string `json:"rtsp_url"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_, _ = w.Write([]byte(`{"success":false,"message":"Method not allowed"}`))
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"success":false,"message":"Failed to read request body"}`))
+			return
+		}
+
+		var req request
+		if err := json.Unmarshal(body, &req); err != nil {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"success":false,"message":"Invalid JSON: rtsp_url is required"}`))
+			return
+		}
+
+		if req.RTSPURL == "" {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"success":false,"message":"rtsp_url is required"}`))
+			return
+		}
+
+		if err := g2r.ProbeStream(r.Context(), req.RTSPURL); err != nil {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"success": false,
+				"message": fmt.Sprintf("Connection failed: %v", err),
+			})
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"message": "Connection successful",
+		})
+	}
+}
+
+// listStreamsHandler returns the set of cameras managed by this ingress
+// together with their go2rtc stream state.
+func listStreamsHandler(rec *reconciler.Reconciler, g2r *go2rtc.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		cameras := rec.LastCameras()
+		allStreams, _ := g2r.ListStreams(r.Context())
+
+		// go2rtc may wrap streams under a "streams" key; handle both shapes.
+		streamMap := allStreams
+		if wrapped, ok := allStreams["streams"].(map[string]any); ok {
+			streamMap = wrapped
+		}
+
+		type cameraEntry struct {
+			ID       string `json:"id"`
+			RTSPURL  string `json:"rtsp_url"`
+			RoomName string `json:"room_name"`
+			Enabled  bool   `json:"enabled"`
+			InGo2RTC bool   `json:"in_go2rtc"`
+		}
+
+		result := make([]cameraEntry, 0, len(cameras))
+		for _, c := range cameras {
+			_, inGo2RTC := streamMap[c.ID]
+			result = append(result, cameraEntry{
+				ID:       c.ID,
+				RTSPURL:  c.RTSPURL,
+				RoomName: c.RoomName,
+				Enabled:  c.Enabled,
+				InGo2RTC: inGo2RTC,
+			})
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"streams": result,
+		})
+	}
+}
+
+// snapshotHandler returns a JPEG snapshot for the given camera stream.
+func snapshotHandler(sup *supervisor.Supervisor) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cameraID := r.PathValue("id")
+		if cameraID == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"error":"missing camera id"}`))
+			return
+		}
+
+		jpegData, err := sup.Snapshot(r.Context(), cameraID)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error":     "snapshot failed",
+				"camera_id": cameraID,
+				"detail":    err.Error(),
+			})
+			return
+		}
+
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(jpegData)
+	}
+}
+
+// streamHealthHandler returns health information for a specific camera stream.
+func streamHealthHandler(sup *supervisor.Supervisor) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		cameraID := r.PathValue("id")
+		if cameraID == "" {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"error":"missing camera id"}`))
+			return
+		}
+
+		health := sup.StreamHealth(r.Context(), cameraID)
+		json.NewEncoder(w).Encode(health)
+	}
+}
+
+// reloadStreamHandler forces go2rtc to reconnect the RTSP session and
+// restarts the poll worker for the given camera.
+func reloadStreamHandler(sup *supervisor.Supervisor) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		cameraID := r.PathValue("id")
+		if cameraID == "" {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"error":"missing camera id"}`))
+			return
+		}
+
+		if err := sup.ReloadStream(r.Context(), cameraID); err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"message": fmt.Sprintf("Stream %s reloaded", cameraID),
+		})
 	}
 }

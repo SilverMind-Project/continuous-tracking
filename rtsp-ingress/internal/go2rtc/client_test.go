@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/go2rtc"
 )
@@ -195,6 +196,75 @@ func TestContextCancellation(t *testing.T) {
 	err := client.RegisterStream(ctx, "cam-1", "rtsp://host/stream")
 	if err == nil {
 		t.Error("expected error for cancelled context, got nil")
+	}
+}
+
+func TestProbeStream_Success(t *testing.T) {
+	jpegData := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	ts := newTestServer(http.StatusOK, string(jpegData))
+	defer ts.Close()
+
+	client := newClient(ts)
+	err := client.ProbeStream(context.Background(), "rtsp://192.168.1.1:554/stream")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Verify the three-leg sequence: PUT (register), GET (fetch), DELETE (deregister).
+	// The last request recorded is DELETE since it runs in the defer.
+	if ts.lastMethod != http.MethodDelete {
+		t.Errorf("last method should be DELETE, got %q", ts.lastMethod)
+	}
+	if ts.lastPath != "/api/streams" {
+		t.Errorf("last path: got %q, want /api/streams", ts.lastPath)
+	}
+}
+
+func TestProbeStream_RegistrationFails(t *testing.T) {
+	ts := newTestServer(http.StatusInternalServerError, "internal error")
+	defer ts.Close()
+
+	client := newClient(ts)
+	err := client.ProbeStream(context.Background(), "rtsp://host/stream")
+	if err == nil {
+		t.Fatal("expected error when registration fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "register stream:") {
+		t.Errorf("error should wrap register stream failure: %v", err)
+	}
+	// The defer deregister still runs, but that's harmless — the test server
+	// returns 500 for it too.
+}
+
+func TestProbeStream_FetchFails(t *testing.T) {
+	// testServer returns a fixed status/body for every request, so we pick 404
+	// — the PUT (register) gets 404, which hits the registration failure path
+	// first.  To exercise the fetch path we need a server that returns 200 for
+	// PUT and 404 for GET.  We use a separate handler for this.
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// GET frame.jpeg returns 404 (stream not producing frames yet).
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("stream not found"))
+	}))
+	defer ts.Close()
+
+	client := go2rtc.New(go2rtc.Config{Addr: ts.URL, TimeoutSeconds: 5})
+	// Use a very short RTSP URL to speed up the test — the 2 s sleep in
+	// ProbeStream still fires, but the context shortens it.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := client.ProbeStream(ctx, "rtsp://host/stream")
+	if err == nil {
+		t.Fatal("expected error when fetch fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "fetch frame:") {
+		t.Errorf("error should wrap fetch frame failure: %v", err)
 	}
 }
 

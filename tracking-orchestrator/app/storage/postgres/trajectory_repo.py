@@ -19,14 +19,14 @@ from ..base import TrajectoryRepository
 logger = get_logger(__name__)
 
 _SQL_INSERT_TRAJECTORY = """
-INSERT INTO person_trajectories
+INSERT INTO continuous_tracking.person_trajectories
     (observed_at, identity_id, global_track_id, room_name,
      ground_x, ground_y, posture, identity_confidence)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 """
 
 _SQL_INSERT_DWELL = """
-INSERT INTO room_dwells
+INSERT INTO continuous_tracking.room_dwells
     (identity_id, global_track_id, room_name, entered_at,
      entry_confidence, primary_posture, activity_summary)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -34,7 +34,7 @@ RETURNING id
 """
 
 _SQL_UPDATE_DWELL = """
-UPDATE room_dwells
+UPDATE continuous_tracking.room_dwells
 SET exited_at        = $1,
     duration_seconds = $2,
     primary_posture  = $3,
@@ -45,7 +45,7 @@ WHERE id = $5
 _SQL_GET_OPEN_DWELL = """
 SELECT id, identity_id, global_track_id, room_name,
        entered_at, entry_confidence, primary_posture, activity_summary
-FROM room_dwells
+FROM continuous_tracking.room_dwells
 WHERE identity_id = $1
   AND global_track_id = $2::uuid
   AND exited_at IS NULL
@@ -56,7 +56,7 @@ LIMIT 1
 _SQL_LIST_TRAJECTORY = """
 SELECT identity_id, global_track_id, observed_at, room_name,
        ground_x, ground_y, posture, identity_confidence
-FROM person_trajectories
+FROM continuous_tracking.person_trajectories
 WHERE TRUE
 """
 
@@ -64,7 +64,7 @@ _SQL_LIST_DWELLS = """
 SELECT id, identity_id, global_track_id, room_name,
        entered_at, exited_at, duration_seconds,
        entry_confidence, primary_posture, activity_summary
-FROM room_dwells
+FROM continuous_tracking.room_dwells
 WHERE TRUE
 """
 

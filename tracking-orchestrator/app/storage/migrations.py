@@ -103,7 +103,7 @@ class MigrationRunner:
     async def _ensure_schema_version(self, conn: Any) -> None:
         await conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS _schema_version (
+            CREATE TABLE IF NOT EXISTS continuous_tracking._schema_version (
                 filename   TEXT PRIMARY KEY,
                 applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
@@ -143,7 +143,9 @@ class MigrationRunner:
     # ------------------------------------------------------------------
 
     async def _get_applied(self, conn: Any) -> list[str]:
-        rows = await conn.fetch("SELECT filename FROM _schema_version ORDER BY filename")
+        rows = await conn.fetch(
+            "SELECT filename FROM continuous_tracking._schema_version ORDER BY filename"
+        )
         return [r["filename"] for r in rows]
 
     async def _pending(self, conn: Any) -> list[str]:
@@ -194,12 +196,16 @@ class MigrationRunner:
             # transaction (required for CREATE MATERIALIZED VIEW WITH timescaledb.continuous).
             for stmt in self._split_statements(sql):
                 await conn.execute(stmt)
-            await conn.execute("INSERT INTO _schema_version (filename) VALUES ($1)", base_name)
+            await conn.execute(
+                "INSERT INTO continuous_tracking._schema_version (filename) VALUES ($1)",
+                base_name,
+            )
         else:
             async with conn.transaction():
                 await conn.execute(sql)
                 await conn.execute(
-                    "INSERT INTO _schema_version (filename) VALUES ($1)", base_name
+                    "INSERT INTO continuous_tracking._schema_version (filename) VALUES ($1)",
+                    base_name,
                 )
         logger.info("Migration applied", filename=path.name)
 
@@ -213,11 +219,15 @@ class MigrationRunner:
         if self._no_transaction(sql):
             for stmt in self._split_statements(sql):
                 await conn.execute(stmt)
-            await conn.execute("DELETE FROM _schema_version WHERE filename = $1", base_name)
+            await conn.execute(
+                "DELETE FROM continuous_tracking._schema_version WHERE filename = $1",
+                base_name,
+            )
         else:
             async with conn.transaction():
                 await conn.execute(sql)
                 await conn.execute(
-                    "DELETE FROM _schema_version WHERE filename = $1", base_name
+                    "DELETE FROM continuous_tracking._schema_version WHERE filename = $1",
+                    base_name,
                 )
         logger.info("Migration rolled back", filename=down.name)
