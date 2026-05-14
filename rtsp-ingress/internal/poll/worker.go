@@ -15,6 +15,7 @@ import (
 
 	pb "github.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1"
 	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/config"
+	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/imageops"
 	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/metrics"
 	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/motion"
 )
@@ -82,12 +83,41 @@ func (w *Worker) poll(ctx context.Context) {
 		return
 	}
 
-	// Decode JPEG once for the motion gate; original bytes are published as-is.
+	// Decode JPEG once for the motion gate.
 	img, err := jpeg.Decode(bytes.NewReader(jpegBytes))
 	if err != nil {
 		metrics.FetchErrorsTotal.WithLabelValues(w.cam.ID).Inc()
 		w.log.Warn("jpeg_decode_failed", zap.String("camera_id", w.cam.ID), zap.Error(err))
 		return
+	}
+
+	// Apply per-camera rotation between decode and motion gate so every
+	// downstream consumer sees a single canonical orientation.  The
+	// rotated JPEG replaces the original bytes for publish.
+	if w.cam.RotationDegrees != 0 {
+		rotStart := time.Now()
+		rotated, err := imageops.RotateCW(img, w.cam.RotationDegrees)
+		if err != nil {
+			metrics.RotationErrorsTotal.WithLabelValues(w.cam.ID).Inc()
+			w.log.Warn("rotation_failed",
+				zap.String("camera_id", w.cam.ID),
+				zap.Int("degrees", w.cam.RotationDegrees),
+				zap.Error(err),
+			)
+		} else {
+			reencoded, err := imageops.EncodeJPEG(rotated, 90)
+			if err != nil {
+				metrics.RotationErrorsTotal.WithLabelValues(w.cam.ID).Inc()
+				w.log.Warn("rotation_reencode_failed",
+					zap.String("camera_id", w.cam.ID),
+					zap.Error(err),
+				)
+			} else {
+				jpegBytes = reencoded
+				img = rotated
+				metrics.RotationLatencySeconds.WithLabelValues(w.cam.ID).Observe(time.Since(rotStart).Seconds())
+			}
+		}
 	}
 
 	if w.gate.IsStatic(img) {

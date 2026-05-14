@@ -63,7 +63,7 @@ plugins = ["pydantic.mypy"]
 exclude = ["app/proto/"]
 
 [[tool.mypy.overrides]]
-module = ["tritonclient.*", "google.protobuf.*", "cv2"]
+module = ["google.protobuf.*", "cv2"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -88,6 +88,7 @@ filterwarnings = ["error::DeprecationWarning"]
 [dependency-groups]
 dev = [
     "fakeredis>=2.35.1",
+    "types-pyyaml>=6.0",
 ]
 
 [tool.uv.sources]

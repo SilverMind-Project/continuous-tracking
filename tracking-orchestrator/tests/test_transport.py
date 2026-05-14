@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.proto.continuoustracking.v1 import frame_pb2
 from app.storage.postgres.gallery_repo import (
     _embedding_to_pgvector,
     _pgvector_to_list,
 )
-from app.proto.continuoustracking.v1 import frame_pb2
 from app.transport.redis_streams import (
     FrameReady,
     RedisStreamsTransport,
@@ -96,8 +96,9 @@ class TestTransportDeserialization:
 
         from app.transport.codec import decode as proto_decode
 
-        with _pytest.raises(Exception):
-            proto_decode({b"frame": b"not-valid-protobuf-\xff\x01"}, frame_pb2.FrameReady, field="frame")
+        with _pytest.raises(Exception):  # noqa: B017
+            payload = {b"frame": b"not-valid-protobuf-\xff\x01"}
+            proto_decode(payload, frame_pb2.FrameReady, field="frame")
 
 
 # ---------------------------------------------------------------------------

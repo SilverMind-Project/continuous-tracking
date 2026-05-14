@@ -76,6 +76,17 @@ type CameraConfig struct {
 	MotionThreshold         float64
 	ReconnectBackoffSeconds float64
 	Enabled                 bool
+	RotationDegrees         int
+}
+
+// ValidateRotation checks that degrees is one of the allowed rotation values.
+func ValidateRotation(degrees int) error {
+	switch degrees {
+	case 0, 90, 180, 270:
+		return nil
+	default:
+		return fmt.Errorf("rotation_degrees must be 0, 90, 180, or 270, got %d", degrees)
+	}
 }
 
 // DefaultConfig returns Config with sensible defaults, overridden by env vars.

@@ -20,6 +20,8 @@ from app.inference.triton_client import TritonClientProtocol
 _MODEL_NAME = "reid-solider"
 _CROP_H = 256
 _CROP_W = 128
+# reid-solider/config.pbtxt max_batch_size: 16 — chunk larger batches.
+_REID_MAX_BATCH = 16
 
 # ImageNet statistics for ReID normalisation
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
@@ -48,22 +50,33 @@ class ReidEmbedder:
         self,
         crops: list[npt.NDArray[np.uint8]],
     ) -> list[Embedding]:
-        """Embed a batch of RGB person crops.  Returns L2-normalised embeddings."""
+        """Embed a batch of RGB person crops.  Returns L2-normalised embeddings.
+
+        Chunks into groups of at most _REID_MAX_BATCH to respect the Triton
+        model's max_batch_size: 16 limit.
+        """
         if not crops:
             return []
 
-        batch = np.stack([_preprocess(c) for c in crops])  # (N, 3, 256, 128)
-        outputs = await self._client.infer(
-            model_name=self._model_name,
-            inputs=[("input", batch)],
-            output_names=["output"],
-        )
-        embeddings: npt.NDArray[np.float32] = outputs["output"]  # (N, 768)
+        results: list[Embedding] = []
+        for start in range(0, len(crops), _REID_MAX_BATCH):
+            chunk = crops[start : start + _REID_MAX_BATCH]
+            batch = np.stack([_preprocess(c) for c in chunk])  # (K, 3, 256, 128)
+            outputs = await self._client.infer(
+                model_name=self._model_name,
+                inputs=[("input", batch)],
+                output_names=["output"],
+            )
+            embeddings: npt.NDArray[np.float32] = outputs["output"]  # (K, 768)
 
-        if embeddings.shape[-1] != EMBEDDING_DIM:
-            raise ValueError(f"Expected {EMBEDDING_DIM}-dim embedding, got {embeddings.shape[-1]}")
+            if embeddings.shape[-1] != EMBEDDING_DIM:
+                raise ValueError(
+                    f"Expected {EMBEDDING_DIM}-dim embedding, got {embeddings.shape[-1]}"
+                )
 
-        return [embeddings[i] for i in range(len(crops))]
+            results.extend(embeddings[i] for i in range(len(chunk)))
+
+        return results
 
     async def embed(self, crop: npt.NDArray[np.uint8]) -> Embedding:
         """Embed a single RGB person crop."""

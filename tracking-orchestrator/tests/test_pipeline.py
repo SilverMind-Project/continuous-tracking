@@ -318,7 +318,7 @@ class TestFullPipelineIntegration:
     async def test_full_pipeline_tracking_and_event_emission(self) -> None:
         """Process frames and verify tracking events are published."""
         pipeline = FrameProcessingPipeline(PipelineConfig(signal_enabled=False))
-        with _mock_redis_deps() as (mock_transport, mock_rev, _mock_scene):
+        with _mock_redis_deps() as (mock_transport, _mock_rev, _mock_scene):
             # Realistic detector: one person in each frame.
             mock_detector = AsyncMock()
             mock_detector.detect = AsyncMock(

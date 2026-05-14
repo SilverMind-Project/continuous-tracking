@@ -16,5 +16,6 @@ Importers should reach for the metrics submodule explicitly so the
 from __future__ import annotations
 
 from . import metrics
+from .logging_config import configure_logging
 
-__all__ = ["metrics"]
+__all__ = ["configure_logging", "metrics"]

@@ -32,7 +32,6 @@ ON CONFLICT (global_track_id) DO UPDATE SET
                 EXCLUDED.tracklet_ids || continuous_tracking.global_tracks.tracklet_ids
             ) AS v
         ) sub
-        WHERE v <> ''
     ),
     started_at = LEAST(EXCLUDED.started_at, continuous_tracking.global_tracks.started_at),
     last_seen_at = GREATEST(EXCLUDED.last_seen_at, continuous_tracking.global_tracks.last_seen_at),
@@ -82,15 +81,20 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
         self._pool = pool
 
     async def save(self, track: GlobalTrack) -> None:
+        identity_id = track.current_identity_id if track.current_identity_id else None
+        clean_tracklet_ids = [tid for tid in track.tracklet_ids if tid]
+        import structlog
+        _log = structlog.get_logger(__name__)
+        _log.debug("save_global_track", global_track_id=repr(track.global_track_id), camera_ids=track.camera_ids, tracklet_ids=clean_tracklet_ids, identity_id=repr(identity_id), state=track.state)
         async with self._pool.acquire() as conn:
             await conn.execute(
                 _SQL_SAVE,
                 track.global_track_id,
                 track.camera_ids,
-                track.tracklet_ids,
+                clean_tracklet_ids,
                 track.started_at,
                 track.last_seen_at,
-                track.current_identity_id,
+                identity_id,
                 track.state,
             )
 

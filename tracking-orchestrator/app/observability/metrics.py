@@ -40,6 +40,7 @@ class Metrics:
     frames_failed_total: Counter
     tracking_events_published_total: Counter
     tracking_revisions_published_total: Counter
+    tracking_responses_published_total: Counter
     dementia_signals_published_total: Counter
     scene_samples_published_total: Counter
 
@@ -105,6 +106,11 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_tracking_revisions_published_total",
             "IdentityRevision messages emitted to tracking.revisions.",
             ["reason"],
+        ),
+        tracking_responses_published_total=_counter(
+            "cts_tracking_responses_published_total",
+            "FrameResponse messages published to tracking.responses (dead-letter).",
+            ["outcome"],
         ),
         dementia_signals_published_total=_counter(
             "cts_dementia_signals_published_total",

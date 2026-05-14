@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
-from triton_shared.inference.schemas import DetectionBox  # noqa: F401 — re-export
+from triton_shared.inference.schemas import DetectionBox
 
 # ---------------------------------------------------------------------------
 # SOLIDER-REID output
@@ -60,6 +60,17 @@ class Keypoint:
     x: float  # horizontal, left=0 right=1
     y: float  # vertical, top=0 bottom=1
     score: float  # visibility confidence [0, 1]
+
+
+__all__ = [
+    "COCO_KEYPOINTS",
+    "EMBEDDING_DIM",
+    "NUM_KEYPOINTS",
+    "DetectionBox",
+    "Embedding",
+    "Keypoint",
+    "PoseResult",
+]
 
 
 @dataclass(frozen=True)

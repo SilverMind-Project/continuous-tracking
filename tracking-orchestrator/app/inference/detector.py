@@ -18,6 +18,9 @@ from triton_shared.inference.detection import (
 )
 from triton_shared.inference.schemas import DetectionBox
 
+# person-detector/config.pbtxt dims are [16,3,640,640] — static batch baked into the ONNX export.
+_DETECTOR_BATCH_SIZE = 16
+
 
 class PersonDetector:
     """Async person detector using YOLO26L on Triton."""
@@ -47,17 +50,22 @@ class PersonDetector:
             preprocessed.append(tensor)
             meta.append((img.shape[0], img.shape[1], px, py, scale))
 
-        batch = np.stack(preprocessed)  # (N, 3, 640, 640)
+        n = len(preprocessed)
+        pad = _DETECTOR_BATCH_SIZE - n
+        if pad > 0:
+            preprocessed.extend([preprocessed[0]] * pad)
+
+        batch = np.stack(preprocessed)  # (_DETECTOR_BATCH_SIZE, 3, 640, 640)
         outputs = await self._client.infer(
             model_name=self._model_name,
             inputs=[("images", batch)],
             output_names=["output0"],
         )
-        raw_batch = outputs["output0"]  # (N, 300, 6) — YOLO26L NMS-free format
+        raw_batch = outputs["output0"]  # (_DETECTOR_BATCH_SIZE, 300, 6) — YOLO26L NMS-free format
 
         return [
             decode_output(raw_batch[i], *meta[i], conf_threshold=self._conf)
-            for i in range(len(images))
+            for i in range(n)
         ]
 
     async def detect(self, image: npt.NDArray[np.uint8]) -> list[DetectionBox]:

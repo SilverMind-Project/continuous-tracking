@@ -17,7 +17,6 @@ to ``config/settings.yaml`` relative to the project root.
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -25,9 +24,6 @@ from typing import Any
 import yaml
 
 __all__ = ["SettingNotFoundError", "Settings", "settings"]
-
-# Matches ${VAR} and ${VAR:-default}.
-_PLACEHOLDER = re.compile(r"\$\{([^}:]+)(?::-([^}]*))?\}")
 
 _DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "settings.yaml"
 _CONFIG_PATH = os.environ.get("ORCHESTRATOR_CONFIG_PATH", str(_DEFAULT_CONFIG))
@@ -41,6 +37,40 @@ class SettingNotFoundError(KeyError):
         self.dotted_key = dotted_key
 
 
+def _resolve_string(value: str, env: Mapping[str, str]) -> str:
+    """Replace ``${VAR}`` and ``${VAR:-default}`` placeholders.
+
+    Brace depth is counted so nested ``${}`` in fallback values are matched
+    correctly.  Fallback values are themselves resolved recursively.
+    """
+    result: list[str] = []
+    i = 0
+    while i < len(value):
+        if value[i : i + 2] == "${":
+            depth = 1
+            j = i + 2
+            while j < len(value) and depth > 0:
+                if value[j : j + 2] == "${":
+                    depth += 1
+                    j += 2
+                    continue
+                if value[j] == "}":
+                    depth -= 1
+                j += 1
+            content = value[i + 2 : j - 1]
+            if ":-" in content:
+                var_name, fallback = content.split(":-", 1)
+                val = env.get(var_name, "")
+                result.append(val if val else _resolve_string(fallback, env))
+            else:
+                result.append(env.get(content, ""))
+            i = j
+        else:
+            result.append(value[i])
+            i += 1
+    return "".join(result)
+
+
 def _interpolate(value: Any, env: Mapping[str, str]) -> Any:
     """Recursively replace ``${VAR}`` and ``${VAR:-default}`` placeholders.
 
@@ -48,20 +78,12 @@ def _interpolate(value: Any, env: Mapping[str, str]) -> Any:
     ``${VAR:-fallback}`` uses the fallback when VAR is missing or empty.
     """
     if isinstance(value, str):
-        return _PLACEHOLDER.sub(lambda m: _resolve_var(m, env), value)
+        return _resolve_string(value, env)
     if isinstance(value, dict):
         return {k: _interpolate(v, env) for k, v in value.items()}
     if isinstance(value, list):
         return [_interpolate(v, env) for v in value]
     return value
-
-
-def _resolve_var(m: re.Match[str], env: Mapping[str, str]) -> str:
-    varname, fallback = m.group(1), m.group(2)
-    val = env.get(varname, "")
-    if not val and fallback is not None:
-        return fallback
-    return val
 
 
 class Settings:

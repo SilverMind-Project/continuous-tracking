@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -42,7 +42,7 @@ from ..domain import (
     TrackingEvent,
 )
 from ..inference.detector import PersonDetector
-from ..inference.face_id_client import FaceIdentificationClient, FaceResult
+from ..inference.face_id_client import FaceIdentificationClient
 from ..inference.schemas import DetectionBox, Embedding
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..storage.base import (
@@ -396,6 +396,12 @@ class FrameProcessingPipeline:
             face_id=bool(self._face_id_client),
         )
 
+        if self._detector is None:
+            logger.warning(
+                "Detector not configured; running in SKELETON mode — no bboxes will be produced. "
+                "Set TRITON_GRPC_URL to enable person detection."
+            )
+
     async def start(self) -> None:
         """Start the pipeline background tasks."""
         if self._running:
@@ -481,9 +487,13 @@ class FrameProcessingPipeline:
             interval_s=self._config.signal_interval_s,
         )
 
+        first_run = True
         while not self._stop_event.is_set():
             try:
-                await asyncio.sleep(self._config.signal_interval_s)
+                if not first_run:
+                    await asyncio.sleep(self._config.signal_interval_s)
+                else:
+                    first_run = False
                 if self._stop_event.is_set():
                     break
                 signals = await self._signal_worker.run_once(now=datetime.now(UTC))
@@ -664,7 +674,7 @@ class FrameProcessingPipeline:
                 frame_index=frame.frame_index,
             )
 
-        # ---- Step 4b: Face identification (rate-limited call to person-identification-service) ----
+        # Step 4b: Face identification (rate-limited call to person-identification-service)
         face_anchors: list[FaceAnchor] = []
         if self._face_id_client is not None and domain_detections:
             now = datetime.now(UTC)
@@ -697,22 +707,6 @@ class FrameProcessingPipeline:
                 captured_at=datetime.now(UTC),
             )
 
-            # Step 5b: Close trajectory dwells for terminated global tracks.
-            # A global track is considered terminated when it was active in a
-            # previous frame but no longer appears in the current active list
-            # (all its tracklets have been closed by the tracklet manager).
-            current_gt_ids = {gt.global_track_id for gt in active_global_tracks}
-            terminated_gt_ids = self._prev_active_gt_ids - current_gt_ids
-            if terminated_gt_ids and self._trajectory_writer:
-                traj_close_time = datetime.now(UTC)
-                for gt_id in terminated_gt_ids:
-                    logger.debug(
-                        "Closing trajectory dwell for terminated global track",
-                        global_track_id=gt_id,
-                    )
-                    await self._trajectory_writer.close_track(gt_id, closed_at=traj_close_time)
-            self._prev_active_gt_ids = current_gt_ids
-
             # Step 6: Identity resolution
             outcome = await self._identity_resolver.resolve(
                 global_tracks=active_global_tracks,
@@ -732,6 +726,21 @@ class FrameProcessingPipeline:
             # Collect revisions to emit.
             new_revisions = list(outcome.revisions)
 
+        # Step 5b: Close trajectory dwells for terminated global tracks.
+        # Runs regardless of whether active_tracklets is empty — when it is
+        # empty, every previously-active track is considered terminated.
+        current_gt_ids = {gt.global_track_id for gt in active_global_tracks}
+        terminated_gt_ids = self._prev_active_gt_ids - current_gt_ids
+        if terminated_gt_ids and self._trajectory_writer:
+            traj_close_time = datetime.now(UTC)
+            for gt_id in terminated_gt_ids:
+                logger.debug(
+                    "Closing trajectory dwell for terminated global track",
+                    global_track_id=gt_id,
+                )
+                await self._trajectory_writer.close_track(gt_id, closed_at=traj_close_time)
+        self._prev_active_gt_ids = current_gt_ids
+
         # Step 7: Write trajectory points and manage room dwells.
         if outcome.decisions and self._trajectory_writer:
             traj_time = datetime.now(UTC)
@@ -745,12 +754,12 @@ class FrameProcessingPipeline:
                 for tracklet in active_tracklets:
                     if tracklet.camera_id != frame.camera_id:
                         continue
-                    bbox = getattr(tracklet, "last_bbox", None)
-                    if bbox is None:
+                    last_bbox: BoundingBox | None = getattr(tracklet, "last_bbox", None)
+                    if last_bbox is None:
                         continue
                     for gt in active_global_tracks:
                         if tracklet.tracklet_id in gt.tracklet_ids:
-                            gt_bbox[gt.global_track_id] = bbox
+                            gt_bbox[gt.global_track_id] = last_bbox
                             break
 
             for decision in outcome.decisions:
@@ -759,10 +768,10 @@ class FrameProcessingPipeline:
                 # Project the tracklet's footpoint through the per-camera
                 # homography, falling back to uncalibrated (0,0) when no
                 # homography is configured for this camera.
-                bbox = gt_bbox.get(decision.global_track_id)
+                gt_bbox_entry = gt_bbox.get(decision.global_track_id)
                 floor_point = (
-                    self._floor_projector.project(frame.camera_id, bbox)
-                    if bbox is not None and self._floor_projector is not None
+                    self._floor_projector.project(frame.camera_id, gt_bbox_entry)
+                    if gt_bbox_entry is not None and self._floor_projector is not None
                     else FloorPoint(0, 0)
                 )
                 _top_id, top_prob = decision.posterior.top_identity()
@@ -824,6 +833,22 @@ class FrameProcessingPipeline:
             if self._repo:
                 for rev in new_revisions:
                     await self._repo.save_identity_revision(revision=rev)
+
+        # Step 9b: Back-fill tracklet_id and global_track_id onto each
+        # Detection so the serialised proto carries identity context for the
+        # CC subscriber and the live-view overlay.
+        if domain_detections and self._tracklet_manager is not None and active_global_tracks:
+            tracklet_to_gt: dict[str, str] = {}
+            for gt in active_global_tracks:
+                for tid in gt.tracklet_ids:
+                    tracklet_to_gt[tid] = gt.global_track_id
+
+            updated: list[Detection] = []
+            for domain_det in domain_detections:
+                tid = self._tracklet_manager.get_tracklet_id_for_detection(domain_det.detection_id)
+                gt_id = tracklet_to_gt.get(tid, "")
+                updated.append(replace(domain_det, tracklet_id=tid, global_track_id=gt_id))
+            domain_detections = updated
 
         # Step 10: Publish tracking event with identity + room context so the
         # CC-side TrackingEventSubscriber can write PersonLocationState directly.
@@ -912,9 +937,7 @@ class FrameProcessingPipeline:
         Per-camera overrides take precedence; falls back to a default-enabled
         config when no override is defined.
         """
-        return self._config.face_id_camera_configs.get(
-            camera_id, FaceIdCameraConfig()
-        )
+        return self._config.face_id_camera_configs.get(camera_id, FaceIdCameraConfig())
 
     def _should_call_face_id(self, camera_id: str, now: datetime) -> bool:
         """Return True if enough time has passed since the last call for this camera.
@@ -985,7 +1008,13 @@ class FrameProcessingPipeline:
             for i, det in enumerate(domain_detections):
                 if i in assigned_detections:
                     continue
-                iou = _bbox_iou(face.bbox_normalized, [det.bbox.x_min, det.bbox.y_min, det.bbox.x_max, det.bbox.y_max])
+                det_norm = [
+                    det.bbox.x_min / frame_width,
+                    det.bbox.y_min / frame_height,
+                    det.bbox.x_max / frame_width,
+                    det.bbox.y_max / frame_height,
+                ]
+                iou = _bbox_iou(face.bbox_normalized, det_norm)
                 if iou > best_iou:
                     best_iou = iou
                     best_det_idx = i
@@ -1000,9 +1029,7 @@ class FrameProcessingPipeline:
             det = domain_detections[best_det_idx]
             tracklet_id = ""
             if self._tracklet_manager is not None:
-                tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(
-                    det.detection_id
-                )
+                tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(det.detection_id)
 
             if not tracklet_id:
                 continue

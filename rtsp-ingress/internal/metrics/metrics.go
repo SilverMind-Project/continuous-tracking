@@ -39,4 +39,19 @@ var (
 	ReconcileErrorsTotal = promauto.NewCounter(
 		prometheus.CounterOpts{Name: "rtsp_reconcile_errors_total"},
 	)
+	RotationLatencySeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "cts_ingress_rotation_latency_seconds",
+			Help:    "Time spent rotating and re-encoding frames at ingest.",
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 8),
+		},
+		[]string{"camera_id"},
+	)
+	RotationErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cts_ingress_rotation_errors_total",
+			Help: "Rotation failures at ingest (invalid config or encode errors).",
+		},
+		[]string{"camera_id"},
+	)
 )

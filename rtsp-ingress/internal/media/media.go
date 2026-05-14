@@ -5,12 +5,13 @@ package media
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"math"
-	"math/rand"
+	"math/big"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -149,7 +150,11 @@ func retry(ctx context.Context, attempts int, fn func() error) error {
 		if i == attempts-1 {
 			break
 		}
-		jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+		jitterN, err := rand.Int(rand.Reader, big.NewInt(int64(backoff/2)))
+		var jitter time.Duration
+		if err == nil {
+			jitter = time.Duration(jitterN.Int64())
+		}
 		select {
 		case <-time.After(backoff + jitter):
 		case <-ctx.Done():

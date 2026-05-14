@@ -130,10 +130,6 @@ class FaceIdentificationClient:
             bbox_px: list[float] = face.get("bbox", [])
             if len(bbox_px) != 4:
                 continue
-            # The downscaled image dimensions
-            scale_h = orig_height / max(orig_height, orig_width) * self._max_dim
-            scale_w = orig_width / max(orig_height, orig_width) * self._max_dim
-            # Actually simpler: person-id-service receives the downscaled image,
             # so its bboxes are in that image's pixel space.  We normalise to
             # [0,1] using the original dimensions because our YOLO detections
             # are already normalised to the original frame.

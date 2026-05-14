@@ -404,11 +404,12 @@ class DementiaSignalWorker:
         if the count exceeds the configured threshold.
         """
         night_transitions = 0
-        # Nighttime window: 22:00–06:00 local time (spans midnight).
+        # Nighttime window: 22:00-06:00 local time (spans midnight).
         # Convert each point to local time before comparing hours.
         night_points = sorted(
             [
-                p for p in window
+                p
+                for p in window
                 if (h := p.observed_at.astimezone(self._cfg.tz).hour) >= 22 or h < 6
             ],
             key=lambda p: p.observed_at,

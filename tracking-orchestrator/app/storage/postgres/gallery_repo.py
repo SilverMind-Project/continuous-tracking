@@ -152,11 +152,12 @@ class PostgresGalleryRepository(GalleryRepository):
 
     async def upsert_gallery_entry(self, entry: GalleryEmbedding) -> str:
         embedding_str = _embedding_to_pgvector(entry.embedding)
+        identity_id = entry.identity_id if entry.identity_id else None
         async with self._pool.acquire() as conn:
             await conn.execute(
                 _SQL_UPSERT_GALLERY_ENTRY,
                 entry.gallery_entry_id,
-                entry.identity_id,
+                identity_id,
                 embedding_str,
                 entry.quality,
                 entry.origin_tracklet_id,

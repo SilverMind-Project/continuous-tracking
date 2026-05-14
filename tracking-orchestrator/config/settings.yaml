@@ -25,13 +25,14 @@ triton:
   url: "${TRITON_GRPC_URL:-}"
   person_detector_model: "${TRITON_DETECTOR_MODEL:-person-detector}"
   reid_model: "${TRITON_REID_MODEL:-reid-solider}"
+  timeout_ms: "${TRITON_TIMEOUT_MS:-5000}"
 
 # MinIO / S3-compatible object storage
 minio:
   endpoint: "${MINIO_ENDPOINT_URL:-}"
-  bucket: "${MINIO_BUCKET:-${CTS_FRAME_BUCKET:-cts-frames}}"
-  access_key: "${MINIO_ACCESS_KEY:-${AWS_ACCESS_KEY_ID:-}}"
-  secret_key: "${MINIO_SECRET_KEY:-${AWS_SECRET_ACCESS_KEY:-}}"
+  bucket: "${MINIO_BUCKET:-ai-media}"
+  access_key: "${MINIO_ACCESS_KEY:-}"
+  secret_key: "${MINIO_SECRET_KEY:-}"
   region: "${AWS_REGION:-us-east-1}"
   secure: "${MINIO_SECURE:-false}"
 
@@ -53,6 +54,7 @@ signal:
 pipeline:
   detector_confidence: "${DETECTOR_CONFIDENCE:-0.25}"
   max_concurrent_frames: "${MAX_CONCURRENT_FRAMES:-4}"
+  allow_skeleton: "${PIPELINE_ALLOW_SKELETON:-false}"
 
 # Cognitive Companion — camera config source and API gateway
 cognitive_companion:
@@ -61,3 +63,7 @@ cognitive_companion:
 
 # Environment label (dev / staging / production)
 env: "${CTS_ENV:-production}"
+
+# Logging
+logging:
+  level: "${LOG_LEVEL:-INFO}"

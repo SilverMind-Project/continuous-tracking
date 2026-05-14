@@ -69,7 +69,7 @@ FrameReady = frame_pb2.FrameReady
 class FrameBatch:
     """A batch of frames ready for processing."""
 
-    frames: list = field(default_factory=list)  # list[frame_pb2.FrameReady]
+    frames: list[frame_pb2.FrameReady] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -224,7 +224,7 @@ class RedisStreamsTransport:
         frame_width: int = 0,
         frame_height: int = 0,
         capture_time_unix_ns: int = 0,
-        detection_count: int = 0,  # noqa: ARG002  deprecated; derived from len(detections)
+        detection_count: int = 0,
     ) -> str:
         """Publish a ``TrackingEvent`` proto to ``tracking.events``.
 
@@ -308,6 +308,8 @@ class RedisStreamsTransport:
             maxlen=10000,
             approximate=True,
         )
+        outcome = "success" if success else (error_code or "processing_error")
+        metrics.metrics.tracking_responses_published_total.labels(outcome=outcome).inc()
         return (
             message_id_bytes.decode("ascii")
             if isinstance(message_id_bytes, bytes)

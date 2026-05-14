@@ -83,6 +83,23 @@ class ResolverConfig:
     # safe for any reasonable number of identities.
     prior_weight: float = 0.6
 
+    # Multiplier applied to face likelihood weights before combining with
+    # ReID and prior.  Face evidence (ArcFace) is much more reliable than
+    # body ReID (SOLIDER) in multi-generational households where clothing
+    # similarities can confuse the ReID embedder.  A value of 3.0 means
+    # face evidence carries 3x the weight of ReID evidence.
+    face_weight_multiplier: float = 3.0
+
+    # Higher commit threshold used in dense scenes (≥ 2 candidate
+    # identities with posterior > 0.3).  Prevents confident-but-wrong
+    # commits when two enrolled people are in the same room.
+    commit_prob_dense: float = 0.80
+
+    # Larger margin required in dense scenes.  When two identities have
+    # posteriors like [0.55, 0.40, 0.05], the narrow 0.15 gap should
+    # refuse to commit — the resolver must wait for stronger evidence.
+    commit_margin_dense: float = 0.20
+
 
 class IdentityResolver:
     """Bayesian identity resolver with retroactive revision.
@@ -369,7 +386,13 @@ class IdentityResolver:
 
         combined: dict[str, float] = {}
         for ident in all_ids:
-            combined[ident] = _weight(prior, ident) * _weight(face, ident) * _weight(reid, ident)
+            fw = _weight(face, ident)
+            # Boost identities that appear in the face distribution.
+            # ArcFace evidence is significantly more reliable than body
+            # ReID for disambiguating enrolled identities in the same room.
+            if ident in face.distribution:
+                fw = fw * self._config.face_weight_multiplier
+            combined[ident] = _weight(prior, ident) * fw * _weight(reid, ident)
 
         if not combined:
             return PosteriorDist({"UNKNOWN": 1.0})
@@ -410,12 +433,20 @@ class IdentityResolver:
             top_id in face_likelihood.distribution or top_id in reid_likelihood.distribution
         )
 
+        # Detect dense scenes: when ≥ 2 candidate identities each have
+        # posterior > 0.3, escalate thresholds to prevent confident-but-wrong
+        # commits from ambiguous ReID evidence in multi-person frames.
+        dense_candidates = sum(1 for p in posterior.distribution.values() if p > 0.3)
+        is_dense = dense_candidates >= 2
+        effective_commit_prob = (
+            self._config.commit_prob_dense if is_dense else self._config.commit_prob
+        )
+        effective_commit_margin = (
+            self._config.commit_margin_dense if is_dense else self._config.commit_margin
+        )
+
         # Apply commit rule.
-        if (
-            has_evidence
-            and top_prob >= self._config.commit_prob
-            and margin >= self._config.commit_margin
-        ):
+        if has_evidence and top_prob >= effective_commit_prob and margin >= effective_commit_margin:
             new_id = top_id if top_id != "UNKNOWN" else None
         else:
             new_id = None  # Committed as UNKNOWN.

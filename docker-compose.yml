@@ -76,7 +76,7 @@ services:
             - driver: nvidia
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "tritonserver", "model-server", "models", "--name", "nonexistent"]
+      test: ["CMD", "curl", "-f", "http://localhost:8700/v2/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -86,6 +86,8 @@ services:
   # Tracking Orchestrator (Python — ML pipeline)
   # -----------------------------------------------------------------------
   tracking-orchestrator:
+    env_file:
+     - .env
     build:
       context: ..
       dockerfile: continuous-tracking/tracking-orchestrator/Dockerfile
@@ -98,13 +100,17 @@ services:
       MINIO_ENDPOINT_URL: ${MINIO_ENDPOINT_URL:-http://${MINIO_ENDPOINT}}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET}
       MINIO_USE_SSL: "false"
-      TRITON_ENDPOINT: triton:8701
+      TRITON_GRPC_URL: triton:8701
       CTS_ENABLED: "true"
+      LOG_LEVEL: "DEBUG"
     ports:
       - "8500:8500"
     depends_on:
       redis:
+        condition: service_healthy
+      triton:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8500/health"]

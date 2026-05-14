@@ -182,6 +182,14 @@ func main() {
 	sugar.Info("rtsp-ingress stopped")
 }
 
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		zap.L().Error("json_encode_error", zap.Error(err))
+	}
+}
+
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
 	_ = r
 	w.Header().Set("Content-Type", "application/json")
@@ -243,16 +251,14 @@ func testConnectionHandler(g2r *go2rtc.Client) http.HandlerFunc {
 		}
 
 		if err := g2r.ProbeStream(r.Context(), req.RTSPURL); err != nil {
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]any{
+			writeJSON(w, http.StatusOK, map[string]any{
 				"success": false,
 				"message": fmt.Sprintf("Connection failed: %v", err),
 			})
 			return
 		}
 
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{
+		writeJSON(w, http.StatusOK, map[string]any{
 			"success": true,
 			"message": "Connection successful",
 		})
@@ -294,7 +300,7 @@ func listStreamsHandler(rec *reconciler.Reconciler, g2r *go2rtc.Client) http.Han
 			})
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		writeJSON(w, http.StatusOK, map[string]any{
 			"streams": result,
 		})
 	}
@@ -314,8 +320,7 @@ func snapshotHandler(sup *supervisor.Supervisor) http.HandlerFunc {
 		jpegData, err := sup.Snapshot(r.Context(), cameraID)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{
+			writeJSON(w, http.StatusNotFound, map[string]any{
 				"error":     "snapshot failed",
 				"camera_id": cameraID,
 				"detail":    err.Error(),
@@ -342,7 +347,7 @@ func streamHealthHandler(sup *supervisor.Supervisor) http.HandlerFunc {
 		}
 
 		health := sup.StreamHealth(r.Context(), cameraID)
-		json.NewEncoder(w).Encode(health)
+		writeJSON(w, http.StatusOK, health)
 	}
 }
 
@@ -360,15 +365,14 @@ func reloadStreamHandler(sup *supervisor.Supervisor) http.HandlerFunc {
 		}
 
 		if err := sup.ReloadStream(r.Context(), cameraID); err != nil {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{
+			writeJSON(w, http.StatusNotFound, map[string]any{
 				"success": false,
 				"message": err.Error(),
 			})
 			return
 		}
 
-		json.NewEncoder(w).Encode(map[string]any{
+		writeJSON(w, http.StatusOK, map[string]any{
 			"success": true,
 			"message": fmt.Sprintf("Stream %s reloaded", cameraID),
 		})

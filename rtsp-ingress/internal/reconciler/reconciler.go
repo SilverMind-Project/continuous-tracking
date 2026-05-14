@@ -132,11 +132,19 @@ func (r *Reconciler) fetchCameras(ctx context.Context) ([]config.CameraConfig, e
 		if !c.Enabled {
 			continue
 		}
+		if err := config.ValidateRotation(c.RotationDegrees); err != nil {
+			r.log.Warn("invalid_rotation",
+				zap.String("camera_id", c.ID),
+				zap.Int("rotation_degrees", c.RotationDegrees),
+				zap.Error(err),
+			)
+		}
 		cc := config.CameraConfig{
-			ID:       c.ID,
-			RTSPURL:  c.RTSPURL,
-			RoomName: c.Location,
-			Enabled:  true,
+			ID:              c.ID,
+			RTSPURL:         c.RTSPURL,
+			RoomName:        c.Location,
+			Enabled:         true,
+			RotationDegrees: c.RotationDegrees,
 		}
 		if cc.FrameIntervalMs <= 0 {
 			cc.FrameIntervalMs = r.defaults.FrameIntervalMs
@@ -213,10 +221,11 @@ func (r *Reconciler) LastCameras() []config.CameraConfig {
 // cameraResponse maps the CtsCameraOut schema returned by
 // GET /api/v1/cts/cameras in cognitive-companion.
 type cameraResponse struct {
-	ID       string `json:"id"`
-	RTSPURL  string `json:"rtsp_url"`
-	Location string `json:"location"`
-	Enabled  bool   `json:"enabled"`
+	ID              string `json:"id"`
+	RTSPURL         string `json:"rtsp_url"`
+	Location        string `json:"location"`
+	Enabled         bool   `json:"enabled"`
+	RotationDegrees int    `json:"rotation_degrees"`
 }
 
 func shardIndex(cameraID string, modulus int) int {

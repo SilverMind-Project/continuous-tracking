@@ -83,6 +83,7 @@ check: venv ## Run the Python quality gate
 	$(MAKE) mypy
 	$(MAKE) import-lint
 	$(MAKE) test
+	@bash scripts/check-env-var-drift.sh
 
 all-check: check go-check proto-lint ## Run the full repo quality gate
 

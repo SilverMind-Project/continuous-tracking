@@ -21,13 +21,15 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from structlog import get_logger
 
 from .config import settings
+from .observability.logging_config import configure_logging
+
+# Configure structlog before any logger is first used.
+configure_logging(settings.get("logging.level", "INFO") or "INFO")
 from .inference.detector import PersonDetector
 from .inference.reid_embedder import ReidEmbedder
 from .inference.triton_client import TritonGrpcClient
 from .pipeline import FrameProcessingPipeline
 from .pipeline.frame_pipeline import FaceIdCameraConfig, PipelineConfig
-from .transport.redis_streams import TransportConfig
-
 from .routers import corrections as corrections_router_mod
 from .routers import dashboard as dashboard_router_mod
 from .routers import live as live_router_mod
@@ -44,6 +46,7 @@ from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.tracking_repo import PostgresTrackingRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
 from .transport.minio_frames import MinioFrameConfig, MinioFrameFetcher
+from .transport.redis_streams import TransportConfig
 
 logger = get_logger(__name__)
 
@@ -85,7 +88,7 @@ async def _fetch_cc_camera_configs(cc_url: str, api_key: str = "") -> dict[str, 
         async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
-            cameras: list[dict] = resp.json()
+            cameras: list[dict[str, Any]] = resp.json()
     except Exception:
         logger.warning("Failed to fetch camera configs from CC", exc_info=True)
         return {}
@@ -134,15 +137,20 @@ def _apply_confidence_fallback(cfgs: dict[str, FaceIdCameraConfig]) -> None:
             logger.warning("Invalid FACE_ID_CAMERA_CONFIDENCE entry", entry=pair)
             continue
 
-        existing = cfgs.get(cam_id.strip())
+        cam_id = cam_id.strip()
+        existing = cfgs.get(cam_id)
         if existing is not None:
             # Only fill if CC didn't set a value.
             if existing.min_confidence is None:
-                cfgs[cam_id.strip()] = FaceIdCameraConfig(
+                cfgs[cam_id] = FaceIdCameraConfig(
                     enabled=existing.enabled,
                     min_confidence=conf,
                 )
-        # Cameras not in CC are not added — CC is the authoritative camera list.
+        else:
+            logger.info(
+                "FACE_ID_CAMERA_CONFIDENCE ignored for unknown camera",
+                camera_id=cam_id,
+            )
 
 
 # Module-level asyncpg pool so shutdown can close it.
@@ -229,14 +237,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     triton_url = settings.get("triton.url", "")
     detector = None
     reid_embedder = None
+    env = settings.get("env", "production")
     if triton_url:
-        _triton_client = TritonGrpcClient(triton_url)
-        await _triton_client.__aenter__()
-        detector = PersonDetector(
-            _triton_client,
-            conf_threshold=float(settings.get("pipeline.detector_confidence", "0.25")),
-        )
-        reid_embedder = ReidEmbedder(_triton_client)
+        try:
+            triton_timeout_ms = int(settings.get("triton.timeout_ms", "5000") or "5000")
+            _triton_client = TritonGrpcClient(triton_url, timeout_ms=triton_timeout_ms)
+            await _triton_client.__aenter__()
+            detector = PersonDetector(
+                _triton_client,
+                conf_threshold=float(settings.get("pipeline.detector_confidence", "0.25")),
+            )
+            reid_embedder = ReidEmbedder(_triton_client)
+        except Exception:
+            logger.exception("Failed to connect to Triton Inference Server")
+            if env in ("production", "staging"):
+                raise RuntimeError(
+                    "Triton Inference Server is required in production/staging. "
+                    "Set PIPELINE_ALLOW_SKELETON=true to override for testing."
+                ) from None
+            _triton_client = None
+    elif env in ("production", "staging"):
+        allow_skeleton = settings.get("pipeline.allow_skeleton", "false")
+        if str(allow_skeleton).lower() not in ("1", "true", "yes"):
+            raise RuntimeError(
+                "Triton Inference Server (TRITON_GRPC_URL) is required in production/staging. "
+                "Set PIPELINE_ALLOW_SKELETON=true to override for testing."
+            )
 
     # -- MinIO --
     minio_endpoint = settings.get("minio.endpoint", "")

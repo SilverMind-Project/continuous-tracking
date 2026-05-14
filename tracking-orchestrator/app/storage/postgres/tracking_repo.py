@@ -101,7 +101,6 @@ _SQL_SAVE_GLOBAL_TRACK = """
                     EXCLUDED.tracklet_ids || continuous_tracking.global_tracks.tracklet_ids
                 ) AS v
             ) sub
-            WHERE v <> ''
         ),
         last_seen_at = GREATEST(
             EXCLUDED.last_seen_at, continuous_tracking.global_tracks.last_seen_at
@@ -326,12 +325,13 @@ class PostgresTrackingRepository(TrackingRepository):
             )
 
     async def save_tracklet(self, tracklet: Tracklet) -> None:
+        clean_detection_ids = [did for did in tracklet.detection_ids if did]
         async with self._pool.acquire() as conn:
             await conn.execute(
                 _SQL_SAVE_TRACKLET,
                 tracklet.tracklet_id,
                 tracklet.camera_id,
-                tracklet.detection_ids,
+                clean_detection_ids,
                 tracklet.started_at,
                 tracklet.ended_at,
                 tracklet.state,
@@ -352,12 +352,13 @@ class PostgresTrackingRepository(TrackingRepository):
         )
 
     async def save_global_track(self, track: GlobalTrack) -> None:
+        clean_tracklet_ids = [tid for tid in track.tracklet_ids if tid]
         async with self._pool.acquire() as conn:
             await conn.execute(
                 _SQL_SAVE_GLOBAL_TRACK,
                 track.global_track_id,
                 track.camera_ids,
-                track.tracklet_ids,
+                clean_tracklet_ids,
                 track.started_at,
                 track.last_seen_at,
                 track.state,

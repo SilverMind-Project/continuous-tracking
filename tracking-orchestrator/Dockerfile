@@ -21,7 +21,7 @@ COPY triton-shared/ triton-shared/
 COPY continuous-tracking/tracking-orchestrator/ continuous-tracking/tracking-orchestrator/
 
 WORKDIR /work/continuous-tracking/tracking-orchestrator
-RUN uv sync --frozen
+RUN uv sync --frozen --extra triton
 
 USER 65532:65532
 EXPOSE 8500
