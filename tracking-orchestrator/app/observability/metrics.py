@@ -59,6 +59,9 @@ class Metrics:
     identity_revisions_total: Counter
     posterior_entropy: Histogram
 
+    # ---- Staleness / backlog -----------------------------------------
+    frames_dropped_stale_total: Counter
+
     # ---- Latency -----------------------------------------------------
     frame_end_to_end_latency_ms: Histogram
     triton_inference_latency_ms: Histogram
@@ -164,6 +167,12 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_posterior_entropy_bits",
             "Per-decision Bayesian posterior entropy (bits).",
             ENTROPY_BUCKETS,
+        ),
+        frames_dropped_stale_total=_counter(
+            "cts_frames_dropped_stale_total",
+            "FrameReady messages silently dropped because capture_time_unix_ns"
+            " was older than the max-frame-age threshold.",
+            ["camera_id"],
         ),
         frame_end_to_end_latency_ms=_hist(
             "cts_frame_end_to_end_latency_ms",

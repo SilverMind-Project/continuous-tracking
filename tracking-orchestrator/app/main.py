@@ -32,10 +32,12 @@ from .pipeline import FrameProcessingPipeline
 from .pipeline.frame_pipeline import FaceIdCameraConfig, PipelineConfig
 from .routers import corrections as corrections_router_mod
 from .routers import dashboard as dashboard_router_mod
+from .routers import gallery as gallery_router_mod
 from .routers import live as live_router_mod
 from .routers.calibration import router as calibration_router
 from .routers.corrections import router as corrections_router
 from .routers.dashboard import router as dashboard_router
+from .routers.gallery import router as gallery_router
 from .routers.live import router as live_router
 from .storage.migrations import MigrationRunner
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
@@ -312,6 +314,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         live_router_mod.set_context(global_track_repo=_pipeline.global_track_repo)
 
+    if gallery_repo is not None:
+        gallery_router_mod.set_context(gallery_repo=gallery_repo)
+
     if signal_repo is not None and trajectory_repo is not None and keyframe_repo is not None:
         dashboard_router_mod.set_repos(
             signal=signal_repo,
@@ -353,6 +358,7 @@ def create_app() -> FastAPI:
     app.include_router(calibration_router)
     app.include_router(dashboard_router)
     app.include_router(corrections_router)
+    app.include_router(gallery_router)
     app.include_router(live_router)
 
     @app.get("/health")

@@ -125,7 +125,7 @@ class RedisStreamsTransport:
             await self._redis.xgroup_create(
                 self._config.frames_stream,
                 self._config.consumer_group,
-                id="0",
+                id="$",
                 mkstream=True,
             )
             self._group_created = True

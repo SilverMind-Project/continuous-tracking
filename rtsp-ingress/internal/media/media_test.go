@@ -3,6 +3,8 @@ package media
 import (
 	"image"
 	"testing"
+
+	"github.com/minio/minio-go/v7/pkg/lifecycle"
 )
 
 func solidImage(w, h int, v uint8) *image.Gray {
@@ -29,6 +31,23 @@ func TestEncodeJPEG(t *testing.T) {
 	}
 	if buf.Bytes()[0] != 0xFF || buf.Bytes()[1] != 0xD8 {
 		t.Error("buffer does not start with JPEG SOI marker")
+	}
+}
+
+func TestFramesLifecycle(t *testing.T) {
+	cfg := framesLifecycle()
+	if len(cfg.Rules) != 1 {
+		t.Fatalf("expected 1 lifecycle rule, got %d", len(cfg.Rules))
+	}
+	rule := cfg.Rules[0]
+	if rule.Status != "Enabled" {
+		t.Errorf("rule Status = %q, want Enabled", rule.Status)
+	}
+	if rule.RuleFilter.Prefix != "frames/" {
+		t.Errorf("rule Prefix = %q, want frames/", rule.RuleFilter.Prefix)
+	}
+	if rule.Expiration.Days != lifecycle.ExpirationDays(1) {
+		t.Errorf("rule Expiration.Days = %d, want 1", rule.Expiration.Days)
 	}
 }
 

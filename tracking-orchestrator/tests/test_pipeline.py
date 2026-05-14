@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import pytest
+
+# A capture timestamp that is always "live" (within the 30s age gate).
+# Using the module-load time is sufficient; the tests run in milliseconds.
+_NOW_NS = int(time.time() * 1e9)
 
 from app.calibration.state import AdjacencyEdge as CalibrationAdjacencyEdge
 from app.calibration.state import calibration_state
@@ -86,8 +91,8 @@ class TestPipelineSkeleton:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/42.jpg",
                 frame_index=42,
-                capture_time_unix_ns=1700000000000000000,
-                received_time_unix_ns=1700000000100000000,
+                capture_time_unix_ns=_NOW_NS,
+                received_time_unix_ns=_NOW_NS + 100_000_000,
                 width=640,
                 height=480,
             )
@@ -102,6 +107,31 @@ class TestPipelineSkeleton:
             assert len(cam_events[0].detections) == 0
 
             await pipeline._transport.ack_frame(frame)
+            await pipeline.stop()
+
+    @pytest.mark.asyncio
+    async def test_stale_frame_is_dropped_without_publishing(
+        self, pipeline: FrameProcessingPipeline
+    ) -> None:
+        """Frames older than _MAX_FRAME_AGE_S must not produce tracking events."""
+        stale_ns = int((time.time() - 60) * 1e9)  # 60 s ago, past the 30 s gate
+        with _mock_redis_deps() as (mock_transport, _, _):
+            await pipeline.initialize()
+            frame = FrameReady(
+                camera_id="cam-stale",
+                minio_key="frames/cam-stale/0.jpg",
+                frame_index=0,
+                capture_time_unix_ns=stale_ns,
+                received_time_unix_ns=stale_ns + 100_000_000,
+                width=640,
+                height=480,
+            )
+            await pipeline._process_frame(frame)
+
+            mock_transport.publish_event.assert_not_called()
+            assert pipeline._repo is not None
+            events = list(pipeline._repo._events.values())
+            assert not any(e.camera_id == "cam-stale" for e in events)
             await pipeline.stop()
 
     @pytest.mark.asyncio
@@ -199,8 +229,8 @@ class TestPipelineSkeleton:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/1.jpg",
                 frame_index=1,
-                capture_time_unix_ns=1700000000000000000,
-                received_time_unix_ns=1700000000100000000,
+                capture_time_unix_ns=_NOW_NS,
+                received_time_unix_ns=_NOW_NS + 100_000_000,
                 width=640,
                 height=480,
             )
@@ -213,8 +243,8 @@ class TestPipelineSkeleton:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/2.jpg",
                 frame_index=2,
-                capture_time_unix_ns=1700000001000000000,
-                received_time_unix_ns=1700000001100000000,
+                capture_time_unix_ns=_NOW_NS + 1_000_000_000,
+                received_time_unix_ns=_NOW_NS + 1_100_000_000,
                 width=640,
                 height=480,
             )
@@ -260,8 +290,8 @@ class TestPipelineSkeleton:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/3.jpg",
                 frame_index=3,
-                capture_time_unix_ns=1700000000000000000,
-                received_time_unix_ns=1700000000100000000,
+                capture_time_unix_ns=_NOW_NS,
+                received_time_unix_ns=_NOW_NS + 100_000_000,
                 width=200,
                 height=100,
             )
@@ -274,7 +304,7 @@ class TestPipelineSkeleton:
             assert detections[0].embedding == [1.0] * 768
             assert publish_kwargs["frame_width"] == 200
             assert publish_kwargs["frame_height"] == 100
-            assert publish_kwargs["capture_time_unix_ns"] == 1700000000000000000
+            assert publish_kwargs["capture_time_unix_ns"] == frame.capture_time_unix_ns
 
             await pipeline.stop()
 
@@ -339,8 +369,8 @@ class TestFullPipelineIntegration:
                     camera_id="cam-1",
                     minio_key=f"frames/cam-1/{i}.jpg",
                     frame_index=i,
-                    capture_time_unix_ns=1700000000000000000 + i * 200_000_000,
-                    received_time_unix_ns=1700000000100000000 + i * 200_000_000,
+                    capture_time_unix_ns=_NOW_NS + i * 200_000_000,
+                    received_time_unix_ns=_NOW_NS + 100_000_000 + i * 200_000_000,
                     width=640,
                     height=480,
                 )
@@ -372,8 +402,8 @@ class TestFullPipelineIntegration:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/0.jpg",
                 frame_index=0,
-                capture_time_unix_ns=1700000000000000000,
-                received_time_unix_ns=1700000000100000000,
+                capture_time_unix_ns=_NOW_NS,
+                received_time_unix_ns=_NOW_NS + 100_000_000,
                 width=640,
                 height=480,
             )
@@ -401,8 +431,8 @@ class TestFullPipelineIntegration:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/missing.jpg",
                 frame_index=0,
-                capture_time_unix_ns=1700000000000000000,
-                received_time_unix_ns=1700000000100000000,
+                capture_time_unix_ns=_NOW_NS,
+                received_time_unix_ns=_NOW_NS + 100_000_000,
                 width=0,
                 height=0,
             )
@@ -421,8 +451,8 @@ class TestCameraRowUpsert:
             camera_id=camera_id,
             minio_key=f"frames/{camera_id}/{frame_index}.jpg",
             frame_index=frame_index,
-            capture_time_unix_ns=1700000000000000000,
-            received_time_unix_ns=1700000000100000000,
+            capture_time_unix_ns=_NOW_NS,
+            received_time_unix_ns=_NOW_NS + 100_000_000,
             width=640,
             height=480,
         )

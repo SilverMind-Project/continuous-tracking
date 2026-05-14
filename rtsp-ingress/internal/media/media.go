@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/lifecycle"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
 
@@ -46,25 +47,40 @@ func New(minioClient *minio.Client, bucket string, redisClient *redis.Client, st
 	}
 }
 
-// EnsureBucket creates the target bucket if it does not exist.
+// EnsureBucket creates the target bucket if it does not exist and applies the
+// object lifecycle policy so frames are automatically purged after 1 day.
 func (p *Publisher) EnsureBucket(ctx context.Context) error {
 	exists, err := p.minio.BucketExists(ctx, p.bucket)
 	if err != nil {
 		return fmt.Errorf("bucket exists: %w", err)
 	}
-	if exists {
-		return nil
+	if !exists {
+		if err = p.minio.MakeBucket(ctx, p.bucket, minio.MakeBucketOptions{}); err != nil {
+			resp := minio.ToErrorResponse(err)
+			if resp.Code != "BucketAlreadyOwnedByYou" && resp.Code != "BucketAlreadyExists" {
+				return fmt.Errorf("make bucket: %w", err)
+			}
+		}
 	}
+	if err := p.minio.SetBucketLifecycle(ctx, p.bucket, framesLifecycle()); err != nil {
+		return fmt.Errorf("set bucket lifecycle: %w", err)
+	}
+	return nil
+}
 
-	err = p.minio.MakeBucket(ctx, p.bucket, minio.MakeBucketOptions{})
-	if err == nil {
-		return nil
+// framesLifecycle returns the lifecycle configuration that expires all objects
+// under the frames/ prefix after 1 day.
+func framesLifecycle() *lifecycle.Configuration {
+	cfg := lifecycle.NewConfiguration()
+	cfg.Rules = []lifecycle.Rule{
+		{
+			ID:         "frames-expiry-1d",
+			Status:     "Enabled",
+			RuleFilter: lifecycle.Filter{Prefix: "frames/"},
+			Expiration: lifecycle.Expiration{Days: lifecycle.ExpirationDays(1)},
+		},
 	}
-	resp := minio.ToErrorResponse(err)
-	if resp.Code == "BucketAlreadyOwnedByYou" || resp.Code == "BucketAlreadyExists" {
-		return nil
-	}
-	return fmt.Errorf("make bucket: %w", err)
+	return cfg
 }
 
 // Publish uploads to MinIO, updates the FrameReady message with the object key,

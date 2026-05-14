@@ -44,6 +44,7 @@ from ..domain import (
 from ..inference.detector import PersonDetector
 from ..inference.face_id_client import FaceIdentificationClient
 from ..inference.schemas import DetectionBox, Embedding
+from ..observability import metrics as _metrics
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..storage.base import (
     DementiaSignalRepository,
@@ -78,6 +79,11 @@ from ..transport.redis_streams import (
 from ..transport.revision_publisher import RevisionPublisher
 from ..transport.scene_publisher import SceneSamplesPublisher
 from ..transport.signal_publisher import SignalPublisher
+
+# Frames older than this are replayed backlog, not live feeds.  They are
+# XACK'd normally so the pending-entry list stays clean, but pipeline work
+# (inference, tracking, DB writes) is skipped entirely.
+_MAX_FRAME_AGE_S: float = 30.0
 
 logger = get_logger(__name__)
 
@@ -602,6 +608,20 @@ class FrameProcessingPipeline:
         9. Persist identity revisions.
         10. Publish tracking event.
         """
+        if frame.capture_time_unix_ns > 0:
+            age_s = datetime.now(UTC).timestamp() - frame.capture_time_unix_ns / 1e9
+            if age_s > _MAX_FRAME_AGE_S:
+                logger.warning(
+                    "Stale frame dropped",
+                    camera_id=frame.camera_id,
+                    frame_index=frame.frame_index,
+                    age_s=round(age_s, 1),
+                )
+                _metrics.metrics.frames_dropped_stale_total.labels(
+                    camera_id=frame.camera_id
+                ).inc()
+                return
+
         if self._detector is None or self._tracklet_manager is None or self._tracker is None:
             # Skeleton mode: produce a zero-detection event
             await self._skeleton_frame(frame)

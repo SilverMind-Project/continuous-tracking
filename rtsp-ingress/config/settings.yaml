@@ -28,6 +28,6 @@ cognitive_companion:
   reconcile_interval_s: 60
 
 defaults:
-  frame_interval_ms: 500
+  frame_interval_ms: 1000
   motion_threshold: 0.02
   reconnect_backoff_s: 2.0
