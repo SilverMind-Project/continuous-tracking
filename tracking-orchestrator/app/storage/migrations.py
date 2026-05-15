@@ -175,16 +175,51 @@ class MigrationRunner:
         which PostgreSQL wraps in an implicit transaction — breaking DDL like
         CREATE MATERIALIZED VIEW ... WITH (timescaledb.continuous).  Executing
         one statement at a time avoids that implicit transaction.
+
+        Dollar-quoted blocks (``$$...$$``, ``$tag$...$tag$``) are kept intact
+        so that ``DO`` blocks and function bodies survive the split.
         """
+        import re
+
         stmts = []
-        for raw in sql.split(";"):
-            stmt = raw.strip()
+        pos = 0
+        n = len(sql)
+        while pos < n:
+            # Find the next semicolon that is NOT inside a dollar-quoted block
+            semicolon = -1
+            i = pos
+            while i < n:
+                ch = sql[i]
+                if ch == "$":
+                    # Check for dollar-quote start: $tag$
+                    m = re.match(r"\$([^$]*?)\$", sql[i:])
+                    if m:
+                        tag = m.group(0)  # e.g. $$ or $func$
+                        # Find matching close tag
+                        close = sql.find(tag, i + len(tag))
+                        if close != -1:
+                            i = close + len(tag)
+                            continue
+                if ch == ";":
+                    semicolon = i
+                    break
+                i += 1
+
+            stmt = sql[pos:].strip() if semicolon == -1 else sql[pos:semicolon].strip()
+
             # Drop pure-comment blocks that have no executable SQL
             non_comment = "\n".join(
-                line for line in stmt.splitlines() if not line.strip().startswith("--")
+                line
+                for line in stmt.splitlines()
+                if not line.strip().startswith("--")
             ).strip()
             if non_comment:
                 stmts.append(stmt)
+
+            if semicolon == -1:
+                break
+            pos = semicolon + 1
+
         return stmts
 
     async def _apply_up(self, conn: Any, base_name: str) -> None:

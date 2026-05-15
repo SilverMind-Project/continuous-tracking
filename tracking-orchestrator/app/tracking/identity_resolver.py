@@ -100,6 +100,14 @@ class ResolverConfig:
     # refuse to commit — the resolver must wait for stronger evidence.
     commit_margin_dense: float = 0.20
 
+    # Maximum age (seconds) of the most recent evidence-backed commit
+    # before the prior alone is no longer sufficient to maintain an
+    # identity.  Set longer than the face-id cooldown (default 5 s) so
+    # identity survives gaps between face-id calls, but short enough
+    # that a person who left and returned hours later still requires
+    # fresh evidence.
+    prior_maintenance_max_age_s: float = 120.0
+
 
 class IdentityResolver:
     """Bayesian identity resolver with retroactive revision.
@@ -235,10 +243,24 @@ class IdentityResolver:
 
         if not relevant_anchors:
             # No face evidence: return uniform (identity-neutral).
+            logger.debug(
+                "face_no_match_for_gt",
+                global_track_id=gt.global_track_id,
+                gt_tracklet_count=len(gt_tracklet_ids),
+                face_anchor_count=len(face_anchors),
+            )
             return PosteriorDist({})
 
         # Take the strongest face anchor (highest confidence * quality).
         best = max(relevant_anchors, key=lambda fa: fa.confidence * fa.quality)
+
+        logger.debug(
+            "face_anchor_matched",
+            global_track_id=gt.global_track_id,
+            person_id=best.person_id,
+            confidence=round(best.confidence, 3),
+            anchor_count=len(relevant_anchors),
+        )
 
         # p_face: probability that this anchor is correct.
         # Monotone function of confidence and quality.
@@ -290,9 +312,19 @@ class IdentityResolver:
                 limit=20,
             )
         except Exception:
+            logger.warning(
+                "reid_gallery_lookup_failed",
+                global_track_id=gt.global_track_id,
+                exc_info=True,
+            )
             return PosteriorDist({})
 
         if not recent:
+            logger.debug(
+                "reid_no_gallery_entries",
+                global_track_id=gt.global_track_id,
+                tracklet_count=len(gt.tracklet_ids),
+            )
             return PosteriorDist({})
 
         # Compute mean embedding from recent gallery entries.
@@ -307,9 +339,20 @@ class IdentityResolver:
                 limit=20,
             )
         except Exception:
+            logger.warning(
+                "reid_search_failed",
+                global_track_id=gt.global_track_id,
+                query_dim=len(query),
+                exc_info=True,
+            )
             return PosteriorDist({})
 
         if not similar:
+            logger.debug(
+                "reid_no_similar_matches",
+                global_track_id=gt.global_track_id,
+                query_entries=len(recent),
+            )
             return PosteriorDist({})
 
         # Map hits to per-identity scores using logistic curve.
@@ -327,6 +370,17 @@ class IdentityResolver:
 
         if not avg:
             return PosteriorDist({})
+
+        # Log top ReID match for diagnostics.
+        top_reid = max(avg.items(), key=lambda x: x[1])
+        logger.debug(
+            "reid_top_match",
+            global_track_id=gt.global_track_id,
+            top_identity=top_reid[0],
+            top_score=round(top_reid[1], 4),
+            candidate_count=len(avg),
+            gallery_entries_searched=len(similar),
+        )
 
         return PosteriorDist(avg)
 
@@ -433,6 +487,20 @@ class IdentityResolver:
             top_id in face_likelihood.distribution or top_id in reid_likelihood.distribution
         )
 
+        # When the top identity matches the current assignment AND the
+        # most recent evidence-backed commit was recent enough, allow
+        # the prior alone to maintain the identity across frames where
+        # face-id is on cooldown or ReID is momentarily quiet.  Without
+        # this gate every non-evidence frame would clear the assignment.
+        prev_id = gt.current_identity_id
+        identity_unchanged = top_id == prev_id and prev_id is not None
+        within_maintenance_window = False
+        if identity_unchanged and not has_evidence:
+            age_s = (captured_at - gt.last_seen_at).total_seconds()
+            within_maintenance_window = age_s <= self._config.prior_maintenance_max_age_s
+
+        evidence_ok = has_evidence or within_maintenance_window
+
         # Detect dense scenes: when ≥ 2 candidate identities each have
         # posterior > 0.3, escalate thresholds to prevent confident-but-wrong
         # commits from ambiguous ReID evidence in multi-person frames.
@@ -446,12 +514,11 @@ class IdentityResolver:
         )
 
         # Apply commit rule.
-        if has_evidence and top_prob >= effective_commit_prob and margin >= effective_commit_margin:
+        if evidence_ok and top_prob >= effective_commit_prob and margin >= effective_commit_margin:
             new_id = top_id if top_id != "UNKNOWN" else None
         else:
             new_id = None  # Committed as UNKNOWN.
 
-        prev_id = gt.current_identity_id
         revises = new_id != prev_id
 
         reason = ""
@@ -473,6 +540,28 @@ class IdentityResolver:
             metrics.metrics.identity_commits_total.labels(
                 source="face" if top_id in face_likelihood.distribution else "reid",
             ).inc()
+
+        # Diagnostic logging: surface why a commit was accepted or refused.
+        if new_id is None and prev_id is not None:
+            logger.debug(
+                "identity_not_committed",
+                global_track_id=gt.global_track_id,
+                top_id=top_id,
+                top_prob=round(top_prob, 4),
+                margin=round(margin, 4),
+                has_evidence=has_evidence,
+                within_maintenance_window=within_maintenance_window,
+                evidence_ok=evidence_ok,
+                prev_id=prev_id,
+            )
+        elif within_maintenance_window:
+            logger.debug(
+                "identity_maintained_by_prior",
+                global_track_id=gt.global_track_id,
+                identity_id=new_id,
+                top_prob=round(top_prob, 4),
+                age_s=round((captured_at - gt.last_seen_at).total_seconds(), 1),
+            )
 
         return IdentityDecision(
             global_track_id=gt.global_track_id,

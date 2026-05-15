@@ -47,6 +47,12 @@ class CrossCamConfig:
     # Minimum combined score to link two tracklets.
     min_link_score: float = 0.55
 
+    # When two UNKNOWN tracklets have appearance similarity above this
+    # threshold they are merged into the same GlobalTrack even when on
+    # the same camera.  Prevents proliferation of duplicate UNKNOWN
+    # GlobalTracks for the same person across tracklet lifecycles.
+    unknown_merge_appearance_threshold: float = 0.92
+
 
 @dataclass
 class TrackletPairScore:
@@ -284,8 +290,42 @@ class CrossCameraAssociator:
             for gt in active_gts:
                 if gt.state == "closed":
                     continue
-                # Skip if this GlobalTrack already has a tracklet on the same camera.
+                # Same-camera UNKNOWN merge: when this GT and the new tracklet
+                # are both UNKNOWN and on the same camera, merge them if their
+                # appearance similarity is very high.  This prevents every
+                # tracklet lifecycle from creating a new GlobalTrack UUID.
                 if t.camera_id in gt.camera_ids:
+                    if gt.current_identity_id is None:
+                        # Find an existing tracklet from this GT on this camera.
+                        existing_tid_same = next(
+                            (
+                                tid
+                                for tid, cid in zip(gt.tracklet_ids, gt.camera_ids, strict=False)
+                                if cid == t.camera_id
+                            ),
+                            None,
+                        )
+                        existing_tl_same = tracklet_by_id.get(existing_tid_same) if existing_tid_same else None
+                        if existing_tl_same is not None:
+                            app_sim = await self._approximate_gallery_similarity(t, existing_tl_same)
+                            if app_sim >= self._config.unknown_merge_appearance_threshold:
+                                logger.debug(
+                                    "unknown_same_camera_merge",
+                                    new_tracklet=t.tracklet_id,
+                                    existing_gt=gt.global_track_id,
+                                    appearance_sim=round(app_sim, 4),
+                                    threshold=self._config.unknown_merge_appearance_threshold,
+                                )
+                                merged = await self._repo.merge_tracklets(
+                                    tracklet_ids=[t.tracklet_id],
+                                    camera_ids=[t.camera_id],
+                                    existing=gt,
+                                )
+                                await _refresh(merged.global_track_id)
+                                assignment_map[t.tracklet_id] = merged.global_track_id
+                                newly_assigned.add(t.tracklet_id)
+                                extended = True
+                                break
                     continue
                 # Check if any camera in this GlobalTrack is adjacent to t's camera.
                 # Time budget: the max transition time, capped by the age of the new

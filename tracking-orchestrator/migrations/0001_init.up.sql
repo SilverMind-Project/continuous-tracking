@@ -126,7 +126,7 @@ CREATE TABLE global_tracks (
     tracklet_ids    UUID[] NOT NULL DEFAULT '{}',
     started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    current_identity_id UUID,
+    current_identity_id TEXT,
     state           TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'closed')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -145,10 +145,10 @@ CREATE TABLE identity_revisions (
     global_track_id        UUID NOT NULL REFERENCES global_tracks(global_track_id) ON DELETE CASCADE,
     tracklet_ids           UUID[] NOT NULL DEFAULT '{}',
     candidates             JSONB NOT NULL DEFAULT '[]',
-    map_identity_id        UUID,
+    map_identity_id        TEXT,
     posterior_entropy      REAL NOT NULL,
-    previous_identity_id   UUID,
-    new_identity_id        UUID,
+    previous_identity_id   TEXT,
+    new_identity_id        TEXT,
     reason                 TEXT NOT NULL DEFAULT '',
     evidence               JSONB NOT NULL DEFAULT '{}',
     PRIMARY KEY (revision_id, revision_time)
@@ -162,7 +162,7 @@ CREATE INDEX idx_identity_revisions_track ON identity_revisions(global_track_id,
 -- Identities and gallery embeddings
 -- ---------------------------------------------------------------------------
 CREATE TABLE identities (
-    identity_id   UUID PRIMARY KEY,
+    identity_id   TEXT PRIMARY KEY,
     display_name  TEXT NOT NULL DEFAULT '',
     metadata      JSONB NOT NULL DEFAULT '{}',
     is_active     BOOLEAN NOT NULL DEFAULT true,
@@ -176,7 +176,7 @@ CREATE INDEX idx_identities_active ON identities(is_active) WHERE is_active = tr
 -- reid_gallery.embedding is nullable: the pipeline uses NULL when ReID is unavailable.
 CREATE TABLE reid_gallery (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    identity_id       UUID NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    identity_id       TEXT NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
     embedding         vector(768),
     quality           REAL NOT NULL DEFAULT 1.0,
     origin_tracklet_id UUID REFERENCES tracklets(tracklet_id) ON DELETE SET NULL,
@@ -200,7 +200,7 @@ CREATE INDEX idx_reid_gallery_origin_tracklet ON reid_gallery(origin_tracklet_id
 CREATE TABLE person_activities (
     activity_id       UUID NOT NULL,
     occurred_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    identity_id       UUID REFERENCES identities(identity_id) ON DELETE SET NULL,
+    identity_id       TEXT REFERENCES identities(identity_id) ON DELETE SET NULL,
     camera_id         TEXT NOT NULL REFERENCES cameras(camera_id) ON DELETE CASCADE,
     activity_type     TEXT NOT NULL CHECK (activity_type IN (
         'entry',
@@ -249,7 +249,7 @@ CREATE UNIQUE INDEX idx_assignments_stream_id ON stream_assignments(stream_id);
 CREATE TABLE person_trajectories (
     id                  BIGSERIAL,
     observed_at         TIMESTAMPTZ NOT NULL,
-    identity_id         UUID NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    identity_id         TEXT NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
     global_track_id     UUID NOT NULL REFERENCES global_tracks(global_track_id) ON DELETE CASCADE,
     room_name           TEXT NOT NULL DEFAULT '',
     ground_x            DOUBLE PRECISION NOT NULL DEFAULT 0.0,
@@ -270,7 +270,7 @@ CREATE INDEX idx_person_trajectories_global_track ON person_trajectories (global
 -- ---------------------------------------------------------------------------
 CREATE TABLE room_dwells (
     id               BIGSERIAL PRIMARY KEY,
-    identity_id      UUID NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    identity_id      TEXT NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
     global_track_id  UUID REFERENCES global_tracks(global_track_id) ON DELETE SET NULL,
     room_name        TEXT NOT NULL,
     entered_at       TIMESTAMPTZ NOT NULL,
@@ -309,7 +309,7 @@ CREATE INDEX idx_tagged_keyframes_expires ON tagged_keyframes (expires_at);
 -- ---------------------------------------------------------------------------
 CREATE TABLE dementia_signals (
     signal_id        UUID        NOT NULL DEFAULT gen_random_uuid(),
-    identity_id      UUID        NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    identity_id      TEXT        NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
     signal_kind      VARCHAR(64) NOT NULL,
     severity         VARCHAR(16) NOT NULL CHECK (severity IN ('info', 'warning', 'emergency')),
     value            FLOAT       NOT NULL,

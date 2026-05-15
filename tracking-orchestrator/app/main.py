@@ -312,7 +312,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             global_track_repo=_pipeline.global_track_repo,
             publisher=_pipeline.revision_publisher,
         )
-        live_router_mod.set_context(global_track_repo=_pipeline.global_track_repo)
+        live_router_mod.set_context(
+            global_track_repo=_pipeline.global_track_repo,
+            keyframe_repo=keyframe_repo,
+            gallery_repo=gallery_repo,
+        )
 
     if gallery_repo is not None:
         gallery_router_mod.set_context(gallery_repo=gallery_repo)

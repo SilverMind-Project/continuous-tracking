@@ -707,6 +707,21 @@ class FrameProcessingPipeline:
                     domain_detections=domain_detections,
                 )
 
+        # Ensure face-anchor identities exist in the identities table so that
+        # downstream FK references (trajectory points, dwells, signals) resolve.
+        if face_anchors and self._gallery_repo is not None:
+            seen: set[str] = set()
+            for fa in face_anchors:
+                if fa.person_id and fa.person_id != "unknown" and fa.person_id not in seen:
+                    seen.add(fa.person_id)
+                    await self._gallery_repo.upsert_identity(
+                        Identity(
+                            identity_id=fa.person_id,
+                            display_name=fa.person_id,
+                            enrolled_at=now,
+                        )
+                    )
+
         # ---- M5: Cross-camera association ----
         active_tracklets = (
             self._tracklet_manager.get_active_tracklets() if self._tracklet_manager else []
@@ -1052,6 +1067,12 @@ class FrameProcessingPipeline:
                 tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(det.detection_id)
 
             if not tracklet_id:
+                logger.debug(
+                    "face_anchor_dropped_no_tracklet",
+                    person_id=face.person_id,
+                    detection_id=det.detection_id,
+                    camera_id=camera_id,
+                )
                 continue
 
             face_anchors.append(
@@ -1065,4 +1086,11 @@ class FrameProcessingPipeline:
             )
 
         self._last_face_id_call[camera_id] = datetime.now(UTC)
+        if face_anchors:
+            logger.debug(
+                "face_anchors_created",
+                camera_id=camera_id,
+                anchor_count=len(face_anchors),
+                identities=[fa.person_id for fa in face_anchors],
+            )
         return face_anchors

@@ -272,7 +272,7 @@ class TestIdentityResolver:
     async def test_posterior_combines_prior_and_face(
         self,
     ) -> None:
-        """Prior + face evidence should combine to strengthen the posterior."""
+        """Prior alone maintains an existing identity when within the maintenance window."""
         identities = [
             _make_identity("grandma", "Grandma"),
             _make_identity("dad", "Dad"),
@@ -281,7 +281,8 @@ class TestIdentityResolver:
 
         # Start with grandma as prior.
         gt = _make_gt(current_identity_id="grandma")
-        # No face anchor -> prior should still favor grandma.
+        # No face anchor, no ReID -> prior alone should maintain grandma
+        # when within the prior_maintenance_max_age_s window.
         outcome = await resolver.resolve(
             global_tracks=[gt],
             new_face_anchors=[],
@@ -289,12 +290,11 @@ class TestIdentityResolver:
         )
 
         decision = outcome.decisions[0]
-        # Prior alone favors grandma but may not meet commit_prob=0.85.
-        # The top identity should still be grandma.
+        # Prior alone favors grandma and maintains it (identity_unchanged gate).
         top_id, _ = decision.posterior.top_identity()
         assert top_id == "grandma"
-        # With no face/ReID evidence, commit_prob is not met -> UNKNOWN.
-        assert decision.identity_id is None
+        assert decision.identity_id == "grandma"
+        assert decision.revises_previous is False
 
     @pytest.mark.asyncio
     async def test_identity_decision_fields(self) -> None:

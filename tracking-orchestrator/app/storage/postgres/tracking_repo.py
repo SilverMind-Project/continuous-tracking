@@ -121,7 +121,7 @@ _SQL_SAVE_IDENTITY_REVISION = """
                                     posterior_entropy, previous_identity_id,
                                     new_identity_id, reason, evidence)
     VALUES ($1, $2, $3, $4::uuid[], $5::jsonb, $6, $7, $8, $9, $10, $11::jsonb)
-    ON CONFLICT (revision_id) DO NOTHING
+    ON CONFLICT (revision_id, revision_time) DO NOTHING
 """
 
 _SQL_LIST_IDENTITY_REVISIONS = """

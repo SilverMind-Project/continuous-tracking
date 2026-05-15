@@ -6,15 +6,19 @@ low-rate reads live here (the hot tracking-event path is the Redis stream).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from structlog import get_logger
 
 from ..storage.base import (
+    GalleryRepository,
     GlobalTrackRepository,
+    InMemoryGalleryRepository,
     InMemoryGlobalTrackRepository,
+    InMemoryKeyframeRepository,
+    KeyframeRepository,
 )
 
 logger = get_logger(__name__)
@@ -30,16 +34,19 @@ router = APIRouter(tags=["live-internal"])
 @dataclass
 class _LiveContext:
     global_track_repo: GlobalTrackRepository
-    feature_flags: dict[str, bool]
+    keyframe_repo: KeyframeRepository
+    gallery_repo: GalleryRepository
+    feature_flags: dict[str, bool] = field(default_factory=lambda: {
+        "retroactive_revision_enabled": True,
+        "cross_camera_association_enabled": True,
+        "manual_corrections_enabled": True,
+    })
 
 
 _ctx: _LiveContext = _LiveContext(
     global_track_repo=InMemoryGlobalTrackRepository(),
-    feature_flags={
-        "retroactive_revision_enabled": True,
-        "cross_camera_association_enabled": True,
-        "manual_corrections_enabled": True,
-    },
+    keyframe_repo=InMemoryKeyframeRepository(),
+    gallery_repo=InMemoryGalleryRepository(),
 )
 
 
@@ -49,11 +56,15 @@ def get_context() -> _LiveContext:
 
 def set_context(
     global_track_repo: GlobalTrackRepository,
+    keyframe_repo: KeyframeRepository | None = None,
+    gallery_repo: GalleryRepository | None = None,
     feature_flags: dict[str, bool] | None = None,
 ) -> None:
     global _ctx
     _ctx = _LiveContext(
         global_track_repo=global_track_repo,
+        keyframe_repo=keyframe_repo or InMemoryKeyframeRepository(),
+        gallery_repo=gallery_repo or InMemoryGalleryRepository(),
         feature_flags=feature_flags or _ctx.feature_flags,
     )
 
@@ -75,7 +86,10 @@ async def list_global_tracks(
         # is added we simply honor the request shape for callers that will
         # later filter server-side.  Today this is equivalent to open_only.
         pass
-    return {"tracks": [_track_to_dict(t) for t in tracks], "count": len(tracks)}
+    result = []
+    for t in tracks:
+        result.append(await _track_to_dict(t, ctx.keyframe_repo))
+    return {"tracks": result, "count": len(result)}
 
 
 @router.get("/internal/global_tracks/{global_track_id}")
@@ -93,7 +107,37 @@ async def get_global_track(
                 "message": f"GlobalTrack {global_track_id} not found.",
             },
         )
-    return _track_to_dict(track)
+    return await _track_to_dict(track, ctx.keyframe_repo)
+
+
+# ---------------------------------------------------------------------------
+# GET /internal/identities
+# ---------------------------------------------------------------------------
+
+
+@router.get("/internal/identities")
+async def list_identities(
+    active_only: bool = Query(True, description="Only return active identities"),
+    ctx: _LiveContext = Depends(get_context),
+) -> dict[str, Any]:
+    """Return all known named identities from the ReID gallery.
+
+    Used by the CC identity-corrections UI to populate the identity picker
+    so caregivers select from names rather than typing raw UUIDs.
+    """
+    identities = await ctx.gallery_repo.list_identities(active_only=active_only)
+    return {
+        "identities": [
+            {
+                "identity_id": i.identity_id,
+                "display_name": i.display_name,
+                "enrolled_at": i.enrolled_at.isoformat(),
+                "is_active": i.is_active,
+            }
+            for i in identities
+        ],
+        "count": len(identities),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +170,11 @@ async def get_feature_flags(
 # ---------------------------------------------------------------------------
 
 
-def _track_to_dict(track: Any) -> dict[str, Any]:
+async def _track_to_dict(track: Any, keyframe_repo: KeyframeRepository) -> dict[str, Any]:
+    keyframes = await keyframe_repo.list_keyframes(
+        global_track_id=track.global_track_id, limit=1
+    )
+    latest_minio_key: str | None = keyframes[0].minio_key if keyframes else None
     return {
         "global_track_id": track.global_track_id,
         "camera_ids": list(track.camera_ids),
@@ -135,4 +183,5 @@ def _track_to_dict(track: Any) -> dict[str, Any]:
         "started_at": track.started_at.isoformat(),
         "last_seen_at": track.last_seen_at.isoformat(),
         "state": track.state,
+        "latest_keyframe_minio_key": latest_minio_key,
     }

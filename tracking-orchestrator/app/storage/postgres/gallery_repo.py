@@ -79,6 +79,7 @@ _SQL_SEARCH_SIMILAR = """
     FROM continuous_tracking.reid_gallery rg
     LEFT JOIN continuous_tracking.tracklets t ON rg.origin_tracklet_id = t.tracklet_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
+      AND rg.identity_id IS NOT NULL AND rg.identity_id != ''
       AND ($2 IS TRUE
            OR (
                SELECT is_active
@@ -86,7 +87,7 @@ _SQL_SEARCH_SIMILAR = """
                WHERE identity_id = rg.identity_id
            ))
       AND ($4::text IS NULL OR t.camera_id = $4)
-      AND ($5 IS NULL OR rg.seen_at > now() - ($6::integer || 'seconds')::interval)
+      AND ($5::integer IS NULL OR rg.seen_at > now() - ($6::integer || 'seconds')::interval)
     ORDER BY rg.embedding <=> $3::vector
     LIMIT $7
 """
@@ -95,7 +96,7 @@ _SQL_LIST_GALLERY_FOR_TRACKLETS = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
            rg.seen_at, rg.face_confirmed
     FROM continuous_tracking.reid_gallery rg
-    WHERE rg.origin_tracklet_id = ANY($1::text[])
+    WHERE rg.origin_tracklet_id = ANY($1::uuid[])
     ORDER BY rg.seen_at DESC
     LIMIT $2
 """
