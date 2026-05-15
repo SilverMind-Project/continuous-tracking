@@ -95,17 +95,17 @@ IP Cameras (RTSP)
 │   ├── app/domain/                Frozen dataclasses (Detection, Tracklet, GlobalTrack, …)
 │   ├── app/inference/             Triton gRPC client (delegates to triton_shared) + ReID/Pose wrappers
 │   ├── app/tracking/              BoT-SORT, identity resolver, cross-camera association
-│   ├── app/trajectory/            Trajectory writer + dementia signal detectors
+│   ├── app/trajectory/            Trajectory writer, dementia signal detectors, posture classifier, motion energy, robust stats
 │   ├── app/transport/             Redis Streams codec (protobuf), publishers
 │   ├── app/cli.py                 ``cts-db`` migration CLI (migrate / rollback / status)
 │   ├── app/storage/               Repository protocols, InMemory impls, Postgres impls, MigrationRunner
-│   ├── app/routers/               Internal FastAPI endpoints
+│   ├── app/routers/               Internal FastAPI endpoints (dashboard, live, calibration, gallery, corrections, trajectory)
 │   ├── app/observability/         Prometheus metrics
 │   ├── app/calibration/           Homography calibration state
 │   ├── app/sampling/              Keyframe sampler
-│   ├── app/pipeline/              Frame processing pipeline wiring
+│   ├── app/pipeline/              Frame processing pipeline (detection, tracking, pose, ReID, privacy enforcement)
 │   ├── app/proto/                 Generated protobuf Python bindings (committed)
-│   └── migrations/                SQL migrations (0001–0002, .up.sql/.down.sql pairs, rolled up)
+│   └── migrations/                SQL migrations (0001–0006, .up.sql/.down.sql pairs)
 ├── triton-models/                 Triton model configs + export/download scripts
 │   ├── person-detector/           YOLO26L ONNX (INT8)
 │   ├── clip-vision/               CLIP ViT-L/14 ONNX (INT8)
@@ -205,7 +205,8 @@ Retroactive revision: when a committed identity is later overturned, an `Identit
 | `structlog` | Structured JSON logging — never `logging.getLogger` or `print` |
 | `numpy` | Frame data and embedding arithmetic |
 | `opencv-python-headless` | Image preprocessing — `cv2.resize(INTER_LINEAR)` for all letterbox/crop resizing |
-| `scipy` | Hungarian assignment (`linear_sum_assignment`) for tracking |
+| `scipy` | Hungarian assignment (`linear_sum_assignment`) for tracking; robust statistics for baselines |
+| `shapely>=2.0` | Polygon containment for privacy zone enforcement |
 | `protobuf` | Message contracts; generated bindings committed in `app/proto/` |
 | `prometheus-client` | Metrics exposition at `GET /metrics` |
 | `pytest` + `pytest-asyncio` | Test runner; all repo tests are `async def` |
@@ -274,8 +275,12 @@ cts-db status           # show applied / pending
 
 | File | Contents |
 | --- | --- |
-| `0001_init` | All transactional DDL: tables, hypertables, indexes, triggers (rolled up from 0001–0005) |
+| `0001_init` | All transactional DDL: tables, hypertables, indexes, triggers |
 | `0002_continuous_aggregates` | `continuous_tracking.dementia_signals_daily` continuous aggregate + refresh policy (non-transactional) |
+| `0003_schema_move` | Schema reorganization |
+| `0004_identity_id_text` | Change identity_id columns to TEXT |
+| `0005_pose_columns` | `motion_energy` on person_trajectories; `min_motion_energy`, `still_seconds` on room_dwells |
+| `0006_signal_algo_version` | `algorithm_version` on dementia_signals |
 
 **DATABASE_URL**: asyncpg expects a plain `postgresql://` DSN. If a `postgresql+asyncpg://` (SQLAlchemy-style) URL is provided, the `_normalize_dsn()` helper strips the `+asyncpg` prefix automatically.
 
@@ -446,7 +451,6 @@ RTSP ingest: go2rtc sidecar
 | ID | Severity | Description |
 | --- | --- | --- |
 | TD-003 | Medium | Revision stream consumer group pre-created by publisher instead of admin tooling |
-| TD-005 | Low | PoseEstimator (pose-rtmpose) is implemented but not wired into the pipeline |
 | TD-006 | Low | `tracking.responses` stream (FrameResponse proto) has publisher but no consumer |
 | TD-007 | Low | `PersonTrackingService` (CC) and CTS identity resolver run parallel identity paths; face anchors from person-identification-service are now integrated (Phase 2, May 2026) but not yet validated end-to-end |
 

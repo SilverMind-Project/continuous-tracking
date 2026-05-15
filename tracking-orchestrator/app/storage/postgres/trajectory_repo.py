@@ -21,24 +21,27 @@ logger = get_logger(__name__)
 _SQL_INSERT_TRAJECTORY = """
 INSERT INTO continuous_tracking.person_trajectories
     (observed_at, identity_id, global_track_id, room_name,
-     ground_x, ground_y, posture, identity_confidence)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ground_x, ground_y, posture, identity_confidence, motion_energy)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 """
 
 _SQL_INSERT_DWELL = """
 INSERT INTO continuous_tracking.room_dwells
     (identity_id, global_track_id, room_name, entered_at,
-     entry_confidence, primary_posture, activity_summary)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+     entry_confidence, primary_posture, activity_summary,
+     min_motion_energy, still_seconds)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id
 """
 
 _SQL_UPDATE_DWELL = """
 UPDATE continuous_tracking.room_dwells
-SET exited_at        = $1,
-    duration_seconds = $2,
-    primary_posture  = $3,
-    activity_summary = $4
+SET exited_at         = $1,
+    duration_seconds  = $2,
+    primary_posture   = $3,
+    activity_summary  = $4,
+    min_motion_energy = $6,
+    still_seconds     = $7
 WHERE id = $5
 """
 
@@ -55,7 +58,7 @@ LIMIT 1
 
 _SQL_LIST_TRAJECTORY = """
 SELECT identity_id, global_track_id, observed_at, room_name,
-       ground_x, ground_y, posture, identity_confidence
+       ground_x, ground_y, posture, identity_confidence, motion_energy
 FROM continuous_tracking.person_trajectories
 WHERE TRUE
 """
@@ -63,7 +66,8 @@ WHERE TRUE
 _SQL_LIST_DWELLS = """
 SELECT id, identity_id, global_track_id, room_name,
        entered_at, exited_at, duration_seconds,
-       entry_confidence, primary_posture, activity_summary
+       entry_confidence, primary_posture, activity_summary,
+       min_motion_energy, still_seconds
 FROM continuous_tracking.room_dwells
 WHERE TRUE
 """
@@ -93,6 +97,7 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
                 point.ground_y,
                 point.posture,
                 point.identity_confidence,
+                point.motion_energy,
             )
 
     async def save_room_dwell(self, dwell: RoomDwell) -> None:
@@ -106,6 +111,8 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
                 dwell.entry_confidence,
                 dwell.primary_posture,
                 json.dumps(dwell.activity_summary),
+                dwell.min_motion_energy,
+                dwell.still_seconds,
             )
             if row is not None:
                 db_id: int = row["id"]
@@ -130,6 +137,8 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
                 dwell.primary_posture,
                 json.dumps(dwell.activity_summary),
                 db_id,
+                dwell.min_motion_energy,
+                dwell.still_seconds,
             )
 
     async def get_open_dwell(self, identity_id: str, global_track_id: str) -> RoomDwell | None:
@@ -208,6 +217,7 @@ def _row_to_point(row: Any) -> PersonTrajectoryPoint:
         ground_y=float(row["ground_y"]),
         posture=row["posture"],
         identity_confidence=float(row["identity_confidence"]),
+        motion_energy=row.get("motion_energy"),
     )
 
 
@@ -227,5 +237,7 @@ def _row_to_dwell(row: Any) -> RoomDwell:
         duration_seconds=row.get("duration_seconds"),
         entry_confidence=float(row["entry_confidence"]),
         primary_posture=row["primary_posture"],
+        min_motion_energy=row.get("min_motion_energy"),
+        still_seconds=int(row.get("still_seconds", 0)),
         activity_summary=summary,
     )

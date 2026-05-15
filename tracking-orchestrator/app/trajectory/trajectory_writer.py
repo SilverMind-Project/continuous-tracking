@@ -12,8 +12,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from ..domain import FloorPoint, PersonTrajectoryPoint, RoomDwell
+from ..domain import FloorPoint, PersonTrajectoryPoint, PostureType, RoomDwell
 from ..storage.base import TrajectoryRepository
+
+# When motion_energy is below this threshold the frame is considered "still".
+_STILL_ENERGY_FLOOR = 0.005
 
 
 class TrajectoryWriter:
@@ -31,6 +34,8 @@ class TrajectoryWriter:
             floor_point=FloorPoint(3500, 2100),
             captured_at=datetime.now(UTC),
             identity_confidence=0.92,
+            posture="standing",
+            motion_energy=0.012,
         )
 
         # Called when a global track is closed.
@@ -43,6 +48,10 @@ class TrajectoryWriter:
         self._current_room: dict[str, str] = {}
         # Open dwell per global_track_id (not yet closed/exited).
         self._open_dwell: dict[str, RoomDwell] = {}
+        # Per-dwell posture counts for modal calculation.
+        self._dwell_posture_counts: dict[str, dict[str, int]] = {}
+        # Contiguous still-second accumulator per dwell.
+        self._dwell_still_acc: dict[str, int] = {}
 
     async def write(
         self,
@@ -52,6 +61,8 @@ class TrajectoryWriter:
         floor_point: FloorPoint,
         captured_at: datetime,
         identity_confidence: float = 0.0,
+        posture: PostureType = "unknown",
+        motion_energy: float | None = None,
     ) -> PersonTrajectoryPoint:
         """Write one trajectory point and update the room dwell state.
 
@@ -62,6 +73,8 @@ class TrajectoryWriter:
             floor_point: ground-plane position in millimeters.
             captured_at: wall-clock time of the observation.
             identity_confidence: posterior probability of the top identity.
+            posture: classified posture for this frame.
+            motion_energy: mean keypoint velocity (None when pose unavailable).
 
         Returns:
             The persisted PersonTrajectoryPoint.
@@ -73,13 +86,20 @@ class TrajectoryWriter:
             room_name=room_name,
             ground_x=floor_point.x_mm / 1000.0,
             ground_y=floor_point.y_mm / 1000.0,
-            posture="unknown",
+            posture=posture,
             identity_confidence=identity_confidence,
+            motion_energy=motion_energy,
         )
         await self._repo.save_trajectory_point(point)
 
         await self._handle_dwell(
-            identity_id, global_track_id, room_name, captured_at, identity_confidence
+            identity_id,
+            global_track_id,
+            room_name,
+            captured_at,
+            identity_confidence,
+            posture,
+            motion_energy,
         )
 
         return point
@@ -89,6 +109,9 @@ class TrajectoryWriter:
         dwell = self._open_dwell.pop(global_track_id, None)
         if dwell is not None:
             duration = int((closed_at - dwell.entered_at).total_seconds())
+            posture_counts = self._dwell_posture_counts.pop(global_track_id, {})
+            modal_posture = _modal_posture(posture_counts)
+            still_seconds = self._dwell_still_acc.pop(global_track_id, 0)
             closed = RoomDwell(
                 dwell_id=dwell.dwell_id,
                 identity_id=dwell.identity_id,
@@ -98,7 +121,9 @@ class TrajectoryWriter:
                 exited_at=closed_at,
                 duration_seconds=duration,
                 entry_confidence=dwell.entry_confidence,
-                primary_posture="unknown",
+                primary_posture=modal_posture,
+                min_motion_energy=dwell.min_motion_energy,
+                still_seconds=dwell.still_seconds + still_seconds,
                 activity_summary={},
             )
             await self._repo.update_room_dwell(closed)
@@ -113,6 +138,8 @@ class TrajectoryWriter:
         for global_track_id in list(self._open_dwell):
             await self.close_track(global_track_id, closed_at)
         self._current_room.clear()
+        self._dwell_posture_counts.clear()
+        self._dwell_still_acc.clear()
 
     async def _handle_dwell(
         self,
@@ -121,15 +148,39 @@ class TrajectoryWriter:
         room_name: str,
         captured_at: datetime,
         identity_confidence: float,
+        posture: PostureType = "unknown",
+        motion_energy: float | None = None,
     ) -> None:
         prev_room = self._current_room.get(global_track_id)
         if prev_room == room_name:
-            return  # still in the same room, dwell continues
+            # Same room: update posture counts and motion energy for open dwell.
+            open_dwell = self._open_dwell.get(global_track_id)
+            if open_dwell is not None:
+                # Accumulate posture count for modal calculation.
+                pc = self._dwell_posture_counts.setdefault(global_track_id, {})
+                pc[posture] = pc.get(posture, 0) + 1
+                # Track minimum motion energy.
+                if motion_energy is not None:
+                    new_min = (
+                        min(open_dwell.min_motion_energy, motion_energy)
+                        if open_dwell.min_motion_energy is not None
+                        else motion_energy
+                    )
+                    object.__setattr__(open_dwell, "min_motion_energy", new_min)
+                # Accumulate still seconds.
+                if motion_energy is not None and motion_energy < _STILL_ENERGY_FLOOR:
+                    self._dwell_still_acc[global_track_id] = (
+                        self._dwell_still_acc.get(global_track_id, 0) + 1
+                    )
+            return
 
         # Room changed (or first observation for this track).
         existing = self._open_dwell.get(global_track_id)
         if existing is not None:
             duration = int((captured_at - existing.entered_at).total_seconds())
+            posture_counts = self._dwell_posture_counts.pop(global_track_id, {})
+            modal_posture = _modal_posture(posture_counts)
+            still_seconds = self._dwell_still_acc.pop(global_track_id, 0)
             closed = RoomDwell(
                 dwell_id=existing.dwell_id,
                 identity_id=existing.identity_id,
@@ -139,7 +190,9 @@ class TrajectoryWriter:
                 exited_at=captured_at,
                 duration_seconds=duration,
                 entry_confidence=existing.entry_confidence,
-                primary_posture="unknown",
+                primary_posture=modal_posture,
+                min_motion_energy=existing.min_motion_energy,
+                still_seconds=existing.still_seconds + still_seconds,
                 activity_summary={},
             )
             await self._repo.update_room_dwell(closed)
@@ -151,7 +204,20 @@ class TrajectoryWriter:
             room_name=room_name,
             entered_at=captured_at,
             entry_confidence=identity_confidence,
+            min_motion_energy=motion_energy,
+            still_seconds=(
+                1 if (motion_energy is not None and motion_energy < _STILL_ENERGY_FLOOR) else 0
+            ),
         )
         await self._repo.save_room_dwell(new_dwell)
         self._open_dwell[global_track_id] = new_dwell
         self._current_room[global_track_id] = room_name
+        # Initialize posture count for the new dwell.
+        self._dwell_posture_counts[global_track_id] = {posture: 1}
+
+
+def _modal_posture(counts: dict[str, int]) -> PostureType:
+    """Return the most frequent posture, defaulting to 'unknown'."""
+    if not counts:
+        return "unknown"
+    return max(counts, key=counts.__getitem__)  # type: ignore[return-value]

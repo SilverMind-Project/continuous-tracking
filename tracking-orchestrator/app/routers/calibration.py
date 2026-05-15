@@ -50,7 +50,7 @@ class PrivacyZoneIn(BaseModel):
     zone_id: str = Field(..., min_length=1)
     name: str = ""
     polygon: list[list[float]] = Field(..., min_length=3)
-    policy: str = Field(..., pattern=r"^(drop_detections|blur_faces|mask_region)$")
+    policy: str = Field(..., pattern=r"^(drop_detection|blur_region|mask_region)$")
     enabled: bool = True
 
     @field_validator("polygon")
@@ -117,7 +117,32 @@ async def post_homography(
         camera_id=body.camera_id,
         matrix=body.matrix,
         meta=body.meta or {},
+        points=[[p.get("x", 0), p.get("y", 0)] for p in body.points] if body.points else None,
     )
+
+
+@router.get(
+    "/homography/{camera_id}",
+    summary="Return the stored homography for a camera (for editing)",
+)
+async def get_homography(camera_id: str) -> dict[str, Any]:
+    state = _get_state()
+    matrix = state.homographies.get(camera_id)
+    if matrix is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "homography.not_found",
+                "message": f"No homography stored for camera {camera_id}",
+            },
+        )
+    meta = state.camera_meta.get(camera_id, {})
+    return {
+        "camera_id": camera_id,
+        "matrix": matrix,
+        "points": meta.get("points", []),
+        "meta": {k: v for k, v in meta.items() if k != "points"},
+    }
 
 
 @router.post(

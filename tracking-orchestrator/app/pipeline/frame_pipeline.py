@@ -30,6 +30,7 @@ from structlog import get_logger
 
 from ..calibration.state import calibration_state
 from ..domain import (
+    BoundingBox,
     CameraConfig,
     Detection,
     FaceAnchor,
@@ -38,18 +39,23 @@ from ..domain import (
     GlobalTrack,
     Identity,
     IdentityRevision,
+    PostureType,
     TaggedKeyframe,
     TrackingEvent,
 )
 from ..inference.detector import PersonDetector
 from ..inference.face_id_client import FaceIdentificationClient
-from ..inference.schemas import DetectionBox, Embedding
+from ..inference.pose import PoseEstimator
+from ..inference.schemas import DetectionBox, Embedding, PoseResult
+from ..pipeline.privacy import PrivacyZoneFilter
 from ..observability import metrics as _metrics
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..storage.base import (
+    BehaviorBaselineRepository,
     DementiaSignalRepository,
     GalleryRepository,
     GlobalTrackRepository,
+    InMemoryBehaviorBaselineRepository,
     InMemoryDementiaSignalRepository,
     InMemoryGalleryRepository,
     InMemoryGlobalTrackRepository,
@@ -70,6 +76,8 @@ from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.tracker import PerCameraTrackers, TrackerConfig
 from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
 from ..trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
+from ..trajectory.motion_energy import MotionEnergyTracker
+from ..trajectory.posture import classify_posture
 from ..trajectory.trajectory_writer import TrajectoryWriter
 from ..transport.redis_streams import (
     FrameReady,
@@ -172,6 +180,8 @@ class PipelineConfig:
     # Top-down cameras should set enabled=false; face-level cameras with
     # difficult angles can raise min_confidence above the global default.
     face_id_camera_configs: dict[str, FaceIdCameraConfig] = field(default_factory=dict)
+    # Pose estimation (RTMPose) — enabled by default; set False to disable.
+    pose_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -246,6 +256,9 @@ class FrameProcessingPipeline:
         self._last_face_id_call: dict[str, datetime] = {}
         # Floor projection (homography-based, hot-reloaded from calibration state).
         self._floor_projector: FloorProjector | None = None
+        # Pose estimation (RTMPose) + motion energy tracking.
+        self._pose_estimator: PoseEstimator | None = None
+        self._motion_energy_tracker: MotionEnergyTracker | None = None
 
     @property
     def is_running(self) -> bool:
@@ -286,6 +299,8 @@ class FrameProcessingPipeline:
         # Frame image source + ReID embedder for the real inference path.
         frame_fetcher: FrameImageFetcher | None = None,
         reid_embedder: ReidEmbedderProtocol | None = None,
+        # Pose estimator (RTMPose) — optional; if None, posture defaults to "unknown".
+        pose_estimator: PoseEstimator | None = None,
     ) -> None:
         """Initialize all pipeline components.
 
@@ -298,6 +313,7 @@ class FrameProcessingPipeline:
             keyframe_repo: Keyframe repository. Defaults to InMemoryKeyframeRepository.
             frame_fetcher: Object-storage backed RGB frame loader.
             reid_embedder: Triton-backed ReID embedder.
+            pose_estimator: Triton-backed RTMPose estimator. If None, posture defaults to "unknown".
         """
         # Transport
         self._transport = RedisStreamsTransport(self._config.transport)
@@ -316,6 +332,10 @@ class FrameProcessingPipeline:
         self._detector = detector
         self._frame_fetcher = frame_fetcher
         self._reid_embedder = reid_embedder
+
+        # Pose estimation
+        self._pose_estimator = pose_estimator
+        self._motion_energy_tracker = MotionEnergyTracker() if pose_estimator is not None else None
 
         # Tracklet manager
         tracker = PerCameraTrackers(TrackerConfig())
@@ -378,10 +398,14 @@ class FrameProcessingPipeline:
                 redis_url=self._config.transport.redis_url,
             )
             await self._signal_publisher.connect()
+            traj_repo = trajectory_repo or InMemoryTrajectoryRepository()
+            # Build a baseline repository from the same trajectory source.
+            baseline_repo: BehaviorBaselineRepository = InMemoryBehaviorBaselineRepository()
             self._signal_worker = DementiaSignalWorker(
-                trajectory_repo=trajectory_repo or InMemoryTrajectoryRepository(),
+                trajectory_repo=traj_repo,
                 signal_repo=self._signal_repo,
                 cfg=SignalConfig(tz_name=self._config.timezone),
+                baseline_repo=baseline_repo,
             )
 
         # Face identification client — calls person-identification-service.
@@ -400,6 +424,7 @@ class FrameProcessingPipeline:
             m6_components=True,
             signal_worker=bool(self._signal_worker),
             face_id=bool(self._face_id_client),
+            pose=bool(self._pose_estimator),
         )
 
         if self._detector is None:
@@ -642,6 +667,42 @@ class FrameProcessingPipeline:
 
         # Step 2: Run detection
         detections = await self._detector.detect(image)
+
+        # Privacy enforcement: drop detections + apply blur/mask to frame.
+        privacy_filter = PrivacyZoneFilter.from_state(
+            calibration_state,
+            frame.camera_id,
+            frame_width=frame.width,
+            frame_height=frame.height,
+        )
+        if privacy_filter.is_active():
+            # Apply blur/mask policies to the frame in place (affects crops
+            # and the uploaded keyframe).
+            image = privacy_filter.apply_blur_mask(image)
+
+        # Filter detections in drop_detection zones.
+        if detections and privacy_filter.is_active():
+            kept: list[DetectionBox] = []
+            dropped_count = 0
+            for det in detections:
+                foot_x = (det.x1 + det.x2) / 2.0
+                foot_y = det.y2
+                if privacy_filter.should_drop((foot_x, foot_y)):
+                    dropped_count += 1
+                    _metrics.metrics.privacy_detections_dropped_total.labels(
+                        camera_id=frame.camera_id,
+                    ).inc()
+                else:
+                    kept.append(det)
+            if dropped_count > 0:
+                logger.debug(
+                    "privacy_detections_filtered",
+                    camera_id=frame.camera_id,
+                    dropped=dropped_count,
+                    kept=len(kept),
+                )
+            detections = kept
+
         domain_detections: list[Detection] = []
 
         if detections:
@@ -652,17 +713,29 @@ class FrameProcessingPipeline:
                 else []
             )
 
-            for det in detections:
-                from ..domain import BoundingBox
+            # Pose estimation: run RTMPose on the same crops (reuse, no re-crop).
+            pose_results: list[PoseResult | None] = []
+            if self._pose_estimator is not None and self._config.pose_enabled:
+                pose_results = await self._run_pose(crops, detections)
 
+            # Per-detection pose info, keyed by detection_id.
+            det_posture: dict[str, PostureType] = {}
+            det_pose_result: dict[str, PoseResult] = {}
+
+            for det_idx, det in enumerate(detections):
                 bbox = BoundingBox(
                     x_min=int(det.x1 * frame.width),
                     y_min=int(det.y1 * frame.height),
                     x_max=int(det.x2 * frame.width),
                     y_max=int(det.y2 * frame.height),
                 )
-                det_idx = len(domain_detections)
                 emb = embeddings[det_idx] if det_idx < len(embeddings) else None
+
+                # Classify posture for this detection.
+                posture: PostureType = "unknown"
+                pose_result = pose_results[det_idx] if det_idx < len(pose_results) else None
+                if pose_result is not None:
+                    posture = classify_posture(pose_result, bbox)
 
                 domain_det = Detection(
                     detection_id=str(uuid.uuid4()),
@@ -674,6 +747,9 @@ class FrameProcessingPipeline:
                     confidence=det.confidence,
                 )
                 domain_detections.append(domain_det)
+                det_posture[domain_det.detection_id] = posture
+                if pose_result is not None:
+                    det_pose_result[domain_det.detection_id] = pose_result
 
             # Step 3: Per-camera tracking
             local_tracks = self._tracker.update(
@@ -774,6 +850,8 @@ class FrameProcessingPipeline:
                     global_track_id=gt_id,
                 )
                 await self._trajectory_writer.close_track(gt_id, closed_at=traj_close_time)
+                if self._motion_energy_tracker is not None:
+                    self._motion_energy_tracker.evict_track(gt_id)
         self._prev_active_gt_ids = current_gt_ids
 
         # Step 7: Write trajectory points and manage room dwells.
@@ -810,6 +888,43 @@ class FrameProcessingPipeline:
                     else FloorPoint(0, 0)
                 )
                 _top_id, top_prob = decision.posterior.top_identity()
+
+                # Resolve posture + motion energy for this global track
+                # via detection_id → tracklet → global_track chain.
+                gt_posture: PostureType = "unknown"
+                gt_motion_energy: float | None = None
+                if self._motion_energy_tracker is not None and gt_bbox_entry is not None:
+                    # Find a detection_id belonging to this global_track_id.
+                    for det in domain_detections:
+                        tid = self._tracklet_manager.get_tracklet_id_for_detection(
+                            det.detection_id
+                        ) if self._tracklet_manager else ""
+                        if not tid:
+                            continue
+                        # Check if this tracklet belongs to the current gt decision.
+                        gt_for_det = next(
+                            (gt.global_track_id for gt in active_global_tracks
+                             if tid in gt.tracklet_ids),
+                            "",
+                        )
+                        if gt_for_det != decision.global_track_id:
+                            continue
+                        # Use the first matching detection's posture + pose.
+                        gt_posture = det_posture.get(det.detection_id, "unknown")
+                        pose = det_pose_result.get(det.detection_id)
+                        if pose is not None:
+                            bbox_diag = (
+                                (gt_bbox_entry.width**2 + gt_bbox_entry.height**2) ** 0.5
+                            )
+                            me = self._motion_energy_tracker.update(
+                                decision.global_track_id,
+                                pose,
+                                traj_time,
+                                bbox_diag_px=bbox_diag,
+                            )
+                            gt_motion_energy = me.mean_keypoint_velocity_px_s
+                        break
+
                 await self._trajectory_writer.write(
                     identity_id=decision.identity_id,
                     global_track_id=decision.global_track_id,
@@ -817,6 +932,8 @@ class FrameProcessingPipeline:
                     floor_point=floor_point,
                     captured_at=traj_time,
                     identity_confidence=top_prob,
+                    posture=gt_posture,
+                    motion_energy=gt_motion_energy,
                 )
 
         # Step 8: Keyframe sampling (periodic per tracklet + triggered on identity change).
@@ -916,6 +1033,41 @@ class FrameProcessingPipeline:
                 frame_index=frame.frame_index,
                 revision_count=len(new_revisions),
             )
+
+    async def _run_pose(
+        self,
+        crops: list[npt.NDArray[np.uint8]],
+        detections: list[DetectionBox],
+    ) -> list[PoseResult | None]:
+        """Run pose estimation on crops, skipping degenerate crops.
+
+        A crop is degenerate when width < 16 or height < 32.
+        Degenerate crops get ``None`` in the result list and are logged
+        as ``pose_skipped``.
+        """
+        assert self._pose_estimator is not None
+        valid_idxs: list[int] = []
+        valid_crops: list[npt.NDArray[np.uint8]] = []
+        results: list[PoseResult | None] = [None] * len(crops)
+        for i, crop in enumerate(crops):
+            h, w = crop.shape[:2]
+            if w < 16 or h < 32:
+                logger.debug(
+                    "pose_skipped",
+                    detection_index=i,
+                    crop_width=w,
+                    crop_height=h,
+                )
+                continue
+            valid_idxs.append(i)
+            valid_crops.append(crop)
+
+        if valid_crops:
+            batch_results = await self._pose_estimator.infer_batch(valid_crops)
+            for vi, pr in zip(valid_idxs, batch_results, strict=True):
+                results[vi] = pr
+
+        return results
 
     async def _skeleton_frame(self, frame: FrameReady) -> None:
         """Process a frame in skeleton mode (no detector, no tracking).

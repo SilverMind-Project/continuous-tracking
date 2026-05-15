@@ -17,7 +17,7 @@ from typing import Any
 class PrivacyZoneConfig:
     zone_id: str
     polygon: list[list[float]]
-    policy: str  # drop_detections | blur_faces | mask_region
+    policy: str  # drop_detection | blur_region | mask_region (canonical)
     name: str = ""
     enabled: bool = True
 
@@ -60,11 +60,15 @@ class CalibrationState:
         camera_id: str,
         matrix: list[list[float]],
         meta: dict[str, Any] | None = None,
+        points: list[list[float]] | None = None,
     ) -> None:
         async with self._lock:
             self.homographies[camera_id] = matrix
+            cm = self.camera_meta.setdefault(camera_id, {})
             if meta:
-                self.camera_meta.setdefault(camera_id, {}).update(meta)
+                cm.update(meta)
+            if points is not None:
+                cm["points"] = points
             self.version += 1
 
     async def set_privacy_zones(

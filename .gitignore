@@ -64,9 +64,9 @@ go.work.sum
 
 # Common binary output directory (if you use a 'bin' folder for builds)
 bin/
-.claude/settings.local.json
 .vscode/
-.claude/
+.claude/settings.json
+.claude/settings.local.json
 .qwen/
 .kiro/
 .agents/

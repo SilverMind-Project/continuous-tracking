@@ -39,6 +39,8 @@ from .routers.corrections import router as corrections_router
 from .routers.dashboard import router as dashboard_router
 from .routers.gallery import router as gallery_router
 from .routers.live import router as live_router
+from .routers.trajectory import router as trajectory_router
+from .routers.trajectory import set_context as set_trajectory_context
 from .storage.migrations import MigrationRunner
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.global_track_repo import PostgresGlobalTrackRepository
@@ -318,6 +320,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             gallery_repo=gallery_repo,
         )
 
+    if trajectory_repo is not None:
+        set_trajectory_context(trajectory_repo=trajectory_repo)
+
     if gallery_repo is not None:
         gallery_router_mod.set_context(gallery_repo=gallery_repo)
 
@@ -364,6 +369,7 @@ def create_app() -> FastAPI:
     app.include_router(corrections_router)
     app.include_router(gallery_router)
     app.include_router(live_router)
+    app.include_router(trajectory_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

@@ -62,6 +62,15 @@ class Metrics:
     # ---- Staleness / backlog -----------------------------------------
     frames_dropped_stale_total: Counter
 
+    # ---- Privacy enforcement ------------------------------------------
+    privacy_detections_dropped_total: Counter
+
+    # ---- Signal worker -------------------------------------------------
+    signal_worker_run_seconds: Histogram
+    signal_worker_identities: Gauge
+    signal_worker_emitted_total: Counter
+    signal_baseline_cache_hits_total: Counter
+
     # ---- Latency -----------------------------------------------------
     frame_end_to_end_latency_ms: Histogram
     triton_inference_latency_ms: Histogram
@@ -173,6 +182,29 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "FrameReady messages silently dropped because capture_time_unix_ns"
             " was older than the max-frame-age threshold.",
             ["camera_id"],
+        ),
+        privacy_detections_dropped_total=_counter(
+            "cts_privacy_detections_dropped_total",
+            "Person detections dropped by privacy zone enforcement.",
+            ["camera_id"],
+        ),
+        signal_worker_run_seconds=_hist(
+            "cts_signal_worker_run_seconds",
+            "Wall-clock duration of a DementiaSignalWorker.run_once cycle.",
+            LATENCY_BUCKETS_MS,
+        ),
+        signal_worker_identities=_gauge(
+            "cts_signal_worker_identities",
+            "Number of identities processed in the last run_once cycle.",
+        ),
+        signal_worker_emitted_total=_counter(
+            "cts_signal_worker_emitted_total",
+            "Dementia signals emitted by the signal worker.",
+            ["kind", "severity"],
+        ),
+        signal_baseline_cache_hits_total=_counter(
+            "cts_signal_baseline_cache_hits_total",
+            "Baseline repository cache hits in the signal worker.",
         ),
         frame_end_to_end_latency_ms=_hist(
             "cts_frame_end_to_end_latency_ms",

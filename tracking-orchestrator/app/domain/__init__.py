@@ -338,6 +338,9 @@ class IdentityCorrection:
     reason: str = ""
 
 
+PrivacyPolicy = Literal["drop_detection", "blur_region", "mask_region"]
+
+
 @dataclass(frozen=True)
 class PrivacyZone:
     """Operator-defined privacy mask for a camera."""
@@ -346,6 +349,7 @@ class PrivacyZone:
     camera_id: CameraId
     name: str
     polygon: list[tuple[int, int]]
+    policy: PrivacyPolicy = "drop_detection"
     enabled: bool = True
 
 
@@ -418,6 +422,8 @@ class PersonTrajectoryPoint:
     ground_y: float = 0.0  # meters, floor-plan frame
     posture: PostureType = "unknown"
     identity_confidence: float = 0.0
+    # mean keypoint velocity at this point; None when pose unavailable
+    motion_energy: float | None = None
 
 
 @dataclass(frozen=True)
@@ -433,6 +439,8 @@ class RoomDwell:
     duration_seconds: int | None = None
     entry_confidence: float = 0.0
     primary_posture: PostureType = "unknown"
+    min_motion_energy: float | None = None  # lowest motion energy observed during the dwell
+    still_seconds: int = 0  # accumulated contiguous low-motion time within the dwell
     activity_summary: dict[str, Any] = field(default_factory=dict)
 
 
@@ -518,3 +526,4 @@ class DementiaSignal:
     window_end: datetime = field(default_factory=lambda: datetime.now(UTC))
     context: dict[str, Any] = field(default_factory=dict)
     emitted_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    algorithm_version: int = 1  # incremented when detector logic changes

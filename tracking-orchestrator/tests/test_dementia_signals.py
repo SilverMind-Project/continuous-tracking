@@ -89,7 +89,7 @@ def _make_worker(
 class TestPacingDetector:
     @pytest.mark.asyncio
     async def test_pacing_detected_above_threshold(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=4))
+        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=4, onset_consecutive_windows=1))
         # 10 alternating room transitions in 20 minutes.
         rooms = ["kitchen", "hallway"] * 5
         for i, room in enumerate(rooms):
@@ -99,11 +99,11 @@ class TestPacingDetector:
         pacing = [s for s in signals if s.signal_kind == "pacing"]
         assert len(pacing) == 1
         assert pacing[0].identity_id == _IDENTITY
-        assert pacing[0].value >= 4
+        assert pacing[0].value >= 0.15  # rate per minute (was >= 4 room changes)
 
     @pytest.mark.asyncio
     async def test_pacing_not_detected_below_threshold(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=10))
+        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=10, onset_consecutive_windows=1))
         # Only 3 transitions.
         for room in ["kitchen", "hallway", "kitchen", "hallway"]:
             await traj_repo.save_trajectory_point(_point(room, offset_minutes=5))
@@ -113,7 +113,7 @@ class TestPacingDetector:
 
     @pytest.mark.asyncio
     async def test_pacing_severity_emergency_at_high_rate(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=3))
+        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=3, onset_consecutive_windows=1))
         # 12 transitions in 2 minutes = very high rate.
         rooms = ["kitchen", "hallway"] * 6
         for i, room in enumerate(rooms):
@@ -133,7 +133,9 @@ class TestPacingDetector:
 class TestSundowningDetector:
     @pytest.mark.asyncio
     async def test_sundowning_detected_high_evening_activity(self):
-        worker, traj_repo, _ = _make_worker()
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(sundowning_min_evening_minutes=5, onset_consecutive_windows=1)
+        )
         now = datetime(2026, 4, 23, 20, 0, 0, tzinfo=UTC)  # 20:00
 
         # Afternoon (12-17): 2 transitions across 6 points (low rate).
@@ -143,7 +145,7 @@ class TestSundowningDetector:
                 _point(room, offset_minutes=0, now=datetime(2026, 4, 23, 14, i * 5, 0, tzinfo=UTC))
             )
 
-        # Evening (17-22): 8 transitions across 10 points (high rate — 4x afternoon).
+        # Evening (17-22): 8 transitions across 10 points (high rate).
         evening_rooms = [
             "kitchen",
             "hallway",
@@ -164,7 +166,7 @@ class TestSundowningDetector:
         signals = await worker.run_once(now=now)
         sundowning = [s for s in signals if s.signal_kind == "sundowning_index"]
         assert len(sundowning) == 1
-        assert sundowning[0].value > 1.5
+        assert sundowning[0].value >= 0.03  # today_rate threshold
 
     @pytest.mark.asyncio
     async def test_sundowning_not_detected_equal_activity(self):
@@ -195,7 +197,7 @@ class TestSundowningDetector:
 class TestBathroomDwellAnomalyDetector:
     @pytest.mark.asyncio
     async def test_anomaly_detected_when_current_dwell_exceeds_2std(self):
-        worker, traj_repo, _ = _make_worker()
+        worker, traj_repo, _ = _make_worker(SignalConfig(onset_consecutive_windows=1))
 
         # Need at least one trajectory point so the identity is discovered.
         await traj_repo.save_trajectory_point(_point("bathroom", offset_minutes=25))
@@ -243,7 +245,7 @@ class TestBathroomDwellAnomalyDetector:
 class TestNighttimeMovementDetector:
     @pytest.mark.asyncio
     async def test_nighttime_movement_detected(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(nighttime_transition_threshold=2))
+        worker, traj_repo, _ = _make_worker(SignalConfig(nighttime_transition_threshold=2, onset_consecutive_windows=1))
         now = datetime(2026, 4, 23, 3, 0, 0, tzinfo=UTC)  # 03:00
 
         # 4 room transitions between 01:00 and 05:00.
@@ -276,10 +278,19 @@ class TestNighttimeMovementDetector:
 class TestStillnessAnomalyDetector:
     @pytest.mark.asyncio
     async def test_stillness_detected_in_non_bed_room(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=20))
+        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=20, onset_consecutive_windows=1))
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=41))
-        # Open dwell in kitchen for 40 minutes.
-        open_dwell = _dwell("kitchen", 40, duration_seconds=None, exited=False)
+        # Open dwell in kitchen for 40 minutes with high still_seconds.
+        entered_at = _NOW - timedelta(minutes=40)
+        open_dwell = RoomDwell(
+            dwell_id=str(uuid.uuid4()),
+            identity_id=_IDENTITY,
+            global_track_id=_GT,
+            room_name="kitchen",
+            entered_at=entered_at,
+            still_seconds=30 * 60,  # 30 minutes of actual stillness
+            min_motion_energy=0.001,  # below motion floor
+        )
         await traj_repo.save_room_dwell(open_dwell)
 
         signals = await worker.run_once(now=_NOW)
@@ -289,7 +300,7 @@ class TestStillnessAnomalyDetector:
 
     @pytest.mark.asyncio
     async def test_stillness_not_detected_in_bedroom(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=20))
+        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=20, onset_consecutive_windows=1))
         await traj_repo.save_trajectory_point(_point("bedroom", offset_minutes=121))
         # Long dwell in bedroom — should be ignored.
         open_dwell = _dwell("bedroom", 120, duration_seconds=None, exited=False)
@@ -300,7 +311,7 @@ class TestStillnessAnomalyDetector:
 
     @pytest.mark.asyncio
     async def test_stillness_not_detected_below_threshold(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=30))
+        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=30, onset_consecutive_windows=1))
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=11))
         # Only 10 minutes in kitchen.
         open_dwell = _dwell("kitchen", 10, duration_seconds=None, exited=False)
@@ -318,7 +329,7 @@ class TestStillnessAnomalyDetector:
 class TestAbsenceDetector:
     @pytest.mark.asyncio
     async def test_absence_detected_when_gap_exceeds_threshold(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30))
+        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30, onset_consecutive_windows=1))
         # Last seen 90 minutes ago.
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=90))
 
@@ -329,7 +340,7 @@ class TestAbsenceDetector:
 
     @pytest.mark.asyncio
     async def test_absence_severity_emergency_at_2h(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30))
+        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30, onset_consecutive_windows=1))
         # Last seen 130 minutes ago.
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=130))
 
@@ -340,7 +351,7 @@ class TestAbsenceDetector:
 
     @pytest.mark.asyncio
     async def test_no_absence_when_recently_seen(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30))
+        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30, onset_consecutive_windows=1))
         # Last seen 5 minutes ago.
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=5))
 
@@ -349,7 +360,7 @@ class TestAbsenceDetector:
 
     @pytest.mark.asyncio
     async def test_no_absence_when_no_data(self):
-        worker, _, _ = _make_worker(SignalConfig(absence_threshold_minutes=30))
+        worker, _, _ = _make_worker(SignalConfig(absence_threshold_minutes=30, onset_consecutive_windows=1))
         # No trajectory data at all — should not emit absence.
         signals = await worker.run_once(now=_NOW)
         assert not any(s.signal_kind == "absence" for s in signals)
@@ -363,7 +374,7 @@ class TestAbsenceDetector:
 class TestRunOnce:
     @pytest.mark.asyncio
     async def test_signals_persisted_to_repo(self):
-        worker, traj_repo, sig_repo = _make_worker(SignalConfig(pacing_room_threshold=3))
+        worker, traj_repo, sig_repo = _make_worker(SignalConfig(pacing_room_threshold=3, onset_consecutive_windows=1))
         rooms = ["kitchen", "hallway"] * 4
         for i, room in enumerate(rooms):
             await traj_repo.save_trajectory_point(_point(room, offset_minutes=20 - i * 2))
@@ -374,7 +385,7 @@ class TestRunOnce:
 
     @pytest.mark.asyncio
     async def test_multiple_identities_processed_independently(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=3))
+        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=3, onset_consecutive_windows=1))
         # Identity A: pacing.
         rooms = ["kitchen", "hallway"] * 4
         for i, room in enumerate(rooms):
@@ -402,3 +413,146 @@ class TestRunOnce:
         bob_signals = [s for s in signals if s.identity_id == "bob" and s.signal_kind == "pacing"]
         assert alice_signals
         assert not bob_signals
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Incremental windows + baseline cache
+# ---------------------------------------------------------------------------
+
+
+class _SpyBaselineRepository:
+    """Wraps InMemoryBehaviorBaselineRepository and counts method calls."""
+
+    def __init__(self, points: list, dwells: list) -> None:
+        from app.storage.base import InMemoryBehaviorBaselineRepository
+
+        self._inner = InMemoryBehaviorBaselineRepository(points, dwells)
+        self.dwell_durations_calls = 0
+        self.hourly_activity_calls = 0
+        self.stillness_episodes_calls = 0
+
+    async def dwell_durations(self, *args, **kwargs):
+        self.dwell_durations_calls += 1
+        return await self._inner.dwell_durations(*args, **kwargs)
+
+    async def hourly_activity(self, *args, **kwargs):
+        self.hourly_activity_calls += 1
+        return await self._inner.hourly_activity(*args, **kwargs)
+
+    async def stillness_episodes(self, *args, **kwargs):
+        self.stillness_episodes_calls += 1
+        return await self._inner.stillness_episodes(*args, **kwargs)
+
+
+class TestIncrementalWindows:
+    @pytest.mark.asyncio
+    async def test_incremental_matches_full_run(self):
+        """Incremental run produces identical signals to a cold full run."""
+        traj_repo = InMemoryTrajectoryRepository()
+        sig_repo_full = InMemoryDementiaSignalRepository()
+        sig_repo_incr = InMemoryDementiaSignalRepository()
+
+        # Seed data for one identity with pacing pattern.
+        rooms = ["kitchen", "hallway"] * 5
+        for i, room in enumerate(rooms):
+            pt = _point(room, offset_minutes=20 - i * 2)
+            await traj_repo.save_trajectory_point(pt)
+
+        cfg = SignalConfig(
+            pacing_room_threshold=4,
+            onset_consecutive_windows=1,
+            incremental_enabled=False,
+        )
+        worker_full = DementiaSignalWorker(traj_repo, sig_repo_full, cfg=cfg)
+        signals_full = await worker_full.run_once(now=_NOW)
+
+        cfg_incr = SignalConfig(
+            pacing_room_threshold=4,
+            onset_consecutive_windows=1,
+            incremental_enabled=True,
+        )
+        worker_incr = DementiaSignalWorker(traj_repo, sig_repo_incr, cfg=cfg_incr)
+        signals_incr = await worker_incr.run_once(now=_NOW)
+
+        assert len(signals_full) == len(signals_incr)
+        for sf, si in zip(
+            sorted(signals_full, key=lambda s: s.signal_id),
+            sorted(signals_incr, key=lambda s: s.signal_id),
+        ):
+            assert sf.signal_id == si.signal_id
+            assert sf.signal_kind == si.signal_kind
+            assert sf.severity == si.severity
+
+    @pytest.mark.asyncio
+    async def test_incremental_rolling_state_retains_points(self):
+        """Rolling state accumulates points across runs."""
+        traj_repo = InMemoryTrajectoryRepository()
+        sig_repo = InMemoryDementiaSignalRepository()
+
+        # Seed one trajectory point.
+        pt = _point("kitchen", offset_minutes=5)
+        await traj_repo.save_trajectory_point(pt)
+
+        cfg = SignalConfig(
+            onset_consecutive_windows=1,
+            incremental_enabled=True,
+        )
+        worker = DementiaSignalWorker(traj_repo, sig_repo, cfg=cfg)
+        # First run — full fetch.
+        await worker.run_once(now=_NOW)
+
+        # Rolling state should have the point.
+        rolling = worker._rolling_points.get(_IDENTITY, [])
+        assert len(rolling) == 1
+
+        # Seed another point at a different time.
+        pt2 = _point("hallway", offset_minutes=3)
+        await traj_repo.save_trajectory_point(pt2)
+
+        # Second run — delta fetch picks up new point.
+        await worker.run_once(now=_NOW + timedelta(minutes=1))
+        rolling = worker._rolling_points.get(_IDENTITY, [])
+        # Should have both points (old from rolling state, new from delta).
+        assert len(rolling) >= 2
+
+
+class TestBaselineCache:
+    @pytest.mark.asyncio
+    async def test_cache_hit_avoids_requery(self):
+        """Second run within TTL does not re-query baseline repo."""
+        from app.storage.base import InMemoryBehaviorBaselineRepository
+
+        traj_repo = InMemoryTrajectoryRepository()
+        sig_repo = InMemoryDementiaSignalRepository()
+
+        # Seed bathroom dwells so we get a valid baseline.
+        for dur in [240, 300, 360, 300, 280]:
+            d = _dwell("bathroom", 120, duration_seconds=dur, exited=True)
+            await traj_repo.save_room_dwell(d)
+            await traj_repo.update_room_dwell(d)
+        # Open bathroom dwell.
+        await traj_repo.save_trajectory_point(_point("bathroom", offset_minutes=25))
+        open_dwell = _dwell("bathroom", 20, duration_seconds=None, exited=False)
+        await traj_repo.save_room_dwell(open_dwell)
+
+        # Gather all points and dwells for the spy baseline repo.
+        points = await traj_repo.list_trajectory_points(limit=1000)
+        dwells_list = await traj_repo.list_room_dwells(limit=1000)
+        spy = _SpyBaselineRepository(points, dwells_list)
+
+        cfg = SignalConfig(
+            onset_consecutive_windows=1,
+            baseline_cache_ttl_minutes=60,
+            min_baseline_n=3,
+        )
+        worker = DementiaSignalWorker(
+            traj_repo, sig_repo, cfg=cfg, baseline_repo=spy
+        )
+
+        # First run populates cache.
+        await worker.run_once(now=_NOW)
+        calls_after_first = spy.dwell_durations_calls
+
+        # Second run within TTL — should use cache.
+        await worker.run_once(now=_NOW + timedelta(minutes=1))
+        assert spy.dwell_durations_calls == calls_after_first  # no new calls

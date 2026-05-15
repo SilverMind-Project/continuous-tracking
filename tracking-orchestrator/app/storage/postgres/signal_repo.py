@@ -18,21 +18,24 @@ from ..base import DementiaSignalRepository
 _SQL_UPSERT_SIGNAL = """
 INSERT INTO continuous_tracking.dementia_signals
     (signal_id, identity_id, signal_kind, severity, value,
-     baseline, z_score, window_start, window_end, context_json, emitted_at)
-VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     baseline, z_score, window_start, window_end, context_json, emitted_at,
+     algorithm_version)
+VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (signal_id, emitted_at) DO UPDATE SET
-    severity     = EXCLUDED.severity,
-    value        = EXCLUDED.value,
-    baseline     = EXCLUDED.baseline,
-    z_score      = EXCLUDED.z_score,
-    window_start = EXCLUDED.window_start,
-    window_end   = EXCLUDED.window_end,
-    context_json = EXCLUDED.context_json
+    severity          = EXCLUDED.severity,
+    value             = EXCLUDED.value,
+    baseline          = EXCLUDED.baseline,
+    z_score           = EXCLUDED.z_score,
+    window_start      = EXCLUDED.window_start,
+    window_end        = EXCLUDED.window_end,
+    context_json      = EXCLUDED.context_json,
+    algorithm_version = EXCLUDED.algorithm_version
 """
 
 _SQL_LIST_SIGNALS = """
 SELECT signal_id, identity_id, signal_kind, severity, value,
-       baseline, z_score, window_start, window_end, context_json, emitted_at
+       baseline, z_score, window_start, window_end, context_json, emitted_at,
+       algorithm_version
 FROM continuous_tracking.dementia_signals
 WHERE TRUE
 """
@@ -62,6 +65,7 @@ class PostgresDementiaSignalRepository(DementiaSignalRepository):
                 signal.window_end,
                 json.dumps(signal.context),
                 signal.emitted_at,
+                signal.algorithm_version,
             )
 
     async def list_signals(
@@ -114,4 +118,5 @@ def _row_to_signal(row: Any) -> DementiaSignal:
         window_end=row["window_end"],
         context=ctx,
         emitted_at=row["emitted_at"],
+        algorithm_version=int(row.get("algorithm_version", 1)),
     )

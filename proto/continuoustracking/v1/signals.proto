@@ -41,6 +41,11 @@ message DementiaSignal {
   // Detector-specific context (window count, room name, last-known posture,
   // etc.) serialised as a JSON string. Free-form by design.
   string context_json = 13;
+
+  // Monotonically incremented detector algorithm version.  A bump indicates
+  // the semantics of value/baseline/z_score may have changed.  Consumers
+  // should use this to filter stale-version signals out of "active" rollups.
+  int32 algorithm_version = 14;
 }
 
 enum DementiaSignalKind {
