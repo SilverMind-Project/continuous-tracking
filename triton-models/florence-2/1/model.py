@@ -153,12 +153,27 @@ class TritonPythonModel:
             attention_mask, combined_embeds
         )                                                      # (1, N_vis+T, 1024)
 
-        # 5. Autoregressive decode loop.
-        generated_ids: list[int] = list(input_ids[0])
-        current_token = np.array([[generated_ids[-1]]], dtype=np.int64)
-        past_kv = self._empty_kv_cache()
+        # 5. Pre-fill: process the full prompt with cache disabled so the
+        #    decoder computes cross-attention K/V from encoder_hidden_states.
+        empty_kv = self._empty_kv_cache()
+        logits, past_kv = self._call_decoder(
+            encoder_attention_mask=attention_mask,
+            encoder_hidden_states=encoder_hidden_states,
+            inputs_embeds=prompt_embeds,
+            past_kv=empty_kv,
+            use_cache_branch=False,
+        )
 
-        for _ in range(self._max_new_tokens):
+        # 6. Autoregressive decode loop (incremental, KV cache enabled).
+        generated_ids: list[int] = list(input_ids[0])
+        next_token = int(np.argmax(logits[0, -1]))
+        generated_ids.append(next_token)
+        current_token = np.array([[next_token]], dtype=np.int64)
+
+        for _ in range(1, self._max_new_tokens):
+            if next_token == self._eos_token_id:
+                break
+
             token_embed = self._call_embed(current_token)     # (1, 1, 1024)
 
             logits, past_kv = self._call_decoder(
@@ -166,14 +181,12 @@ class TritonPythonModel:
                 encoder_hidden_states=encoder_hidden_states,
                 inputs_embeds=token_embed,
                 past_kv=past_kv,
+                use_cache_branch=True,
             )
 
             next_token = int(np.argmax(logits[0, -1]))
             generated_ids.append(next_token)
             current_token = np.array([[next_token]], dtype=np.int64)
-
-            if next_token == self._eos_token_id:
-                break
 
         return np.array([generated_ids], dtype=np.int64)
 
@@ -233,6 +246,7 @@ class TritonPythonModel:
         encoder_hidden_states: np.ndarray,
         inputs_embeds: np.ndarray,
         past_kv: dict[str, np.ndarray],
+        use_cache_branch: bool = True,
     ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         """florence-2-decoder: full decode step with KV cache.
 
@@ -246,7 +260,7 @@ class TritonPythonModel:
         for name in _PAST_KV_INPUTS:
             inputs.append(pb_utils.Tensor(name, past_kv[name].astype(np.float32)))
         inputs.append(
-            pb_utils.Tensor("use_cache_branch", np.array([True], dtype=np.bool_))
+            pb_utils.Tensor("use_cache_branch", np.array([use_cache_branch], dtype=np.bool_))
         )
 
         request = pb_utils.InferenceRequest(
