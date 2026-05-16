@@ -4,16 +4,27 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import numpy as np
-
 from app.inference.schemas import Keypoint, PoseResult
 from app.trajectory.motion_energy import MotionEnergyTracker
 
 _COCO_NAMES = (
-    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
-    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-    "left_wrist", "right_wrist", "left_hip", "right_hip",
-    "left_knee", "right_knee", "left_ankle", "right_ankle",
+    "nose",
+    "left_eye",
+    "right_eye",
+    "left_ear",
+    "right_ear",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
 )
 
 
@@ -76,9 +87,7 @@ class TestMotionEnergyTracker:
             )
             t = t0 + timedelta(seconds=i * 0.2)
             tracker.update("gt-001", pose, t, bbox_diag_px=bbox_diag)
-        energy = tracker.update(
-            "gt-001", pose, t0 + timedelta(seconds=2.0), bbox_diag_px=bbox_diag
-        )
+        energy = tracker.update("gt-001", pose, t0 + timedelta(seconds=2.0), bbox_diag_px=bbox_diag)
         # Should have significant velocity
         assert energy.max_joint_velocity_px_s > 0.0
         assert energy.still_fraction < 0.5
@@ -111,10 +120,14 @@ class TestMotionEnergyTracker:
         )
 
         tracker_small.update("gt-001", pose_a, t0, bbox_diag_px=50.0)
-        e_small = tracker_small.update("gt-001", pose_b, t0 + timedelta(seconds=0.2), bbox_diag_px=50.0)
+        e_small = tracker_small.update(
+            "gt-001", pose_b, t0 + timedelta(seconds=0.2), bbox_diag_px=50.0
+        )
 
         tracker_large.update("gt-001", pose_a, t0, bbox_diag_px=100.0)
-        e_large = tracker_large.update("gt-001", pose_b, t0 + timedelta(seconds=0.2), bbox_diag_px=100.0)
+        e_large = tracker_large.update(
+            "gt-001", pose_b, t0 + timedelta(seconds=0.2), bbox_diag_px=100.0
+        )
 
         # Same normalized displacement → roughly equal energy
         assert abs(e_small.mean_keypoint_velocity_px_s - e_large.mean_keypoint_velocity_px_s) < 0.01
@@ -153,7 +166,9 @@ class TestMotionEnergyTracker:
         tracker.update("gt-move", pose_move, t0, bbox_diag_px=bbox_diag)
 
         # Still track: same pose
-        e_still = tracker.update("gt-still", pose_still, t0 + timedelta(seconds=0.2), bbox_diag_px=bbox_diag)
+        e_still = tracker.update(
+            "gt-still", pose_still, t0 + timedelta(seconds=0.2), bbox_diag_px=bbox_diag
+        )
         # Moving track: large shift
         shift_pose = _pose(
             left_shoulder=_kp(0.5, 0.3),
@@ -165,6 +180,8 @@ class TestMotionEnergyTracker:
             left_ankle=_kp(0.5, 0.85),
             right_ankle=_kp(0.7, 0.85),
         )
-        e_move = tracker.update("gt-move", shift_pose, t0 + timedelta(seconds=0.2), bbox_diag_px=bbox_diag)
+        e_move = tracker.update(
+            "gt-move", shift_pose, t0 + timedelta(seconds=0.2), bbox_diag_px=bbox_diag
+        )
 
         assert e_still.still_fraction > e_move.still_fraction

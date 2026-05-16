@@ -80,7 +80,10 @@
       "Bash(.venv/bin/python -m pytest tests/ -x -q --tb=short -k \"identity\")",
       "Bash(.venv/bin/python -m pytest tests/ -x -q --tb=short)",
       "Bash(.venv/bin/python -m pytest tests/ -q --tb=short)",
-      "Bash(PGPASSWORD=\"change-me-cts-password\" psql *)"
+      "Bash(PGPASSWORD=\"change-me-cts-password\" psql *)",
+      "Bash(make all-check *)",
+      "Bash(make format *)",
+      "Bash(tracking-orchestrator/.venv/bin/mypy *)"
     ]
   }
 }

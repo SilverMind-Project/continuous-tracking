@@ -412,9 +412,15 @@ TagReason = Literal["periodic", "identity_changed", "hazard", "dwell_start"]
 
 @dataclass(frozen=True)
 class PersonTrajectoryPoint:
-    """One confirmed ground-plane position row in person_trajectories."""
+    """One confirmed ground-plane position row in person_trajectories.
 
-    identity_id: IdentityId
+    ``identity_id`` is nullable: when the Bayesian resolver has not yet
+    committed an identity, the trajectory point is still written with
+    ``identity_id=None`` so the track remains visible on dashboards and
+    can be retroactively labelled when identity is resolved (Phase 5).
+    """
+
+    identity_id: IdentityId | None
     global_track_id: GlobalTrackId
     observed_at: datetime
     room_name: str = ""
@@ -431,7 +437,7 @@ class RoomDwell:
     """Contiguous interval a person spent in one room."""
 
     dwell_id: str
-    identity_id: IdentityId
+    identity_id: IdentityId | None
     global_track_id: GlobalTrackId
     room_name: str
     entered_at: datetime

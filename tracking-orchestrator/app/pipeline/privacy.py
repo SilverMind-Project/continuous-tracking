@@ -122,9 +122,7 @@ class PrivacyZoneFilter:
         foot_y = bbox.y_max / max(self._frame_height, 1)
         return self.should_drop((foot_x, foot_y))
 
-    def apply_blur_mask(
-        self, frame: npt.NDArray[np.uint8]
-    ) -> npt.NDArray[np.uint8]:
+    def apply_blur_mask(self, frame: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         """Apply blur_region and mask_region policies to *frame* in place.
 
         Returns *frame* for chaining.
@@ -157,7 +155,7 @@ class PrivacyZoneFilter:
 
 def _point_in_poly(point: tuple[float, float], poly: Polygon) -> bool:
     """Test if normalized point is inside polygon."""
-    return poly.contains(Point(point[0], point[1]))
+    return bool(poly.contains(Point(point[0], point[1])))
 
 
 # Deferred import to avoid circular dependency at module level.

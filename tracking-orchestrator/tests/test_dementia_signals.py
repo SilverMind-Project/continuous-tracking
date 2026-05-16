@@ -89,7 +89,12 @@ def _make_worker(
 class TestPacingDetector:
     @pytest.mark.asyncio
     async def test_pacing_detected_above_threshold(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=4, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                pacing_room_threshold=4,
+                onset_consecutive_windows=1,
+            )
+        )
         # 10 alternating room transitions in 20 minutes.
         rooms = ["kitchen", "hallway"] * 5
         for i, room in enumerate(rooms):
@@ -103,7 +108,12 @@ class TestPacingDetector:
 
     @pytest.mark.asyncio
     async def test_pacing_not_detected_below_threshold(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=10, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                pacing_room_threshold=10,
+                onset_consecutive_windows=1,
+            )
+        )
         # Only 3 transitions.
         for room in ["kitchen", "hallway", "kitchen", "hallway"]:
             await traj_repo.save_trajectory_point(_point(room, offset_minutes=5))
@@ -113,7 +123,12 @@ class TestPacingDetector:
 
     @pytest.mark.asyncio
     async def test_pacing_severity_emergency_at_high_rate(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=3, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                pacing_room_threshold=3,
+                onset_consecutive_windows=1,
+            )
+        )
         # 12 transitions in 2 minutes = very high rate.
         rooms = ["kitchen", "hallway"] * 6
         for i, room in enumerate(rooms):
@@ -245,7 +260,12 @@ class TestBathroomDwellAnomalyDetector:
 class TestNighttimeMovementDetector:
     @pytest.mark.asyncio
     async def test_nighttime_movement_detected(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(nighttime_transition_threshold=2, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                nighttime_transition_threshold=2,
+                onset_consecutive_windows=1,
+            )
+        )
         now = datetime(2026, 4, 23, 3, 0, 0, tzinfo=UTC)  # 03:00
 
         # 4 room transitions between 01:00 and 05:00.
@@ -278,7 +298,12 @@ class TestNighttimeMovementDetector:
 class TestStillnessAnomalyDetector:
     @pytest.mark.asyncio
     async def test_stillness_detected_in_non_bed_room(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=20, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                stillness_threshold_minutes=20,
+                onset_consecutive_windows=1,
+            )
+        )
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=41))
         # Open dwell in kitchen for 40 minutes with high still_seconds.
         entered_at = _NOW - timedelta(minutes=40)
@@ -300,7 +325,12 @@ class TestStillnessAnomalyDetector:
 
     @pytest.mark.asyncio
     async def test_stillness_not_detected_in_bedroom(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=20, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                stillness_threshold_minutes=20,
+                onset_consecutive_windows=1,
+            )
+        )
         await traj_repo.save_trajectory_point(_point("bedroom", offset_minutes=121))
         # Long dwell in bedroom — should be ignored.
         open_dwell = _dwell("bedroom", 120, duration_seconds=None, exited=False)
@@ -311,7 +341,12 @@ class TestStillnessAnomalyDetector:
 
     @pytest.mark.asyncio
     async def test_stillness_not_detected_below_threshold(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(stillness_threshold_minutes=30, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                stillness_threshold_minutes=30,
+                onset_consecutive_windows=1,
+            )
+        )
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=11))
         # Only 10 minutes in kitchen.
         open_dwell = _dwell("kitchen", 10, duration_seconds=None, exited=False)
@@ -329,7 +364,12 @@ class TestStillnessAnomalyDetector:
 class TestAbsenceDetector:
     @pytest.mark.asyncio
     async def test_absence_detected_when_gap_exceeds_threshold(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                absence_threshold_minutes=30,
+                onset_consecutive_windows=1,
+            )
+        )
         # Last seen 90 minutes ago.
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=90))
 
@@ -340,7 +380,12 @@ class TestAbsenceDetector:
 
     @pytest.mark.asyncio
     async def test_absence_severity_emergency_at_2h(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                absence_threshold_minutes=30,
+                onset_consecutive_windows=1,
+            )
+        )
         # Last seen 130 minutes ago.
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=130))
 
@@ -351,7 +396,12 @@ class TestAbsenceDetector:
 
     @pytest.mark.asyncio
     async def test_no_absence_when_recently_seen(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(absence_threshold_minutes=30, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                absence_threshold_minutes=30,
+                onset_consecutive_windows=1,
+            )
+        )
         # Last seen 5 minutes ago.
         await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=5))
 
@@ -360,7 +410,12 @@ class TestAbsenceDetector:
 
     @pytest.mark.asyncio
     async def test_no_absence_when_no_data(self):
-        worker, _, _ = _make_worker(SignalConfig(absence_threshold_minutes=30, onset_consecutive_windows=1))
+        worker, _, _ = _make_worker(
+            SignalConfig(
+                absence_threshold_minutes=30,
+                onset_consecutive_windows=1,
+            )
+        )
         # No trajectory data at all — should not emit absence.
         signals = await worker.run_once(now=_NOW)
         assert not any(s.signal_kind == "absence" for s in signals)
@@ -374,7 +429,12 @@ class TestAbsenceDetector:
 class TestRunOnce:
     @pytest.mark.asyncio
     async def test_signals_persisted_to_repo(self):
-        worker, traj_repo, sig_repo = _make_worker(SignalConfig(pacing_room_threshold=3, onset_consecutive_windows=1))
+        worker, traj_repo, sig_repo = _make_worker(
+            SignalConfig(
+                pacing_room_threshold=3,
+                onset_consecutive_windows=1,
+            )
+        )
         rooms = ["kitchen", "hallway"] * 4
         for i, room in enumerate(rooms):
             await traj_repo.save_trajectory_point(_point(room, offset_minutes=20 - i * 2))
@@ -385,7 +445,12 @@ class TestRunOnce:
 
     @pytest.mark.asyncio
     async def test_multiple_identities_processed_independently(self):
-        worker, traj_repo, _ = _make_worker(SignalConfig(pacing_room_threshold=3, onset_consecutive_windows=1))
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                pacing_room_threshold=3,
+                onset_consecutive_windows=1,
+            )
+        )
         # Identity A: pacing.
         rooms = ["kitchen", "hallway"] * 4
         for i, room in enumerate(rooms):
@@ -478,6 +543,7 @@ class TestIncrementalWindows:
         for sf, si in zip(
             sorted(signals_full, key=lambda s: s.signal_id),
             sorted(signals_incr, key=lambda s: s.signal_id),
+            strict=True,
         ):
             assert sf.signal_id == si.signal_id
             assert sf.signal_kind == si.signal_kind
@@ -520,8 +586,6 @@ class TestBaselineCache:
     @pytest.mark.asyncio
     async def test_cache_hit_avoids_requery(self):
         """Second run within TTL does not re-query baseline repo."""
-        from app.storage.base import InMemoryBehaviorBaselineRepository
-
         traj_repo = InMemoryTrajectoryRepository()
         sig_repo = InMemoryDementiaSignalRepository()
 
@@ -545,9 +609,7 @@ class TestBaselineCache:
             baseline_cache_ttl_minutes=60,
             min_baseline_n=3,
         )
-        worker = DementiaSignalWorker(
-            traj_repo, sig_repo, cfg=cfg, baseline_repo=spy
-        )
+        worker = DementiaSignalWorker(traj_repo, sig_repo, cfg=cfg, baseline_repo=spy)
 
         # First run populates cache.
         await worker.run_once(now=_NOW)

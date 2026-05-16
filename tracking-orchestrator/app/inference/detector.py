@@ -63,10 +63,7 @@ class PersonDetector:
         )
         raw_batch = outputs["output0"]  # (_DETECTOR_BATCH_SIZE, 300, 6) — YOLO26L NMS-free format
 
-        return [
-            decode_output(raw_batch[i], *meta[i], conf_threshold=self._conf)
-            for i in range(n)
-        ]
+        return [decode_output(raw_batch[i], *meta[i], conf_threshold=self._conf) for i in range(n)]
 
     async def detect(self, image: npt.NDArray[np.uint8]) -> list[DetectionBox]:
         """Detect persons in a single RGB image."""

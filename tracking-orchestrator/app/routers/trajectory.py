@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -51,6 +51,7 @@ def set_context(trajectory_repo: TrajectoryRepository) -> None:
 @router.get("/internal/trajectory/recent")
 async def list_recent_trajectory(
     identity_id: str | None = Query(None, description="Filter by identity"),
+    global_track_id: str | None = Query(None, description="Filter by global track"),
     since: str | None = Query(
         None,
         description="ISO-8601 UTC datetime; defaults to 30 minutes ago",
@@ -63,16 +64,11 @@ async def list_recent_trajectory(
     Consumed by cognitive-companion to render past-track annotation
     in the live view and the floor-plan view.
     """
-    from datetime import UTC, datetime as dt, timedelta
-
-    since_dt: datetime | None = None
-    if since:
-        since_dt = dt.fromisoformat(since)
-    else:
-        since_dt = dt.now(UTC) - timedelta(minutes=30)
+    since_dt = datetime.fromisoformat(since) if since else datetime.now(UTC) - timedelta(minutes=30)
 
     points = await ctx.trajectory_repo.list_trajectory_points(
         identity_id=identity_id,
+        global_track_id=global_track_id,
         after=since_dt,
         limit=limit,
     )

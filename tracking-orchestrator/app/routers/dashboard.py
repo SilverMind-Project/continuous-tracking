@@ -206,6 +206,9 @@ async def get_dwell_summary(
 async def list_keyframes(
     person_id: str | None = Query(None, description="Filter by identity ID"),
     tag_reason: str | None = Query(None, description="Filter by tag reason"),
+    signal_type: str | None = Query(None, description="Alias for tag_reason"),
+    global_track_id: str | None = Query(None, description="Filter by global track"),
+    strategy: str | None = Query(None, pattern="^lifecycle$"),
     after: str | None = Query(None, description="ISO-8601 start time"),
     limit: int = Query(100, ge=1, le=500),
     repo: KeyframeRepository = Depends(get_keyframe_repo),
@@ -223,14 +226,26 @@ async def list_keyframes(
                 detail=f"Invalid after timestamp: {after!r}",
             ) from exc
 
-    keyframes = await repo.list_keyframes(after=after_dt, limit=limit)
+    fetch_limit = 500 if strategy == "lifecycle" else limit
+    keyframes = await repo.list_keyframes(
+        global_track_id=global_track_id,
+        after=after_dt,
+        limit=fetch_limit,
+    )
 
     # Apply person_id and tag_reason filters in-memory (KeyframeRepository
     # protocol does not expose these filters to keep the interface minimal).
     if person_id:
         keyframes = [k for k in keyframes if k.annotations.get("identity_id") == person_id]
-    if tag_reason:
-        keyframes = [k for k in keyframes if k.tag_reason == tag_reason]
+    effective_tag_reason = tag_reason or signal_type
+    if effective_tag_reason:
+        keyframes = [k for k in keyframes if k.tag_reason == effective_tag_reason]
+    if strategy == "lifecycle" and len(keyframes) > 3:
+        ordered = sorted(keyframes, key=lambda k: k.captured_at)
+        midpoint = ordered[len(ordered) // 2]
+        keyframes = [ordered[0], midpoint, ordered[-1]]
+    else:
+        keyframes = keyframes[:limit]
 
     return {
         "keyframes": [_keyframe_to_dict(k) for k in keyframes],

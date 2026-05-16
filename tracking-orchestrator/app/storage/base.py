@@ -736,7 +736,7 @@ class InMemoryTrajectoryRepository(TrajectoryRepository):
     def __init__(self) -> None:
         self._points: list[PersonTrajectoryPoint] = []
         # Keyed by (identity_id, global_track_id) -> open RoomDwell
-        self._open_dwells: dict[tuple[str, str], RoomDwell] = {}
+        self._open_dwells: dict[tuple[str | None, str], RoomDwell] = {}
         self._closed_dwells: list[RoomDwell] = []
 
     async def save_trajectory_point(self, point: PersonTrajectoryPoint) -> None:

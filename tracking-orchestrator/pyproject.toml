@@ -55,6 +55,7 @@ extend-exclude = ["app/proto"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "A", "C4", "SIM", "RUF", "FA"]
 ignore = ["B008"]  # Depends() in FastAPI param defaults is idiomatic
+per-file-ignores = { "app/main.py" = ["E402"] }  # configure_logging before logger-using imports
 
 [tool.mypy]
 python_version = "3.12"
@@ -64,7 +65,7 @@ plugins = ["pydantic.mypy"]
 exclude = ["app/proto/"]
 
 [[tool.mypy.overrides]]
-module = ["google.protobuf.*", "cv2"]
+module = ["google.protobuf.*", "cv2", "shapely"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

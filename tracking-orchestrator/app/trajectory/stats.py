@@ -43,9 +43,7 @@ def robust_z(value: float, samples: list[float]) -> RobustZ:
         # If value == median: z = 0. If value != median: arbitrary large z.
         if abs(value - median) < 1e-9:
             return RobustZ(median=median, mad=mad, modified_z=0.0, n=len(samples))
-        return RobustZ(
-            median=median, mad=mad, modified_z=float("inf"), n=len(samples)
-        )
+        return RobustZ(median=median, mad=mad, modified_z=float("inf"), n=len(samples))
 
     modified_z_val = 0.6745 * (value - median) / mad
     return RobustZ(

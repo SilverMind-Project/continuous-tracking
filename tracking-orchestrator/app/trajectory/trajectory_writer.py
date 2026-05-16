@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import cast
 
 from ..domain import FloorPoint, PersonTrajectoryPoint, PostureType, RoomDwell
 from ..storage.base import TrajectoryRepository
@@ -55,7 +56,7 @@ class TrajectoryWriter:
 
     async def write(
         self,
-        identity_id: str,
+        identity_id: str | None,
         global_track_id: str,
         room_name: str,
         floor_point: FloorPoint,
@@ -67,9 +68,10 @@ class TrajectoryWriter:
         """Write one trajectory point and update the room dwell state.
 
         Args:
-            identity_id: committed identity for this track.
+            identity_id: committed identity for this track, or None when
+                the Bayesian resolver has not yet committed.
             global_track_id: the GlobalTrack this person belongs to.
-            room_name: current room (resolved from camera → stream assignment).
+            room_name: current room (resolved from camera to stream assignment).
             floor_point: ground-plane position in millimeters.
             captured_at: wall-clock time of the observation.
             identity_confidence: posterior probability of the top identity.
@@ -143,7 +145,7 @@ class TrajectoryWriter:
 
     async def _handle_dwell(
         self,
-        identity_id: str,
+        identity_id: str | None,
         global_track_id: str,
         room_name: str,
         captured_at: datetime,
@@ -220,4 +222,4 @@ def _modal_posture(counts: dict[str, int]) -> PostureType:
     """Return the most frequent posture, defaulting to 'unknown'."""
     if not counts:
         return "unknown"
-    return max(counts, key=counts.__getitem__)  # type: ignore[return-value]
+    return cast(PostureType, max(counts.items(), key=lambda item: item[1])[0])

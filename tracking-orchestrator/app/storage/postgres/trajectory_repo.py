@@ -83,7 +83,7 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
         self._pool = pool
         # In-memory cache of open dwell row IDs, keyed by (identity_id, global_track_id).
         # Used to find the DB row id for update_room_dwell without an extra SELECT.
-        self._open_dwell_db_id: dict[tuple[str, str], int] = {}
+        self._open_dwell_db_id: dict[tuple[str | None, str], int] = {}
 
     async def save_trajectory_point(self, point: PersonTrajectoryPoint) -> None:
         async with self._pool.acquire() as conn:

@@ -47,8 +47,8 @@ from ..inference.detector import PersonDetector
 from ..inference.face_id_client import FaceIdentificationClient
 from ..inference.pose import PoseEstimator
 from ..inference.schemas import DetectionBox, Embedding, PoseResult
-from ..pipeline.privacy import PrivacyZoneFilter
 from ..observability import metrics as _metrics
+from ..pipeline.privacy import PrivacyZoneFilter
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..storage.base import (
     BehaviorBaselineRepository,
@@ -72,6 +72,7 @@ from ..tracking.camera_adjacency import AdjacencyEdge as GraphAdjacencyEdge
 from ..tracking.camera_adjacency import CameraAdjacency
 from ..tracking.cross_camera import CrossCamConfig, CrossCameraAssociator
 from ..tracking.floor_projector import FloorProjector
+from ..tracking.identity_committer import IdentityCommitter
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.tracker import PerCameraTrackers, TrackerConfig
 from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
@@ -237,6 +238,7 @@ class FrameProcessingPipeline:
         self._reid_embedder: ReidEmbedderProtocol | None = None
         # M6
         self._trajectory_writer: TrajectoryWriter | None = None
+        self._identity_committer: IdentityCommitter | None = None
         self._keyframe_sampler: KeyframeSampler | None = None
         self._scene_publisher: SceneSamplesPublisher | None = None
         self._running = False
@@ -380,6 +382,10 @@ class FrameProcessingPipeline:
         self._trajectory_writer = TrajectoryWriter(
             repo=trajectory_repo or InMemoryTrajectoryRepository(),
         )
+
+        # Phase 5: IdentityCommitter buffers per-frame posterior evidence
+        # and emits one commit decision per GT per commit_window_s.
+        self._identity_committer = IdentityCommitter()
 
         self._keyframe_sampler = KeyframeSampler(
             repo=keyframe_repo or InMemoryKeyframeRepository(),
@@ -642,9 +648,7 @@ class FrameProcessingPipeline:
                     frame_index=frame.frame_index,
                     age_s=round(age_s, 1),
                 )
-                _metrics.metrics.frames_dropped_stale_total.labels(
-                    camera_id=frame.camera_id
-                ).inc()
+                _metrics.metrics.frames_dropped_stale_total.labels(camera_id=frame.camera_id).inc()
                 return
 
         if self._detector is None or self._tracklet_manager is None or self._tracker is None:
@@ -876,8 +880,10 @@ class FrameProcessingPipeline:
                             break
 
             for decision in outcome.decisions:
-                if decision.identity_id is None:
-                    continue
+                # CR-12: Always write trajectory points, even when identity
+                # is UNKNOWN.  The trajectory is keyed on global_track_id;
+                # identity is a stamp, not a gate.  When identity later
+                # resolves, the rewriter retroactively labels the points.
                 # Project the tracklet's footpoint through the per-camera
                 # homography, falling back to uncalibrated (0,0) when no
                 # homography is configured for this camera.
@@ -895,27 +901,32 @@ class FrameProcessingPipeline:
                 gt_motion_energy: float | None = None
                 if self._motion_energy_tracker is not None and gt_bbox_entry is not None:
                     # Find a detection_id belonging to this global_track_id.
-                    for det in domain_detections:
-                        tid = self._tracklet_manager.get_tracklet_id_for_detection(
-                            det.detection_id
-                        ) if self._tracklet_manager else ""
+                    for domain_det in domain_detections:
+                        tid = (
+                            self._tracklet_manager.get_tracklet_id_for_detection(
+                                domain_det.detection_id
+                            )
+                            if self._tracklet_manager
+                            else ""
+                        )
                         if not tid:
                             continue
                         # Check if this tracklet belongs to the current gt decision.
                         gt_for_det = next(
-                            (gt.global_track_id for gt in active_global_tracks
-                             if tid in gt.tracklet_ids),
+                            (
+                                gt.global_track_id
+                                for gt in active_global_tracks
+                                if tid in gt.tracklet_ids
+                            ),
                             "",
                         )
                         if gt_for_det != decision.global_track_id:
                             continue
                         # Use the first matching detection's posture + pose.
-                        gt_posture = det_posture.get(det.detection_id, "unknown")
-                        pose = det_pose_result.get(det.detection_id)
+                        gt_posture = det_posture.get(domain_det.detection_id, "unknown")
+                        pose = det_pose_result.get(domain_det.detection_id)
                         if pose is not None:
-                            bbox_diag = (
-                                (gt_bbox_entry.width**2 + gt_bbox_entry.height**2) ** 0.5
-                            )
+                            bbox_diag = (gt_bbox_entry.width**2 + gt_bbox_entry.height**2) ** 0.5
                             me = self._motion_energy_tracker.update(
                                 decision.global_track_id,
                                 pose,

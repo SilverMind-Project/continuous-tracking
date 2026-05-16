@@ -305,9 +305,13 @@ class CrossCameraAssociator:
                             ),
                             None,
                         )
-                        existing_tl_same = tracklet_by_id.get(existing_tid_same) if existing_tid_same else None
+                        existing_tl_same = (
+                            tracklet_by_id.get(existing_tid_same) if existing_tid_same else None
+                        )
                         if existing_tl_same is not None:
-                            app_sim = await self._approximate_gallery_similarity(t, existing_tl_same)
+                            app_sim = await self._approximate_gallery_similarity(
+                                t, existing_tl_same
+                            )
                             if app_sim >= self._config.unknown_merge_appearance_threshold:
                                 logger.debug(
                                     "unknown_same_camera_merge",

@@ -15,13 +15,7 @@ class TestSplitStatements:
         assert stmts[1] == "SELECT 2"
 
     def test_do_block_preserved(self) -> None:
-        stmts = _split(
-            "DO $$\n"
-            "BEGIN\n"
-            "  EXECUTE 'SELECT 1';\n"
-            "END $$;\n"
-            "SELECT 2;"
-        )
+        stmts = _split("DO $$\nBEGIN\n  EXECUTE 'SELECT 1';\nEND $$;\nSELECT 2;")
         assert len(stmts) == 2
         assert "DO $$" in stmts[0]
         assert "END $$" in stmts[0]
@@ -29,22 +23,13 @@ class TestSplitStatements:
         assert stmts[1] == "SELECT 2"
 
     def test_named_dollar_quote(self) -> None:
-        stmts = _split(
-            "$func$\n"
-            "BEGIN\n"
-            "  RETURN 1;\n"
-            "END $func$;\n"
-            "SELECT 2;"
-        )
+        stmts = _split("$func$\nBEGIN\n  RETURN 1;\nEND $func$;\nSELECT 2;")
         assert len(stmts) == 2
         assert "$func$" in stmts[0]
         assert "RETURN 1;" in stmts[0]
 
     def test_multiple_do_blocks(self) -> None:
-        stmts = _split(
-            "DO $$ BEGIN EXECUTE 'a'; END $$;\n"
-            "DO $$ BEGIN EXECUTE 'b'; END $$;"
-        )
+        stmts = _split("DO $$ BEGIN EXECUTE 'a'; END $$;\nDO $$ BEGIN EXECUTE 'b'; END $$;")
         assert len(stmts) == 2
 
     def test_comment_only_statements_dropped(self) -> None:

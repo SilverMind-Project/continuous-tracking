@@ -17,7 +17,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.domain import GalleryEmbedding, Identity
+from app.domain import GalleryEmbedding
 from app.routers.gallery import router as gallery_router
 from app.routers.gallery import set_context
 from app.storage.base import InMemoryGalleryRepository

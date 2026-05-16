@@ -48,7 +48,7 @@ def _sanitize_log_values(
         if key in ("event", "_record"):
             continue
         if isinstance(value, _NUMPY_ARRAY):
-            event_dict[key] = f"ndarray(shape={value.shape}, dtype={value.dtype})"  # type: ignore[union-attr]
+            event_dict[key] = f"ndarray(shape={value.shape}, dtype={value.dtype})"
         elif isinstance(value, (bytes, bytearray)) and len(value) > 64:
             event_dict[key] = f"bytes({len(value)})"
         elif hasattr(value, "DESCRIPTOR"):
@@ -75,7 +75,8 @@ def configure_logging(level: str = "INFO") -> None:
     ]
 
     if sys.stderr.isatty():
-        processors: list[Any] = shared + [
+        processors: list[Any] = [
+            *shared,
             structlog.dev.ConsoleRenderer(
                 exception_formatter=structlog.dev.RichTracebackFormatter(
                     show_locals=False,
@@ -85,7 +86,8 @@ def configure_logging(level: str = "INFO") -> None:
             ),
         ]
     else:
-        processors = shared + [
+        processors = [
+            *shared,
             structlog.processors.ExceptionRenderer(),
             structlog.processors.JSONRenderer(),
         ]

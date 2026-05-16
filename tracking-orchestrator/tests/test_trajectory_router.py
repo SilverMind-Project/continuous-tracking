@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import pytest
 from fastapi.testclient import TestClient
 
-from app.domain import PersonTrajectoryPoint
 from app.main import create_app
-from app.storage.base import InMemoryTrajectoryRepository
 
 
 def _make_client() -> TestClient:
@@ -39,7 +36,5 @@ class TestTrajectoryRouter:
     def test_recent_with_since(self) -> None:
         client = _make_client()
         since = datetime(2026, 1, 1, tzinfo=UTC).isoformat()
-        resp = client.get(
-            "/internal/trajectory/recent", params={"since": since, "limit": 10}
-        )
+        resp = client.get("/internal/trajectory/recent", params={"since": since, "limit": 10})
         assert resp.status_code == 200

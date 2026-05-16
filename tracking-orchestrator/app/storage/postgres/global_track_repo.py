@@ -84,8 +84,16 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
         identity_id = track.current_identity_id if track.current_identity_id else None
         clean_tracklet_ids = [tid for tid in track.tracklet_ids if tid]
         import structlog
+
         _log = structlog.get_logger(__name__)
-        _log.debug("save_global_track", global_track_id=repr(track.global_track_id), camera_ids=track.camera_ids, tracklet_ids=clean_tracklet_ids, identity_id=repr(identity_id), state=track.state)
+        _log.debug(
+            "save_global_track",
+            global_track_id=repr(track.global_track_id),
+            camera_ids=track.camera_ids,
+            tracklet_ids=clean_tracklet_ids,
+            identity_id=repr(identity_id),
+            state=track.state,
+        )
         async with self._pool.acquire() as conn:
             await conn.execute(
                 _SQL_SAVE,

@@ -209,9 +209,7 @@ class MigrationRunner:
 
             # Drop pure-comment blocks that have no executable SQL
             non_comment = "\n".join(
-                line
-                for line in stmt.splitlines()
-                if not line.strip().startswith("--")
+                line for line in stmt.splitlines() if not line.strip().startswith("--")
             ).strip()
             if non_comment:
                 stmts.append(stmt)

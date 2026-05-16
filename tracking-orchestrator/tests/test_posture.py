@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from app.domain import BoundingBox
 from app.inference.schemas import Keypoint, PoseResult
 from app.trajectory.posture import classify_posture

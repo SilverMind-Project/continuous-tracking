@@ -22,7 +22,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from ..domain import DementiaSignal, DementiaSignalSeverity, PersonTrajectoryPoint, RoomDwell
+from ..domain import (
+    DementiaSignal,
+    DementiaSignalKind,
+    DementiaSignalSeverity,
+    PersonTrajectoryPoint,
+    RoomDwell,
+)
 from ..storage.base import (
     BehaviorBaselineRepository,
     DementiaSignalRepository,
@@ -196,6 +202,7 @@ class DementiaSignalWorker:
         # Collect metrics
         try:
             from ..observability import metrics as m
+
             m.metrics.signal_worker_identities.set(len(identities))
         except Exception:
             pass
@@ -216,7 +223,8 @@ class DementiaSignalWorker:
 
         # Evict stale identities from rolling state.
         stale = [
-            iid for iid, last in self._last_run_at.items()
+            iid
+            for iid, last in self._last_run_at.items()
             if (now - last).total_seconds() > self._cfg.window.total_seconds() * 2
         ]
         for iid in stale:
@@ -227,6 +235,7 @@ class DementiaSignalWorker:
         elapsed = time.monotonic() - t_start
         try:
             from ..observability import metrics as m
+
             m.metrics.signal_worker_run_seconds.observe(elapsed)
             for s in all_signals:
                 m.metrics.signal_worker_emitted_total.labels(
@@ -237,9 +246,7 @@ class DementiaSignalWorker:
 
         return all_signals
 
-    async def _process_identity(
-        self, identity_id: str, now: datetime
-    ) -> list[DementiaSignal]:
+    async def _process_identity(self, identity_id: str, now: datetime) -> list[DementiaSignal]:
         """Fetch window data (incremental when possible) and compute signals."""
         last = self._last_run_at.get(identity_id)
         self._last_run_at[identity_id] = now
@@ -303,7 +310,7 @@ class DementiaSignalWorker:
             after=now - self._cfg.window,
             limit=10000,
         )
-        return list({p.identity_id for p in points})
+        return list({p.identity_id for p in points if p.identity_id is not None})
 
     async def _compute_signals(
         self,
@@ -332,7 +339,8 @@ class DementiaSignalWorker:
         # stillness: clear if no open non-resting dwell is still
         open_dwells = [d for d in dwells if d.exited_at is None]
         any_stillness = any(
-            d for d in open_dwells
+            d
+            for d in open_dwells
             if not self._is_resting_room(d.room_name)
             and (now - d.entered_at).total_seconds() >= self._cfg.stillness_threshold_minutes * 60
         )
@@ -340,9 +348,7 @@ class DementiaSignalWorker:
             self._hysteresis.clear_trigger(identity_id, "stillness_anomaly")
 
         # bathroom: clear if no open bathroom dwell
-        any_bath = any(
-            d for d in open_dwells if "bath" in d.room_name.lower()
-        )
+        any_bath = any(d for d in open_dwells if "bath" in d.room_name.lower())
         if not any_bath:
             self._hysteresis.clear_trigger(identity_id, "bathroom_dwell_anomaly")
 
@@ -371,7 +377,9 @@ class DementiaSignalWorker:
             return []
 
         sorted_window = sorted(pacing_points, key=lambda p: p.observed_at)
-        window_duration_s = (sorted_window[-1].observed_at - sorted_window[0].observed_at).total_seconds()
+        window_duration_s = (
+            sorted_window[-1].observed_at - sorted_window[0].observed_at
+        ).total_seconds()
         if window_duration_s <= 0:
             return []
 
@@ -420,8 +428,10 @@ class DementiaSignalWorker:
             severity = "info"
 
         # Hysteresis.
-        kind = "pacing"
-        if not self._hysteresis.should_emit(identity_id, kind, severity, now, self._cfg.cooldown_minutes):
+        kind: DementiaSignalKind = "pacing"
+        if not self._hysteresis.should_emit(
+            identity_id, kind, severity, now, self._cfg.cooldown_minutes
+        ):
             return []
 
         w_start = sorted_window[0].observed_at
@@ -508,31 +518,32 @@ class DementiaSignalWorker:
             evening_transition_total = sum(
                 h.transition_count for hr, h in hourly.items() if 17 <= hr < 22
             )
-            evening_obs_total = sum(
-                h.observed_minutes for hr, h in hourly.items() if 17 <= hr < 22
-            )
+            evening_obs_total = sum(h.observed_minutes for hr, h in hourly.items() if 17 <= hr < 22)
             if evening_obs_total > 0:
                 avg_evening_rate = evening_transition_total / evening_obs_total
                 evening_rates = [avg_evening_rate]  # daily aggregate
 
+        severity: DementiaSignalSeverity
         if len(evening_rates) < 2:
             # Fall back: use simple threshold (1.5x ratio → significant)
             if today_rate < 0.03:
                 return []
-            severity: DementiaSignalSeverity = "info"
+            severity = "info"
         else:
             rz = robust_z(today_rate, evening_rates)
             if rz.n < self._cfg.min_baseline_n or rz.modified_z < self._cfg.sundowning_z_threshold:
                 return []
             if rz.modified_z >= 4.0:
-                severity: DementiaSignalSeverity = "emergency"
+                severity = "emergency"
             elif rz.modified_z >= 3.0:
                 severity = "warning"
             else:
                 severity = "info"
 
-        kind = "sundowning_index"
-        if not self._hysteresis.should_emit(identity_id, kind, severity, now, self._cfg.cooldown_minutes):
+        kind: DementiaSignalKind = "sundowning_index"
+        if not self._hysteresis.should_emit(
+            identity_id, kind, severity, now, self._cfg.cooldown_minutes
+        ):
             return []
 
         w_start = sorted_window[0].observed_at
@@ -619,7 +630,11 @@ class DementiaSignalWorker:
         else:
             # No baseline repo: fall back to old std-dev approach (kept for
             # backward compatibility with InMemory-only test setups).
-            closed = [d for d in bathroom_dwells if d.exited_at is not None and d.duration_seconds is not None]
+            closed = [
+                d
+                for d in bathroom_dwells
+                if d.exited_at is not None and d.duration_seconds is not None
+            ]
             if len(closed) < 2:
                 return []
             durations = [float(d.duration_seconds) for d in closed]  # type: ignore[arg-type]
@@ -633,8 +648,10 @@ class DementiaSignalWorker:
             baseline_val = mean_dur
             severity = _bathroom_severity(z_score_val)
 
-        kind = "bathroom_dwell_anomaly"
-        if not self._hysteresis.should_emit(identity_id, kind, severity, now, self._cfg.cooldown_minutes):
+        kind: DementiaSignalKind = "bathroom_dwell_anomaly"
+        if not self._hysteresis.should_emit(
+            identity_id, kind, severity, now, self._cfg.cooldown_minutes
+        ):
             return []
 
         w_start = current.entered_at
@@ -714,8 +731,10 @@ class DementiaSignalWorker:
             else:
                 severity = "info"
 
-        kind = "nighttime_movement"
-        if not self._hysteresis.should_emit(identity_id, kind, severity, now, self._cfg.cooldown_minutes):
+        kind: DementiaSignalKind = "nighttime_movement"
+        if not self._hysteresis.should_emit(
+            identity_id, kind, severity, now, self._cfg.cooldown_minutes
+        ):
             return []
 
         w_start = night_points[0].observed_at if night_points else now
@@ -767,7 +786,10 @@ class DementiaSignalWorker:
                 # Closed dwell — check if it meets stillness criteria.
                 if dwell.still_seconds < self._cfg.stillness_threshold_minutes * 60:
                     continue
-                if dwell.min_motion_energy is not None and dwell.min_motion_energy > self._cfg.stillness_motion_floor:
+                if (
+                    dwell.min_motion_energy is not None
+                    and dwell.min_motion_energy > self._cfg.stillness_motion_floor
+                ):
                     continue
                 duration = dwell.duration_seconds or 0
                 severity = _stillness_severity(duration, dwell.primary_posture, self._cfg)
@@ -790,7 +812,10 @@ class DementiaSignalWorker:
                 duration = int((now - dwell.entered_at).total_seconds())
                 if duration < self._cfg.stillness_threshold_minutes * 60:
                     continue
-                if dwell.min_motion_energy is not None and dwell.min_motion_energy > self._cfg.stillness_motion_floor:
+                if (
+                    dwell.min_motion_energy is not None
+                    and dwell.min_motion_energy > self._cfg.stillness_motion_floor
+                ):
                     continue
                 severity = _stillness_severity(duration, dwell.primary_posture, self._cfg)
                 w_end = now
@@ -803,14 +828,18 @@ class DementiaSignalWorker:
                 if cold_start and severity == "emergency":
                     severity = "warning"
 
-            kind = "stillness_anomaly"
-            if not self._hysteresis.should_emit(identity_id, kind, severity, now, self._cfg.cooldown_minutes):
+            kind: DementiaSignalKind = "stillness_anomaly"
+            if not self._hysteresis.should_emit(
+                identity_id, kind, severity, now, self._cfg.cooldown_minutes
+            ):
                 continue
 
             still_signals.append(
                 DementiaSignal(
                     signal_id=_stable_signal_id(
-                        identity_id, kind, dwell.entered_at,
+                        identity_id,
+                        kind,
+                        dwell.entered_at,
                         "open" if dwell.exited_at is None else dwell.exited_at,
                     ),
                     identity_id=identity_id,
@@ -889,9 +918,11 @@ class DementiaSignalWorker:
                 if expected_absence_prior > 0.5 and severity != "info":
                     severity = "info" if severity == "warning" else "warning"
 
-        kind = "absence"
+        kind: DementiaSignalKind = "absence"
         open_marker = "open"
-        if not self._hysteresis.should_emit(identity_id, kind, severity, now, self._cfg.cooldown_minutes):
+        if not self._hysteresis.should_emit(
+            identity_id, kind, severity, now, self._cfg.cooldown_minutes
+        ):
             return []
 
         return [
@@ -949,6 +980,7 @@ class DementiaSignalWorker:
                     samples = cached_samples
                     try:
                         from ..observability import metrics as m
+
                         m.metrics.signal_baseline_cache_hits_total.inc()
                     except Exception:
                         pass

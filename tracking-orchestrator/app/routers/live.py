@@ -36,11 +36,13 @@ class _LiveContext:
     global_track_repo: GlobalTrackRepository
     keyframe_repo: KeyframeRepository
     gallery_repo: GalleryRepository
-    feature_flags: dict[str, bool] = field(default_factory=lambda: {
-        "retroactive_revision_enabled": True,
-        "cross_camera_association_enabled": True,
-        "manual_corrections_enabled": True,
-    })
+    feature_flags: dict[str, bool] = field(
+        default_factory=lambda: {
+            "retroactive_revision_enabled": True,
+            "cross_camera_association_enabled": True,
+            "manual_corrections_enabled": True,
+        }
+    )
 
 
 _ctx: _LiveContext = _LiveContext(
@@ -77,6 +79,11 @@ def set_context(
 @router.get("/internal/global_tracks")
 async def list_global_tracks(
     open_only: bool = Query(True, description="Only return tracks with state='active'"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    camera_id: str | None = Query(None),
+    status: str | None = Query(None, pattern="^(committed|UNKNOWN)$"),
+    search: str | None = Query(None),
     ctx: _LiveContext = Depends(get_context),
 ) -> dict[str, Any]:
     """Return a summary of global tracks for the Live and Corrections views."""
@@ -84,12 +91,36 @@ async def list_global_tracks(
     if not open_only:
         # list_active() is the only protocol accessor; until a list-all method
         # is added we simply honor the request shape for callers that will
-        # later filter server-side.  Today this is equivalent to open_only.
+        # later filter server-side. Today this is equivalent to open_only.
         pass
+    if camera_id:
+        tracks = [t for t in tracks if camera_id in t.camera_ids]
+    if status == "committed":
+        tracks = [t for t in tracks if t.current_identity_id is not None]
+    elif status == "UNKNOWN":
+        tracks = [t for t in tracks if t.current_identity_id is None]
+    if search:
+        needle = search.casefold()
+        identities = await ctx.gallery_repo.list_identities(active_only=True)
+        display_by_id = {i.identity_id: i.display_name for i in identities}
+        tracks = [
+            t
+            for t in tracks
+            if t.current_identity_id is not None
+            and (
+                needle in t.current_identity_id.casefold()
+                or needle in display_by_id.get(t.current_identity_id, "").casefold()
+            )
+        ]
+
+    tracks.sort(key=lambda t: t.last_seen_at, reverse=True)
+    total = len(tracks)
+    page = tracks[offset : offset + limit]
+
     result = []
-    for t in tracks:
+    for t in page:
         result.append(await _track_to_dict(t, ctx.keyframe_repo))
-    return {"tracks": result, "count": len(result)}
+    return {"tracks": result, "count": total, "limit": limit, "offset": offset}
 
 
 @router.get("/internal/global_tracks/{global_track_id}")
@@ -171,9 +202,7 @@ async def get_feature_flags(
 
 
 async def _track_to_dict(track: Any, keyframe_repo: KeyframeRepository) -> dict[str, Any]:
-    keyframes = await keyframe_repo.list_keyframes(
-        global_track_id=track.global_track_id, limit=1
-    )
+    keyframes = await keyframe_repo.list_keyframes(global_track_id=track.global_track_id, limit=1)
     latest_minio_key: str | None = keyframes[0].minio_key if keyframes else None
     return {
         "global_track_id": track.global_track_id,

@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
-from app.calibration.state import CalibrationState, PrivacyZoneConfig
+from app.calibration.state import PrivacyZoneConfig
 from app.domain import BoundingBox
 from app.pipeline.privacy import PrivacyZoneFilter
 
@@ -54,14 +53,18 @@ class TestPrivacyZoneFilter:
     def test_uncalibrated_fails_closed(self) -> None:
         """When homography is unavailable and drop_detection zones exist, fail closed."""
         zone = _zone("z1", [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]])
-        pzf = PrivacyZoneFilter("cam-1", [zone], homography_available=False, frame_width=640, frame_height=480)
+        pzf = PrivacyZoneFilter(
+            "cam-1", [zone], homography_available=False, frame_width=640, frame_height=480
+        )
         # Without foot-point info (None), uncalibrated + drop zones → return True
         assert pzf.should_drop(None)
 
     def test_calibrated_no_drop_without_foot_point(self) -> None:
         """With homography available, None foot point means no drop check."""
         zone = _zone("z1", [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]])
-        pzf = PrivacyZoneFilter("cam-1", [zone], homography_available=True, frame_width=640, frame_height=480)
+        pzf = PrivacyZoneFilter(
+            "cam-1", [zone], homography_available=True, frame_width=640, frame_height=480
+        )
         assert not pzf.should_drop(None)
 
     def test_blur_region_no_drop(self) -> None:

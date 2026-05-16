@@ -10,15 +10,15 @@ from unittest.mock import AsyncMock, patch
 import numpy as np
 import pytest
 
-# A capture timestamp that is always "live" (within the 30s age gate).
-# Using the module-load time is sufficient; the tests run in milliseconds.
-_NOW_NS = int(time.time() * 1e9)
-
 from app.calibration.state import AdjacencyEdge as CalibrationAdjacencyEdge
 from app.calibration.state import calibration_state
 from app.inference.schemas import DetectionBox
 from app.pipeline.frame_pipeline import FrameProcessingPipeline, PipelineConfig
 from app.transport.redis_streams import FrameReady
+
+# A capture timestamp that is always "live" (within the 30s age gate).
+# Using the module-load time is sufficient; the tests run in milliseconds.
+_NOW_NS = int(time.time() * 1e9)
 
 # ---------------------------------------------------------------------------
 # Pipeline skeleton tests
