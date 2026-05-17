@@ -35,10 +35,16 @@ _SQL_GET_IDENTITY = """
     WHERE identity_id = $1
 """
 
-_SQL_LIST_IDENTITIES = """
+_SQL_LIST_IDENTITIES_ACTIVE = """
     SELECT identity_id, display_name, metadata, is_active, enrolled_at
     FROM continuous_tracking.identities
-    WHERE is_active = $1
+    WHERE is_active = true
+    ORDER BY enrolled_at DESC
+"""
+
+_SQL_LIST_IDENTITIES_ALL = """
+    SELECT identity_id, display_name, metadata, is_active, enrolled_at
+    FROM continuous_tracking.identities
     ORDER BY enrolled_at DESC
 """
 
@@ -138,8 +144,9 @@ class PostgresGalleryRepository(GalleryRepository):
         )
 
     async def list_identities(self, active_only: bool = True) -> list[Identity]:
+        sql = _SQL_LIST_IDENTITIES_ACTIVE if active_only else _SQL_LIST_IDENTITIES_ALL
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(_SQL_LIST_IDENTITIES, active_only)
+            rows = await conn.fetch(sql)
         return [
             Identity(
                 identity_id=row["identity_id"],

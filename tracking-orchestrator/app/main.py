@@ -26,6 +26,7 @@ from .observability.logging_config import configure_logging
 # Configure structlog before any logger is first used.
 configure_logging(settings.get("logging.level", "INFO") or "INFO")
 from .inference.detector import PersonDetector
+from .inference.pose import PoseEstimator
 from .inference.reid_embedder import ReidEmbedder
 from .inference.triton_client import TritonGrpcClient
 from .pipeline import FrameProcessingPipeline
@@ -41,8 +42,9 @@ from .routers.gallery import router as gallery_router
 from .routers.live import router as live_router
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
+from .services.cc_client import CognitiveCompanionClient
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
-from .services.overlap_group_sync import fetch_overlap_groups
+from .services.overlap_group_sync import fetch_adjacency_edges, fetch_overlap_groups
 from .storage.migrations import MigrationRunner
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.global_track_repo import PostgresGlobalTrackRepository
@@ -69,7 +71,9 @@ def _normalize_dsn(dsn: str) -> str:
     return dsn
 
 
-async def _fetch_cc_camera_configs(cc_url: str, api_key: str = "") -> dict[str, FaceIdCameraConfig]:
+async def _fetch_cc_camera_configs(
+    client: CognitiveCompanionClient,
+) -> dict[str, FaceIdCameraConfig]:
     """Fetch per-camera face-id configs from cognitive-companion's camera API.
 
     Returns an empty dict if CC is unreachable (graceful degradation).
@@ -77,24 +81,8 @@ async def _fetch_cc_camera_configs(cc_url: str, api_key: str = "") -> dict[str, 
     and min_confidence). The ``FACE_ID_CAMERA_CONFIDENCE`` env var provides
     a deployment-level fallback for cameras not in CC.
     """
-    if not cc_url:
-        return {}
     try:
-        import httpx
-    except ImportError:
-        logger.warning("httpx not installed; cannot fetch camera configs from CC")
-        return {}
-
-    url = cc_url.rstrip("/") + "/api/v1/cts/cameras"
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            cameras: list[dict[str, Any]] = resp.json()
+        cameras: list[dict[str, Any]] = await client.get("/api/v1/cts/cameras")
     except Exception:
         logger.warning("Failed to fetch camera configs from CC", exc_info=True)
         return {}
@@ -184,8 +172,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Per-camera face-id config: CC is the primary source.
     cc_url = settings.get("cognitive_companion.url", "")
     cc_api_key = settings.get("cognitive_companion.api_key", "")
-    face_id_camera_configs = await _fetch_cc_camera_configs(cc_url, cc_api_key)
-    overlap_groups = await fetch_overlap_groups(cc_url, cc_api_key)
+    cc_client = CognitiveCompanionClient(cc_url, cc_api_key)
+    face_id_camera_configs = await _fetch_cc_camera_configs(cc_client)
+    overlap_groups = await fetch_overlap_groups(cc_client)
+    adjacency_edges_raw = await fetch_adjacency_edges(cc_client)
 
     config = PipelineConfig(
         transport=TransportConfig(redis_url=redis_url),
@@ -264,6 +254,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     triton_url = settings.get("triton.url", "")
     detector = None
     reid_embedder = None
+    pose_estimator = None
     env = settings.get("env", "production")
     if triton_url:
         try:
@@ -274,7 +265,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 _triton_client,
                 conf_threshold=float(settings.get("pipeline.detector_confidence", "0.35")),
             )
-            reid_embedder = ReidEmbedder(_triton_client)
+            reid_embedder = ReidEmbedder(
+                _triton_client,
+                model_name=settings.get("triton.reid_model", "reid-solider"),
+            )
+            pose_enabled_str = settings.get("triton.pose_enabled", "true")
+            if str(pose_enabled_str).lower() not in ("0", "false", "no"):
+                pose_estimator = PoseEstimator(
+                    _triton_client,
+                    model_name=settings.get("triton.pose_model", "pose-rtmpose"),
+                )
         except Exception:
             logger.exception("Failed to connect to Triton Inference Server")
             if env in ("production", "staging"):
@@ -323,9 +323,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings_repo=settings_repo,
         frame_fetcher=_frame_fetcher,
         reid_embedder=reid_embedder,
+        pose_estimator=pose_estimator,
         identity_rewriter=identity_rewriter,
     )
     _pipeline.set_overlap_groups(overlap_groups)
+
+    # Restore persisted adjacency edges from CC DB into in-memory calibration state.
+    if adjacency_edges_raw:
+        from .calibration.state import AdjacencyEdge as _AdjacencyEdge
+        from .calibration.state import calibration_state
+
+        edges = [
+            _AdjacencyEdge(
+                from_camera=e.get("from", ""),
+                to_camera=e.get("to", ""),
+                min_transit_s=float(e.get("min_transit_s", 0.5)),
+                max_transit_s=float(e.get("max_transit_s", 30.0)),
+                overlap=bool(e.get("overlap", False)),
+            )
+            for e in adjacency_edges_raw
+            if e.get("from") and e.get("to")
+        ]
+        await calibration_state.set_adjacency(edges)
+        logger.info("Restored adjacency edges from CC", edge_count=len(edges))
+
     await _pipeline.start()
 
     # Wire router modules to share the pipeline's repositories.

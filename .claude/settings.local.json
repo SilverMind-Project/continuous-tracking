@@ -83,7 +83,27 @@
       "Bash(PGPASSWORD=\"change-me-cts-password\" psql *)",
       "Bash(make all-check *)",
       "Bash(make format *)",
-      "Bash(tracking-orchestrator/.venv/bin/mypy *)"
+      "Bash(tracking-orchestrator/.venv/bin/mypy *)",
+      "Skill(engineering-standards)",
+      "Bash(../tracking-orchestrator/.venv/bin/pytest tests *)",
+      "Bash(git *)",
+      "Bash(../tracking-orchestrator/.venv/bin/pytest tests/test_pipeline.py -v --tb=short)",
+      "Bash(echo \"EXIT_CODE=$?\")",
+      "Bash(curl -s http://localhost:8000/v2/health/ready)",
+      "Bash(curl -s http://localhost:8001/v2/health/ready)",
+      "Bash(curl -s http://localhost:8700/v2/health/ready)",
+      "Bash(curl -s http://localhost:8700/v2/models)",
+      "Bash(curl -s \"http://localhost:8700/v2/models/reid-solider\")",
+      "Bash(curl -s \"http://localhost:8700/v2/models/pose-rtmpose\")",
+      "Bash(curl -s \"http://localhost:8700/v2/models/reid-solider/stats\")",
+      "Bash(curl -s \"http://localhost:8700/v2/models/pose-rtmpose/stats\")",
+      "Bash(curl -s http://localhost:8500/gallery/identities)",
+      "Bash(curl *)",
+      "Bash(xargs ls -la)",
+      "Bash(xargs cat)",
+      "Bash(awk '/name/{name=$2} /idle/{print name, \"idle:\", $2}')",
+      "Bash(sort -k3 -n)",
+      "Bash(sort -k6 -n)"
     ]
   }
 }

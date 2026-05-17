@@ -164,8 +164,9 @@ class TrackerConfig:
     # extend an existing track (used as a secondary filter).
     track_high_thresh: float = 0.6
 
-    # Maximum IoU cost for association (higher = more permissive).
-    match_thresh: float = 0.8
+    # Minimum IoU required for a match to be accepted (higher = stricter).
+    # Effective as: accept match when iou_cost <= (1 - match_thresh).
+    match_thresh: float = 0.4
 
     # Frames without a match before a track is terminated.
     max_time_lost: int = 30

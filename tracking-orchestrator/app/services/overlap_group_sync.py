@@ -13,34 +13,19 @@ from typing import Any
 from structlog import get_logger
 
 from ..domain import OverlapGroup
+from .cc_client import CognitiveCompanionClient
 
 logger = get_logger(__name__)
 
 
-async def fetch_overlap_groups(cc_url: str, api_key: str = "") -> list[OverlapGroup]:
+async def fetch_overlap_groups(client: CognitiveCompanionClient) -> list[OverlapGroup]:
     """Fetch camera overlap groups from CC.
 
     Returns [] on error so the pipeline degrades gracefully when CC is
     unavailable at startup.
     """
-    if not cc_url:
-        return []
     try:
-        import httpx
-    except ImportError:
-        logger.error("httpx not installed; cannot fetch overlap groups from CC")
-        return []
-
-    url = cc_url.rstrip("/") + "/api/v1/cts/overlap_groups"
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            raw: list[dict[str, Any]] = resp.json()
+        raw: list[dict[str, Any]] = await client.get("/api/v1/cts/overlap_groups")
     except Exception:
         logger.warning("Failed to fetch overlap groups from CC", exc_info=True)
         return []
@@ -64,3 +49,22 @@ async def fetch_overlap_groups(cc_url: str, api_key: str = "") -> list[OverlapGr
         logger.warning("Skipped malformed overlap groups", count=skipped)
     logger.info("Fetched camera overlap groups from CC", group_count=len(groups))
     return groups
+
+
+async def fetch_adjacency_edges(client: CognitiveCompanionClient) -> list[dict[str, Any]]:
+    """Fetch persisted camera adjacency edges from CC.
+
+    Returns [] on error so the pipeline degrades gracefully when CC is
+    unavailable at startup.  Each dict has keys ``from``, ``to``,
+    ``min_transit_s``, ``max_transit_s``, ``overlap`` matching the
+    orchestrator's AdjacencyEdgeIn wire format.
+    """
+    try:
+        data: dict[str, Any] = await client.get("/api/v1/cts/calibration/adjacency")
+    except Exception:
+        logger.warning("Failed to fetch adjacency edges from CC", exc_info=True)
+        return []
+
+    edges: list[dict[str, Any]] = data.get("edges", [])
+    logger.info("Fetched camera adjacency edges from CC", edge_count=len(edges))
+    return edges

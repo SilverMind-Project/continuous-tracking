@@ -25,6 +25,8 @@ triton:
   url: "${TRITON_GRPC_URL:-}"
   person_detector_model: "${TRITON_DETECTOR_MODEL:-person-detector}"
   reid_model: "${TRITON_REID_MODEL:-reid-solider}"
+  pose_model: "${TRITON_POSE_MODEL:-pose-rtmpose}"
+  pose_enabled: "${TRITON_POSE_ENABLED:-true}"
   timeout_ms: "${TRITON_TIMEOUT_MS:-5000}"
 
 # MinIO / S3-compatible object storage

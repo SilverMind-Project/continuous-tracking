@@ -274,6 +274,15 @@ class GlobalTrackRepository(ABC):
         """Find the global track that contains a given tracklet ID."""
 
     @abstractmethod
+    async def close_global_track(self, global_track_id: str) -> None:
+        """Mark a global track as closed (state='closed').
+
+        Called when the tracker loses the track and it disappears from the
+        active set.  Prevents stale 'active' rows from accumulating and
+        bloating list_active() queries over time.
+        """
+
+    @abstractmethod
     async def update_last_posterior(
         self,
         global_track_id: str,
@@ -675,6 +684,19 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
         if gt_id is None:
             return None
         return self._tracks.get(gt_id)
+
+    async def close_global_track(self, global_track_id: str) -> None:
+        track = self._tracks.get(global_track_id)
+        if track is not None and track.state == "active":
+            self._tracks[global_track_id] = GlobalTrack(
+                global_track_id=track.global_track_id,
+                camera_ids=track.camera_ids,
+                tracklet_ids=track.tracklet_ids,
+                started_at=track.started_at,
+                last_seen_at=track.last_seen_at,
+                current_identity_id=track.current_identity_id,
+                state="closed",
+            )
 
     async def update_last_posterior(
         self,

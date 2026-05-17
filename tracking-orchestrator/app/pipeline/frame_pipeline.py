@@ -148,6 +148,27 @@ def _bbox_iou(a: list[float], b: list[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def _face_person_overlap(face: list[float], person: list[float]) -> float:
+    """Fraction of the face bbox covered by the person bbox.
+
+    Standard IoU is wrong for face-to-person matching because the face
+    (small) vs full-body YOLO bbox (large) gives IoU ≈ face_area/body_area
+    which is ~0.05-0.13 — near or below any useful threshold.  Instead,
+    measure what fraction of the face is inside the person bbox.  This
+    approaches 1.0 when the face is fully contained in the person and is
+    robust to the face being much smaller than the body.
+    """
+    x_left = max(face[0], person[0])
+    y_top = max(face[1], person[1])
+    x_right = min(face[2], person[2])
+    y_bottom = min(face[3], person[3])
+    if x_right <= x_left or y_bottom <= y_top:
+        return 0.0
+    inter = (x_right - x_left) * (y_bottom - y_top)
+    face_area = max(1e-8, (face[2] - face[0]) * (face[3] - face[1]))
+    return inter / face_area
+
+
 def _iou_dedup_detections(
     boxes: list[DetectionBox],
     iou_threshold: float,
@@ -752,6 +773,8 @@ class FrameProcessingPipeline:
                     age_s=round(age_s, 1),
                 )
                 _metrics.metrics.frames_dropped_stale_total.labels(camera_id=frame.camera_id).inc()
+                if self._transport is not None:
+                    await self._transport.ack_frame(frame)
                 return
 
         if self._detector is None or self._tracklet_manager is None or self._tracker is None:
@@ -774,6 +797,13 @@ class FrameProcessingPipeline:
 
         # Step 2: Run detection
         detections = await self._detector.detect(image)
+        logger.debug(
+            "detections_raw",
+            camera_id=frame.camera_id,
+            frame_index=frame.frame_index,
+            count=len(detections),
+            image_shape=f"{image.shape[0]}x{image.shape[1]}",
+        )
 
         # Step 2a: Post-decode IoU dedup — suppresses any near-duplicate
         # detections that survived the model's baked NMS. Keeps the highest-
@@ -822,10 +852,11 @@ class FrameProcessingPipeline:
         domain_detections: list[Detection] = []
         det_posture: dict[str, PostureType] = {}
         det_pose_result: dict[str, PoseResult] = {}
+        embeddings: list[Embedding] = []
 
         if detections:
             crops = [_crop_detection(image, det) for det in detections]
-            embeddings: list[Embedding] = (
+            embeddings = (
                 await self._reid_embedder.embed_batch(crops)
                 if self._reid_embedder is not None
                 else []
@@ -865,31 +896,34 @@ class FrameProcessingPipeline:
                 if pose_result is not None:
                     det_pose_result[domain_det.detection_id] = pose_result
 
-            # Step 3: Per-camera tracking
-            local_tracks = self._tracker.update(
-                camera_id=frame.camera_id,
-                detections=domain_detections,
-                embeddings=embeddings or None,
-                frame_index=frame.frame_index,
-            )
+        # Step 3: Per-camera tracking — run even with 0 detections so the
+        # BoT-SORT Kalman filter ages out lost tracklets instead of keeping
+        # them alive indefinitely when nobody is in frame.
+        local_tracks = self._tracker.update(
+            camera_id=frame.camera_id,
+            detections=domain_detections,
+            embeddings=embeddings or None,
+            frame_index=frame.frame_index,
+        )
 
-            # Emit tracker dedup metric
-            dedup_dropped = self._tracker.get_dedup_dropped(frame.camera_id)
-            if dedup_dropped > 0:
-                _metrics.metrics.tracklets_dedup_dropped_total.labels(
-                    camera_id=frame.camera_id
-                ).inc(dedup_dropped)
+        # Emit tracker dedup metric
+        dedup_dropped = self._tracker.get_dedup_dropped(frame.camera_id)
+        if dedup_dropped > 0:
+            _metrics.metrics.tracklets_dedup_dropped_total.labels(
+                camera_id=frame.camera_id
+            ).inc(dedup_dropped)
 
-            # Step 4: Tracklet management
-            camera_config = CameraConfig(camera_id=frame.camera_id)
-            await self._tracklet_manager.step(
-                camera=camera_config,
-                local_tracks=local_tracks,
-                detections=domain_detections,
-                embeddings=embeddings,
-                event_time=event_time,
-                frame_index=frame.frame_index,
-            )
+        # Step 4: Tracklet management — run even with 0 detections so
+        # tracklets that have no corresponding detection are marked lost.
+        camera_config = CameraConfig(camera_id=frame.camera_id)
+        await self._tracklet_manager.step(
+            camera=camera_config,
+            local_tracks=local_tracks,
+            detections=domain_detections,
+            embeddings=embeddings,
+            event_time=event_time,
+            frame_index=frame.frame_index,
+        )
 
         # Step 4b: Face identification (rate-limited call to person-identification-service)
         face_anchors: list[FaceAnchor] = []
@@ -1013,14 +1047,17 @@ class FrameProcessingPipeline:
         # empty, every previously-active track is considered terminated.
         current_gt_ids = {gt.global_track_id for gt in active_global_tracks}
         terminated_gt_ids = self._prev_active_gt_ids - current_gt_ids
-        if terminated_gt_ids and self._trajectory_writer:
+        if terminated_gt_ids:
             traj_close_time = datetime.now(UTC)
             for gt_id in terminated_gt_ids:
                 logger.debug(
-                    "Closing trajectory dwell for terminated global track",
+                    "Closing terminated global track",
                     global_track_id=gt_id,
                 )
-                await self._trajectory_writer.close_track(gt_id, closed_at=traj_close_time)
+                if self._global_track_repo is not None:
+                    await self._global_track_repo.close_global_track(gt_id)
+                if self._trajectory_writer:
+                    await self._trajectory_writer.close_track(gt_id, closed_at=traj_close_time)
                 if self._motion_energy_tracker is not None:
                     self._motion_energy_tracker.evict_track(gt_id)
         self._prev_active_gt_ids = current_gt_ids
@@ -1435,13 +1472,21 @@ class FrameProcessingPipeline:
                     det.bbox.x_max / frame_width,
                     det.bbox.y_max / frame_height,
                 ]
-                iou = _bbox_iou(face.bbox_normalized, det_norm)
+                iou = _face_person_overlap(face.bbox_normalized, det_norm)
                 if iou > best_iou:
                     best_iou = iou
                     best_det_idx = i
 
-            # Minimum IoU threshold for face-to-person association.
-            if best_det_idx < 0 or best_iou < 0.1:
+            # Require ≥30% of the face bbox to lie inside the person bbox.
+            # Standard IoU is too strict here: a face region is ~5-15% of
+            # the full-body area, so IoU caps well below any useful threshold.
+            if best_det_idx < 0 or best_iou < 0.3:
+                logger.debug(
+                    "face_anchor_dropped_no_iou",
+                    person_id=face.person_id,
+                    best_iou=round(best_iou, 3),
+                    camera_id=camera_id,
+                )
                 continue
 
             assigned_detections.add(best_det_idx)

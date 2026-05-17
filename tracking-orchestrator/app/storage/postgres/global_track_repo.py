@@ -56,6 +56,7 @@ SELECT global_track_id, camera_ids, tracklet_ids, started_at,
        last_seen_at, current_identity_id, state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE state = 'active'
+  AND last_seen_at > now() - interval '5 minutes'
 ORDER BY last_seen_at DESC
 """
 
@@ -72,6 +73,12 @@ _SQL_ASSIGN_IDENTITY = """
 UPDATE continuous_tracking.global_tracks
 SET current_identity_id = $2, updated_at = now()
 WHERE global_track_id = $1
+"""
+
+_SQL_CLOSE_GLOBAL_TRACK = """
+UPDATE continuous_tracking.global_tracks
+SET state = 'closed', updated_at = now()
+WHERE global_track_id = $1 AND state = 'active'
 """
 
 
@@ -200,6 +207,10 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(_SQL_GET_BY_TRACKLET, tracklet_id)
         return _row_to_global_track(row) if row is not None else None
+
+    async def close_global_track(self, global_track_id: str) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(_SQL_CLOSE_GLOBAL_TRACK, global_track_id)
 
     async def update_last_posterior(
         self,
