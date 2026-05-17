@@ -89,7 +89,8 @@ class TestTrackletManager:
     def manager(self) -> TrackletManager:
         repo = InMemoryTrackingRepository()
         gallery = InMemoryGalleryRepository()
-        return TrackletManager(repo, gallery, TrackletConfig())
+        # Disable stability gate so existing tests don't have to call step() N times.
+        return TrackletManager(repo, gallery, TrackletConfig(min_frames_to_publish=0))
 
     @pytest.fixture
     def camera(self) -> CameraConfig:
@@ -402,7 +403,7 @@ class TestTrackletManager:
 
         # Stop sending the local track — tracklet is no longer in alive set.
         # Use a short grace window for faster testing.
-        manager._config = TrackletConfig(close_grace_frames=2)
+        manager._config = TrackletConfig(close_grace_frames=2, min_frames_to_publish=0)
 
         # Frame 1: lost_count = 1, still alive.
         _, _, _ = await manager.step(

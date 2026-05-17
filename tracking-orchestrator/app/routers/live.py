@@ -84,6 +84,9 @@ async def list_global_tracks(
     camera_id: str | None = Query(None),
     status: str | None = Query(None, pattern="^(committed|UNKNOWN)$"),
     search: str | None = Query(None),
+    min_duration_s: float = Query(
+        0.0, ge=0.0, description="Exclude tracks shorter than this many seconds"
+    ),
     ctx: _LiveContext = Depends(get_context),
 ) -> dict[str, Any]:
     """Return a summary of global tracks for the Live and Corrections views."""
@@ -93,6 +96,10 @@ async def list_global_tracks(
         # is added we simply honor the request shape for callers that will
         # later filter server-side. Today this is equivalent to open_only.
         pass
+    if min_duration_s > 0:
+        tracks = [
+            t for t in tracks if (t.last_seen_at - t.started_at).total_seconds() >= min_duration_s
+        ]
     if camera_id:
         tracks = [t for t in tracks if camera_id in t.camera_ids]
     if status == "committed":
@@ -213,4 +220,5 @@ async def _track_to_dict(track: Any, keyframe_repo: KeyframeRepository) -> dict[
         "last_seen_at": track.last_seen_at.isoformat(),
         "state": track.state,
         "latest_keyframe_minio_key": latest_minio_key,
+        "last_posterior_jsonb": track.last_posterior_jsonb,
     }

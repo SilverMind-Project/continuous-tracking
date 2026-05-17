@@ -151,6 +151,7 @@ class GlobalTrack:
     last_seen_at: datetime
     current_identity_id: IdentityId | None = None
     state: Literal["active", "closed"] = "active"
+    last_posterior_jsonb: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +371,15 @@ class CameraConfig:
     resolution_height: int = 1080
     floor_plan: dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
+
+
+@dataclass(frozen=True)
+class OverlapGroup:
+    """A group of cameras that share a physical field of view."""
+
+    group_id: str
+    name: str = ""
+    camera_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

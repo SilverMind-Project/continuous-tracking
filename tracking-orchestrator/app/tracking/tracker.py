@@ -177,6 +177,12 @@ class TrackerConfig:
     # BoT-SORT uses appearance + IoU; we default to equal weighting.
     appearance_weight: float = 0.5
 
+    # Post-update dedup: a newly-spawned tracklet (age==1) whose bbox overlaps
+    # an existing stable tracklet (age >= dedup_min_age) by more than this IoU
+    # threshold is immediately dropped. Suppresses ghost re-detections.
+    dedup_iou_threshold: float = 0.7
+    dedup_min_age: int = 5
+
 
 # ---------------------------------------------------------------------------
 # Association helpers
@@ -268,6 +274,7 @@ class PerCameraTracker:
         self._config = config or TrackerConfig()
         self._tracks: dict[str, _InternalTrack] = {}
         self._next_local_id: int = 0
+        self._dedup_dropped: int = 0
 
     @property
     def active_track_count(self) -> int:
@@ -346,13 +353,53 @@ class PerCameraTracker:
             result.append(self._make_local_track(track, det, emb))
 
         # ---- Step 4: handle unmatched detections (new tracks) ----
+        # Collect (local_id, det, emb) for all candidate new tracks so we can
+        # dedup before adding to result.
+        new_candidates: list[tuple[str, Detection, Embedding | None]] = []
         for det_idx in unmatched_dets:
             det = detections[det_idx]
             emb = emb_list[det_idx]
             if det.confidence >= self._config.new_track_thresh:
                 local_id = self._create_track(det, emb)
-                track = self._tracks[local_id]
-                result.append(self._make_local_track(track, det, emb))
+                new_candidates.append((local_id, det, emb))
+
+        # ---- Step 4a: dedup — drop new tracklets that heavily overlap a
+        # stable existing tracklet (age >= dedup_min_age). ----
+        self._dedup_dropped = 0
+        if new_candidates and self._config.dedup_iou_threshold < 1.0:
+            new_ids = {lid for lid, _, _ in new_candidates}
+            stable_tracks = [
+                t
+                for t in self._tracks.values()
+                if t.age >= self._config.dedup_min_age and t.local_track_id not in new_ids
+            ]
+            if stable_tracks:
+                stable_boxes = np.array(
+                    [
+                        [float(b[0]), float(b[1]), float(b[2]), float(b[3])]
+                        for t in stable_tracks
+                        for b in [t.bbox_history[-1]]
+                    ],
+                    dtype=np.float64,
+                )
+                kept_candidates: list[tuple[str, Detection, Embedding | None]] = []
+                for local_id, det, emb in new_candidates:
+                    new_track = self._tracks[local_id]
+                    nb = new_track.bbox_history[-1]
+                    new_box = np.array(
+                        [[float(nb[0]), float(nb[1]), float(nb[2]), float(nb[3])]],
+                        dtype=np.float64,
+                    )
+                    if _iou_matrix(new_box, stable_boxes).max() > self._config.dedup_iou_threshold:
+                        del self._tracks[local_id]
+                        self._dedup_dropped += 1
+                    else:
+                        kept_candidates.append((local_id, det, emb))
+                new_candidates = kept_candidates
+
+        for local_id, det, emb in new_candidates:
+            track = self._tracks[local_id]
+            result.append(self._make_local_track(track, det, emb))
 
         # ---- Step 5: advance unmatched tracks (lost count) ----
         for trk_id in unmatched_tracks:
@@ -608,3 +655,8 @@ class PerCameraTrackers:
         if tracker is None:
             return 0
         return tracker.active_track_count
+
+    def get_dedup_dropped(self, camera_id: str) -> int:
+        """Return the number of tracklets dropped by dedup in the last update() call."""
+        tracker = self._trackers.get(camera_id)
+        return tracker._dedup_dropped if tracker is not None else 0

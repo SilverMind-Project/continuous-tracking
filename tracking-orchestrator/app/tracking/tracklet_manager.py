@@ -56,6 +56,12 @@ class TrackletConfig:
     # Whether to enable tracklet creation (for testing).
     enabled: bool = True
 
+    # Stability gate: tracklets must survive this many consecutive frames
+    # before being exposed to cross-camera association, identity resolution,
+    # trajectory writing, and the published TrackingEvent.
+    # Setting to 0 disables the gate (legacy behaviour).
+    min_frames_to_publish: int = 3
+
 
 # ---------------------------------------------------------------------------
 # Internal tracklet state (mutable during the tracklet's lifetime)
@@ -73,6 +79,9 @@ class _TrackletState:
     detections: list[Detection] = field(default_factory=list)
     embeddings: list[Embedding] = field(default_factory=list)
     lost_count: int = 0
+    # Frames this tracklet has been alive (incremented each frame it appears
+    # in alive_tracklet_ids). Used by the stability gate.
+    frames_alive: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +179,7 @@ class TrackletManager:
                 emb_idx = self._find_embedding_index(local_track.detection, detections)
                 emb = embeddings[emb_idx] if emb_idx < len(embeddings) else None
 
+                state.frames_alive += 1
                 new_state = self._extend_tracklet(state, det, emb, event_time, frame_index)
                 if new_state is not None:
                     state = new_state
@@ -218,6 +228,7 @@ class TrackletManager:
                     last_detection_time=event_time,
                     detections=[det],
                     embeddings=[emb] if emb is not None else [],
+                    frames_alive=1,
                 )
 
                 # Register in active set and reverse map before gallery append
@@ -300,6 +311,7 @@ class TrackletManager:
             detections=state.detections,
             embeddings=state.embeddings,
             lost_count=state.lost_count,
+            frames_alive=state.frames_alive,
         )
 
     def _create_tracklet(
@@ -441,11 +453,32 @@ class TrackletManager:
         return events
 
     def get_active_tracklets(self) -> list[Tracklet]:
-        """Return all currently active tracklets."""
-        active = [
-            state.tracklet for state in self._active.values() if state.tracklet.state == "active"
+        """Return active tracklets that have passed the stability gate.
+
+        Tracklets with ``frames_alive < min_frames_to_publish`` are kept in
+        memory and continue accumulating evidence, but are not returned here.
+        They produce no DB rows, no identity resolution, and no published event
+        until they reach the gate — silently suppressing false-positive flashes.
+        """
+        threshold = self._config.min_frames_to_publish
+        return [
+            state.tracklet
+            for state in self._active.values()
+            if state.tracklet.state == "active"
+            and (threshold == 0 or state.frames_alive >= threshold)
         ]
-        return active
+
+    def get_held_count_by_camera(self) -> dict[str, int]:
+        """Return number of tracklets currently held below the stability gate, per camera."""
+        threshold = self._config.min_frames_to_publish
+        if threshold == 0:
+            return {}
+        counts: dict[str, int] = {}
+        for state in self._active.values():
+            if state.tracklet.state == "active" and state.frames_alive < threshold:
+                cam = state.tracklet.camera_id
+                counts[cam] = counts.get(cam, 0) + 1
+        return counts
 
     def get_tracklet(self, tracklet_id: str) -> Tracklet | None:
         """Get a tracklet by ID, checking both active and persisted storage."""

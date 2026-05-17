@@ -41,6 +41,8 @@ from .routers.gallery import router as gallery_router
 from .routers.live import router as live_router
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
+from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
+from .services.overlap_group_sync import fetch_overlap_groups
 from .storage.migrations import MigrationRunner
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.global_track_repo import PostgresGlobalTrackRepository
@@ -183,6 +185,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     cc_url = settings.get("cognitive_companion.url", "")
     cc_api_key = settings.get("cognitive_companion.api_key", "")
     face_id_camera_configs = await _fetch_cc_camera_configs(cc_url, cc_api_key)
+    overlap_groups = await fetch_overlap_groups(cc_url, cc_api_key)
 
     config = PipelineConfig(
         transport=TransportConfig(redis_url=redis_url),
@@ -193,6 +196,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         face_id_enabled=bool(face_id_url),
         face_id_camera_configs=face_id_camera_configs,
         timezone=settings.get("app.timezone", "UTC"),
+        allow_skeleton=str(settings.get("pipeline.allow_skeleton", "false")).lower()
+        in ("1", "true", "yes"),
+        # Phase 1: noise reduction
+        detection_iou_dedup_threshold=float(
+            settings.get("pipeline.detection.iou_dedup_threshold", "0.55")
+        ),
+        tracker_dedup_iou_threshold=float(
+            settings.get("pipeline.tracker.dedup_iou_threshold", "0.7")
+        ),
+        tracker_min_frames_to_publish=int(
+            settings.get("pipeline.tracker.min_frames_to_publish", "3")
+        ),
+        identity_commit_window_s=float(settings.get("pipeline.identity.commit_window_s", "3.0")),
+        identity_high_confidence_face_threshold=float(
+            settings.get("pipeline.identity.high_confidence_face_threshold", "0.85")
+        ),
+        identity_committer_enabled=str(
+            settings.get("pipeline.identity.committer_enabled", "false")
+        ).lower()
+        in ("1", "true", "yes"),
     )
     _pipeline = FrameProcessingPipeline(config)
 
@@ -249,7 +272,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await _triton_client.__aenter__()
             detector = PersonDetector(
                 _triton_client,
-                conf_threshold=float(settings.get("pipeline.detector_confidence", "0.25")),
+                conf_threshold=float(settings.get("pipeline.detector_confidence", "0.35")),
             )
             reid_embedder = ReidEmbedder(_triton_client)
         except Exception:
@@ -260,13 +283,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     "Set PIPELINE_ALLOW_SKELETON=true to override for testing."
                 ) from None
             _triton_client = None
-    elif env in ("production", "staging"):
-        allow_skeleton = settings.get("pipeline.allow_skeleton", "false")
-        if str(allow_skeleton).lower() not in ("1", "true", "yes"):
-            raise RuntimeError(
-                "Triton Inference Server (TRITON_GRPC_URL) is required in production/staging. "
-                "Set PIPELINE_ALLOW_SKELETON=true to override for testing."
-            )
 
     # -- MinIO --
     minio_endpoint = settings.get("minio.endpoint", "")
@@ -293,6 +309,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
     # -- Wire everything and start --
+    identity_rewriter = (
+        PostgresIdentityRewriter(_pool) if _pool is not None else InMemoryIdentityRewriter()
+    )
     await _pipeline.initialize(
         detector=detector,
         tracking_repo=tracking_repo,
@@ -304,7 +323,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings_repo=settings_repo,
         frame_fetcher=_frame_fetcher,
         reid_embedder=reid_embedder,
+        identity_rewriter=identity_rewriter,
     )
+    _pipeline.set_overlap_groups(overlap_groups)
     await _pipeline.start()
 
     # Wire router modules to share the pipeline's repositories.

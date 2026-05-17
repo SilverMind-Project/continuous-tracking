@@ -65,6 +65,12 @@ class Metrics:
     # ---- Privacy enforcement ------------------------------------------
     privacy_detections_dropped_total: Counter
 
+    # ---- Phase 1: noise reduction ------------------------------------
+    detections_suppressed_total: Counter
+    tracklets_dedup_dropped_total: Counter
+    tracklets_held_below_stability_gate: Gauge
+    revision_rows_rewritten_total: Counter
+
     # ---- Signal worker -------------------------------------------------
     signal_worker_run_seconds: Histogram
     signal_worker_identities: Gauge
@@ -187,6 +193,26 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_privacy_detections_dropped_total",
             "Person detections dropped by privacy zone enforcement.",
             ["camera_id"],
+        ),
+        detections_suppressed_total=_counter(
+            "cts_detections_suppressed_total",
+            "Detections suppressed before tracker: score_threshold or post-decode IoU dedup.",
+            ["stage"],
+        ),
+        tracklets_dedup_dropped_total=_counter(
+            "cts_tracklets_dedup_dropped_total",
+            "Newly-spawned tracklets dropped because they overlapped a stable existing tracklet.",
+            ["camera_id"],
+        ),
+        tracklets_held_below_stability_gate=_gauge(
+            "cts_tracklets_held_below_stability_gate",
+            "Active tracklets currently below the frames_alive stability gate.",
+            ["camera_id"],
+        ),
+        revision_rows_rewritten_total=_counter(
+            "cts_revision_rows_rewritten_total",
+            "DB rows retroactively relabelled by the identity rewriter.",
+            ["table"],
         ),
         signal_worker_run_seconds=_hist(
             "cts_signal_worker_run_seconds",

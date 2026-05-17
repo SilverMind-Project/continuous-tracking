@@ -163,9 +163,13 @@ type DementiaSignal struct {
 	EmittedAtUnixNs uint64 `protobuf:"fixed64,12,opt,name=emitted_at_unix_ns,json=emittedAtUnixNs,proto3" json:"emitted_at_unix_ns,omitempty"`
 	// Detector-specific context (window count, room name, last-known posture,
 	// etc.) serialised as a JSON string. Free-form by design.
-	ContextJson   string `protobuf:"bytes,13,opt,name=context_json,json=contextJson,proto3" json:"context_json,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ContextJson string `protobuf:"bytes,13,opt,name=context_json,json=contextJson,proto3" json:"context_json,omitempty"`
+	// Monotonically incremented detector algorithm version.  A bump indicates
+	// the semantics of value/baseline/z_score may have changed.  Consumers
+	// should use this to filter stale-version signals out of "active" rollups.
+	AlgorithmVersion int32 `protobuf:"varint,14,opt,name=algorithm_version,json=algorithmVersion,proto3" json:"algorithm_version,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *DementiaSignal) Reset() {
@@ -289,11 +293,18 @@ func (x *DementiaSignal) GetContextJson() string {
 	return ""
 }
 
+func (x *DementiaSignal) GetAlgorithmVersion() int32 {
+	if x != nil {
+		return x.AlgorithmVersion
+	}
+	return 0
+}
+
 var File_continuoustracking_v1_signals_proto protoreflect.FileDescriptor
 
 const file_continuoustracking_v1_signals_proto_rawDesc = "" +
 	"\n" +
-	"#continuoustracking/v1/signals.proto\x12\x15continuoustracking.v1\"\x94\x04\n" +
+	"#continuoustracking/v1/signals.proto\x12\x15continuoustracking.v1\"\xc1\x04\n" +
 	"\x0eDementiaSignal\x12\x1b\n" +
 	"\tsignal_id\x18\x01 \x01(\tR\bsignalId\x12\x1f\n" +
 	"\videntity_id\x18\x02 \x01(\tR\n" +
@@ -309,7 +320,8 @@ const file_continuoustracking_v1_signals_proto_rawDesc = "" +
 	" \x01(\x06R\x11windowStartUnixNs\x12+\n" +
 	"\x12window_end_unix_ns\x18\v \x01(\x06R\x0fwindowEndUnixNs\x12+\n" +
 	"\x12emitted_at_unix_ns\x18\f \x01(\x06R\x0femittedAtUnixNs\x12!\n" +
-	"\fcontext_json\x18\r \x01(\tR\vcontextJson*\xb2\x02\n" +
+	"\fcontext_json\x18\r \x01(\tR\vcontextJson\x12+\n" +
+	"\x11algorithm_version\x18\x0e \x01(\x05R\x10algorithmVersion*\xb2\x02\n" +
 	"\x12DementiaSignalKind\x12$\n" +
 	" DEMENTIA_SIGNAL_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bDEMENTIA_SIGNAL_KIND_PACING\x10\x01\x12)\n" +

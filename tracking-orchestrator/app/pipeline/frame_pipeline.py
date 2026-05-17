@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Protocol
@@ -39,6 +40,7 @@ from ..domain import (
     GlobalTrack,
     Identity,
     IdentityRevision,
+    OverlapGroup,
     PostureType,
     TaggedKeyframe,
     TrackingEvent,
@@ -50,6 +52,10 @@ from ..inference.schemas import DetectionBox, Embedding, PoseResult
 from ..observability import metrics as _metrics
 from ..pipeline.privacy import PrivacyZoneFilter
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
+from ..services.identity_rewriter import (
+    IdentityRewriter,
+    InMemoryIdentityRewriter,
+)
 from ..storage.base import (
     BehaviorBaselineRepository,
     DementiaSignalRepository,
@@ -142,6 +148,34 @@ def _bbox_iou(a: list[float], b: list[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def _iou_dedup_detections(
+    boxes: list[DetectionBox],
+    iou_threshold: float,
+) -> list[DetectionBox]:
+    """Greedy IoU dedup: keep the highest-confidence box from overlapping clusters.
+
+    Processes boxes in descending confidence order. A box is suppressed if its
+    IoU with any already-kept box exceeds *iou_threshold*.  O(N^2) but N is
+    always small (YOLO outputs ≤ 300 post-NMS boxes of which only a handful
+    pass the score threshold in a typical room-camera scene).
+    """
+    if len(boxes) <= 1:
+        return list(boxes)
+
+    sorted_boxes = sorted(boxes, key=lambda b: b.confidence, reverse=True)
+    kept: list[DetectionBox] = []
+    suppressed_count = 0
+    for box in sorted_boxes:
+        b_coords = [box.x1, box.y1, box.x2, box.y2]
+        if any(_bbox_iou(b_coords, [k.x1, k.y1, k.x2, k.y2]) > iou_threshold for k in kept):
+            suppressed_count += 1
+        else:
+            kept.append(box)
+    if suppressed_count > 0:
+        _metrics.metrics.detections_suppressed_total.labels(stage="iou_dedup").inc(suppressed_count)
+    return kept
+
+
 # ---------------------------------------------------------------------------
 # Pipeline configuration
 # ---------------------------------------------------------------------------
@@ -175,6 +209,8 @@ class PipelineConfig:
     face_id_url: str = ""
     face_id_cooldown_s: float = 5.0
     face_id_timeout_s: float = 2.0
+    # Allow running without a detector (skeleton mode). Off by default; enable only in tests.
+    allow_skeleton: bool = False
     face_id_min_confidence: float = 0.4
     face_id_enabled: bool = True
     # Per-camera overrides: camera_id -> enabled flag and optional higher threshold.
@@ -183,6 +219,26 @@ class PipelineConfig:
     face_id_camera_configs: dict[str, FaceIdCameraConfig] = field(default_factory=dict)
     # Pose estimation (RTMPose) — enabled by default; set False to disable.
     pose_enabled: bool = True
+
+    # --- Phase 1: noise reduction ---
+
+    # Post-decode IoU suppression threshold. Detections whose bboxes overlap
+    # an already-kept detection by more than this IoU are dropped before
+    # the tracker sees them. Belt-and-braces since the ONNX model bakes NMS.
+    detection_iou_dedup_threshold: float = 0.55
+
+    # Per-camera tracker dedup IoU threshold (see TrackerConfig.dedup_iou_threshold).
+    tracker_dedup_iou_threshold: float = 0.7
+
+    # Stability gate: tracklets must survive this many frames before being
+    # exposed to downstream pipeline stages and publication.
+    tracker_min_frames_to_publish: int = 3
+
+    # IdentityCommitter — buffered windowed commit (see IdentityCommitter).
+    identity_commit_window_s: float = 3.0
+    identity_high_confidence_face_threshold: float = 0.85
+    # Feature flag: off by default; enable after one week soak.
+    identity_committer_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -234,6 +290,8 @@ class FrameProcessingPipeline:
         self._revision_publisher: RevisionPublisher | None = None
         self._adjacency: CameraAdjacency | None = None
         self._adjacency_version: int = -1
+        # Overlap groups fetched from CC at startup; preserved across adjacency reloads.
+        self._overlap_groups: list[OverlapGroup] = []
         self._frame_fetcher: FrameImageFetcher | None = None
         self._reid_embedder: ReidEmbedderProtocol | None = None
         # M6
@@ -261,6 +319,12 @@ class FrameProcessingPipeline:
         # Pose estimation (RTMPose) + motion energy tracking.
         self._pose_estimator: PoseEstimator | None = None
         self._motion_energy_tracker: MotionEnergyTracker | None = None
+        # Phase 1: cross-table identity rewriter (orchestrator side).
+        self._identity_rewriter: IdentityRewriter | None = None
+        # Phase 7: per-tracklet trail deque (last 12 normalised foot-points).
+        _trail_maxlen = 12
+        self._trail_by_tracklet: dict[str, deque[tuple[float, float]]] = {}
+        self._TRAIL_MAXLEN = _trail_maxlen
 
     @property
     def is_running(self) -> bool:
@@ -303,6 +367,9 @@ class FrameProcessingPipeline:
         reid_embedder: ReidEmbedderProtocol | None = None,
         # Pose estimator (RTMPose) — optional; if None, posture defaults to "unknown".
         pose_estimator: PoseEstimator | None = None,
+        # Identity rewriter — rewrites trajectory/dwell/signal rows on revision.
+        # Defaults to InMemory no-op; inject PostgresIdentityRewriter in production.
+        identity_rewriter: IdentityRewriter | None = None,
     ) -> None:
         """Initialize all pipeline components.
 
@@ -339,13 +406,30 @@ class FrameProcessingPipeline:
         self._pose_estimator = pose_estimator
         self._motion_energy_tracker = MotionEnergyTracker() if pose_estimator is not None else None
 
+        # Identity rewriter (orchestrator side)
+        self._identity_rewriter = identity_rewriter or InMemoryIdentityRewriter()
+
         # Tracklet manager
-        tracker = PerCameraTrackers(TrackerConfig())
+        tracker = PerCameraTrackers(
+            TrackerConfig(
+                dedup_iou_threshold=self._config.tracker_dedup_iou_threshold,
+            )
+        )
+
+        tracklet_config = TrackletConfig(
+            min_hit_ratio=self._config.tracklet.min_hit_ratio,
+            close_grace_frames=self._config.tracklet.close_grace_frames,
+            gallery_min_quality=self._config.tracklet.gallery_min_quality,
+            gallery_max_per_tracklet=self._config.tracklet.gallery_max_per_tracklet,
+            min_detection_confidence=self._config.tracklet.min_detection_confidence,
+            enabled=self._config.tracklet.enabled,
+            min_frames_to_publish=self._config.tracker_min_frames_to_publish,
+        )
 
         self._tracklet_manager = TrackletManager(
             repo=self._repo,
             gallery=gallery,
-            config=self._config.tracklet,
+            config=tracklet_config,
         )
 
         # Store tracker reference for pipeline step
@@ -385,7 +469,10 @@ class FrameProcessingPipeline:
 
         # Phase 5: IdentityCommitter buffers per-frame posterior evidence
         # and emits one commit decision per GT per commit_window_s.
-        self._identity_committer = IdentityCommitter()
+        self._identity_committer = IdentityCommitter(
+            commit_window_s=self._config.identity_commit_window_s,
+            high_confidence_face_threshold=self._config.identity_high_confidence_face_threshold,
+        )
 
         self._keyframe_sampler = KeyframeSampler(
             repo=keyframe_repo or InMemoryKeyframeRepository(),
@@ -434,6 +521,11 @@ class FrameProcessingPipeline:
         )
 
         if self._detector is None:
+            if not self._config.allow_skeleton:
+                raise RuntimeError(
+                    "Detector not configured and pipeline.allow_skeleton is False. "
+                    "Set PIPELINE_ALLOW_SKELETON=true to run without a detector (tests only)."
+                )
             logger.warning(
                 "Detector not configured; running in SKELETON mode — no bboxes will be produced. "
                 "Set TRITON_GRPC_URL to enable person detection."
@@ -609,6 +701,7 @@ class FrameProcessingPipeline:
                     overlap=edge.overlap,
                 )
             )
+        new_adjacency.set_overlap_groups(self._overlap_groups)
         self._adjacency = new_adjacency
         self._adjacency_version = calibration_state.version
         if self._gallery_repo is not None and self._global_track_repo is not None:
@@ -619,6 +712,16 @@ class FrameProcessingPipeline:
                 config=self._config.cross_cam,
                 floor_projector=self._floor_projector,
             )
+
+    def set_overlap_groups(self, groups: list[OverlapGroup]) -> None:
+        """Apply overlap group data from CC.
+
+        Stores the groups for future adjacency reloads and immediately
+        updates the current adjacency graph if it has been built.
+        """
+        self._overlap_groups = groups
+        if self._adjacency is not None:
+            self._adjacency.set_overlap_groups(groups)
 
     async def _process_frame(self, frame: FrameReady) -> None:
         """Process a single FrameReady message through the full pipeline.
@@ -672,6 +775,15 @@ class FrameProcessingPipeline:
         # Step 2: Run detection
         detections = await self._detector.detect(image)
 
+        # Step 2a: Post-decode IoU dedup — suppresses any near-duplicate
+        # detections that survived the model's baked NMS. Keeps the highest-
+        # confidence box from each overlapping cluster.
+        if detections and self._config.detection_iou_dedup_threshold < 1.0:
+            detections = _iou_dedup_detections(
+                detections,
+                self._config.detection_iou_dedup_threshold,
+            )
+
         # Privacy enforcement: drop detections + apply blur/mask to frame.
         privacy_filter = PrivacyZoneFilter.from_state(
             calibration_state,
@@ -708,6 +820,8 @@ class FrameProcessingPipeline:
             detections = kept
 
         domain_detections: list[Detection] = []
+        det_posture: dict[str, PostureType] = {}
+        det_pose_result: dict[str, PoseResult] = {}
 
         if detections:
             crops = [_crop_detection(image, det) for det in detections]
@@ -721,10 +835,6 @@ class FrameProcessingPipeline:
             pose_results: list[PoseResult | None] = []
             if self._pose_estimator is not None and self._config.pose_enabled:
                 pose_results = await self._run_pose(crops, detections)
-
-            # Per-detection pose info, keyed by detection_id.
-            det_posture: dict[str, PostureType] = {}
-            det_pose_result: dict[str, PoseResult] = {}
 
             for det_idx, det in enumerate(detections):
                 bbox = BoundingBox(
@@ -762,6 +872,13 @@ class FrameProcessingPipeline:
                 embeddings=embeddings or None,
                 frame_index=frame.frame_index,
             )
+
+            # Emit tracker dedup metric
+            dedup_dropped = self._tracker.get_dedup_dropped(frame.camera_id)
+            if dedup_dropped > 0:
+                _metrics.metrics.tracklets_dedup_dropped_total.labels(
+                    camera_id=frame.camera_id
+                ).inc(dedup_dropped)
 
             # Step 4: Tracklet management
             camera_config = CameraConfig(camera_id=frame.camera_id)
@@ -806,6 +923,13 @@ class FrameProcessingPipeline:
         active_tracklets = (
             self._tracklet_manager.get_active_tracklets() if self._tracklet_manager else []
         )
+
+        # Stability gate metric: count tracklets held below the publish threshold.
+        if self._tracklet_manager is not None:
+            for cam_id, held_count in self._tracklet_manager.get_held_count_by_camera().items():
+                _metrics.metrics.tracklets_held_below_stability_gate.labels(camera_id=cam_id).set(
+                    held_count
+                )
         active_global_tracks: list[GlobalTrack] = []
         new_revisions: list[IdentityRevision] = []
         from ..domain import ResolveOutcome
@@ -830,7 +954,50 @@ class FrameProcessingPipeline:
             )
 
             # Apply decisions: update GlobalTrack identity assignments.
-            if self._global_track_repo:
+            if self._config.identity_committer_enabled and self._identity_committer is not None:
+                # Buffered path: ingest per-frame evidence, flush committed decisions.
+                for decision in outcome.decisions:
+                    _top_id, top_conf = decision.posterior.top_identity()
+                    self._identity_committer.ingest(
+                        global_track_id=decision.global_track_id,
+                        identity_id=decision.identity_id,
+                        confidence=top_conf,
+                        reason=decision.reason,
+                    )
+                # High-confidence face fast-path: commit immediately and rewrite history.
+                for fa in face_anchors:
+                    gt = next(
+                        (
+                            g
+                            for g in active_global_tracks
+                            if any(tid == fa.tracklet_id for tid in g.tracklet_ids)
+                            if self._tracklet_manager is not None
+                        ),
+                        None,
+                    )
+                    if gt is not None:
+                        immediate = self._identity_committer.check_high_confidence_face(
+                            gt.global_track_id,
+                            fa.person_id,
+                            fa.confidence,
+                            first_seen_at=gt.started_at,
+                        )
+                        if immediate and self._global_track_repo:
+                            await self._global_track_repo.assign_identity(
+                                global_track_id=immediate.global_track_id,
+                                identity_id=immediate.identity_id,
+                            )
+                # Flush buffer: emit committed decisions.
+                flushed = self._identity_committer.flush()
+                if self._global_track_repo:
+                    for commit in flushed:
+                        if commit.identity_id is not None:
+                            await self._global_track_repo.assign_identity(
+                                global_track_id=commit.global_track_id,
+                                identity_id=commit.identity_id,
+                            )
+            elif self._global_track_repo:
+                # Direct per-frame path (legacy, committer_enabled=False).
                 for decision in outcome.decisions:
                     if decision.identity_id is not None or decision.revises_previous:
                         await self._global_track_repo.assign_identity(
@@ -997,6 +1164,29 @@ class FrameProcessingPipeline:
                 for rev in new_revisions:
                     await self._repo.save_identity_revision(revision=rev)
 
+        # Step 9c: Retroactive cross-table rewrite. Run when the committer is
+        # enabled and a revision changes identity (committer produces
+        # applies_from=gt.started_at for face fast-path rewrites).
+        if (
+            self._config.identity_committer_enabled
+            and new_revisions
+            and self._identity_rewriter is not None
+        ):
+            rewrite_time = datetime.now(UTC)
+            gt_start_by_id = {gt.global_track_id: gt.started_at for gt in active_global_tracks}
+            for rev in new_revisions:
+                if rev.previous_identity_id is None or rev.new_identity_id is None:
+                    continue
+                applies_from = gt_start_by_id.get(rev.global_track_id, rewrite_time)
+                await self._identity_rewriter.rewrite(
+                    revision_id=str(rev.revision_id),
+                    global_track_id=str(rev.global_track_id),
+                    old_identity_id=str(rev.previous_identity_id),
+                    new_identity_id=str(rev.new_identity_id),
+                    applies_from=applies_from,
+                    applies_to=rewrite_time,
+                )
+
         # Step 9b: Back-fill tracklet_id and global_track_id onto each
         # Detection so the serialised proto carries identity context for the
         # CC subscriber and the live-view overlay.
@@ -1013,15 +1203,45 @@ class FrameProcessingPipeline:
                 updated.append(replace(domain_det, tracklet_id=tid, global_track_id=gt_id))
             domain_detections = updated
 
+        # Step 9c (Phase 7): Update per-tracklet trail deques with the current
+        # foot-point (bbox bottom-centre in normalised camera coords).
+        frame_w = float(frame.width) if frame.width else 1.0
+        frame_h = float(frame.height) if frame.height else 1.0
+        for domain_det in domain_detections:
+            if not domain_det.tracklet_id:
+                continue
+            foot_x = (domain_det.bbox.x_min + domain_det.bbox.x_max) / 2.0 / frame_w
+            foot_y = domain_det.bbox.y_max / frame_h
+            trail_dq = self._trail_by_tracklet.get(domain_det.tracklet_id)
+            if trail_dq is None:
+                trail_dq = deque(maxlen=self._TRAIL_MAXLEN)
+                self._trail_by_tracklet[domain_det.tracklet_id] = trail_dq
+            trail_dq.append((float(foot_x), float(foot_y)))
+
+        # Expire trails for tracklets no longer active.
+        active_tids = {d.tracklet_id for d in domain_detections if d.tracklet_id}
+        stale_tids = set(self._trail_by_tracklet) - active_tids
+        for tid in stale_tids:
+            del self._trail_by_tracklet[tid]
+
+        trail_by_tracklet_snapshot: dict[str, list[tuple[float, float]]] = {
+            tid: list(dq) for tid, dq in self._trail_by_tracklet.items()
+        }
+
         # Step 10: Publish tracking event with identity + room context so the
         # CC-side TrackingEventSubscriber can write PersonLocationState directly.
         identities: dict[str, tuple[str, float]] = {}
+        evidence_by_gt: dict[str, tuple[float, float, bool]] = {}
         if active_tracklets and outcome.decisions:
             for decision in outcome.decisions:
                 if decision.identity_id is None:
                     continue
                 _top_id, top_prob = decision.posterior.top_identity()
                 identities[decision.global_track_id] = (decision.identity_id, top_prob)
+                # Compute top-2 probability for the evidence chip.
+                top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
+                top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
+                evidence_by_gt[decision.global_track_id] = (top_prob, top2_prob, False)
 
         assert self._transport is not None
         await self._transport.publish_event(
@@ -1035,6 +1255,9 @@ class FrameProcessingPipeline:
             frame_width=frame.width,
             frame_height=frame.height,
             capture_time_unix_ns=frame.capture_time_unix_ns,
+            pose_results=det_pose_result if det_pose_result else None,
+            trail_by_tracklet=trail_by_tracklet_snapshot or None,
+            evidence_by_gt=evidence_by_gt or None,
         )
 
         if new_revisions:

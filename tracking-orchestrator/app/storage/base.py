@@ -273,6 +273,19 @@ class GlobalTrackRepository(ABC):
     async def get_by_tracklet_id(self, tracklet_id: str) -> GlobalTrack | None:
         """Find the global track that contains a given tracklet ID."""
 
+    @abstractmethod
+    async def update_last_posterior(
+        self,
+        global_track_id: str,
+        posterior_json: dict[str, float],
+        at: datetime,
+    ) -> None:
+        """Persist the latest Bayesian posterior distribution for the inspector drawer.
+
+        *posterior_json* is a mapping of identity_id -> probability (including
+        the ``"UNKNOWN"`` key). Written every frame; does not create a revision.
+        """
+
 
 class InMemoryTrackingRepository(TrackingRepository):
     """In-memory store for tracking data."""
@@ -662,6 +675,16 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
         if gt_id is None:
             return None
         return self._tracks.get(gt_id)
+
+    async def update_last_posterior(
+        self,
+        global_track_id: str,
+        posterior_json: dict[str, float],
+        at: datetime,
+    ) -> None:
+        # In-memory: no-op. The posterior is only useful for the CC inspector
+        # drawer which reads the Postgres column directly.
+        pass
 
 
 class TrajectoryRepository(ABC):

@@ -227,7 +227,18 @@ type Detection struct {
 	GlobalTrackId string `protobuf:"bytes,6,opt,name=global_track_id,json=globalTrackId,proto3" json:"global_track_id,omitempty"`
 	// Floor point (x, y) in millimeters relative to the camera's calibrated
 	// coordinate system. Origin is the camera's ground intersection point.
-	FloorPoint    *FloorPoint `protobuf:"bytes,7,opt,name=floor_point,json=floorPoint,proto3" json:"floor_point,omitempty"`
+	FloorPoint *FloorPoint `protobuf:"bytes,7,opt,name=floor_point,json=floorPoint,proto3" json:"floor_point,omitempty"`
+	// RTMPose 17 COCO keypoints (normalised to [0,1] within the bbox crop).
+	// Empty when pose estimation is disabled or the crop is too small.
+	PoseKeypoints []*PoseKeypoint `protobuf:"bytes,9,rep,name=pose_keypoints,json=poseKeypoints,proto3" json:"pose_keypoints,omitempty"`
+	// Last 12 foot-point positions for this tracklet (camera-frame normalised
+	// coords [0,1]). Oldest entry first. Empty until the tracklet has history.
+	Trail []*TrailPoint `protobuf:"bytes,10,rep,name=trail,proto3" json:"trail,omitempty"`
+	// Posterior evidence snapshot from the identity resolver.
+	Evidence *PosteriorEvidence `protobuf:"bytes,11,opt,name=evidence,proto3" json:"evidence,omitempty"`
+	// Floor position in metres via homography (0 when not calibrated).
+	FloorX        float32 `protobuf:"fixed32,12,opt,name=floor_x,json=floorX,proto3" json:"floor_x,omitempty"`
+	FloorY        float32 `protobuf:"fixed32,13,opt,name=floor_y,json=floorY,proto3" json:"floor_y,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -311,6 +322,216 @@ func (x *Detection) GetFloorPoint() *FloorPoint {
 	return nil
 }
 
+func (x *Detection) GetPoseKeypoints() []*PoseKeypoint {
+	if x != nil {
+		return x.PoseKeypoints
+	}
+	return nil
+}
+
+func (x *Detection) GetTrail() []*TrailPoint {
+	if x != nil {
+		return x.Trail
+	}
+	return nil
+}
+
+func (x *Detection) GetEvidence() *PosteriorEvidence {
+	if x != nil {
+		return x.Evidence
+	}
+	return nil
+}
+
+func (x *Detection) GetFloorX() float32 {
+	if x != nil {
+		return x.FloorX
+	}
+	return 0
+}
+
+func (x *Detection) GetFloorY() float32 {
+	if x != nil {
+		return x.FloorY
+	}
+	return 0
+}
+
+// PoseKeypoint is one of the 17 COCO body keypoints.
+type PoseKeypoint struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	X             float32                `protobuf:"fixed32,1,opt,name=x,proto3" json:"x,omitempty"`         // horizontal position normalised to bbox crop [0, 1]
+	Y             float32                `protobuf:"fixed32,2,opt,name=y,proto3" json:"y,omitempty"`         // vertical position normalised to bbox crop [0, 1]
+	Score         float32                `protobuf:"fixed32,3,opt,name=score,proto3" json:"score,omitempty"` // visibility confidence [0, 1]
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PoseKeypoint) Reset() {
+	*x = PoseKeypoint{}
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PoseKeypoint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PoseKeypoint) ProtoMessage() {}
+
+func (x *PoseKeypoint) ProtoReflect() protoreflect.Message {
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PoseKeypoint.ProtoReflect.Descriptor instead.
+func (*PoseKeypoint) Descriptor() ([]byte, []int) {
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PoseKeypoint) GetX() float32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *PoseKeypoint) GetY() float32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *PoseKeypoint) GetScore() float32 {
+	if x != nil {
+		return x.Score
+	}
+	return 0
+}
+
+// TrailPoint is a historical foot-point position in camera-frame coords.
+type TrailPoint struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	X             float32                `protobuf:"fixed32,1,opt,name=x,proto3" json:"x,omitempty"` // normalised horizontal [0, 1]
+	Y             float32                `protobuf:"fixed32,2,opt,name=y,proto3" json:"y,omitempty"` // normalised vertical [0, 1]
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrailPoint) Reset() {
+	*x = TrailPoint{}
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrailPoint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrailPoint) ProtoMessage() {}
+
+func (x *TrailPoint) ProtoReflect() protoreflect.Message {
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrailPoint.ProtoReflect.Descriptor instead.
+func (*TrailPoint) Descriptor() ([]byte, []int) {
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *TrailPoint) GetX() float32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *TrailPoint) GetY() float32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+// PosteriorEvidence captures the identity resolver's confidence snapshot.
+type PosteriorEvidence struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TopProb        float32                `protobuf:"fixed32,1,opt,name=top_prob,json=topProb,proto3" json:"top_prob,omitempty"`                       // P(top identity | observations)
+	Top2Prob       float32                `protobuf:"fixed32,2,opt,name=top2_prob,json=top2Prob,proto3" json:"top2_prob,omitempty"`                    // P(second-best identity | observations)
+	FaceAnchorUsed bool                   `protobuf:"varint,3,opt,name=face_anchor_used,json=faceAnchorUsed,proto3" json:"face_anchor_used,omitempty"` // true when a face anchor drove the commit
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PosteriorEvidence) Reset() {
+	*x = PosteriorEvidence{}
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PosteriorEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PosteriorEvidence) ProtoMessage() {}
+
+func (x *PosteriorEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PosteriorEvidence.ProtoReflect.Descriptor instead.
+func (*PosteriorEvidence) Descriptor() ([]byte, []int) {
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PosteriorEvidence) GetTopProb() float32 {
+	if x != nil {
+		return x.TopProb
+	}
+	return 0
+}
+
+func (x *PosteriorEvidence) GetTop2Prob() float32 {
+	if x != nil {
+		return x.Top2Prob
+	}
+	return 0
+}
+
+func (x *PosteriorEvidence) GetFaceAnchorUsed() bool {
+	if x != nil {
+		return x.FaceAnchorUsed
+	}
+	return false
+}
+
 // BoundingBox in pixel coordinates: top-left origin, width/height positive.
 type BoundingBox struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -324,7 +545,7 @@ type BoundingBox struct {
 
 func (x *BoundingBox) Reset() {
 	*x = BoundingBox{}
-	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[3]
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -336,7 +557,7 @@ func (x *BoundingBox) String() string {
 func (*BoundingBox) ProtoMessage() {}
 
 func (x *BoundingBox) ProtoReflect() protoreflect.Message {
-	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[3]
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -349,7 +570,7 @@ func (x *BoundingBox) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BoundingBox.ProtoReflect.Descriptor instead.
 func (*BoundingBox) Descriptor() ([]byte, []int) {
-	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{3}
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *BoundingBox) GetXMin() int32 {
@@ -395,7 +616,7 @@ type FloorPoint struct {
 
 func (x *FloorPoint) Reset() {
 	*x = FloorPoint{}
-	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[4]
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -407,7 +628,7 @@ func (x *FloorPoint) String() string {
 func (*FloorPoint) ProtoMessage() {}
 
 func (x *FloorPoint) ProtoReflect() protoreflect.Message {
-	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[4]
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -420,7 +641,7 @@ func (x *FloorPoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FloorPoint.ProtoReflect.Descriptor instead.
 func (*FloorPoint) Descriptor() ([]byte, []int) {
-	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{4}
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *FloorPoint) GetXMm() int64 {
@@ -484,7 +705,7 @@ type IdentityRevision struct {
 
 func (x *IdentityRevision) Reset() {
 	*x = IdentityRevision{}
-	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[5]
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -496,7 +717,7 @@ func (x *IdentityRevision) String() string {
 func (*IdentityRevision) ProtoMessage() {}
 
 func (x *IdentityRevision) ProtoReflect() protoreflect.Message {
-	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[5]
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -509,7 +730,7 @@ func (x *IdentityRevision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdentityRevision.ProtoReflect.Descriptor instead.
 func (*IdentityRevision) Descriptor() ([]byte, []int) {
-	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{5}
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *IdentityRevision) GetGlobalTrackId() string {
@@ -604,7 +825,7 @@ type IdentityCandidate struct {
 
 func (x *IdentityCandidate) Reset() {
 	*x = IdentityCandidate{}
-	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[6]
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -616,7 +837,7 @@ func (x *IdentityCandidate) String() string {
 func (*IdentityCandidate) ProtoMessage() {}
 
 func (x *IdentityCandidate) ProtoReflect() protoreflect.Message {
-	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[6]
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -629,7 +850,7 @@ func (x *IdentityCandidate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdentityCandidate.ProtoReflect.Descriptor instead.
 func (*IdentityCandidate) Descriptor() ([]byte, []int) {
-	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{6}
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *IdentityCandidate) GetIdentityId() string {
@@ -674,7 +895,7 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\x06height\x18\x03 \x01(\x05R\x06height\x12\x1f\n" +
 	"\vframe_index\x18\x04 \x01(\x03R\n" +
 	"frameIndex\x12/\n" +
-	"\x14capture_time_unix_ns\x18\x05 \x01(\x06R\x11captureTimeUnixNs\"\xb1\x02\n" +
+	"\x14capture_time_unix_ns\x18\x05 \x01(\x06R\x11captureTimeUnixNs\"\xae\x04\n" +
 	"\tDetection\x12!\n" +
 	"\fdetection_id\x18\x01 \x01(\tR\vdetectionId\x126\n" +
 	"\x04bbox\x18\x02 \x01(\v2\".continuoustracking.v1.BoundingBoxR\x04bbox\x12\x1c\n" +
@@ -686,7 +907,25 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"trackletId\x12&\n" +
 	"\x0fglobal_track_id\x18\x06 \x01(\tR\rglobalTrackId\x12B\n" +
 	"\vfloor_point\x18\a \x01(\v2!.continuoustracking.v1.FloorPointR\n" +
-	"floorPoint\"a\n" +
+	"floorPoint\x12J\n" +
+	"\x0epose_keypoints\x18\t \x03(\v2#.continuoustracking.v1.PoseKeypointR\rposeKeypoints\x127\n" +
+	"\x05trail\x18\n" +
+	" \x03(\v2!.continuoustracking.v1.TrailPointR\x05trail\x12D\n" +
+	"\bevidence\x18\v \x01(\v2(.continuoustracking.v1.PosteriorEvidenceR\bevidence\x12\x17\n" +
+	"\afloor_x\x18\f \x01(\x02R\x06floorX\x12\x17\n" +
+	"\afloor_y\x18\r \x01(\x02R\x06floorY\"@\n" +
+	"\fPoseKeypoint\x12\f\n" +
+	"\x01x\x18\x01 \x01(\x02R\x01x\x12\f\n" +
+	"\x01y\x18\x02 \x01(\x02R\x01y\x12\x14\n" +
+	"\x05score\x18\x03 \x01(\x02R\x05score\"(\n" +
+	"\n" +
+	"TrailPoint\x12\f\n" +
+	"\x01x\x18\x01 \x01(\x02R\x01x\x12\f\n" +
+	"\x01y\x18\x02 \x01(\x02R\x01y\"u\n" +
+	"\x11PosteriorEvidence\x12\x19\n" +
+	"\btop_prob\x18\x01 \x01(\x02R\atopProb\x12\x1b\n" +
+	"\ttop2_prob\x18\x02 \x01(\x02R\btop2Prob\x12(\n" +
+	"\x10face_anchor_used\x18\x03 \x01(\bR\x0efaceAnchorUsed\"a\n" +
 	"\vBoundingBox\x12\x13\n" +
 	"\x05x_min\x18\x01 \x01(\x05R\x04xMin\x12\x13\n" +
 	"\x05y_min\x18\x02 \x01(\x05R\x04yMin\x12\x13\n" +
@@ -733,28 +972,34 @@ func file_continuoustracking_v1_tracking_proto_rawDescGZIP() []byte {
 	return file_continuoustracking_v1_tracking_proto_rawDescData
 }
 
-var file_continuoustracking_v1_tracking_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_continuoustracking_v1_tracking_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_continuoustracking_v1_tracking_proto_goTypes = []any{
 	(*TrackingEvent)(nil),     // 0: continuoustracking.v1.TrackingEvent
 	(*FrameRef)(nil),          // 1: continuoustracking.v1.FrameRef
 	(*Detection)(nil),         // 2: continuoustracking.v1.Detection
-	(*BoundingBox)(nil),       // 3: continuoustracking.v1.BoundingBox
-	(*FloorPoint)(nil),        // 4: continuoustracking.v1.FloorPoint
-	(*IdentityRevision)(nil),  // 5: continuoustracking.v1.IdentityRevision
-	(*IdentityCandidate)(nil), // 6: continuoustracking.v1.IdentityCandidate
+	(*PoseKeypoint)(nil),      // 3: continuoustracking.v1.PoseKeypoint
+	(*TrailPoint)(nil),        // 4: continuoustracking.v1.TrailPoint
+	(*PosteriorEvidence)(nil), // 5: continuoustracking.v1.PosteriorEvidence
+	(*BoundingBox)(nil),       // 6: continuoustracking.v1.BoundingBox
+	(*FloorPoint)(nil),        // 7: continuoustracking.v1.FloorPoint
+	(*IdentityRevision)(nil),  // 8: continuoustracking.v1.IdentityRevision
+	(*IdentityCandidate)(nil), // 9: continuoustracking.v1.IdentityCandidate
 }
 var file_continuoustracking_v1_tracking_proto_depIdxs = []int32{
 	1, // 0: continuoustracking.v1.TrackingEvent.frame_ref:type_name -> continuoustracking.v1.FrameRef
 	2, // 1: continuoustracking.v1.TrackingEvent.detections:type_name -> continuoustracking.v1.Detection
-	5, // 2: continuoustracking.v1.TrackingEvent.identity_revisions:type_name -> continuoustracking.v1.IdentityRevision
-	3, // 3: continuoustracking.v1.Detection.bbox:type_name -> continuoustracking.v1.BoundingBox
-	4, // 4: continuoustracking.v1.Detection.floor_point:type_name -> continuoustracking.v1.FloorPoint
-	6, // 5: continuoustracking.v1.IdentityRevision.candidates:type_name -> continuoustracking.v1.IdentityCandidate
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	8, // 2: continuoustracking.v1.TrackingEvent.identity_revisions:type_name -> continuoustracking.v1.IdentityRevision
+	6, // 3: continuoustracking.v1.Detection.bbox:type_name -> continuoustracking.v1.BoundingBox
+	7, // 4: continuoustracking.v1.Detection.floor_point:type_name -> continuoustracking.v1.FloorPoint
+	3, // 5: continuoustracking.v1.Detection.pose_keypoints:type_name -> continuoustracking.v1.PoseKeypoint
+	4, // 6: continuoustracking.v1.Detection.trail:type_name -> continuoustracking.v1.TrailPoint
+	5, // 7: continuoustracking.v1.Detection.evidence:type_name -> continuoustracking.v1.PosteriorEvidence
+	9, // 8: continuoustracking.v1.IdentityRevision.candidates:type_name -> continuoustracking.v1.IdentityCandidate
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	9, // [9:9] is the sub-list for extension type_name
+	9, // [9:9] is the sub-list for extension extendee
+	0, // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_continuoustracking_v1_tracking_proto_init() }
@@ -768,7 +1013,7 @@ func file_continuoustracking_v1_tracking_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_continuoustracking_v1_tracking_proto_rawDesc), len(file_continuoustracking_v1_tracking_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

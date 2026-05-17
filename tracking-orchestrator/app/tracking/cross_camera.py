@@ -53,6 +53,12 @@ class CrossCamConfig:
     # GlobalTracks for the same person across tracklet lifecycles.
     unknown_merge_appearance_threshold: float = 0.92
 
+    # Minimum combined score to link two tracklets from cameras in the
+    # same overlap group (cameras sharing a physical field of view).
+    # Lower than min_link_score because within-group pairs are always
+    # geometrically co-located; appearance similarity alone is sufficient.
+    within_group_min_score: float = 0.35
+
 
 @dataclass
 class TrackletPairScore:
@@ -152,6 +158,17 @@ class CrossCameraAssociator:
                 if pair_key in seen_pairs:
                     continue
                 seen_pairs.add(pair_key)
+
+                # Within-group pairs (same physical space, different camera angles)
+                # skip the transit-time budget and use a relaxed score threshold.
+                if self._adjacency.same_overlap_group(ta.camera_id, tb.camera_id):
+                    score = await self._score_pair(ta, tb)
+                    if (
+                        score is not None
+                        and score.combined_score >= self._config.within_group_min_score
+                    ):
+                        candidate_scores.append(score)
+                    continue
 
                 # Check adjacency with time-bounded reachability.
                 # The time budget is the max transition time for this camera pair,
@@ -331,67 +348,71 @@ class CrossCameraAssociator:
                                 extended = True
                                 break
                     continue
-                # Check if any camera in this GlobalTrack is adjacent to t's camera.
-                # Time budget: the max transition time, capped by the age of the new
-                # tracklet and the time since the GlobalTrack was last seen.
+                # Check if any camera in this GlobalTrack is adjacent to t's camera
+                # or in the same overlap group.
                 for existing_cam in gt.camera_ids:
-                    max_transition = self._adjacency.get_max_transition(existing_cam, t.camera_id)
-                    if max_transition is not None:
+                    # Within-group: skip transit check, use relaxed score threshold.
+                    in_same_group = self._adjacency.same_overlap_group(existing_cam, t.camera_id)
+                    if not in_same_group:
+                        max_transition = self._adjacency.get_max_transition(
+                            existing_cam, t.camera_id
+                        )
+                        if max_transition is None:
+                            continue
                         older_time = min(gt.last_seen_at, t.started_at)
                         budget = max_transition
                         tracklet_age = (captured_at - older_time).total_seconds()
                         if tracklet_age >= budget:
                             budget = tracklet_age
-                        if self._adjacency.reachable(existing_cam, t.camera_id, within_s=budget):
-                            # Check association score before extending.
-                            # Find the tracklet on existing_cam from this GlobalTrack.
-                            existing_tid = next(
-                                (
-                                    tid
-                                    for tid, cid in zip(
-                                        gt.tracklet_ids, gt.camera_ids, strict=False
-                                    )
-                                    if cid == existing_cam
-                                ),
-                                None,
-                            )
-                            existing_tl = (
-                                tracklet_by_id.get(existing_tid)
-                                if existing_tid
-                                else (
-                                    await self._repo.get_tracklet(existing_tid)
-                                    if existing_tid
-                                    else None
-                                )
-                            )
-                            if existing_tl:
-                                score = await self._score_pair(t, existing_tl)
-                                logger.debug(
-                                    "remaining_unassigned_score",
-                                    tracklet=t.tracklet_id,
-                                    gt_id=gt.global_track_id,
-                                    score=score.combined_score if score else None,
-                                    threshold=self._config.min_link_score,
-                                )
-                                if (
-                                    score is not None
-                                    and score.combined_score < self._config.min_link_score
-                                ):
-                                    continue  # skip if score below threshold
-                            # If existing_tl is None, skip scoring — adjacency already verified.
-                            # Extend this GlobalTrack.
-                            merged = await self._repo.merge_tracklets(
-                                tracklet_ids=[t.tracklet_id],
-                                camera_ids=[t.camera_id],
-                                existing=gt,
-                            )
-                            await _refresh(merged.global_track_id)
-                            assignment_map[t.tracklet_id] = merged.global_track_id
-                            newly_assigned.add(t.tracklet_id)
-                            extended = True
-                            break
-                    if extended:
-                        break
+                        if not self._adjacency.reachable(
+                            existing_cam, t.camera_id, within_s=budget
+                        ):
+                            continue
+
+                    # Find the tracklet on existing_cam from this GlobalTrack.
+                    existing_tid = next(
+                        (
+                            tid
+                            for tid, cid in zip(gt.tracklet_ids, gt.camera_ids, strict=False)
+                            if cid == existing_cam
+                        ),
+                        None,
+                    )
+                    existing_tl = (
+                        tracklet_by_id.get(existing_tid)
+                        if existing_tid
+                        else (await self._repo.get_tracklet(existing_tid) if existing_tid else None)
+                    )
+                    score_threshold = (
+                        self._config.within_group_min_score
+                        if in_same_group
+                        else self._config.min_link_score
+                    )
+                    if existing_tl:
+                        score = await self._score_pair(t, existing_tl)
+                        logger.debug(
+                            "remaining_unassigned_score",
+                            tracklet=t.tracklet_id,
+                            gt_id=gt.global_track_id,
+                            score=score.combined_score if score else None,
+                            threshold=score_threshold,
+                            within_group=in_same_group,
+                        )
+                        if score is not None and score.combined_score < score_threshold:
+                            continue  # skip if score below threshold
+                    # Extend this GlobalTrack.
+                    merged = await self._repo.merge_tracklets(
+                        tracklet_ids=[t.tracklet_id],
+                        camera_ids=[t.camera_id],
+                        existing=gt,
+                    )
+                    await _refresh(merged.global_track_id)
+                    assignment_map[t.tracklet_id] = merged.global_track_id
+                    newly_assigned.add(t.tracklet_id)
+                    extended = True
+                    break
+                if extended:
+                    break
                 if extended:
                     break
 

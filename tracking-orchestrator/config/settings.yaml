@@ -52,9 +52,29 @@ signal:
 
 # Pipeline tuning
 pipeline:
-  detector_confidence: "${DETECTOR_CONFIDENCE:-0.25}"
+  detector_confidence: "${DETECTOR_CONFIDENCE:-0.35}"
   max_concurrent_frames: "${MAX_CONCURRENT_FRAMES:-4}"
   allow_skeleton: "${PIPELINE_ALLOW_SKELETON:-false}"
+  detection:
+    # Post-decode IoU suppression — drops near-duplicate detections after
+    # the model's baked NMS when two boxes overlap more than this threshold.
+    iou_dedup_threshold: "${PIPELINE_DETECTION_IOU_DEDUP:-0.55}"
+  tracker:
+    # Newly-spawned tracklets that overlap an established track (age >= 5
+    # frames) by more than this IoU are dropped immediately.
+    dedup_iou_threshold: "${PIPELINE_TRACKER_DEDUP_IOU:-0.7}"
+    # Tracklets must survive this many frames before being exposed to
+    # cross-camera association, identity resolution, and publish.
+    min_frames_to_publish: "${PIPELINE_TRACKER_MIN_FRAMES:-3}"
+  identity:
+    # Commit window: at most one identity commit per global track per N seconds.
+    commit_window_s: "${PIPELINE_IDENTITY_COMMIT_WINDOW_S:-3.0}"
+    # Face anchors with confidence above this threshold bypass the window
+    # and commit immediately with applies_from = track.first_seen_at.
+    high_confidence_face_threshold: "${PIPELINE_IDENTITY_HC_FACE_THRESHOLD:-0.85}"
+    # Feature flag: activate the IdentityCommitter. Default false; enable
+    # after one week of soak on the buffered-but-not-committed path.
+    committer_enabled: "${PIPELINE_IDENTITY_COMMITTER_ENABLED:-false}"
 
 # Cognitive Companion — camera config source and API gateway
 cognitive_companion:

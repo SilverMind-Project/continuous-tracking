@@ -24,6 +24,7 @@ import redis.asyncio as redis
 from structlog import get_logger
 
 from ..domain import Detection
+from ..inference.schemas import PoseResult
 from ..observability import metrics
 from ..proto.continuoustracking.v1 import frame_pb2, tracking_pb2
 from .codec import decode as proto_decode
@@ -225,6 +226,9 @@ class RedisStreamsTransport:
         frame_height: int = 0,
         capture_time_unix_ns: int = 0,
         detection_count: int = 0,
+        pose_results: dict[str, PoseResult] | None = None,
+        trail_by_tracklet: dict[str, list[tuple[float, float]]] | None = None,
+        evidence_by_gt: dict[str, tuple[float, float, bool]] | None = None,
     ) -> str:
         """Publish a ``TrackingEvent`` proto to ``tracking.events``.
 
@@ -262,6 +266,9 @@ class RedisStreamsTransport:
             frame_width=frame_width,
             frame_height=frame_height,
             capture_time_unix_ns=capture_time_unix_ns,
+            pose_results=pose_results,
+            trail_by_tracklet=trail_by_tracklet,
+            evidence_by_gt=evidence_by_gt,
         )
 
         message_id_bytes = await self._redis.xadd(
@@ -352,6 +359,9 @@ def _build_tracking_event_pb(
     frame_width: int = 0,
     frame_height: int = 0,
     capture_time_unix_ns: int = 0,
+    pose_results: dict[str, PoseResult] | None = None,
+    trail_by_tracklet: dict[str, list[tuple[float, float]]] | None = None,
+    evidence_by_gt: dict[str, tuple[float, float, bool]] | None = None,
 ) -> tracking_pb2.TrackingEvent:
     """Build a TrackingEvent proto from domain types.
 
@@ -359,6 +369,11 @@ def _build_tracking_event_pb(
     the gallery owns canonical per-person embeddings; shipping a 768-float
     array per detection per frame would 10x the wire payload with no
     consumer.
+
+    Optional enrichment kwargs:
+        pose_results: detection_id → PoseResult (17 COCO keypoints).
+        trail_by_tracklet: tracklet_id → list of (x, y) normalised foot-points.
+        evidence_by_gt: global_track_id → (top_prob, top2_prob, face_anchor_used).
     """
     event = tracking_pb2.TrackingEvent(
         camera_id=camera_id,
@@ -386,6 +401,29 @@ def _build_tracking_event_pb(
         d.floor_point.x_mm = det.floor_point.x_mm
         d.floor_point.y_mm = det.floor_point.y_mm
         d.floor_point.calibrated = det.floor_point.calibrated
+
+        # Floor position in metres (non-zero only when homography is calibrated).
+        if det.floor_point.calibrated:
+            d.floor_x = det.floor_point.x_mm / 1000.0
+            d.floor_y = det.floor_point.y_mm / 1000.0
+
+        # Pose keypoints (normalised within bbox crop).
+        if pose_results and det.detection_id in pose_results:
+            pr = pose_results[det.detection_id]
+            for kp in pr.keypoints:
+                d.pose_keypoints.add(x=kp.x, y=kp.y, score=kp.score)
+
+        # Historical trail for this tracklet.
+        if trail_by_tracklet and det.tracklet_id and det.tracklet_id in trail_by_tracklet:
+            for tx, ty in trail_by_tracklet[det.tracklet_id]:
+                d.trail.add(x=tx, y=ty)
+
+        # Posterior evidence from identity resolver.
+        if evidence_by_gt and det.global_track_id and det.global_track_id in evidence_by_gt:
+            top_prob, top2_prob, face_anchor_used = evidence_by_gt[det.global_track_id]
+            d.evidence.top_prob = top_prob
+            d.evidence.top2_prob = top2_prob
+            d.evidence.face_anchor_used = face_anchor_used
 
     # Per-detection identity decisions are folded into the per-event
     # IdentityRevision repeated field. Stream-level revision fields

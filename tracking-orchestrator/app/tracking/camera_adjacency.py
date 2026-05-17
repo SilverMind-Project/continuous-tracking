@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..domain import CameraId
+from ..domain import CameraId, OverlapGroup
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,7 @@ class AdjacencyEdge:
     to_camera: CameraId
     max_transition_seconds: float = 300.0  # 5 minutes default
     overlap: bool = False
+    overlap_group_id: str | None = None
 
 
 class CameraAdjacency:
@@ -52,6 +53,8 @@ class CameraAdjacency:
         self._edges: dict[CameraId, list[AdjacencyEdge]] = {}
         # Overlap set: frozenset({a, b}) -> True
         self._overlaps: set[frozenset[str]] = set()
+        # Overlap group membership: camera_id -> group_id string
+        self._group_by_camera: dict[CameraId, str] = {}
 
     def add_edge(self, edge: AdjacencyEdge) -> None:
         """Add a directed edge to the adjacency graph."""
@@ -151,3 +154,26 @@ class CameraAdjacency:
         return camera_id in self._edges or any(
             edge.to_camera == camera_id for edges in self._edges.values() for edge in edges
         )
+
+    def set_overlap_groups(self, groups: list[OverlapGroup]) -> None:
+        """Replace the overlap group membership table.
+
+        Any previous group data is discarded.
+        """
+        self._group_by_camera = {}
+        for group in groups:
+            for cam_id in group.camera_ids:
+                self._group_by_camera[cam_id] = group.group_id
+
+    def get_overlap_group(self, camera_id: CameraId) -> str | None:
+        """Return the overlap group ID for a camera, or None."""
+        return self._group_by_camera.get(camera_id)
+
+    def same_overlap_group(self, camera_a: CameraId, camera_b: CameraId) -> bool:
+        """Return True if both cameras belong to the same overlap group."""
+        if camera_a == camera_b:
+            return False
+        gid_a = self._group_by_camera.get(camera_a)
+        if gid_a is None:
+            return False
+        return gid_a == self._group_by_camera.get(camera_b)

@@ -88,6 +88,7 @@ class CalibrationStatusResponse(BaseModel):
     cameras_with_privacy_zones: int
     adjacency_edge_count: int
     last_reload_at: str | None
+    adjacency_edges: list[AdjacencyEdgeIn] = []
 
 
 # ---------------------------------------------------------------------------
@@ -211,9 +212,20 @@ async def post_reload() -> None:
 )
 async def get_status() -> CalibrationStatusResponse:
     state = _get_state()
+    edges = [
+        AdjacencyEdgeIn(
+            from_camera=e.from_camera,
+            to_camera=e.to_camera,
+            min_transit_s=e.min_transit_s,
+            max_transit_s=e.max_transit_s,
+            overlap=e.overlap,
+        )
+        for e in state.adjacency_edges
+    ]
     return CalibrationStatusResponse(
         cameras_with_homography=len(state.homographies),
         cameras_with_privacy_zones=len(state.privacy_zones),
         adjacency_edge_count=len(state.adjacency_edges),
         last_reload_at=state.last_reload_at,
+        adjacency_edges=edges,
     )

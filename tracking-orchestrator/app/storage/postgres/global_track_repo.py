@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -45,14 +46,14 @@ ON CONFLICT (global_track_id) DO UPDATE SET
 
 _SQL_GET = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
-       last_seen_at, current_identity_id, state
+       last_seen_at, current_identity_id, state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE global_track_id = $1
 """
 
 _SQL_LIST_ACTIVE = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
-       last_seen_at, current_identity_id, state
+       last_seen_at, current_identity_id, state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE state = 'active'
 ORDER BY last_seen_at DESC
@@ -60,7 +61,7 @@ ORDER BY last_seen_at DESC
 
 _SQL_GET_BY_TRACKLET = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
-       last_seen_at, current_identity_id, state
+       last_seen_at, current_identity_id, state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE $1::uuid = ANY(tracklet_ids)
 ORDER BY state = 'active' DESC, last_seen_at DESC
@@ -200,8 +201,33 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
             row = await conn.fetchrow(_SQL_GET_BY_TRACKLET, tracklet_id)
         return _row_to_global_track(row) if row is not None else None
 
+    async def update_last_posterior(
+        self,
+        global_track_id: str,
+        posterior_json: dict[str, float],
+        at: datetime,
+    ) -> None:
+        import json
+
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.global_tracks
+                SET last_posterior_jsonb = $2::jsonb,
+                    last_posterior_at    = $3
+                WHERE global_track_id = $1
+                """,
+                global_track_id,
+                json.dumps(posterior_json),
+                at,
+            )
+
 
 def _row_to_global_track(row: Any) -> GlobalTrack:
+    raw_posterior = row["last_posterior_jsonb"]
+    posterior: dict[str, Any] | None = (
+        json.loads(raw_posterior) if isinstance(raw_posterior, str) else raw_posterior
+    )
     return GlobalTrack(
         global_track_id=str(row["global_track_id"]),
         camera_ids=list(row["camera_ids"] or []),
@@ -212,4 +238,5 @@ def _row_to_global_track(row: Any) -> GlobalTrack:
             str(row["current_identity_id"]) if row["current_identity_id"] else None
         ),
         state=row["state"],
+        last_posterior_jsonb=posterior,
     )
