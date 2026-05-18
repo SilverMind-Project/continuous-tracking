@@ -54,9 +54,10 @@ class FloorProjector:
         if abs(w_h) < 1e-9:
             return FloorPoint(x_mm=0, y_mm=0, calibrated=False)
 
+        # H maps raw pixels to metres; convert to mm for FloorPoint.
         return FloorPoint(
-            x_mm=round(x_h / w_h),
-            y_mm=round(y_h / w_h),
+            x_mm=round((x_h / w_h) * 1000.0),
+            y_mm=round((y_h / w_h) * 1000.0),
             calibrated=True,
         )
 

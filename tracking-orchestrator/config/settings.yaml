@@ -27,6 +27,8 @@ triton:
   reid_model: "${TRITON_REID_MODEL:-reid-solider}"
   pose_model: "${TRITON_POSE_MODEL:-pose-rtmpose}"
   pose_enabled: "${TRITON_POSE_ENABLED:-true}"
+  depth_enabled: "${TRITON_DEPTH_ENABLED:-true}"
+  depth_model: "${TRITON_DEPTH_MODEL:-depth-anything-v2}"
   timeout_ms: "${TRITON_TIMEOUT_MS:-5000}"
 
 # MinIO / S3-compatible object storage

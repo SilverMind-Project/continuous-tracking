@@ -69,6 +69,7 @@ services:
       - ./triton-models/reid-solider:/models/reid-solider
       - ./triton-models/pose-rtmpose:/models/pose-rtmpose
       - ./triton-models/embeddinggemma-300m:/models/embeddinggemma-300m
+      - ./triton-models/depth-anything-v2:/models/depth-anything-v2
     deploy:
       resources:
         reservations:

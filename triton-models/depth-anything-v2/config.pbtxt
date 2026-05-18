@@ -1,0 +1,64 @@
+# Depth Anything v2 ViT-S Metric Indoor — ONNX Runtime backend (GPU).
+#
+# Source: depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf on HuggingFace
+#         (DPT architecture with DINOv2-S backbone, ~25M params, SafeTensors).
+# Export: uv run --python 3.12 --with torch --with transformers --with onnx \
+#           python triton-models/scripts/export_depth_anything_v2.py
+#
+# Output: absolute metric depth in metres, not relative/inverse depth.
+#
+# Verify tensor names after export:
+#   uv run --with onnx python -c "
+#     import onnx
+#     m = onnx.load('triton-models/depth-anything-v2/1/model.onnx')
+#     print('inputs:', [i.name for i in m.graph.input])
+#     print('outputs:', [o.name for o in m.graph.output])
+#   "
+#
+# Expected:
+#   inputs:  ['pixel_values']  shape: ['batch', 3, 'height', 'height']
+#   outputs: ['predicted_depth']  shape: [1, 518, 518]
+#
+# max_batch_size is 0 because the ONNX export produced a static batch=1
+# output dim (the torch.onnx exporter did not apply dynamic_axes to the
+# output).  The caller sends an explicit batch dim: (1, 3, 518, 518).
+#
+# Input preprocessing (handled in app/inference/depth.py):
+#   - Letterbox resize to 518×518 (padding value 114)
+#   - ImageNet normalise (mean [0.485, 0.456, 0.406], std [0.229, 0.224, 0.225])
+#   - Layout: NCHW float32 with explicit batch dim (1, 3, 518, 518)
+#
+# Output postprocessing (handled in app/inference/depth.py):
+#   - Strip batch dim → (518, 518)
+#   - Crop letterbox padding
+#   - Resize to original image resolution via cv2.INTER_LINEAR
+#   - Values are absolute depth in metres (ViT-S metric indoor)
+#   - Clamp to 0.0 to discard invalid negatives
+
+name: "depth-anything-v2"
+platform: "onnxruntime_onnx"
+default_model_filename: "model.onnx"
+max_batch_size: 0
+
+input [
+  {
+    name: "pixel_values"
+    data_type: TYPE_FP32
+    dims: [1, 3, 518, 518]
+  }
+]
+
+output [
+  {
+    name: "predicted_depth"
+    data_type: TYPE_FP32
+    dims: [1, 518, 518]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

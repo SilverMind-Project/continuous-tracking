@@ -25,6 +25,7 @@ from .observability.logging_config import configure_logging
 
 # Configure structlog before any logger is first used.
 configure_logging(settings.get("logging.level", "INFO") or "INFO")
+from .inference.depth import DepthEstimator
 from .inference.detector import PersonDetector
 from .inference.pose import PoseEstimator
 from .inference.reid_embedder import ReidEmbedder
@@ -36,6 +37,7 @@ from .routers import dashboard as dashboard_router_mod
 from .routers import gallery as gallery_router_mod
 from .routers import live as live_router_mod
 from .routers.calibration import router as calibration_router
+from .routers.calibration import set_auto_calibration_context
 from .routers.corrections import router as corrections_router
 from .routers.dashboard import router as dashboard_router
 from .routers.gallery import router as gallery_router
@@ -274,6 +276,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     reid_embedder = None
     pose_estimator = None
     env = settings.get("env", "production")
+    depth_estimator: DepthEstimator | None = None
     if triton_url:
         try:
             triton_timeout_ms = int(settings.get("triton.timeout_ms", "5000") or "5000")
@@ -293,6 +296,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     _triton_client,
                     model_name=settings.get("triton.pose_model", "pose-rtmpose"),
                 )
+            depth_enabled_str = settings.get("triton.depth_enabled", "true")
+            if str(depth_enabled_str).lower() not in ("0", "false", "no"):
+                depth_model_name = settings.get("triton.depth_model", "depth-anything-v2")
+                if await _triton_client.is_model_ready(depth_model_name):
+                    depth_estimator = DepthEstimator(
+                        _triton_client,
+                        model_name=depth_model_name,
+                    )
+                else:
+                    logger.warning(
+                        "depth_model_not_ready",
+                        model=depth_model_name,
+                        hint="export_depth_anything_v2.py must be run to produce model.onnx",
+                    )
         except Exception:
             logger.exception("Failed to connect to Triton Inference Server")
             if env in ("production", "staging"):
@@ -325,6 +342,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning(
             "Triton configured without MinIO frame storage; inference will run on blank frames.",
         )
+
+    # -- Auto-calibration (depth-based homography estimation) --
+    if depth_estimator is not None:
+        from .calibration.auto_calibrator import AutoCalibrator
+
+        auto_calibrator = AutoCalibrator(depth_estimator=depth_estimator)
+        set_auto_calibration_context(auto_calibrator=auto_calibrator, frame_fetcher=_frame_fetcher)
+        logger.info("auto_calibrator_ready", model="depth-anything-v2")
+    else:
+        set_auto_calibration_context(auto_calibrator=None, frame_fetcher=_frame_fetcher)
+        logger.info("auto_calibrator_disabled", reason="triton_not_connected_or_depth_disabled")
 
     # -- Wire everything and start --
     identity_rewriter = (

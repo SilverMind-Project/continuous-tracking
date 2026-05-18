@@ -28,10 +28,15 @@ def _scale_h(sx: float, sy: float) -> list[list[float]]:
 
 
 def _state_with(*camera_ids: str) -> CalibrationState:
-    """Return a CalibrationState with identity homographies pre-set."""
+    """Return a CalibrationState with 1px→1mm homographies pre-set.
+
+    Uses _scale_h(0.001, 0.001) so that pixel coordinates map to metres
+    (1000px = 1m), and FloorProjector.project() returns mm values equal to
+    the input pixel values (after the x1000 metres-to-mm conversion).
+    """
     state = CalibrationState()
     for cam in camera_ids:
-        state.homographies[cam] = _identity_h()
+        state.homographies[cam] = _scale_h(0.001, 0.001)
     return state
 
 
@@ -81,20 +86,21 @@ class TestFloorProjector:
         assert fp.x_mm == 0
         assert fp.y_mm == 0
 
-    def test_identity_homography_footpoint(self) -> None:
+    def test_footpoint_projection(self) -> None:
+        # H: 1px = 0.001m; footpoint = bottom-centre: x=(100+200)/2=150, y=400
+        # 0.15m, 0.4m x1000 = 150mm, 400mm
         state = _state_with("cam_a")
         proj = FloorProjector(state)
-        # footpoint = bottom-centre: x=(100+200)/2=150, y=400
         fp = proj.project("cam_a", BoundingBox(100, 200, 200, 400))
         assert fp.calibrated is True
         assert fp.x_mm == 150
         assert fp.y_mm == 400
 
     def test_scale_homography(self) -> None:
+        # H: 1px → 0.01m (10mm/px); footpoint (20, 50) → 0.2m, 0.5m → 200mm, 500mm
         state = CalibrationState()
-        state.homographies["cam_a"] = _scale_h(10.0, 10.0)
+        state.homographies["cam_a"] = _scale_h(0.01, 0.01)
         proj = FloorProjector(state)
-        # footpoint px: (20, 50) → floor mm: (200, 500)
         fp = proj.project("cam_a", BoundingBox(10, 20, 30, 50))
         assert fp.calibrated is True
         assert fp.x_mm == 200
