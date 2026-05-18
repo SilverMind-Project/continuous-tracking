@@ -23,7 +23,7 @@ import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-import asyncpg
+import asyncpg  # type: ignore[import-untyped]
 
 from ..observability import metrics as _metrics
 

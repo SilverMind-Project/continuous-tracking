@@ -1146,25 +1146,32 @@ class SignalConfig:
         onset_consecutive_windows: int = 2,
         cooldown_minutes: int = 60,
         # Pacing
-        pacing_room_threshold: int = 5,
+        # 8 transitions in 30 min: distinguishes purposeful ambulation from dementia pacing
+        pacing_room_threshold: int = 8,
         pacing_window_minutes: int = 30,
         pacing_min_obs_density: float = 0.5,  # minimum points/min to evaluate
         # Nighttime movement
-        nighttime_transition_threshold: int = 2,
+        # 3 transitions = one bathroom trip plus return and one more; 2 is a single bathroom trip
+        nighttime_transition_threshold: int = 3,
         # Stillness
-        stillness_threshold_minutes: int = 30,
+        # 60 min: desk work, reading, TV watching routinely exceed 30 min without clinical concern
+        stillness_threshold_minutes: int = 60,
         stillness_emergency_minutes: int = 120,
-        stillness_motion_floor: float = 0.005,
+        # 0.02: normal physiological ambient motion (breathing, micro-adjustments) ≈ 0.01-0.02
+        stillness_motion_floor: float = 0.02,
         resting_rooms: tuple[str, ...] = ("bed", "bedroom"),
         # Bathroom
         bathroom_z_threshold: float = 3.5,
         bathroom_z_threshold_night: float = 4.0,
-        bathroom_absolute_threshold_seconds: int = 1800,  # 30 min cold-start fallback
+        # 45 min cold-start fallback: constipation (common with dementia medications) routinely
+        # extends bathroom time beyond 30 min before a personal baseline can be established
+        bathroom_absolute_threshold_seconds: int = 2700,
         # Sundowning
         sundowning_z_threshold: float = 2.5,
         sundowning_min_evening_minutes: int = 30,
         # Absence
-        absence_threshold_minutes: int = 30,
+        # 60 min: cameras don't cover every room; 30 min gap is normal (cooking, porch, bathroom)
+        absence_threshold_minutes: int = 60,
         # Phase 4: scalability
         baseline_cache_ttl_minutes: int = 60,
         max_concurrent_identities: int = 4,

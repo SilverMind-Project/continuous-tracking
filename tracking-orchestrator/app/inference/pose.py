@@ -11,6 +11,10 @@ SimCC decoding (simcc_split_ratio = 2.0):
   x_pixel = argmax(simcc_x[k]) / 2.0   (in crop pixel space)
   y_pixel = argmax(simcc_y[k]) / 2.0   (in crop pixel space)
 
+Visibility score: min(max_logit_x, max_logit_y). The ONNX export produces
+small-scale logits (~0.3-0.6 for visible keypoints, ~0.0 for occluded), so
+the raw max logit is used directly rather than softmax-peak probability.
+
 Keypoints are returned in original-crop normalised coordinates [0, 1].
 """
 
@@ -51,15 +55,8 @@ def _preprocess(
     pad_x = (_INPUT_W - new_w) // 2
     canvas = np.full((_INPUT_H, _INPUT_W, 3), 114, dtype=np.uint8)
     canvas[pad_y : pad_y + new_h, pad_x : pad_x + new_w] = resized
-    chw = canvas.astype(np.float32).transpose(2, 0, 1)
+    chw = canvas.astype(np.float32).transpose(2, 0, 1) / 255.0
     return (chw - _MEAN) / _STD, pad_x, pad_y, scale
-
-
-def _softmax_peak(logits: npt.NDArray[np.float32]) -> float:
-    """Softmax probability of the argmax bin (used as visibility score)."""
-    shifted = logits - logits.max()
-    exp = np.exp(shifted)
-    return float(exp[np.argmax(logits)] / exp.sum())
 
 
 def _decode_simcc(
@@ -86,7 +83,11 @@ def _decode_simcc(
 
         x_norm = float(np.clip((x_input - pad_x) / new_w, 0.0, 1.0))
         y_norm = float(np.clip((y_input - pad_y) / new_h, 0.0, 1.0))
-        score = min(_softmax_peak(simcc_x[k]), _softmax_peak(simcc_y[k]))
+        # The exported ONNX model produces small-scale logits (~0.3-0.6 peak
+        # vs ~0.0 background). Softmax-peak scoring over 384/512 bins dilutes
+        # valid peaks to ~0.004, below any useful threshold. Use the raw max
+        # logit directly — visible keypoints score >0.2, occluded ones <0.1.
+        score = float(min(float(simcc_x[k].max()), float(simcc_y[k].max())))
 
         kpts.append(Keypoint(x=x_norm, y=y_norm, score=score))
 

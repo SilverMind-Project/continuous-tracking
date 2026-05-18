@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
@@ -12,6 +13,7 @@ import pytest
 
 from app.calibration.state import AdjacencyEdge as CalibrationAdjacencyEdge
 from app.calibration.state import calibration_state
+from app.domain import GlobalTrack, Tracklet
 from app.inference.schemas import DetectionBox
 from app.pipeline.frame_pipeline import FrameProcessingPipeline, PipelineConfig
 from app.transport.redis_streams import FrameReady
@@ -163,18 +165,13 @@ class TestPipelineSkeleton:
             # detections.
             pipeline._tracklet_manager.get_active_tracklets = (  # type: ignore[method-assign,union-attr]
                 lambda: [
-                    type(
-                        "Tracklet",
-                        (),
-                        {
-                            "tracklet_id": "tl-1",
-                            "camera_id": "cam-1",
-                            "detection_ids": ["det-1"],
-                            "started_at": None,
-                            "ended_at": None,
-                            "state": "active",
-                        },
-                    )()
+                    Tracklet(
+                        tracklet_id="tl-1",
+                        camera_id="cam-1",
+                        detection_ids=["det-1"],
+                        started_at=datetime.now(UTC),
+                        state="active",
+                    )
                 ]
             )
 
@@ -183,19 +180,14 @@ class TestPipelineSkeleton:
             mock_associate = AsyncMock(
                 side_effect=[
                     [
-                        type(
-                            "GlobalTrack",
-                            (),
-                            {
-                                "global_track_id": "gt-001",
-                                "camera_ids": ["cam-1"],
-                                "tracklet_ids": ["tl-1"],
-                                "started_at": None,
-                                "last_seen_at": None,
-                                "current_identity_id": None,
-                                "state": "active",
-                            },
-                        )(),
+                        GlobalTrack(
+                            global_track_id="gt-001",
+                            camera_ids=["cam-1"],
+                            tracklet_ids=["tl-1"],
+                            started_at=datetime.now(UTC),
+                            last_seen_at=datetime.now(UTC),
+                            state="active",
+                        ),
                     ],
                     [],  # tracklet terminated — global track no longer active
                 ]

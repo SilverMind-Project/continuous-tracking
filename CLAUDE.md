@@ -45,7 +45,7 @@ IP Cameras (RTSP)
                                            │ RTMPose  pose estimation     │
                                            │ BoT-SORT tracker             │    YOLO26L · CLIP · Florence-2
                                            │ Bayesian identity resolver   │    SOLIDER-REID · RTMPose
-                                           │ Dementia signal worker       │    (all ONNX, INT8-quantized)
+                                           │ Dementia signal worker       │    (all ONNX, FP32)
                                            └──────────────────────────────┘
                                                          │ tracking.events
                                                          │ tracking.revisions
@@ -70,7 +70,7 @@ IP Cameras (RTSP)
 
 **Infrastructure**: TimescaleDB + pgvectorscale (StreamingDiskANN) · Redis Streams (AOF) · MinIO · Triton Inference Server
 
-**GPU support**: NVIDIA (TensorRT/CUDA execution provider) and Intel Arc (OpenVINO execution provider). Switch with `python triton-models/scripts/configure_gpu.py --vendor nvidia|intel`. All models use INT8-quantized ONNX for efficiency.
+**GPU support**: NVIDIA only (TensorRT/CUDA execution provider via ONNX Runtime).
 
 **Shared libraries**: `triton-shared/` (sibling) provides the Triton gRPC client (`TritonClientProtocol`, `TritonGrpcClient`) and inference pre/post-processing used by both CTS and `scene-analysis-service`.
 
@@ -107,12 +107,12 @@ IP Cameras (RTSP)
 │   ├── app/proto/                 Generated protobuf Python bindings (committed)
 │   └── migrations/                SQL migrations (0001–0006, .up.sql/.down.sql pairs)
 ├── triton-models/                 Triton model configs + export/download scripts
-│   ├── person-detector/           YOLO26L ONNX (INT8)
-│   ├── clip-vision/               CLIP ViT-L/14 ONNX (INT8)
-│   ├── florence-2/                Florence-2-large Python backend (INT8)
+│   ├── person-detector/           YOLO26L ONNX (FP32)
+│   ├── clip-vision/               CLIP ViT-L/14 ONNX (FP32)
+│   ├── florence-2/                Florence-2-large Python backend (INT8 HF export)
 │   ├── reid-solider/              SOLIDER-REID ONNX
 │   ├── pose-rtmpose/              RTMPose-m ONNX
-│   └── scripts/                   export, download, quantize, configure_gpu
+│   └── scripts/                   export, download
 ├── proto/                         Protobuf contracts (frame, tracking, signals, scene)
 ├── cognitive-companion/           BFF gateway (sibling repo — see its own CLAUDE.md)
 ├── k8s/                           Legacy K8s (migrated to ../kubernetes/continuous-tracking/)
@@ -460,7 +460,7 @@ RTSP ingest: go2rtc sidecar
 
 - **cognitive-companion** is a dependent system in a sibling directory (`../cognitive-companion`). Its own CLAUDE.md is required reading before touching anything under `cognitive-companion/`.
 - **scene-analysis-service** shares the Triton instance and the `triton-shared/` client library. Changes to `triton-shared/` affect both CTS and SAS.
-- **Model binaries are not in git.** Run the export/download scripts and place outputs in `triton-models/<model>/1/`. See `triton-models/README.md`. All models use INT8 quantization for production.
+- **Model binaries are not in git.** Run the export/download scripts and place outputs in `triton-models/<model>/1/`. See `triton-models/README.md`. Models run as FP32 ONNX; no quantization.
 - **Triton inference code** in `app/inference/` delegates to `triton_shared.client` and `triton_shared.inference`. CTS-specific wrappers (`PersonDetector`, `ReidEmbedder`, `PoseEstimator`) remain in `app/inference/`; shared logic lives in `triton-shared/`.
 - **Never implement a feature that depends on another in-flight PR.** The layering is load-bearing.
 - **Validation gates** (phase-0 §0.31) define binary pass/fail criteria for each subsystem. Any PR touching a subsystem must satisfy the relevant gates.

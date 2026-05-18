@@ -37,8 +37,9 @@ class FaceResult:
 class FaceIdentificationClient:
     """Async HTTP client for person-identification-service.
 
-    Sends a downscaled JPEG frame to ``{base_url}/api/v1/identify`` and
-    returns face detections with identity assignments.
+    Sends person crops (or a downscaled full frame) to
+    ``{base_url}/api/v1/identify`` and returns face detections with
+    identity assignments.
 
     Graceful degradation: if the service is unreachable or returns an
     error, an empty list is returned and the error is logged.
@@ -79,22 +80,127 @@ class FaceIdentificationClient:
             await self._client.aclose()
             self._client = None
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def identify_crops(
+        self,
+        crops: list[npt.NDArray[np.uint8]],
+        crop_bboxes_norm: list[tuple[float, float, float, float]],
+    ) -> list[tuple[int, list[FaceResult]]]:
+        """Identify faces in person crops at native crop resolution.
+
+        Each crop is encoded as a standalone JPEG and sent to the
+        person-id-service.  Face bboxes returned by the service are in
+        the crop's pixel space; they are normalised to [0, 1] relative
+        to the **original frame** using the corresponding crop bbox.
+
+        Args:
+            crops: RGB uint8 person crops (one per detection).
+            crop_bboxes_norm: Normalised person bboxes (x1, y1, x2, y2)
+                in [0, 1] of the original frame, one per crop.
+
+        Returns:
+            List of ``(crop_index, [FaceResult, ...])`` pairs.  Only
+            crops with at least one face above the confidence threshold
+            are included.
+        """
+        if self._client is None:
+            logger.warning("FaceIdentificationClient not connected, skipping identify")
+            return []
+
+        results: list[tuple[int, list[FaceResult]]] = []
+        crop_with_bboxes = zip(crops, crop_bboxes_norm, strict=True)
+        for idx, (crop, (cx1, cy1, cx2, cy2)) in enumerate(crop_with_bboxes):
+            crop_h, crop_w = crop.shape[:2]
+            if crop_w < 40 or crop_h < 40:
+                continue  # too small for meaningful face detection
+
+            try:
+                crop_b64 = _encode_crop(crop)
+            except Exception:
+                logger.exception("Failed to encode crop for face id", crop_index=idx)
+                continue
+
+            try:
+                resp = await self._client.post(
+                    f"{self._base_url}/api/v1/identify",
+                    json={"image": crop_b64, "save_guest_images": False},
+                )
+                resp.raise_for_status()
+                data: dict[str, Any] = resp.json()
+            except httpx.HTTPError:
+                logger.warning(
+                    "Face identification HTTP error for crop",
+                    crop_index=idx,
+                    exc_info=True,
+                )
+                continue
+            except Exception:
+                logger.exception("Face identification unexpected error for crop", crop_index=idx)
+                continue
+
+            crop_results: list[FaceResult] = []
+            for face in data.get("faces", []):
+                confidence = float(face.get("confidence", 0))
+                if confidence < self._min_confidence:
+                    continue
+                bbox_px: list[float] = face.get("bbox", [])
+                if len(bbox_px) != 4:
+                    continue
+
+                fx1, fy1, fx2, fy2 = bbox_px
+                # Normalise face bbox from crop pixel space → crop [0, 1].
+                fnx1 = fx1 / crop_w
+                fny1 = fy1 / crop_h
+                fnx2 = fx2 / crop_w
+                fny2 = fy2 / crop_h
+                # Map from crop [0, 1] → original frame [0, 1].
+                crop_w_norm = cx2 - cx1
+                crop_h_norm = cy2 - cy1
+                nx1 = cx1 + fnx1 * crop_w_norm
+                ny1 = cy1 + fny1 * crop_h_norm
+                nx2 = cx1 + fnx2 * crop_w_norm
+                ny2 = cy1 + fny2 * crop_h_norm
+
+                crop_results.append(
+                    FaceResult(
+                        person_id=face.get("person_id", "unknown"),
+                        name=face.get("name", "Unknown"),
+                        confidence=confidence,
+                        bbox_normalized=[nx1, ny1, nx2, ny2],
+                    )
+                )
+
+            if crop_results:
+                results.append((idx, crop_results))
+
+        total_faces = sum(len(r) for _, r in results)
+        logger.debug(
+            "Face identification complete (crops)",
+            crop_count=len(crops),
+            face_count=total_faces,
+            identities=list({r.person_id for _, rr in results for r in rr}),
+        )
+        return results
+
     async def identify(
         self,
         image: npt.NDArray[np.uint8],
         orig_width: int,
         orig_height: int,
     ) -> list[FaceResult]:
-        """Identify faces in an RGB image.
+        """Identify faces in a full RGB frame (legacy path).
+
+        Prefer :meth:`identify_crops` for better face resolution — this
+        method downscales the full frame before sending, which may lose
+        small faces.
 
         Args:
             image: RGB uint8 numpy array (H, W, 3).
             orig_width: Original frame width (for bbox normalisation).
             orig_height: Original frame height (for bbox normalisation).
-
-        Returns:
-            List of FaceResult with normalised bboxes in [0, 1] relative
-            to the original frame dimensions.
         """
         if self._client is None:
             logger.warning("FaceIdentificationClient not connected, skipping identify")
@@ -125,29 +231,20 @@ class FaceIdentificationClient:
             confidence = float(face.get("confidence", 0))
             if confidence < self._min_confidence:
                 continue
-            # Person-id-service returns pixel bboxes in the downscaled image.
-            # Normalise to [0,1] in the original frame coordinate space.
             bbox_px: list[float] = face.get("bbox", [])
             if len(bbox_px) != 4:
                 continue
-            # so its bboxes are in that image's pixel space.  We normalise to
-            # [0,1] using the original dimensions because our YOLO detections
-            # are already normalised to the original frame.
             x1, y1, x2, y2 = bbox_px
             dw = self._max_dim
             dh = self._max_dim
-            # Letterbox scaling used by _encode_frame
             if orig_width > orig_height:
                 dh = int(orig_height * self._max_dim / orig_width)
             else:
                 dw = int(orig_width * self._max_dim / orig_height)
-
-            # Convert from downscaled pixel space → normalised original space
             nx1 = x1 / dw
             ny1 = y1 / dh
             nx2 = x2 / dw
             ny2 = y2 / dh
-
             results.append(
                 FaceResult(
                     person_id=face.get("person_id", "unknown"),
@@ -158,7 +255,7 @@ class FaceIdentificationClient:
             )
 
         logger.debug(
-            "Face identification complete",
+            "Face identification complete (full frame)",
             face_count=len(results),
             identities=[r.person_id for r in results],
         )
@@ -185,4 +282,16 @@ def _encode_frame(
     ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise RuntimeError("JPEG encoding failed")
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def _encode_crop(
+    crop: npt.NDArray[np.uint8],
+    quality: int = 90,
+) -> str:
+    """Encode a person crop as base64 JPEG (no downscaling)."""
+    bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
+    ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise RuntimeError("JPEG encoding failed for crop")
     return base64.b64encode(buf.tobytes()).decode("ascii")

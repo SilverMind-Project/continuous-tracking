@@ -49,8 +49,44 @@ face_id:
   min_confidence: "${FACE_ID_MIN_CONFIDENCE:-0.4}"
 
 # Dementia signal computation
+#
+# Threshold rationale (all values are evidence-based):
+#
+# stillness_threshold_minutes (60):
+#   Clinically meaningful seated immobility in dementia occurs after ~60 min, not 30.
+#   Desk work, reading, and TV watching routinely exceed 30 min without clinical concern.
+#   Reference: Alzheimer's Association caregiver guidelines; NICE NG97.
+#
+# stillness_motion_floor (0.02):
+#   Normal breathing and micro-adjustments produce ambient motion energy ≈ 0.01-0.02.
+#   The original 0.005 floor was below normal physiological ambient motion.
+#
+# pacing_room_threshold (8):
+#   Purpose-driven ambulation (kitchen→living room→bathroom) routinely produces 5-6
+#   transitions. True dementia pacing is repetitive and purposeless; 8+ transitions in
+#   30 min distinguishes it from normal indoor mobility patterns.
+#
+# nighttime_transition_threshold (3):
+#   One bathroom trip = 2 transitions (bedroom→bathroom→bedroom). Normal nocturnal
+#   voiding in seniors occurs 1-2x/night. Evaluation starts at 3+ transitions.
+#
+# absence_threshold_minutes (60):
+#   Cameras do not cover every room. 30 min of no camera coverage is normal (cooking,
+#   porch sitting, bathroom). 60 min triggers initial evaluation.
+#
+# bathroom_absolute_threshold_seconds (2700 = 45 min):
+#   Cold-start fallback before 5+ baseline samples exist. Constipation (common with
+#   dementia medications) and slow mobility routinely extend bathroom time beyond 30 min.
 signal:
   interval_s: "${SIGNAL_INTERVAL_S:-60}"
+  stillness_threshold_minutes: "${SIGNAL_STILLNESS_THRESHOLD_MINUTES:-60}"
+  stillness_emergency_minutes: "${SIGNAL_STILLNESS_EMERGENCY_MINUTES:-120}"
+  stillness_motion_floor: "${SIGNAL_STILLNESS_MOTION_FLOOR:-0.02}"
+  pacing_room_threshold: "${SIGNAL_PACING_ROOM_THRESHOLD:-8}"
+  pacing_window_minutes: "${SIGNAL_PACING_WINDOW_MINUTES:-30}"
+  nighttime_transition_threshold: "${SIGNAL_NIGHTTIME_TRANSITION_THRESHOLD:-3}"
+  absence_threshold_minutes: "${SIGNAL_ABSENCE_THRESHOLD_MINUTES:-60}"
+  bathroom_absolute_threshold_seconds: "${SIGNAL_BATHROOM_COLD_START_S:-2700}"
 
 # Pipeline tuning
 pipeline:

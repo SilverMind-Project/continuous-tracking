@@ -171,6 +171,12 @@ class IdentityResolver:
         Returns:
             ResolveOutcome with decisions and any revisions to emit.
         """
+        # Refresh known-identity list from the gallery so new enrolments
+        # are picked up without a restart and the prior is not degenerate.
+        # The gallery query is fast (indexed PK scan, ≤100 rows in practice).
+        enrolled = await self._gallery_repo.list_identities(active_only=True)
+        self._identities = {ident.identity_id: ident for ident in enrolled}
+
         outcome = ResolveOutcome()
 
         for gt in global_tracks:
@@ -542,7 +548,10 @@ class IdentityResolver:
             ).inc()
 
         # Diagnostic logging: surface why a commit was accepted or refused.
-        if new_id is None and prev_id is not None:
+        # Log for ALL failed commits — not only when prev_id is set — so new
+        # tracks with strong ReID hits that fail the probability/margin gate
+        # are visible rather than silently staying UNKNOWN.
+        if new_id is None:
             logger.debug(
                 "identity_not_committed",
                 global_track_id=gt.global_track_id,
@@ -553,6 +562,7 @@ class IdentityResolver:
                 within_maintenance_window=within_maintenance_window,
                 evidence_ok=evidence_ok,
                 prev_id=prev_id,
+                known_identity_count=len(self._identities),
             )
         elif within_maintenance_window:
             logger.debug(

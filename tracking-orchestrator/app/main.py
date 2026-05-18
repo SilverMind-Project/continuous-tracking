@@ -186,6 +186,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         face_id_enabled=bool(face_id_url),
         face_id_camera_configs=face_id_camera_configs,
         timezone=settings.get("app.timezone", "UTC"),
+        signal_stillness_threshold_minutes=int(
+            settings.get("signal.stillness_threshold_minutes", "60")
+        ),
+        signal_stillness_emergency_minutes=int(
+            settings.get("signal.stillness_emergency_minutes", "120")
+        ),
+        signal_stillness_motion_floor=float(settings.get("signal.stillness_motion_floor", "0.02")),
+        signal_pacing_room_threshold=int(settings.get("signal.pacing_room_threshold", "8")),
+        signal_pacing_window_minutes=int(settings.get("signal.pacing_window_minutes", "30")),
+        signal_nighttime_transition_threshold=int(
+            settings.get("signal.nighttime_transition_threshold", "3")
+        ),
+        signal_absence_threshold_minutes=int(
+            settings.get("signal.absence_threshold_minutes", "60")
+        ),
+        signal_bathroom_absolute_threshold_seconds=int(
+            settings.get("signal.bathroom_absolute_threshold_seconds", "2700")
+        ),
         allow_skeleton=str(settings.get("pipeline.allow_skeleton", "false")).lower()
         in ("1", "true", "yes"),
         # Phase 1: noise reduction

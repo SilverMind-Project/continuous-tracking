@@ -1,7 +1,4 @@
-# CLIP ViT-L/14 vision encoder — ONNX Runtime backend.
-#
-# Works on NVIDIA GPUs (TensorRT EP auto-selected by ONNX Runtime) and
-# Intel Arc GPUs (activate OpenVINO EP via configure_gpu.py --vendor intel).
+# CLIP ViT-L/14 vision encoder — ONNX Runtime backend (NVIDIA GPU).
 #
 # Model file: triton-models/clip-vision/1/model.onnx
 # Export:     python triton-models/scripts/export_clip.py
@@ -22,7 +19,7 @@
 
 name: "clip-vision"
 platform: "onnxruntime_onnx"
-default_model_filename: "model_qdq.onnx"
+default_model_filename: "model.onnx"
 max_batch_size: 16
 
 dynamic_batching {

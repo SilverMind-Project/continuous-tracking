@@ -1,7 +1,4 @@
-# YOLO26L person detector — ONNX Runtime backend.
-#
-# Works on NVIDIA GPUs (TensorRT EP auto-selected by ONNX Runtime) and
-# Intel Arc GPUs (activate OpenVINO EP via configure_gpu.py --vendor intel).
+# YOLO26L person detector — ONNX Runtime backend (NVIDIA GPU).
 #
 # Model file: triton-models/person-detector/1/model.onnx
 # Export:     python triton-models/scripts/export_yolo.py --weights yolo26l.pt
@@ -12,11 +9,8 @@
 #
 # YOLO26L uses a NMS-Free end-to-end architecture. Verify the ONNX output
 # shape before deploying — see export_yolo.py for the verification command.
-#
-# NVIDIA: ONNX Runtime auto-selects TensorrtExecutionProvider then
-#   CUDAExecutionProvider. On first load Triton builds and caches a TRT
-#   engine from the ONNX graph; subsequent loads use the cache.
-# Intel Arc: run configure_gpu.py --vendor intel to activate the OpenVINO EP.
+# ONNX Runtime auto-selects TensorrtExecutionProvider then CUDAExecutionProvider.
+# On first load Triton builds and caches a TRT engine; subsequent loads use the cache.
 
 name: "person-detector"
 platform: "onnxruntime_onnx"

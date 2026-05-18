@@ -148,27 +148,6 @@ def _bbox_iou(a: list[float], b: list[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def _face_person_overlap(face: list[float], person: list[float]) -> float:
-    """Fraction of the face bbox covered by the person bbox.
-
-    Standard IoU is wrong for face-to-person matching because the face
-    (small) vs full-body YOLO bbox (large) gives IoU ≈ face_area/body_area
-    which is ~0.05-0.13 — near or below any useful threshold.  Instead,
-    measure what fraction of the face is inside the person bbox.  This
-    approaches 1.0 when the face is fully contained in the person and is
-    robust to the face being much smaller than the body.
-    """
-    x_left = max(face[0], person[0])
-    y_top = max(face[1], person[1])
-    x_right = min(face[2], person[2])
-    y_bottom = min(face[3], person[3])
-    if x_right <= x_left or y_bottom <= y_top:
-        return 0.0
-    inter = (x_right - x_left) * (y_bottom - y_top)
-    face_area = max(1e-8, (face[2] - face[0]) * (face[3] - face[1]))
-    return inter / face_area
-
-
 def _iou_dedup_detections(
     boxes: list[DetectionBox],
     iou_threshold: float,
@@ -226,6 +205,15 @@ class PipelineConfig:
     signal_enabled: bool = True
     # IANA timezone name used for time-of-day signal computations.
     timezone: str = "UTC"
+    # Dementia signal thresholds (see SignalConfig for rationale).
+    signal_stillness_threshold_minutes: int = 60
+    signal_stillness_emergency_minutes: int = 120
+    signal_stillness_motion_floor: float = 0.02
+    signal_pacing_room_threshold: int = 8
+    signal_pacing_window_minutes: int = 30
+    signal_nighttime_transition_threshold: int = 3
+    signal_absence_threshold_minutes: int = 60
+    signal_bathroom_absolute_threshold_seconds: int = 2700
     # Face identification via person-identification-service (ArcFace).
     face_id_url: str = ""
     face_id_cooldown_s: float = 5.0
@@ -518,7 +506,17 @@ class FrameProcessingPipeline:
             self._signal_worker = DementiaSignalWorker(
                 trajectory_repo=traj_repo,
                 signal_repo=self._signal_repo,
-                cfg=SignalConfig(tz_name=self._config.timezone),
+                cfg=SignalConfig(
+                    tz_name=self._config.timezone,
+                    stillness_threshold_minutes=self._config.signal_stillness_threshold_minutes,
+                    stillness_emergency_minutes=self._config.signal_stillness_emergency_minutes,
+                    stillness_motion_floor=self._config.signal_stillness_motion_floor,
+                    pacing_room_threshold=self._config.signal_pacing_room_threshold,
+                    pacing_window_minutes=self._config.signal_pacing_window_minutes,
+                    nighttime_transition_threshold=self._config.signal_nighttime_transition_threshold,
+                    absence_threshold_minutes=self._config.signal_absence_threshold_minutes,
+                    bathroom_absolute_threshold_seconds=self._config.signal_bathroom_absolute_threshold_seconds,
+                ),
                 baseline_repo=baseline_repo,
             )
 
@@ -797,12 +795,31 @@ class FrameProcessingPipeline:
 
         # Step 2: Run detection
         detections = await self._detector.detect(image)
+        # Guard against resolution mismatch between the MinIO-stored image
+        # and the FrameReady-reported dimensions.  If they diverge (e.g.
+        # due to EXIF rotation, resized upload, or thumbnail storage), the
+        # bbox→pixel and pose→pixel transforms would be offset, producing
+        # misaligned overlays in the live view.
+        img_h, img_w = image.shape[:2]
+        effective_width = frame.width
+        effective_height = frame.height
+        if img_w != frame.width or img_h != frame.height:
+            logger.warning(
+                "frame_dimension_mismatch",
+                camera_id=frame.camera_id,
+                frame_index=frame.frame_index,
+                minio_shape=f"{img_h}x{img_w}",
+                reported_shape=f"{frame.height}x{frame.width}",
+            )
+            effective_width = img_w
+            effective_height = img_h
+
         logger.debug(
             "detections_raw",
             camera_id=frame.camera_id,
             frame_index=frame.frame_index,
             count=len(detections),
-            image_shape=f"{image.shape[0]}x{image.shape[1]}",
+            image_shape=f"{img_h}x{img_w}",
         )
 
         # Step 2a: Post-decode IoU dedup — suppresses any near-duplicate
@@ -869,10 +886,10 @@ class FrameProcessingPipeline:
 
             for det_idx, det in enumerate(detections):
                 bbox = BoundingBox(
-                    x_min=int(det.x1 * frame.width),
-                    y_min=int(det.y1 * frame.height),
-                    x_max=int(det.x2 * frame.width),
-                    y_max=int(det.y2 * frame.height),
+                    x_min=int(det.x1 * effective_width),
+                    y_min=int(det.y1 * effective_height),
+                    x_max=int(det.x2 * effective_width),
+                    y_max=int(det.y2 * effective_height),
                 )
                 emb = embeddings[det_idx] if det_idx < len(embeddings) else None
 
@@ -909,9 +926,9 @@ class FrameProcessingPipeline:
         # Emit tracker dedup metric
         dedup_dropped = self._tracker.get_dedup_dropped(frame.camera_id)
         if dedup_dropped > 0:
-            _metrics.metrics.tracklets_dedup_dropped_total.labels(
-                camera_id=frame.camera_id
-            ).inc(dedup_dropped)
+            _metrics.metrics.tracklets_dedup_dropped_total.labels(camera_id=frame.camera_id).inc(
+                dedup_dropped
+            )
 
         # Step 4: Tracklet management — run even with 0 detections so
         # tracklets that have no corresponding detection are marked lost.
@@ -925,17 +942,19 @@ class FrameProcessingPipeline:
             frame_index=frame.frame_index,
         )
 
-        # Step 4b: Face identification (rate-limited call to person-identification-service)
+        # Step 4b: Face identification (rate-limited call to person-identification-service).
+        # Uses person crops (already extracted for ReID at Step 3) at native
+        # resolution to give the face detector the best chance at small faces.
         face_anchors: list[FaceAnchor] = []
-        if self._face_id_client is not None and domain_detections:
+        if self._face_id_client is not None and domain_detections and crops:
             now = datetime.now(UTC)
             if self._should_call_face_id(frame.camera_id, now):
-                face_anchors = await self._identify_faces(
-                    image=image,
+                face_anchors = await self._identify_faces_from_crops(
+                    crops=crops,
+                    crop_detections=domain_detections,
                     frame_width=frame.width,
                     frame_height=frame.height,
                     camera_id=frame.camera_id,
-                    domain_detections=domain_detections,
                 )
 
         # Ensure face-anchor identities exist in the identities table so that
@@ -1164,10 +1183,29 @@ class FrameProcessingPipeline:
                     ),
                     tracklet.tracklet_id,
                 )
+                # Resolve the global track for this tracklet to pick up
+                # the committed identity (if any).  The identity resolver
+                # writes current_identity_id on the GlobalTrack before
+                # keyframe sampling runs, so it is available here.
+                gt_for_tracklet = next(
+                    (gt for gt in active_global_tracks if tracklet.tracklet_id in gt.tracklet_ids),
+                    None,
+                )
+                identity_id = (
+                    gt_for_tracklet.current_identity_id if gt_for_tracklet is not None else ""
+                )
                 annotations: dict[str, object] = {
                     "tracklet_id": tracklet.tracklet_id,
                     "camera_id": tracklet.camera_id,
+                    "identity_id": identity_id or "",
                 }
+                if tracklet.last_bbox is not None:
+                    annotations["bbox"] = {
+                        "x_min": tracklet.last_bbox.x_min,
+                        "y_min": tracklet.last_bbox.y_min,
+                        "x_max": tracklet.last_bbox.x_max,
+                        "y_max": tracklet.last_bbox.y_max,
+                    }
 
                 sampled: TaggedKeyframe | None
                 # Trigger on identity revision.
@@ -1242,8 +1280,8 @@ class FrameProcessingPipeline:
 
         # Step 9c (Phase 7): Update per-tracklet trail deques with the current
         # foot-point (bbox bottom-centre in normalised camera coords).
-        frame_w = float(frame.width) if frame.width else 1.0
-        frame_h = float(frame.height) if frame.height else 1.0
+        frame_w = float(effective_width) if effective_width else 1.0
+        frame_h = float(effective_height) if effective_height else 1.0
         for domain_det in domain_detections:
             if not domain_det.tracklet_id:
                 continue
@@ -1271,10 +1309,18 @@ class FrameProcessingPipeline:
         evidence_by_gt: dict[str, tuple[float, float, bool]] = {}
         if active_tracklets and outcome.decisions:
             for decision in outcome.decisions:
-                if decision.identity_id is None:
+                # Use the posterior's top identity even when the commit rule
+                # hasn't fired yet.  If we gate on decision.identity_id alone
+                # (which is None until a formal commit), the per-frame
+                # TrackingEvent carries no IdentityRevision sub-messages, the
+                # CC subscriber defaults identity_confidence to 0.0, the
+                # LocationWriter skips the detection, no PersonLocationState
+                # row is written, and the Current Presence tab falls through
+                # to UNKNOWN for every person.
+                top_id, top_prob = decision.posterior.top_identity()
+                if top_id == "UNKNOWN" or top_prob <= 0.0:
                     continue
-                _top_id, top_prob = decision.posterior.top_identity()
-                identities[decision.global_track_id] = (decision.identity_id, top_prob)
+                identities[decision.global_track_id] = (top_id, top_prob)
                 # Compute top-2 probability for the evidence chip.
                 top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
                 top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
@@ -1289,8 +1335,8 @@ class FrameProcessingPipeline:
             minio_key=frame.minio_key,
             room_name=self._config.camera_room_map.get(frame.camera_id, ""),
             identities=identities or None,
-            frame_width=frame.width,
-            frame_height=frame.height,
+            frame_width=effective_width,
+            frame_height=effective_height,
             capture_time_unix_ns=frame.capture_time_unix_ns,
             pose_results=det_pose_result if det_pose_result else None,
             trail_by_tracklet=trail_by_tracklet_snapshot or None,
@@ -1337,6 +1383,14 @@ class FrameProcessingPipeline:
             batch_results = await self._pose_estimator.infer_batch(valid_crops)
             for vi, pr in zip(valid_idxs, batch_results, strict=True):
                 results[vi] = pr
+                visible = sum(1 for kp in pr.keypoints if kp.score > 0.2)
+                logger.debug(
+                    "pose_result",
+                    detection_index=vi,
+                    visible_keypoints=visible,
+                    min_score=round(min(kp.score for kp in pr.keypoints), 3),
+                    max_score=round(max(kp.score for kp in pr.keypoints), 3),
+                )
 
         return results
 
@@ -1411,37 +1465,49 @@ class FrameProcessingPipeline:
             return True
         return (now - last).total_seconds() >= self._config.face_id_cooldown_s
 
-    async def _identify_faces(
+    async def _identify_faces_from_crops(
         self,
-        image: npt.NDArray[np.uint8],
+        crops: list[npt.NDArray[np.uint8]],
+        crop_detections: list[Detection],
         frame_width: int,
         frame_height: int,
         camera_id: str,
-        domain_detections: list[Detection],
     ) -> list[FaceAnchor]:
-        """Call person-identification-service and build FaceAnchors.
+        """Call person-id-service on person crops and build FaceAnchors.
 
-        Associates face detections with YOLO person detections via bbox IoU,
-        maps to tracklets via the local_track lookup, and returns
-        FaceAnchors for the identity resolver.
+        Sends each person crop at native resolution (no downscaling) to
+        give the face detector the best chance at small/distant faces.
+        The face bboxes are returned in frame-normalised [0, 1] space
+        by the client, so association with YOLO detections is already
+        handled — we just map detection → tracklet_id.
 
         If no face_id_client is configured, or the call fails, an empty
         list is returned (graceful degradation).
         """
-        if self._face_id_client is None:
+        if self._face_id_client is None or not crops:
             return []
 
         cam_cfg = self._get_face_id_config(camera_id)
         if not cam_cfg.enabled:
             return []
 
-        face_results = await self._face_id_client.identify(
-            image,
-            orig_width=frame_width,
-            orig_height=frame_height,
-        )
+        # Build crop_bboxes_norm from detections (frame-normalised [0, 1]).
+        # Crop i corresponds to crop_detections[i].
+        crop_bboxes_norm: list[tuple[float, float, float, float]] = []
+        for det in crop_detections:
+            crop_bboxes_norm.append(
+                (
+                    det.bbox.x_min / frame_width,
+                    det.bbox.y_min / frame_height,
+                    det.bbox.x_max / frame_width,
+                    det.bbox.y_max / frame_height,
+                )
+            )
 
-        if not face_results:
+        crop_face_results = await self._face_id_client.identify_crops(crops, crop_bboxes_norm)
+
+        if not crop_face_results:
+            self._last_face_id_call[camera_id] = datetime.now(UTC)
             return []
 
         # Effective per-camera confidence threshold.
@@ -1451,70 +1517,40 @@ class FrameProcessingPipeline:
             else self._config.face_id_min_confidence
         )
 
-        # Associate each face with the best-matching YOLO detection via IoU.
         face_anchors: list[FaceAnchor] = []
-        assigned_detections: set[int] = set()
+        for crop_idx, face_results in crop_face_results:
+            det = crop_detections[crop_idx]
 
-        for face in face_results:
-            if face.person_id == "unknown":
-                continue
-            if face.confidence < min_conf:
-                continue
-
-            best_det_idx = -1
-            best_iou = 0.0
-            for i, det in enumerate(domain_detections):
-                if i in assigned_detections:
+            for face in face_results:
+                if face.person_id == "unknown":
                     continue
-                det_norm = [
-                    det.bbox.x_min / frame_width,
-                    det.bbox.y_min / frame_height,
-                    det.bbox.x_max / frame_width,
-                    det.bbox.y_max / frame_height,
-                ]
-                iou = _face_person_overlap(face.bbox_normalized, det_norm)
-                if iou > best_iou:
-                    best_iou = iou
-                    best_det_idx = i
+                if face.confidence < min_conf:
+                    continue
 
-            # Require ≥30% of the face bbox to lie inside the person bbox.
-            # Standard IoU is too strict here: a face region is ~5-15% of
-            # the full-body area, so IoU caps well below any useful threshold.
-            if best_det_idx < 0 or best_iou < 0.3:
-                logger.debug(
-                    "face_anchor_dropped_no_iou",
-                    person_id=face.person_id,
-                    best_iou=round(best_iou, 3),
-                    camera_id=camera_id,
+                tracklet_id = ""
+                if self._tracklet_manager is not None:
+                    tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(
+                        det.detection_id
+                    )
+
+                if not tracklet_id:
+                    logger.debug(
+                        "face_anchor_dropped_no_tracklet",
+                        person_id=face.person_id,
+                        detection_id=det.detection_id,
+                        camera_id=camera_id,
+                    )
+                    continue
+
+                face_anchors.append(
+                    FaceAnchor(
+                        person_id=face.person_id,
+                        confidence=face.confidence,
+                        tracklet_id=tracklet_id,
+                        camera_id=camera_id,
+                        captured_at=datetime.now(UTC),
+                    )
                 )
-                continue
-
-            assigned_detections.add(best_det_idx)
-
-            # Map detection → local_track → tracklet_id
-            det = domain_detections[best_det_idx]
-            tracklet_id = ""
-            if self._tracklet_manager is not None:
-                tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(det.detection_id)
-
-            if not tracklet_id:
-                logger.debug(
-                    "face_anchor_dropped_no_tracklet",
-                    person_id=face.person_id,
-                    detection_id=det.detection_id,
-                    camera_id=camera_id,
-                )
-                continue
-
-            face_anchors.append(
-                FaceAnchor(
-                    person_id=face.person_id,
-                    confidence=face.confidence,
-                    tracklet_id=tracklet_id,
-                    camera_id=camera_id,
-                    captured_at=datetime.now(UTC),
-                )
-            )
 
         self._last_face_id_call[camera_id] = datetime.now(UTC)
         if face_anchors:

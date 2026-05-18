@@ -442,6 +442,44 @@ class TestIdentityResolver:
         assert outcome.decisions[0].identity_id == "alice"
 
     @pytest.mark.asyncio
+    async def test_resolve_gallery_enrolled_without_constructor_identities(self) -> None:
+        """Regression: new track should commit via ReID even when known_identities=[]
+        at construction time — the fix refreshes from gallery_repo on each resolve()."""
+        from app.domain import GalleryEmbedding
+
+        gallery_repo = InMemoryGalleryRepository()
+        alice = _make_identity("alice", "Alice")
+        await gallery_repo.upsert_identity(alice)
+        await gallery_repo.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id="ge-1",
+                identity_id="alice",
+                embedding=[0.9] * 768,
+                seen_at=datetime.now(UTC),
+                origin_tracklet_id="t1",
+            )
+        )
+
+        # Deliberately pass no identities at construction — mimics the production
+        # wiring where known_identities defaults to [] in PipelineConfig.
+        resolver = _make_resolver(
+            identities=[],
+            gallery_repo=gallery_repo,
+            config=ResolverConfig(commit_prob=0.65, prior_weight=0.3),
+        )
+
+        gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
+        outcome = await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[],
+            captured_at=datetime.now(UTC),
+        )
+        assert len(outcome.decisions) == 1
+        # With the gallery refresh in resolve(), alice should be in the prior
+        # and the strong ReID hit should push the posterior above commit_prob.
+        assert outcome.decisions[0].identity_id == "alice"
+
+    @pytest.mark.asyncio
     async def test_resolve_rate_limiting(self) -> None:
         """Revisions should be rate-limited per global track."""
         identities = [_make_identity("alice", "Alice")]

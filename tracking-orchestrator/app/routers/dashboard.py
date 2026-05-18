@@ -206,7 +206,7 @@ async def get_dwell_summary(
 async def list_keyframes(
     person_id: str | None = Query(None, description="Filter by identity ID"),
     tag_reason: str | None = Query(None, description="Filter by tag reason"),
-    signal_type: str | None = Query(None, description="Alias for tag_reason"),
+    signal_type: str | None = Query(None, description="Filter by annotations.signal_type"),
     global_track_id: str | None = Query(None, description="Filter by global track"),
     strategy: str | None = Query(None, pattern="^lifecycle$"),
     after: str | None = Query(None, description="ISO-8601 start time"),
@@ -237,9 +237,10 @@ async def list_keyframes(
     # protocol does not expose these filters to keep the interface minimal).
     if person_id:
         keyframes = [k for k in keyframes if k.annotations.get("identity_id") == person_id]
-    effective_tag_reason = tag_reason or signal_type
-    if effective_tag_reason:
-        keyframes = [k for k in keyframes if k.tag_reason == effective_tag_reason]
+    if tag_reason:
+        keyframes = [k for k in keyframes if k.tag_reason == tag_reason]
+    if signal_type:
+        keyframes = [k for k in keyframes if k.annotations.get("signal_type") == signal_type]
     if strategy == "lifecycle" and len(keyframes) > 3:
         ordered = sorted(keyframes, key=lambda k: k.captured_at)
         midpoint = ordered[len(ordered) // 2]
@@ -322,14 +323,19 @@ def _point_to_dict(p: Any) -> dict[str, Any]:
 
 
 def _keyframe_to_dict(k: Any) -> dict[str, Any]:
+    annotations = k.annotations if isinstance(k.annotations, dict) else {}
     return {
         "sample_id": k.keyframe_id,
+        "keyframe_id": k.keyframe_id,
         "tracklet_id": k.tracklet_id,
         "global_track_id": k.global_track_id,
         "camera_id": k.camera_id,
         "minio_key": k.minio_key,
         "captured_at": k.captured_at.isoformat(),
-        "annotations": k.annotations,
+        "annotations": annotations,
         "tag_reason": k.tag_reason,
         "expires_at": k.expires_at.isoformat(),
+        "person_id": annotations.get("identity_id") or None,
+        "signal_type": annotations.get("signal_type") or None,
+        "severity": annotations.get("severity") or None,
     }
