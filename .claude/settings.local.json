@@ -106,7 +106,16 @@
       "Bash(sort -k6 -n)",
       "Bash(.venv/bin/python -m mypy app/pipeline/frame_pipeline.py app/tracking/cross_camera.py --ignore-missing-imports)",
       "Bash(.venv/bin/python -m pytest tests/test_cross_camera.py -x -q)",
-      "Bash(.venv/bin/python -m pytest tests/ -x -q --ignore=tests/integration)"
+      "Bash(.venv/bin/python -m pytest tests/ -x -q --ignore=tests/integration)",
+      "Bash(.venv/bin/python -m pytest tests/test_identity_resolver.py tests/test_identity_committer.py -x -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_cross_camera.py tests/test_identity_committer.py -v)",
+      "Bash(npx vue-tsc *)",
+      "Bash(node_modules/.bin/vue-tsc --noEmit)",
+      "Bash(node *)",
+      "Bash(.venv/bin/python -m pytest tests/test_posture.py -v)",
+      "Bash(make proto-py *)",
+      "Bash(.venv/bin/python *)",
+      "Bash(python -m ruff check services/cts/tracking_event_subscriber.py)"
     ]
   }
 }

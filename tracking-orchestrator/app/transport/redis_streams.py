@@ -229,6 +229,7 @@ class RedisStreamsTransport:
         pose_results: dict[str, PoseResult] | None = None,
         trail_by_tracklet: dict[str, list[tuple[float, float]]] | None = None,
         evidence_by_gt: dict[str, tuple[float, float, bool]] | None = None,
+        det_posture: dict[str, str] | None = None,
     ) -> str:
         """Publish a ``TrackingEvent`` proto to ``tracking.events``.
 
@@ -269,6 +270,7 @@ class RedisStreamsTransport:
             pose_results=pose_results,
             trail_by_tracklet=trail_by_tracklet,
             evidence_by_gt=evidence_by_gt,
+            det_posture=det_posture,
         )
 
         message_id_bytes = await self._redis.xadd(
@@ -362,6 +364,7 @@ def _build_tracking_event_pb(
     pose_results: dict[str, PoseResult] | None = None,
     trail_by_tracklet: dict[str, list[tuple[float, float]]] | None = None,
     evidence_by_gt: dict[str, tuple[float, float, bool]] | None = None,
+    det_posture: dict[str, str] | None = None,
 ) -> tracking_pb2.TrackingEvent:
     """Build a TrackingEvent proto from domain types.
 
@@ -374,6 +377,7 @@ def _build_tracking_event_pb(
         pose_results: detection_id → PoseResult (17 COCO keypoints).
         trail_by_tracklet: tracklet_id → list of (x, y) normalised foot-points.
         evidence_by_gt: global_track_id → (top_prob, top2_prob, face_anchor_used).
+        det_posture: detection_id → posture string (standing|sitting|walking|lying|unknown).
     """
     event = tracking_pb2.TrackingEvent(
         camera_id=camera_id,
@@ -412,6 +416,10 @@ def _build_tracking_event_pb(
             pr = pose_results[det.detection_id]
             for kp in pr.keypoints:
                 d.pose_keypoints.add(x=kp.x, y=kp.y, score=kp.score)
+
+        # Classified posture.
+        if det_posture and det.detection_id in det_posture:
+            d.posture = det_posture[det.detection_id]
 
         # Historical trail for this tracklet.
         if trail_by_tracklet and det.tracklet_id and det.tracklet_id in trail_by_tracklet:

@@ -56,7 +56,6 @@ SELECT global_track_id, camera_ids, tracklet_ids, started_at,
        last_seen_at, current_identity_id, state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE state = 'active'
-  AND last_seen_at > now() - interval '5 minutes'
 ORDER BY last_seen_at DESC
 """
 

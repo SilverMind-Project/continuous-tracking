@@ -82,6 +82,7 @@ async def list_global_tracks(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     camera_id: str | None = Query(None),
+    identity_id: str | None = Query(None, description="Filter to tracks assigned this identity"),
     status: str | None = Query(None, pattern="^(committed|UNKNOWN)$"),
     search: str | None = Query(None),
     min_duration_s: float = Query(
@@ -92,16 +93,15 @@ async def list_global_tracks(
     """Return a summary of global tracks for the Live and Corrections views."""
     tracks = await ctx.global_track_repo.list_active()
     if not open_only:
-        # list_active() is the only protocol accessor; until a list-all method
-        # is added we simply honor the request shape for callers that will
-        # later filter server-side. Today this is equivalent to open_only.
-        pass
+        pass  # list_active() returns all state='active' tracks; open_only is reserved for future closed-track queries.
     if min_duration_s > 0:
         tracks = [
             t for t in tracks if (t.last_seen_at - t.started_at).total_seconds() >= min_duration_s
         ]
     if camera_id:
         tracks = [t for t in tracks if camera_id in t.camera_ids]
+    if identity_id:
+        tracks = [t for t in tracks if t.current_identity_id == identity_id]
     if status == "committed":
         tracks = [t for t in tracks if t.current_identity_id is not None]
     elif status == "UNKNOWN":

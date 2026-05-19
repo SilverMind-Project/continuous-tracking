@@ -108,6 +108,44 @@ class ResolverConfig:
     # fresh evidence.
     prior_maintenance_max_age_s: float = 120.0
 
+    # Minimum cosine similarity for applying the face-confirmed entry
+    # likelihood boost.  Below this value the raw logistic is used
+    # unchanged.  At or above it, the logistic is raised to
+    # identified_entry_min_likelihood because face recognition already
+    # confirmed the identity of that gallery entry — the lower raw
+    # similarity only reflects a viewpoint change (front→back), not a
+    # different person.
+    identified_entry_boost_min_sim: float = 0.65
+
+    # Likelihood floor applied to face-confirmed gallery entries whose
+    # similarity exceeds identified_entry_boost_min_sim.
+    # Without this floor, a back-facing query finding front-facing
+    # alice entries at sim≈0.73 produces logistic≈0.65, which after
+    # _combine() smoothing collapses to posterior≈0.35 — below
+    # commit_prob.  The floor ensures the posterior crosses commit_prob
+    # even when only alice's entries appear in the top-k results.
+    identified_entry_min_likelihood: float = 0.80
+
+    # --- Embedding coherence (sticky ReID) ---
+    # When enabled, if a GlobalTrack's last N gallery entries are all
+    # mutually similar (embedding drift ≤ 1 - embedding_coherence_min_sim),
+    # the best-matching identity gets a likelihood boost.  This prevents
+    # identity loss when the person's pose is stable but the gallery search
+    # returns scores just below the commit threshold.
+    # Disabled by default — turn on via ResolverConfig(enable_embedding_coherence_boost=True).
+    enable_embedding_coherence_boost: bool = False
+
+    # Number of consecutive gallery entries to inspect for coherence.
+    embedding_coherence_window: int = 5
+
+    # Minimum cosine similarity between every consecutive pair in the window.
+    # If any pair falls below this, coherence is not declared.
+    embedding_coherence_min_sim: float = 0.85
+
+    # Multiplier applied to the best-matching identity's likelihood when
+    # coherence is active.  Capped at 0.99 after multiplication.
+    embedding_coherence_boost: float = 2.0
+
 
 class IdentityResolver:
     """Bayesian identity resolver with retroactive revision.
@@ -339,6 +377,23 @@ class IdentityResolver:
         embs = np.array([e.embedding for e in recent], dtype=np.float32)
         query = np.mean(embs, axis=0).tolist()
 
+        # Embedding coherence check: if the last N embeddings are all mutually
+        # similar, the person's appearance is stable → apply a likelihood boost
+        # to the top matching identity so that stable but below-threshold scores
+        # still cross commit_prob.
+        coherence_active = False
+        if self._config.enable_embedding_coherence_boost and len(embs) >= 2:
+            window = embs[-self._config.embedding_coherence_window :]
+            norms = np.linalg.norm(window, axis=1, keepdims=True)
+            normed = window / np.maximum(norms, 1e-8)
+            consecutive_sims = [
+                float(normed[i] @ normed[i + 1]) for i in range(len(normed) - 1)
+            ]
+            coherence_active = (
+                bool(consecutive_sims)
+                and min(consecutive_sims) >= self._config.embedding_coherence_min_sim
+            )
+
         try:
             similar = await self._gallery_repo.search_similar(
                 embedding=query,
@@ -362,10 +417,20 @@ class IdentityResolver:
             return PosteriorDist({})
 
         # Map hits to per-identity scores using logistic curve.
-        # Use the actual similarity score returned by search_similar.
+        # Face-confirmed entries (identity_id set) above the boost threshold
+        # get a likelihood floor so a back-facing query finding front-facing
+        # gallery entries at sim≈0.73 still crosses the commit threshold.
         likelihood: dict[str, list[float]] = defaultdict(list)
+        boosted = False
         for entry, sim in similar:
             logit = self._logistic(sim)
+            if (
+                entry.identity_id is not None
+                and sim >= self._config.identified_entry_boost_min_sim
+                and logit < self._config.identified_entry_min_likelihood
+            ):
+                logit = self._config.identified_entry_min_likelihood
+                boosted = True
             key = entry.identity_id if entry.identity_id else "UNKNOWN"
             likelihood[key].append(logit)
 
@@ -377,6 +442,30 @@ class IdentityResolver:
         if not avg:
             return PosteriorDist({})
 
+        # When a face-confirmed entry was boosted, explicitly fill a low
+        # floor for every known identity NOT already in the results.
+        # Without this, _combine()'s smoothing term (1/(n+1)) assigns 0.50
+        # to missing identities, collapsing the boosted posterior from ~0.83
+        # to ~0.35.
+        if boosted:
+            non_match_floor = (1.0 - self._config.identified_entry_min_likelihood) / max(
+                len(self._identities), 1
+            )
+            for iid in self._identities:
+                if iid not in avg:
+                    avg[iid] = non_match_floor
+            if "UNKNOWN" not in avg:
+                avg["UNKNOWN"] = non_match_floor
+
+        # Coherence boost: stable embedding sequence → multiply the top match.
+        coherence_boosted_identity: str | None = None
+        if coherence_active and avg:
+            best_key = max(avg, key=lambda k: avg[k])
+            if best_key != "UNKNOWN":
+                original = avg[best_key]
+                avg[best_key] = min(0.99, original * self._config.embedding_coherence_boost)
+                coherence_boosted_identity = best_key
+
         # Log top ReID match for diagnostics.
         top_reid = max(avg.items(), key=lambda x: x[1])
         logger.debug(
@@ -386,6 +475,8 @@ class IdentityResolver:
             top_score=round(top_reid[1], 4),
             candidate_count=len(avg),
             gallery_entries_searched=len(similar),
+            face_entry_boosted=boosted,
+            coherence_boosted=coherence_boosted_identity,
         )
 
         return PosteriorDist(avg)
@@ -520,7 +611,16 @@ class IdentityResolver:
         )
 
         # Apply commit rule.
-        if evidence_ok and top_prob >= effective_commit_prob and margin >= effective_commit_margin:
+        if within_maintenance_window:
+            # Carry the existing identity forward without re-applying the
+            # probability threshold.  The threshold governs initial commits
+            # and genuine identity changes; during an evidence gap (same top
+            # candidate, no new evidence, within maintenance window) the
+            # prior-only posterior falls below commit_prob when N>=4 enrolled
+            # identities — applying the threshold here would clear a valid
+            # face-confirmed identity on every quiet frame.
+            new_id = prev_id
+        elif evidence_ok and top_prob >= effective_commit_prob and margin >= effective_commit_margin:
             new_id = top_id if top_id != "UNKNOWN" else None
         else:
             new_id = None  # Committed as UNKNOWN.

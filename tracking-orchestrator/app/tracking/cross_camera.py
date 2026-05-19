@@ -66,6 +66,20 @@ class CrossCamConfig:
     # the consolidation closes the source GT which is hard to undo.
     inter_gt_consolidation_appearance_threshold: float = 0.88
 
+    # Lower re-entry threshold applied when the existing GlobalTrack already has
+    # a committed identity AND the gap since last seen is short.  A person who
+    # turns away produces back-facing SOLIDER-ReID embeddings with ~0.7-0.85
+    # cosine similarity vs their front-facing embeddings — below the stricter
+    # unknown_merge_appearance_threshold=0.92.  Without this lower threshold,
+    # every turn-away creates a new GT, producing hundreds of duplicate tracks.
+    known_identity_reentry_threshold: float = 0.72
+
+    # Maximum gap (seconds) since a GT was last seen for
+    # known_identity_reentry_threshold to apply.  Beyond this window a new
+    # person entering the same camera cannot be assumed to be the same physical
+    # person who previously held that identity.
+    same_camera_reentry_max_gap_s: float = 30.0
+
 
 @dataclass
 class TrackletPairScore:
@@ -339,14 +353,22 @@ class CrossCameraAssociator:
                             app_sim = await self._gallery_similarity_by_ids(
                                 t.tracklet_id, existing_tid_same
                             )
-                        if app_sim >= self._config.unknown_merge_appearance_threshold:
+                        gap_s = (captured_at - gt.last_seen_at).total_seconds()
+                        reentry_threshold = (
+                            self._config.known_identity_reentry_threshold
+                            if gt.current_identity_id is not None
+                            and gap_s <= self._config.same_camera_reentry_max_gap_s
+                            else self._config.unknown_merge_appearance_threshold
+                        )
+                        if app_sim >= reentry_threshold:
                             logger.debug(
                                 "same_camera_reentry_merge",
                                 new_tracklet=t.tracklet_id,
                                 existing_gt=gt.global_track_id,
                                 identity=gt.current_identity_id,
                                 appearance_sim=round(app_sim, 4),
-                                threshold=self._config.unknown_merge_appearance_threshold,
+                                threshold=reentry_threshold,
+                                gap_s=round(gap_s, 1),
                             )
                             merged = await self._repo.merge_tracklets(
                                 tracklet_ids=[t.tracklet_id],
@@ -358,6 +380,16 @@ class CrossCameraAssociator:
                             newly_assigned.add(t.tracklet_id)
                             extended = True
                             break
+                        else:
+                            logger.info(
+                                "same_camera_reentry_below_threshold",
+                                new_tracklet=t.tracklet_id,
+                                gt_id=gt.global_track_id,
+                                gt_identity=gt.current_identity_id,
+                                app_sim=round(app_sim, 4),
+                                threshold=reentry_threshold,
+                                gap_s=round(gap_s, 1),
+                            )
                     continue
                 # Check if any camera in this GlobalTrack is adjacent to t's camera
                 # or in the same overlap group.
@@ -428,6 +460,12 @@ class CrossCameraAssociator:
                     tracklet_ids=[t.tracklet_id],
                     camera_ids=[t.camera_id],
                 )
+                logger.info(
+                    "new_global_track_created",
+                    tracklet_id=t.tracklet_id,
+                    camera_id=t.camera_id,
+                    new_gt_id=new_gt.global_track_id,
+                )
                 assignment_map[t.tracklet_id] = new_gt.global_track_id
                 newly_assigned.add(t.tracklet_id)
                 active_gts.append(new_gt)
@@ -445,16 +483,10 @@ class CrossCameraAssociator:
         # not the in-memory list; also picks up any consolidation merges).
         fresh_active = await self._repo.list_active()
 
-        # Persist the heartbeat so the 5-minute active-window filter never
-        # evicts a GlobalTrack whose tracklet is still alive.  Without this,
-        # a tracklet longer than 5 minutes will fall off list_active() and be
-        # treated as "unassigned", creating a duplicate GlobalTrack.
+        # Update last_seen_at for all active GTs so the corrections view and
+        # identity resolver always see a fresh timestamp.
         fresh_ids = [gt.global_track_id for gt in fresh_active]
         if fresh_ids:
-            # Use wall-clock now() rather than captured_at: merge_tracklets()
-            # already sets last_seen_at = now() (processing time), which is
-            # always >= captured_at (frame time).  Passing captured_at would
-            # make the SQL guard `last_seen_at < $2` perpetually false.
             await self._repo.batch_update_last_seen_at(fresh_ids, datetime.now(UTC))
 
         updated_gts = [

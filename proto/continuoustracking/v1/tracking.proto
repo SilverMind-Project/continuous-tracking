@@ -90,6 +90,9 @@ message Detection {
   // Floor position in metres via homography (0 when not calibrated).
   float floor_x = 12;
   float floor_y = 13;
+
+  // Classified posture: standing | sitting | walking | lying | unknown.
+  string posture = 14;
 }
 
 // PoseKeypoint is one of the 17 COCO body keypoints.

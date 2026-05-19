@@ -66,15 +66,33 @@ class IdentityCommitter:
             if oldest > cutoff:
                 continue
 
-            # Take the latest identity_id and max confidence in the window.
+            # Prefer the most recent non-None identity in the window.
+            # This prevents stale None entries (from frames before a face
+            # commit) from overwriting a valid assignment that arrived later
+            # in the same flush window.  If the window contains ONLY None
+            # entries the latest entry is used (genuine UNKNOWN result).
             latest_entry = max(entries, key=lambda e: e[0])
-            max_conf = max(e[2] for e in entries if e[1] == latest_entry[1])
+            non_none_entries = [e for e in entries if e[1] is not None]
+            if non_none_entries and latest_entry[1] is None:
+                # The latest frame said UNKNOWN but an earlier frame in the
+                # same window had a confirmed identity — keep the confirmed
+                # one.  Once maintenance kicks in (after Fix 1 in the
+                # resolver) this branch should never be reached; it is here
+                # as a belt-and-suspenders guard.
+                best_non_none = max(non_none_entries, key=lambda e: e[0])
+                chosen_entry = best_non_none
+            else:
+                chosen_entry = latest_entry
+
+            max_conf = max(
+                e[2] for e in entries if e[1] == chosen_entry[1]
+            )
             decisions.append(
                 CommitDecision(
                     global_track_id=gt_id,
-                    identity_id=latest_entry[1],
+                    identity_id=chosen_entry[1],
                     confidence=max_conf,
-                    reason=latest_entry[3],
+                    reason=chosen_entry[3],
                     buffered=True,
                 )
             )

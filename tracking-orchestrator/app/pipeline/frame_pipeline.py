@@ -23,7 +23,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -1054,8 +1054,11 @@ class FrameProcessingPipeline:
                             )
             elif self._global_track_repo:
                 # Direct per-frame path (legacy, committer_enabled=False).
+                # Only write when the identity actually changes; maintenance
+                # carry-forwards set revises_previous=False and must not call
+                # assign_identity(None) which would clear a valid assignment.
                 for decision in outcome.decisions:
-                    if decision.identity_id is not None or decision.revises_previous:
+                    if decision.revises_previous:
                         await self._global_track_repo.assign_identity(
                             global_track_id=decision.global_track_id,
                             identity_id=decision.identity_id,
@@ -1364,6 +1367,7 @@ class FrameProcessingPipeline:
             pose_results=det_pose_result if det_pose_result else None,
             trail_by_tracklet=trail_by_tracklet_snapshot or None,
             evidence_by_gt=evidence_by_gt or None,
+            det_posture=cast("dict[str, str] | None", det_posture) if det_posture else None,
         )
 
         if new_revisions:

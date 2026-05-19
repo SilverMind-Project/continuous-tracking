@@ -237,8 +237,10 @@ type Detection struct {
 	// Posterior evidence snapshot from the identity resolver.
 	Evidence *PosteriorEvidence `protobuf:"bytes,11,opt,name=evidence,proto3" json:"evidence,omitempty"`
 	// Floor position in metres via homography (0 when not calibrated).
-	FloorX        float32 `protobuf:"fixed32,12,opt,name=floor_x,json=floorX,proto3" json:"floor_x,omitempty"`
-	FloorY        float32 `protobuf:"fixed32,13,opt,name=floor_y,json=floorY,proto3" json:"floor_y,omitempty"`
+	FloorX float32 `protobuf:"fixed32,12,opt,name=floor_x,json=floorX,proto3" json:"floor_x,omitempty"`
+	FloorY float32 `protobuf:"fixed32,13,opt,name=floor_y,json=floorY,proto3" json:"floor_y,omitempty"`
+	// Classified posture: standing | sitting | walking | lying | unknown.
+	Posture       string `protobuf:"bytes,14,opt,name=posture,proto3" json:"posture,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -355,6 +357,13 @@ func (x *Detection) GetFloorY() float32 {
 		return x.FloorY
 	}
 	return 0
+}
+
+func (x *Detection) GetPosture() string {
+	if x != nil {
+		return x.Posture
+	}
+	return ""
 }
 
 // PoseKeypoint is one of the 17 COCO body keypoints.
@@ -895,7 +904,7 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\x06height\x18\x03 \x01(\x05R\x06height\x12\x1f\n" +
 	"\vframe_index\x18\x04 \x01(\x03R\n" +
 	"frameIndex\x12/\n" +
-	"\x14capture_time_unix_ns\x18\x05 \x01(\x06R\x11captureTimeUnixNs\"\xae\x04\n" +
+	"\x14capture_time_unix_ns\x18\x05 \x01(\x06R\x11captureTimeUnixNs\"\xc8\x04\n" +
 	"\tDetection\x12!\n" +
 	"\fdetection_id\x18\x01 \x01(\tR\vdetectionId\x126\n" +
 	"\x04bbox\x18\x02 \x01(\v2\".continuoustracking.v1.BoundingBoxR\x04bbox\x12\x1c\n" +
@@ -913,7 +922,8 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	" \x03(\v2!.continuoustracking.v1.TrailPointR\x05trail\x12D\n" +
 	"\bevidence\x18\v \x01(\v2(.continuoustracking.v1.PosteriorEvidenceR\bevidence\x12\x17\n" +
 	"\afloor_x\x18\f \x01(\x02R\x06floorX\x12\x17\n" +
-	"\afloor_y\x18\r \x01(\x02R\x06floorY\"@\n" +
+	"\afloor_y\x18\r \x01(\x02R\x06floorY\x12\x18\n" +
+	"\aposture\x18\x0e \x01(\tR\aposture\"@\n" +
 	"\fPoseKeypoint\x12\f\n" +
 	"\x01x\x18\x01 \x01(\x02R\x01x\x12\f\n" +
 	"\x01y\x18\x02 \x01(\x02R\x01y\x12\x14\n" +

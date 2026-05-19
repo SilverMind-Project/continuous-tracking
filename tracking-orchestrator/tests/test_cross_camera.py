@@ -671,6 +671,102 @@ class TestCrossCameraAssociator:
         assert "gt-person-b" in active_ids, "Bob's GT must stay active"
 
     @pytest.mark.asyncio
+    async def test_known_identity_lower_threshold_merges_medium_similarity(
+        self,
+        global_track_repo: GlobalTrackRepository,
+        gallery: InMemoryGalleryRepository,
+        assoc: CrossCameraAssociator,
+    ) -> None:
+        """When a GT has a committed identity and the re-entry gap is short,
+        medium appearance similarity (0.80, above known_identity_reentry_threshold=0.72
+        but below unknown_merge_appearance_threshold=0.92) must still merge.
+
+        This is the turn-away scenario: front-facing and back-facing embeddings
+        have cosine similarity ~0.7-0.85 for the same person.
+        """
+        import numpy as np
+
+        # Construct unit vectors with cosine similarity ≈ 0.80.
+        emb_a = np.zeros(768)
+        emb_a[0] = 1.0
+        emb_b = np.zeros(768)
+        emb_b[0] = 0.8
+        emb_b[1] = 0.6  # norm = 1.0, cos_sim with emb_a = 0.8
+        emb_a = emb_a.tolist()
+        emb_b = emb_b.tolist()
+
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-known-med",
+                camera_ids=["cam_a"],
+                tracklet_ids=["t1"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+                current_identity_id="sriram",
+            )
+        )
+        gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb_a)
+
+        t2 = _make_tracklet("t2", "cam_a")
+        gallery._entries["e2"] = _make_gallery_entry("t2", "cam_a", embedding=emb_b)
+
+        await assoc.associate([t2], captured_at=datetime.now(UTC))
+
+        gt = await global_track_repo.get("gt-known-med")
+        assert gt is not None
+        assert "t2" in gt.tracklet_ids, (
+            "Turn-away re-entry (sim≈0.80) must merge into committed GT "
+            "using known_identity_reentry_threshold, not the stricter unknown threshold"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_gt_strict_threshold_blocks_medium_similarity(
+        self,
+        global_track_repo: GlobalTrackRepository,
+        gallery: InMemoryGalleryRepository,
+        assoc: CrossCameraAssociator,
+    ) -> None:
+        """When a GT has NO committed identity, the strict
+        unknown_merge_appearance_threshold=0.92 applies.  Medium appearance
+        similarity (0.80) must NOT merge into an UNKNOWN GT.
+
+        This prevents a new person from being attached to a stale UNKNOWN GT.
+        """
+        import numpy as np
+
+        emb_a = np.zeros(768)
+        emb_a[0] = 1.0
+        emb_b = np.zeros(768)
+        emb_b[0] = 0.8
+        emb_b[1] = 0.6
+        emb_a = emb_a.tolist()
+        emb_b = emb_b.tolist()
+
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-unknown",
+                camera_ids=["cam_a"],
+                tracklet_ids=["t1"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+                current_identity_id=None,
+            )
+        )
+        gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb_a)
+
+        t2 = _make_tracklet("t2", "cam_a")
+        gallery._entries["e2"] = _make_gallery_entry("t2", "cam_a", embedding=emb_b)
+
+        await assoc.associate([t2], captured_at=datetime.now(UTC))
+
+        gt = await global_track_repo.get("gt-unknown")
+        assert gt is not None
+        assert "t2" not in gt.tracklet_ids, (
+            "Medium similarity (0.80) must NOT merge into an UNKNOWN GT; "
+            "strict unknown_merge_appearance_threshold=0.92 must apply"
+        )
+
+    @pytest.mark.asyncio
     async def test_overlap_group_low_similarity_not_merged(
         self,
         global_track_repo: GlobalTrackRepository,
