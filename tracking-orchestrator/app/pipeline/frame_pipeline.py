@@ -1352,6 +1352,17 @@ class FrameProcessingPipeline:
                 top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
                 evidence_by_gt[decision.global_track_id] = (top_prob, top2_prob, False)
 
+        # Carry committed identities forward when the current-frame posterior
+        # is below the identification threshold (brief occlusion, bad frame,
+        # momentary YOLO miss).  A formal commit is a high-confidence,
+        # multi-frame assignment; one ambiguous frame must not let it flicker
+        # to UNKNOWN on the live view.  confidence=0.0 is an intentional
+        # sentinel meaning "maintained from commit, not freshly evidenced";
+        # LocationWriter accepts it and no downstream code gates on > 0.
+        for gt in active_global_tracks:
+            if gt.global_track_id not in identities and gt.current_identity_id:
+                identities[gt.global_track_id] = (gt.current_identity_id, 0.0)
+
         assert self._transport is not None
         await self._transport.publish_event(
             camera_id=frame.camera_id,
