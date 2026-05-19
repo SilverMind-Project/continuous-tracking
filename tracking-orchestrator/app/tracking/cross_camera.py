@@ -59,6 +59,13 @@ class CrossCamConfig:
     # geometrically co-located; appearance similarity alone is sufficient.
     within_group_min_score: float = 0.35
 
+    # Minimum **pure cosine similarity** between two GlobalTracks' mean gallery
+    # embeddings before the inter-GT consolidation pass merges them.
+    # This is appearance-only (no geo component), so must be higher than the
+    # combined within_group_min_score.  Conservative to avoid false merges —
+    # the consolidation closes the source GT which is hard to undo.
+    inter_gt_consolidation_appearance_threshold: float = 0.88
+
 
 @dataclass
 class TrackletPairScore:
@@ -308,41 +315,49 @@ class CrossCameraAssociator:
                 # appearance similarity is very high.  This prevents every
                 # tracklet lifecycle from creating a new GlobalTrack UUID.
                 if t.camera_id in gt.camera_ids:
-                    if gt.current_identity_id is None:
-                        # Find an existing tracklet from this GT on this camera.
-                        existing_tid_same = next(
-                            (
-                                tid
-                                for tid, cid in zip(gt.tracklet_ids, gt.camera_ids, strict=False)
-                                if cid == t.camera_id
-                            ),
-                            None,
-                        )
-                        existing_tl_same = (
-                            tracklet_by_id.get(existing_tid_same) if existing_tid_same else None
-                        )
+                    # Same-camera re-entry: try to merge regardless of identity
+                    # status.  A committed identity is *more* deserving of a
+                    # merge than UNKNOWN — blocking it here generates a new GT
+                    # for every re-entry, creating duplicate tracks.
+                    existing_tid_same = next(
+                        (
+                            tid
+                            for tid, cid in zip(gt.tracklet_ids, gt.camera_ids, strict=False)
+                            if cid == t.camera_id
+                        ),
+                        None,
+                    )
+                    if existing_tid_same is not None:
+                        existing_tl_same = tracklet_by_id.get(existing_tid_same)
                         if existing_tl_same is not None:
                             app_sim = await self._approximate_gallery_similarity(
                                 t, existing_tl_same
                             )
-                            if app_sim >= self._config.unknown_merge_appearance_threshold:
-                                logger.debug(
-                                    "unknown_same_camera_merge",
-                                    new_tracklet=t.tracklet_id,
-                                    existing_gt=gt.global_track_id,
-                                    appearance_sim=round(app_sim, 4),
-                                    threshold=self._config.unknown_merge_appearance_threshold,
-                                )
-                                merged = await self._repo.merge_tracklets(
-                                    tracklet_ids=[t.tracklet_id],
-                                    camera_ids=[t.camera_id],
-                                    existing=gt,
-                                )
-                                await _refresh(merged.global_track_id)
-                                assignment_map[t.tracklet_id] = merged.global_track_id
-                                newly_assigned.add(t.tracklet_id)
-                                extended = True
-                                break
+                        else:
+                            # Existing tracklet is no longer active — use
+                            # gallery-only similarity (no geo component available).
+                            app_sim = await self._gallery_similarity_by_ids(
+                                t.tracklet_id, existing_tid_same
+                            )
+                        if app_sim >= self._config.unknown_merge_appearance_threshold:
+                            logger.debug(
+                                "same_camera_reentry_merge",
+                                new_tracklet=t.tracklet_id,
+                                existing_gt=gt.global_track_id,
+                                identity=gt.current_identity_id,
+                                appearance_sim=round(app_sim, 4),
+                                threshold=self._config.unknown_merge_appearance_threshold,
+                            )
+                            merged = await self._repo.merge_tracklets(
+                                tracklet_ids=[t.tracklet_id],
+                                camera_ids=[t.camera_id],
+                                existing=gt,
+                            )
+                            await _refresh(merged.global_track_id)
+                            assignment_map[t.tracklet_id] = merged.global_track_id
+                            newly_assigned.add(t.tracklet_id)
+                            extended = True
+                            break
                     continue
                 # Check if any camera in this GlobalTrack is adjacent to t's camera
                 # or in the same overlap group.
@@ -406,8 +421,6 @@ class CrossCameraAssociator:
                     break
                 if extended:
                     break
-                if extended:
-                    break
 
             # If no existing track was extended, create a new one.
             if not extended:
@@ -419,10 +432,17 @@ class CrossCameraAssociator:
                 newly_assigned.add(t.tracklet_id)
                 active_gts.append(new_gt)
 
+        # ---- Step 4b: Consolidate fragmented GTs within overlap groups ----
+        # Healing pass: races between concurrent associate() calls can produce
+        # two GTs for the same person from cameras in the same overlap group.
+        # Merge pairs whose gallery embeddings confirm it's the same person.
+        pre_consolidation = await self._repo.list_active()
+        await self._consolidate_overlap_group_gts(pre_consolidation)
+
         # ---- Step 5: Update last_seen_at for all active GlobalTracks ----
         # Fetch fresh state from repo (active_gts may have stale tracklet_ids
         # and camera_ids from merge_tracklets calls that updated the repo but
-        # not the in-memory list).
+        # not the in-memory list; also picks up any consolidation merges).
         fresh_active = await self._repo.list_active()
 
         # Persist the heartbeat so the 5-minute active-window filter never
@@ -451,6 +471,123 @@ class CrossCameraAssociator:
         ]
 
         return updated_gts
+
+    async def _gt_pair_gallery_similarity(
+        self, tids_a: list[str], tids_b: list[str]
+    ) -> float:
+        """Mean cosine similarity between two GlobalTracks via their gallery embeddings.
+
+        Queries all tracklets in each GT, computes a centroid, and returns cosine
+        similarity.  Returns 0.0 when either GT has no gallery entries.
+        """
+        import numpy as np
+
+        try:
+            entries_a = await self._gallery.list_gallery_entries_for_tracklets(
+                tracklet_ids=set(tids_a), limit=20
+            )
+        except Exception:
+            entries_a = []
+
+        try:
+            entries_b = await self._gallery.list_gallery_entries_for_tracklets(
+                tracklet_ids=set(tids_b), limit=20
+            )
+        except Exception:
+            entries_b = []
+
+        if not entries_a or not entries_b:
+            return 0.0
+
+        emb_a = np.mean([e.embedding for e in entries_a], axis=0)
+        emb_b = np.mean([e.embedding for e in entries_b], axis=0)
+        norm_a = float(np.linalg.norm(emb_a))
+        norm_b = float(np.linalg.norm(emb_b))
+        if norm_a < 1e-9 or norm_b < 1e-9:
+            return 0.0
+        return float(np.dot(emb_a, emb_b) / (norm_a * norm_b + 1e-9))
+
+    async def _consolidate_overlap_group_gts(
+        self, active_gts: list[GlobalTrack]
+    ) -> None:
+        """Merge fragmented GlobalTracks within the same overlap group.
+
+        Race condition: two concurrent associate() calls can each see an empty
+        list_active() and both create fresh GTs for the same person from two
+        cameras in the same overlap group.  This healing pass detects those
+        cases and merges the pair when gallery embeddings confirm it's the
+        same person.
+
+        Hard guard: two GTs with **different** committed current_identity_id
+        values are NEVER merged — they represent different enrolled people.
+        """
+        threshold = self._config.inter_gt_consolidation_appearance_threshold
+
+        # Group active GTs by overlap group.  A GT may span multiple cameras
+        # in the same group; we assign it to the first group we find.
+        group_to_gts: dict[str, list[GlobalTrack]] = {}
+        for gt in active_gts:
+            group_id: str | None = None
+            for cam_id in gt.camera_ids:
+                group_id = self._adjacency.get_overlap_group(cam_id)
+                if group_id is not None:
+                    break
+            if group_id is None:
+                continue
+            group_to_gts.setdefault(group_id, []).append(gt)
+
+        for group_id, gts in group_to_gts.items():
+            if len(gts) < 2:
+                continue
+
+            closed_in_group: set[str] = set()
+
+            for i, gt_a in enumerate(gts):
+                if gt_a.global_track_id in closed_in_group:
+                    continue
+
+                # current_gt_a accumulates merges so subsequent inner-loop
+                # iterations use the latest merged state.
+                current_gt_a = gt_a
+
+                for gt_b in gts[i + 1 :]:
+                    if gt_b.global_track_id in closed_in_group:
+                        continue
+
+                    id_a = current_gt_a.current_identity_id
+                    id_b = gt_b.current_identity_id
+                    if id_a and id_b and id_a != id_b:
+                        logger.debug(
+                            "overlap_consolidation_identity_conflict",
+                            gt_a=current_gt_a.global_track_id,
+                            gt_b=gt_b.global_track_id,
+                            identity_a=id_a,
+                            identity_b=id_b,
+                            group_id=group_id,
+                        )
+                        continue
+
+                    sim = await self._gt_pair_gallery_similarity(
+                        current_gt_a.tracklet_ids, gt_b.tracklet_ids
+                    )
+                    if sim < threshold:
+                        continue
+
+                    merged = await self._repo.merge_global_tracks(
+                        into_id=current_gt_a.global_track_id,
+                        from_id=gt_b.global_track_id,
+                    )
+                    if merged is not None:
+                        logger.info(
+                            "overlap_consolidation_merged",
+                            into_gt=current_gt_a.global_track_id,
+                            from_gt=gt_b.global_track_id,
+                            similarity=round(sim, 4),
+                            threshold=threshold,
+                            group_id=group_id,
+                        )
+                        current_gt_a = merged
+                        closed_in_group.add(gt_b.global_track_id)
 
     async def _score_pair(self, ta: Tracklet, tb: Tracklet) -> TrackletPairScore | None:
         """Score a candidate pair of tracklets.
@@ -517,6 +654,40 @@ class CrossCameraAssociator:
             return None
 
         return math.exp(-((dist_m / self._config.floor_sigma_m) ** 2))
+
+    async def _gallery_similarity_by_ids(self, tid_a: str, tid_b: str) -> float:
+        """Gallery-only cosine similarity between two tracklets identified by ID.
+
+        Used when the Tracklet domain objects are no longer in the active set
+        (e.g., a same-camera re-entry where the prior tracklet has closed).
+        Returns 0.0 when neither side has gallery entries.
+        """
+        import numpy as np
+
+        try:
+            entries_a = await self._gallery.list_gallery_entries_for_tracklets(
+                tracklet_ids={tid_a}, limit=10
+            )
+        except Exception:
+            entries_a = []
+
+        try:
+            entries_b = await self._gallery.list_gallery_entries_for_tracklets(
+                tracklet_ids={tid_b}, limit=10
+            )
+        except Exception:
+            entries_b = []
+
+        if not entries_a or not entries_b:
+            return 0.0
+
+        emb_a = np.mean([e.embedding for e in entries_a], axis=0)
+        emb_b = np.mean([e.embedding for e in entries_b], axis=0)
+        norm_a = float(np.linalg.norm(emb_a))
+        norm_b = float(np.linalg.norm(emb_b))
+        if norm_a < 1e-9 or norm_b < 1e-9:
+            return 0.0
+        return float(np.dot(emb_a, emb_b) / (norm_a * norm_b + 1e-9))
 
     async def _approximate_gallery_similarity(self, ta: Tracklet, tb: Tracklet) -> float:
         """Compute real cosine similarity between two tracklets via gallery.

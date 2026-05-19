@@ -465,3 +465,264 @@ class TestCrossCameraAssociator:
         # directly adjacent (within_s filtering blocks transitive edges).
         assert len(result) == 2
         assert all(len(r.tracklet_ids) == 1 for r in result)
+
+    @pytest.mark.asyncio
+    async def test_known_identity_same_camera_reentry_merges(
+        self,
+        global_track_repo: GlobalTrackRepository,
+        gallery: InMemoryGalleryRepository,
+        assoc: CrossCameraAssociator,
+    ) -> None:
+        """Re-entry on the same camera merges into the existing GlobalTrack even
+        when that GT has a committed identity.
+
+        Regression test for the bug where `if gt.current_identity_id is None:`
+        guarded the same-camera merge path, causing every re-entry to spawn a
+        fresh GlobalTrack assigned to the same person.
+        """
+        import numpy as np
+
+        np.random.seed(7)
+        emb = np.random.randn(768)
+        emb = (emb / np.linalg.norm(emb)).tolist()
+
+        # Pre-existing GT on cam_a with a committed identity and gallery entry.
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-known",
+                camera_ids=["cam_a"],
+                tracklet_ids=["t1"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+                current_identity_id="sriram",
+            )
+        )
+        gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb)
+
+        # New tracklet on the same camera with a matching appearance.
+        t2 = _make_tracklet("t2", "cam_a")
+        gallery._entries["e2"] = _make_gallery_entry("t2", "cam_a", embedding=emb)
+
+        await assoc.associate([t2], captured_at=datetime.now(UTC))
+
+        gt = await global_track_repo.get("gt-known")
+        assert gt is not None
+        assert "t2" in gt.tracklet_ids, "Re-entry tracklet must merge into existing GT"
+        assert gt.current_identity_id == "sriram"
+
+    @pytest.mark.asyncio
+    async def test_known_identity_same_camera_different_person_no_merge(
+        self,
+        global_track_repo: GlobalTrackRepository,
+        gallery: InMemoryGalleryRepository,
+        assoc: CrossCameraAssociator,
+    ) -> None:
+        """A different person on the same camera should NOT merge into an
+        existing committed GT when appearance similarity is below threshold."""
+        import numpy as np
+
+        np.random.seed(11)
+        emb_a = np.random.randn(768)
+        emb_a = (emb_a / np.linalg.norm(emb_a)).tolist()
+        emb_b = np.random.randn(768)
+        emb_b = (emb_b / np.linalg.norm(emb_b)).tolist()
+
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-known",
+                camera_ids=["cam_a"],
+                tracklet_ids=["t1"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+                current_identity_id="person_a",
+            )
+        )
+        gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb_a)
+
+        # Different person on same camera — dissimilar embedding.
+        t2 = _make_tracklet("t2", "cam_a")
+        gallery._entries["e2"] = _make_gallery_entry("t2", "cam_a", embedding=emb_b)
+
+        await assoc.associate([t2], captured_at=datetime.now(UTC))
+
+        gt = await global_track_repo.get("gt-known")
+        assert gt is not None
+        assert "t2" not in gt.tracklet_ids, "Different person must not merge into existing GT"
+
+    @pytest.mark.asyncio
+    async def test_overlap_group_fragmented_gts_consolidate(
+        self,
+        global_track_repo: GlobalTrackRepository,
+        gallery: InMemoryGalleryRepository,
+    ) -> None:
+        """Two GTs in the same overlap group with similar appearances are merged.
+
+        Simulates the race condition where two concurrent associate() calls
+        each see an empty list_active() and create separate GTs for the same
+        person observed from different cameras in the same overlap group.
+        """
+        import numpy as np
+        from app.domain import OverlapGroup
+
+        np.random.seed(42)
+        emb = np.random.randn(768)
+        emb = (emb / np.linalg.norm(emb)).tolist()
+
+        adj = CameraAdjacency()
+        adj.set_overlap_groups(
+            [OverlapGroup(group_id="living-room", camera_ids=["cam_a", "cam_b", "cam_c"])]
+        )
+        assoc = CrossCameraAssociator(
+            gallery=gallery,
+            adjacency=adj,
+            global_track_repo=global_track_repo,
+        )
+
+        # Two GTs created by a race — same person, different cameras, same group.
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-frag-a",
+                camera_ids=["cam_a"],
+                tracklet_ids=["t1"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+            )
+        )
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-frag-b",
+                camera_ids=["cam_b"],
+                tracklet_ids=["t2"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+            )
+        )
+        gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb)
+        gallery._entries["e2"] = _make_gallery_entry("t2", "cam_b", embedding=emb)
+
+        # Any new tracklet on cam_c triggers associate(), which runs consolidation.
+        t3 = _make_tracklet("t3", "cam_c")
+        gallery._entries["e3"] = _make_gallery_entry("t3", "cam_c", embedding=emb)
+        await assoc.associate([t3], captured_at=datetime.now(UTC))
+
+        active = await global_track_repo.list_active()
+        assert len(active) == 1, f"Fragmented GTs should be consolidated; got {len(active)}"
+        surviving = active[0]
+        assert set(surviving.camera_ids) >= {"cam_a", "cam_b"}
+
+    @pytest.mark.asyncio
+    async def test_overlap_group_different_identities_not_merged(
+        self,
+        global_track_repo: GlobalTrackRepository,
+        gallery: InMemoryGalleryRepository,
+    ) -> None:
+        """Two GTs in the same overlap group with DIFFERENT committed identities
+        must never be consolidated — they are different enrolled people."""
+        import numpy as np
+        from app.domain import OverlapGroup
+
+        np.random.seed(42)
+        emb = np.random.randn(768)
+        emb = (emb / np.linalg.norm(emb)).tolist()
+
+        adj = CameraAdjacency()
+        adj.set_overlap_groups(
+            [OverlapGroup(group_id="living-room", camera_ids=["cam_a", "cam_b"])]
+        )
+        assoc = CrossCameraAssociator(
+            gallery=gallery,
+            adjacency=adj,
+            global_track_repo=global_track_repo,
+        )
+
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-person-a",
+                camera_ids=["cam_a"],
+                tracklet_ids=["t1"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+                current_identity_id="alice",
+            )
+        )
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-person-b",
+                camera_ids=["cam_b"],
+                tracklet_ids=["t2"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+                current_identity_id="bob",
+            )
+        )
+        # Give them identical embeddings to ensure only the identity guard stops the merge.
+        gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb)
+        gallery._entries["e2"] = _make_gallery_entry("t2", "cam_b", embedding=emb)
+
+        # Trigger associate() with any new tracklet.
+        t3 = _make_tracklet("t3", "cam_a")
+        gallery._entries["e3"] = _make_gallery_entry("t3", "cam_a", embedding=emb)
+        await assoc.associate([t3], captured_at=datetime.now(UTC))
+
+        # Both GTs must remain active and separate.
+        active = await global_track_repo.list_active()
+        active_ids = {gt.global_track_id for gt in active}
+        assert "gt-person-a" in active_ids, "Alice's GT must stay active"
+        assert "gt-person-b" in active_ids, "Bob's GT must stay active"
+
+    @pytest.mark.asyncio
+    async def test_overlap_group_low_similarity_not_merged(
+        self,
+        global_track_repo: GlobalTrackRepository,
+        gallery: InMemoryGalleryRepository,
+    ) -> None:
+        """Two GTs in the same overlap group with dissimilar embeddings
+        must not be consolidated — they are different people."""
+        import numpy as np
+        from app.domain import OverlapGroup
+
+        np.random.seed(99)
+        emb_a = np.random.randn(768)
+        emb_a = (emb_a / np.linalg.norm(emb_a)).tolist()
+        emb_b = np.random.randn(768)
+        emb_b = (emb_b / np.linalg.norm(emb_b)).tolist()
+
+        adj = CameraAdjacency()
+        adj.set_overlap_groups(
+            [OverlapGroup(group_id="living-room", camera_ids=["cam_a", "cam_b"])]
+        )
+        assoc = CrossCameraAssociator(
+            gallery=gallery,
+            adjacency=adj,
+            global_track_repo=global_track_repo,
+        )
+
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-x",
+                camera_ids=["cam_a"],
+                tracklet_ids=["t1"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+            )
+        )
+        await global_track_repo.save(
+            GlobalTrack(
+                global_track_id="gt-y",
+                camera_ids=["cam_b"],
+                tracklet_ids=["t2"],
+                started_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+            )
+        )
+        gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb_a)
+        gallery._entries["e2"] = _make_gallery_entry("t2", "cam_b", embedding=emb_b)
+
+        t3 = _make_tracklet("t3", "cam_a")
+        gallery._entries["e3"] = _make_gallery_entry("t3", "cam_a", embedding=emb_a)
+        await assoc.associate([t3], captured_at=datetime.now(UTC))
+
+        active = await global_track_repo.list_active()
+        active_ids = {gt.global_track_id for gt in active}
+        assert "gt-x" in active_ids, "GT-X must stay active"
+        assert "gt-y" in active_ids, "GT-Y must stay active"

@@ -771,8 +771,6 @@ class FrameProcessingPipeline:
                     age_s=round(age_s, 1),
                 )
                 _metrics.metrics.frames_dropped_stale_total.labels(camera_id=frame.camera_id).inc()
-                if self._transport is not None:
-                    await self._transport.ack_frame(frame)
                 return
 
         if self._detector is None or self._tracklet_manager is None or self._tracker is None:
@@ -835,8 +833,8 @@ class FrameProcessingPipeline:
         privacy_filter = PrivacyZoneFilter.from_state(
             calibration_state,
             frame.camera_id,
-            frame_width=frame.width,
-            frame_height=frame.height,
+            frame_width=effective_width,
+            frame_height=effective_height,
         )
         if privacy_filter.is_active():
             # Apply blur/mask policies to the frame in place (affects crops
@@ -870,6 +868,7 @@ class FrameProcessingPipeline:
         det_posture: dict[str, PostureType] = {}
         det_pose_result: dict[str, PoseResult] = {}
         embeddings: list[Embedding] = []
+        crops: list[npt.NDArray[np.uint8]] = []
 
         if detections:
             crops = [_crop_detection(image, det) for det in detections]
@@ -946,16 +945,20 @@ class FrameProcessingPipeline:
         # Uses person crops (already extracted for ReID at Step 3) at native
         # resolution to give the face detector the best chance at small faces.
         face_anchors: list[FaceAnchor] = []
-        if self._face_id_client is not None and domain_detections and crops:
-            now = datetime.now(UTC)
-            if self._should_call_face_id(frame.camera_id, now):
-                face_anchors = await self._identify_faces_from_crops(
-                    crops=crops,
-                    crop_detections=domain_detections,
-                    frame_width=frame.width,
-                    frame_height=frame.height,
-                    camera_id=frame.camera_id,
-                )
+        now = datetime.now(UTC)
+        if (
+            self._face_id_client is not None
+            and domain_detections
+            and crops
+            and self._should_call_face_id(frame.camera_id, now)
+        ):
+            face_anchors = await self._identify_faces_from_crops(
+                crops=crops,
+                crop_detections=domain_detections,
+                frame_width=effective_width,
+                frame_height=effective_height,
+                camera_id=frame.camera_id,
+            )
 
         # Ensure face-anchor identities exist in the identities table so that
         # downstream FK references (trajectory points, dwells, signals) resolve.
@@ -1259,7 +1262,7 @@ class FrameProcessingPipeline:
                 for rev in new_revisions:
                     await self._repo.save_identity_revision(revision=rev)
 
-        # Step 9c: Retroactive cross-table rewrite. Run when the committer is
+        # Step 9a: Retroactive cross-table rewrite. Run when the committer is
         # enabled and a revision changes identity (committer produces
         # applies_from=gt.started_at for face fast-path rewrites).
         if (

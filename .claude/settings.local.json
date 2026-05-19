@@ -103,7 +103,10 @@
       "Bash(xargs cat)",
       "Bash(awk '/name/{name=$2} /idle/{print name, \"idle:\", $2}')",
       "Bash(sort -k3 -n)",
-      "Bash(sort -k6 -n)"
+      "Bash(sort -k6 -n)",
+      "Bash(.venv/bin/python -m mypy app/pipeline/frame_pipeline.py app/tracking/cross_camera.py --ignore-missing-imports)",
+      "Bash(.venv/bin/python -m pytest tests/test_cross_camera.py -x -q)",
+      "Bash(.venv/bin/python -m pytest tests/ -x -q --ignore=tests/integration)"
     ]
   }
 }
