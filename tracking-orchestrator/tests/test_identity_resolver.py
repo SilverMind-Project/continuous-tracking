@@ -591,6 +591,93 @@ class TestIdentityResolver:
         assert not decision.revises_previous or decision.identity_id is None or decision.identity_id == "grandma"
 
     @pytest.mark.asyncio
+    async def test_weak_reid_evidence_does_not_clear_committed_identity(
+        self,
+    ) -> None:
+        """Committed identity must survive when weak ReID evidence (sim≈0.7)
+        for the same person is present but below commit_prob.
+
+        Regression test for the bug where `_commit()` required `not has_evidence`
+        before activating the maintenance window. With weak ReID evidence
+        present for the *same* identity, `has_evidence=True` would bypass the
+        window and return `new_id=None` → pipeline would call `assign_identity(None)`,
+        clearing the DB.
+        """
+        from app.storage.base import InMemoryGalleryRepository
+
+        dim = 256
+
+        def _unit(idx: int) -> list[float]:
+            v = [0.0] * dim
+            v[idx] = 1.0
+            return v
+
+        identities = [_make_identity(f"person_{i}") for i in range(6)]
+        gallery = InMemoryGalleryRepository()
+        for ident in identities:
+            await gallery.upsert_identity(ident)
+
+        # person_0's front-facing gallery entry
+        gallery_emb = _unit(0)
+        await gallery.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id="p0_front",
+                identity_id="person_0",
+                embedding=gallery_emb,
+                seen_at=datetime.now(UTC),
+                quality=0.9,
+                origin_tracklet_id="t_old",
+                face_confirmed=True,
+            )
+        )
+
+        # Back-facing query: cos_sim ≈ 0.7 to gallery_emb — below commit threshold
+        # when combined with prior smoothing across 6 identities.
+        import math
+
+        back_query = [0.0] * dim
+        back_query[0] = 0.70
+        back_query[1] = math.sqrt(1 - 0.70**2)
+        await gallery.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id="p0_back_query",
+                identity_id=None,
+                embedding=back_query,
+                seen_at=datetime.now(UTC),
+                quality=0.9,
+                origin_tracklet_id="t_current",
+                face_confirmed=False,
+            )
+        )
+
+        config = ResolverConfig(
+            commit_prob=0.65,
+            commit_margin=0.25,
+            # Keep boost off so this tests the pure maintenance window path.
+            identified_entry_boost_min_sim=0.99,
+        )
+        resolver = _make_resolver(identities=identities, config=config, gallery_repo=gallery)
+
+        # GT already has person_0 committed from a prior face anchor.
+        committed_gt = _make_gt(
+            current_identity_id="person_0",
+            tracklet_ids=["t_current"],
+        )
+
+        outcome = await resolver.resolve(
+            global_tracks=[committed_gt],
+            new_face_anchors=[],
+            captured_at=datetime.now(UTC),
+        )
+
+        decision = outcome.decisions[0]
+        assert decision.identity_id == "person_0", (
+            "Maintenance window must carry committed identity forward when weak "
+            "ReID evidence for the same person is present but below commit_prob"
+        )
+        assert decision.revises_previous is False
+
+    @pytest.mark.asyncio
     async def test_face_confirmed_identity_persists_on_quiet_frames(
         self,
     ) -> None:
@@ -835,6 +922,253 @@ class TestGalleryBoost:
         assert decision.identity_id is None, (
             "Ambiguous equal-boost scenario must not commit any identity"
         )
+
+
+class TestFaceLock:
+    """Tests for the face lock mechanism."""
+
+    @pytest.mark.asyncio
+    async def test_face_lock_set_on_high_confidence(self) -> None:
+        """A face anchor above face_commit_min_confidence sets a face lock."""
+        identities = [_make_identity("alice", "Alice")]
+        config = ResolverConfig(face_commit_min_confidence=0.60)
+        resolver = _make_resolver(identities=identities, config=config)
+
+        gt = _make_gt(global_track_id="gt-1", tracklet_ids=["t1"])
+        anchor = _make_face_anchor("alice", confidence=0.90, tracklet_id="t1")
+
+        await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[anchor],
+            captured_at=datetime.now(UTC),
+        )
+
+        locked_id = resolver.get_face_locked_identity("gt-1")
+        assert locked_id == "alice"
+
+    @pytest.mark.asyncio
+    async def test_face_lock_not_set_below_threshold(self) -> None:
+        """A weak face anchor below face_commit_min_confidence does not set a lock."""
+        identities = [_make_identity("alice", "Alice")]
+        config = ResolverConfig(face_commit_min_confidence=0.80)
+        resolver = _make_resolver(identities=identities, config=config)
+
+        gt = _make_gt(global_track_id="gt-1", tracklet_ids=["t1"])
+        anchor = _make_face_anchor("alice", confidence=0.50, tracklet_id="t1")
+
+        await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[anchor],
+            captured_at=datetime.now(UTC),
+        )
+
+        locked_id = resolver.get_face_locked_identity("gt-1")
+        assert locked_id is None
+
+    @pytest.mark.asyncio
+    async def test_face_lock_displaced_by_different_identity(self) -> None:
+        """A different identity's face anchor at sufficient confidence displaces the lock."""
+        identities = [_make_identity("alice", "Alice"), _make_identity("bob", "Bob")]
+        config = ResolverConfig(face_commit_min_confidence=0.60, commit_prob=0.50)
+        resolver = _make_resolver(identities=identities, config=config)
+
+        # First: alice face lock set.
+        gt = _make_gt(global_track_id="gt-1", tracklet_ids=["t1"])
+        await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[_make_face_anchor("alice", confidence=0.90, tracklet_id="t1")],
+            captured_at=datetime.now(UTC),
+        )
+        assert resolver.get_face_locked_identity("gt-1") == "alice"
+
+        # Second: bob face anchor displaces alice's lock.
+        gt = _make_gt(
+            global_track_id="gt-1",
+            current_identity_id="alice",
+            tracklet_ids=["t1"],
+        )
+        await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[_make_face_anchor("bob", confidence=0.90, tracklet_id="t1")],
+            captured_at=datetime.now(UTC),
+        )
+        assert resolver.get_face_locked_identity("gt-1") == "bob"
+
+    @pytest.mark.asyncio
+    async def test_face_locked_identity_maintained_across_frames(self) -> None:
+        """Face-locked identity is maintained when the person turns away.
+
+        In production, CrossCameraAssociator.associate() sets gt.last_seen_at =
+        captured_at every frame, so age_s ≈ 0 and within_maintenance_window is
+        always True for active GTs.  This test replicates that invariant: even
+        with no face evidence and no strong ReID (simulated by an empty gallery),
+        the identity persists as long as the GT is active.
+        """
+        from datetime import timedelta
+
+        identities = [_make_identity("alice", "Alice")]
+        config = ResolverConfig(
+            face_commit_min_confidence=0.60,
+            prior_maintenance_max_age_s=120.0,  # default
+        )
+        resolver = _make_resolver(identities=identities, config=config)
+
+        now = datetime.now(UTC)
+
+        # First: commit alice via face anchor.
+        gt = _make_gt(global_track_id="gt-1", tracklet_ids=["t1"])
+        await resolver.resolve(
+            global_tracks=[gt],
+            new_face_anchors=[_make_face_anchor("alice", confidence=0.95, tracklet_id="t1")],
+            captured_at=now,
+        )
+        assert resolver.get_face_locked_identity("gt-1") == "alice"
+
+        # Second frame (alice assigned, face locked, no fresh face/ReID evidence).
+        # The cross-cam assoc stamps last_seen_at = captured_at → age_s = 0.
+        # This simulates the person turning away from the camera.
+        next_frame = now + timedelta(seconds=5)
+        gt_with_alice = GlobalTrack(
+            global_track_id="gt-1",
+            camera_ids=["cam_a"],
+            tracklet_ids=["t1"],
+            started_at=now,
+            last_seen_at=next_frame,  # cross-cam sets this to captured_at
+            current_identity_id="alice",
+            state="active",
+        )
+        outcome = await resolver.resolve(
+            global_tracks=[gt_with_alice],
+            new_face_anchors=[],
+            captured_at=next_frame,
+        )
+
+        assert outcome.decisions[0].identity_id == "alice"
+
+
+class TestCrossGtFacePropagation:
+    """Tests for cross-GT face identity propagation."""
+
+    @pytest.mark.asyncio
+    async def test_face_propagates_to_similar_adjacent_gt(self) -> None:
+        """Face anchor on GT-A propagates to GT-B when gallery similarity is high.
+
+        Two enrolled identities (alice, bob) split the prior.  Without face
+        propagation, GT-B would stay UNKNOWN (no direct face evidence, ReID
+        evidence too weak on its own).  With propagation, GT-B receives a
+        synthetic face anchor for alice because its gallery centroid is nearly
+        identical to GT-A's.
+        """
+        from app.domain import GalleryEmbedding
+
+        # Two identities so the prior is balanced — requires real evidence to commit.
+        identities = [_make_identity("alice", "Alice"), _make_identity("bob", "Bob")]
+        gallery_repo = InMemoryGalleryRepository()
+        for ident in identities:
+            await gallery_repo.upsert_identity(ident)
+
+        # GT-A tracklet gallery: embedding [1, 0, 0, ...]
+        base_emb = [1.0] + [0.0] * 767
+        await gallery_repo.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id="ge-a",
+                identity_id="alice",
+                embedding=base_emb,
+                seen_at=datetime.now(UTC),
+                origin_tracklet_id="t-a",
+            )
+        )
+        # GT-B tracklet gallery: very similar embedding (cosine sim ≈ 0.964 with GT-A)
+        similar_emb = [1.0] + [0.01] * 767
+        await gallery_repo.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id="ge-b",
+                identity_id=None,
+                embedding=similar_emb,
+                seen_at=datetime.now(UTC),
+                origin_tracklet_id="t-b",
+            )
+        )
+
+        config = ResolverConfig(
+            cross_gt_face_propagation_threshold=0.70,
+            face_commit_min_confidence=0.60,
+        )
+        resolver = _make_resolver(identities=identities, gallery_repo=gallery_repo, config=config)
+
+        gt_a = _make_gt(global_track_id="gt-a", tracklet_ids=["t-a"], camera_ids=["cam-a"])
+        gt_b = _make_gt(global_track_id="gt-b", tracklet_ids=["t-b"], camera_ids=["cam-b"])
+
+        anchor = _make_face_anchor("alice", confidence=0.95, tracklet_id="t-a")
+
+        outcome = await resolver.resolve(
+            global_tracks=[gt_a, gt_b],
+            new_face_anchors=[anchor],
+            captured_at=datetime.now(UTC),
+        )
+
+        # GT-B should have received a synthetic face anchor and committed alice.
+        decisions_by_gt = {d.global_track_id: d for d in outcome.decisions}
+        assert decisions_by_gt["gt-a"].identity_id == "alice"
+        assert decisions_by_gt["gt-b"].identity_id == "alice"
+
+    @pytest.mark.asyncio
+    async def test_face_not_propagated_to_dissimilar_gt(self) -> None:
+        """Face anchor on GT-A does NOT propagate to dissimilar GT-B.
+
+        Two enrolled identities split the prior so that neither alice nor bob
+        can cross commit_prob without genuine evidence.  GT-B's embedding is
+        orthogonal to GT-A's (cosine sim = 0), so gallery similarity is below
+        the propagation threshold and no synthetic face anchor is created.
+        """
+        from app.domain import GalleryEmbedding
+
+        # Two identities so the prior is ~50/50 — alice can't commit on prior alone.
+        identities = [_make_identity("alice", "Alice"), _make_identity("bob", "Bob")]
+        gallery_repo = InMemoryGalleryRepository()
+        for ident in identities:
+            await gallery_repo.upsert_identity(ident)
+
+        # GT-A: embedding in one direction.
+        await gallery_repo.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id="ge-a",
+                identity_id="alice",
+                embedding=[1.0] + [0.0] * 767,
+                seen_at=datetime.now(UTC),
+                origin_tracklet_id="t-a",
+            )
+        )
+        # GT-B: embedding in orthogonal direction → gallery cosine sim with GT-A ≈ 0.
+        dissimilar_emb = [0.0, 1.0] + [0.0] * 766
+        await gallery_repo.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id="ge-b",
+                identity_id=None,
+                embedding=dissimilar_emb,
+                seen_at=datetime.now(UTC),
+                origin_tracklet_id="t-b",
+            )
+        )
+
+        config = ResolverConfig(cross_gt_face_propagation_threshold=0.70)
+        resolver = _make_resolver(identities=identities, gallery_repo=gallery_repo, config=config)
+
+        gt_a = _make_gt(global_track_id="gt-a", tracklet_ids=["t-a"], camera_ids=["cam-a"])
+        gt_b = _make_gt(global_track_id="gt-b", tracklet_ids=["t-b"], camera_ids=["cam-b"])
+
+        anchor = _make_face_anchor("alice", confidence=0.95, tracklet_id="t-a")
+
+        outcome = await resolver.resolve(
+            global_tracks=[gt_a, gt_b],
+            new_face_anchors=[anchor],
+            captured_at=datetime.now(UTC),
+        )
+
+        decisions_by_gt = {d.global_track_id: d for d in outcome.decisions}
+        # GT-A gets alice; GT-B stays UNKNOWN (no propagation, no evidence).
+        assert decisions_by_gt["gt-a"].identity_id == "alice"
+        assert decisions_by_gt["gt-b"].identity_id is None
 
 
 class TestResolveOutcome:

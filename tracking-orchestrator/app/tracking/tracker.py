@@ -166,7 +166,9 @@ class TrackerConfig:
 
     # Minimum IoU required for a match to be accepted (higher = stricter).
     # Effective as: accept match when iou_cost <= (1 - match_thresh).
-    match_thresh: float = 0.4
+    # Lowered from 0.4 → 0.2: accept matches at IoU ≥ 0.2 so that bbox
+    # shift from turning-in-place does not break the track.
+    match_thresh: float = 0.2
 
     # Frames without a match before a track is terminated.
     max_time_lost: int = 30
@@ -175,14 +177,16 @@ class TrackerConfig:
     min_hits: int = 3
 
     # IoU weight in the association cost (appearance weight = 1 - iou_weight).
-    # BoT-SORT uses appearance + IoU; we default to equal weighting.
-    appearance_weight: float = 0.5
+    # Lowered from 0.5 → 0.15: IoU dominates Hungarian assignment so that
+    # appearance changes (front/back view) don't steer pairing away from the
+    # spatially correct track.  Appearance still acts as a tiebreaker.
+    appearance_weight: float = 0.15
 
     # Post-update dedup: a newly-spawned tracklet (age==1) whose bbox overlaps
     # an existing stable tracklet (age >= dedup_min_age) by more than this IoU
     # threshold is immediately dropped. Suppresses ghost re-detections.
-    dedup_iou_threshold: float = 0.7
-    dedup_min_age: int = 5
+    dedup_iou_threshold: float = 0.6
+    dedup_min_age: int = 3
 
 
 # ---------------------------------------------------------------------------

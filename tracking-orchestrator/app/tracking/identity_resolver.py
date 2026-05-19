@@ -47,6 +47,19 @@ from ..storage.base import GalleryRepository, GlobalTrackRepository, TrackingRep
 logger = get_logger(__name__)
 
 
+@dataclass
+class _FaceLock:
+    """Tracks a face-confirmed identity for one GlobalTrack.
+
+    Set when a face anchor's confidence exceeds face_commit_min_confidence.
+    Displaced when a different identity's face anchor also clears that threshold.
+    """
+
+    identity_id: str
+    confidence: float
+    locked_at: datetime
+
+
 @dataclass(frozen=True)
 class ResolverConfig:
     """Configuration for the identity resolver."""
@@ -61,7 +74,7 @@ class ResolverConfig:
     commit_prob: float = 0.65
 
     # Margin (top - second) required to commit.
-    commit_margin: float = 0.25
+    commit_margin: float = 0.15
 
     # ReID similarity midpoint for the logistic likelihood curve.
     reid_decision_sim: float = 0.70
@@ -140,11 +153,34 @@ class ResolverConfig:
 
     # Minimum cosine similarity between every consecutive pair in the window.
     # If any pair falls below this, coherence is not declared.
-    embedding_coherence_min_sim: float = 0.85
+    embedding_coherence_min_sim: float = 0.70
 
     # Multiplier applied to the best-matching identity's likelihood when
     # coherence is active.  Capped at 0.99 after multiplication.
     embedding_coherence_boost: float = 2.0
+
+    # --- Face lock ---
+    # Minimum face anchor confidence to set a face lock on a GlobalTrack.
+    # Face locks extend the maintenance window to face_lock_maintenance_max_age_s
+    # so that a face-confirmed identity persists across frames where face-id is
+    # on cooldown or the person turns away.
+    face_commit_min_confidence: float = 0.70
+
+    # How long (seconds) a face-locked identity is maintained without fresh face
+    # evidence.  Much longer than prior_maintenance_max_age_s because a face ID
+    # commit represents a high-confidence, hardware-verified identification that
+    # should persist until a contradicting face match arrives.
+    face_lock_maintenance_max_age_s: float = 300
+
+    # --- Cross-GT face propagation ---
+    # Minimum gallery cosine similarity for propagating a face-confirmed identity
+    # to an adjacent GlobalTrack that has no face anchor of its own.  Prevents
+    # false propagation to a different person who happens to be nearby.
+    cross_gt_face_propagation_threshold: float = 0.65
+
+    # Maximum number of adjacent GlobalTracks to propagate face identity to per
+    # resolve() call.  Caps the gallery query overhead for busy scenes.
+    cross_gt_face_propagation_max_gts: int = 4
 
 
 class IdentityResolver:
@@ -192,6 +228,8 @@ class IdentityResolver:
         }
         # Revision rate limiter: global_track_id -> list of revision timestamps
         self._revision_log: dict[str, list[datetime]] = defaultdict(list)
+        # Face locks: global_track_id -> _FaceLock tracking the strongest committed face identity.
+        self._face_locks: dict[str, _FaceLock] = {}
 
     async def resolve(
         self,
@@ -215,15 +253,22 @@ class IdentityResolver:
         enrolled = await self._gallery_repo.list_identities(active_only=True)
         self._identities = {ident.identity_id: ident for ident in enrolled}
 
+        # Propagate face anchors from face-evidenced GTs to similar adjacent GTs
+        # that share the same physical space but weren't merged by the cross-camera
+        # associator (appearance below merge threshold, or different overlap groups).
+        augmented_anchors = await self._propagate_face_anchors(global_tracks, new_face_anchors)
+
         outcome = ResolveOutcome()
 
         for gt in global_tracks:
             prior = self._build_prior(gt, captured_at)
-            face_likelihood = self._from_face_anchors(gt, new_face_anchors)
+            face_likelihood, best_face_conf = self._from_face_anchors(gt, augmented_anchors)
             reid_likelihood = await self._from_gallery(gt)
             posterior = self._combine(prior, face_likelihood, reid_likelihood)
 
-            decision = self._commit(gt, posterior, face_likelihood, reid_likelihood, captured_at)
+            decision = self._commit(
+                gt, posterior, face_likelihood, reid_likelihood, captured_at, best_face_conf
+            )
             if decision.revises_previous:
                 revision = self._build_revision(gt, decision, captured_at)
                 if revision is not None:
@@ -271,14 +316,16 @@ class IdentityResolver:
     # Face anchor likelihood
     # ------------------------------------------------------------------
 
-    def _from_face_anchors(self, gt: GlobalTrack, face_anchors: list[FaceAnchor]) -> PosteriorDist:
+    def _from_face_anchors(
+        self, gt: GlobalTrack, face_anchors: list[FaceAnchor]
+    ) -> tuple[PosteriorDist, float | None]:
         """Build likelihood from face anchors associated with this GlobalTrack.
 
         Face anchors are the strongest evidence. A face anchor is associated
         with a GlobalTrack if its tracklet_id is in the tracklet's list.
 
-        Returns a PosteriorDist with a point mass at the face-confirmed
-        identity, scaled by p_face(confidence, quality).
+        Returns (PosteriorDist, best_confidence) where best_confidence is the
+        strongest face anchor's confidence, or None when no anchor matched.
         """
         gt_tracklet_ids = set(gt.tracklet_ids)
 
@@ -293,7 +340,7 @@ class IdentityResolver:
                 gt_tracklet_count=len(gt_tracklet_ids),
                 face_anchor_count=len(face_anchors),
             )
-            return PosteriorDist({})
+            return PosteriorDist({}), None
 
         # Take the strongest face anchor (highest confidence * quality).
         best = max(relevant_anchors, key=lambda fa: fa.confidence * fa.quality)
@@ -326,7 +373,7 @@ class IdentityResolver:
             else:
                 likelihood["UNKNOWN"] = remainder
 
-        return PosteriorDist(likelihood)
+        return PosteriorDist(likelihood), best.confidence
 
     def _p_face(self, confidence: float, quality: float) -> float:
         """Probability that a face anchor is correct.
@@ -561,6 +608,7 @@ class IdentityResolver:
         face_likelihood: PosteriorDist,
         reid_likelihood: PosteriorDist,
         captured_at: datetime,
+        best_face_confidence: float | None = None,
     ) -> IdentityDecision:
         """Apply the commit rule to produce an identity decision.
 
@@ -571,9 +619,48 @@ class IdentityResolver:
           committing an assignment on its own — a strong prior should
           maintain an existing assignment but not create one.
 
+        Face locks: when a face anchor's confidence exceeds face_commit_min_confidence,
+        a face lock is set on this GT.  The face-locked identity uses the longer
+        face_lock_maintenance_max_age_s window so it persists across frames where
+        face-id is on cooldown.  A different identity's face anchor at the same
+        threshold displaces the lock.
+
         Otherwise, the decision is UNKNOWN (None).
         """
         (top_id, top_prob), margin = posterior.top_with_margin()
+
+        # --- Face lock management ---
+        existing_lock = self._face_locks.get(gt.global_track_id)
+        is_face_evidence = top_id in face_likelihood.distribution and top_id not in ("UNKNOWN", "")
+        # Narrow type: only enter the block when confidence is a float.
+        if (
+            is_face_evidence
+            and best_face_confidence is not None
+            and best_face_confidence >= self._config.face_commit_min_confidence
+        ):
+            face_conf: float = best_face_confidence  # narrowed
+            if existing_lock is None or existing_lock.identity_id == top_id:
+                # Set or refresh the face lock for the same identity.
+                self._face_locks[gt.global_track_id] = _FaceLock(
+                    identity_id=top_id,
+                    confidence=face_conf,
+                    locked_at=captured_at,
+                )
+            else:
+                # Different identity at sufficient confidence: displace the lock.
+                logger.info(
+                    "face_lock_displaced",
+                    global_track_id=gt.global_track_id,
+                    old_identity=existing_lock.identity_id,
+                    new_identity=top_id,
+                    old_confidence=round(existing_lock.confidence, 3),
+                    new_confidence=round(face_conf, 3),
+                )
+                self._face_locks[gt.global_track_id] = _FaceLock(
+                    identity_id=top_id,
+                    confidence=face_conf,
+                    locked_at=captured_at,
+                )
 
         # Require evidence from at least one non-prior source.
         # The prior encodes temporal continuity (a track likely keeps
@@ -592,7 +679,13 @@ class IdentityResolver:
         prev_id = gt.current_identity_id
         identity_unchanged = top_id == prev_id and prev_id is not None
         within_maintenance_window = False
-        if identity_unchanged and not has_evidence:
+        if identity_unchanged:
+            # Use gt.last_seen_at, which the cross-camera associator updates to
+            # captured_at on every frame for active GTs (age_s ≈ 0).  This means
+            # an actively-tracked identity is maintained indefinitely — including
+            # when the person turns away and ReID evidence becomes weak.
+            # face_lock_maintenance_max_age_s is reserved for future GT reactivation
+            # scenarios (closed GT re-enters scene); it does NOT govern active tracks.
             age_s = (captured_at - gt.last_seen_at).total_seconds()
             within_maintenance_window = age_s <= self._config.prior_maintenance_max_age_s
 
@@ -770,6 +863,140 @@ class IdentityResolver:
 
         self._revision_log[gt.global_track_id].append(now)
         return revision
+
+    # ------------------------------------------------------------------
+    # Cross-GT face propagation
+    # ------------------------------------------------------------------
+
+    async def _propagate_face_anchors(
+        self,
+        global_tracks: list[GlobalTrack],
+        face_anchors: list[FaceAnchor],
+    ) -> list[FaceAnchor]:
+        """Propagate face anchors from face-evidenced GTs to similar adjacent GTs.
+
+        When Camera A gets a face match for Alice but Camera B (same room,
+        overlapping FOV) has a separate GlobalTrack for the same person, this
+        method creates synthetic FaceAnchors for Camera B's GT so that the
+        Bayesian resolver can commit Alice's identity there too.
+
+        Confidence of the synthetic anchor is scaled by the gallery cosine
+        similarity between the two GTs.  Only GTs with no direct face evidence
+        this frame are candidates for propagation.
+        """
+        if not face_anchors or len(global_tracks) < 2:
+            return face_anchors
+
+        # Map each tracklet to its GT for fast lookup.
+        gt_by_tracklet: dict[str, GlobalTrack] = {}
+        for gt in global_tracks:
+            for tid in gt.tracklet_ids:
+                gt_by_tracklet[tid] = gt
+
+        # Find which GTs have direct face evidence and pick the best anchor per GT.
+        evidenced_gt_ids: set[str] = set()
+        best_anchor_by_gt: dict[str, FaceAnchor] = {}
+        for fa in face_anchors:
+            src_gt = gt_by_tracklet.get(fa.tracklet_id)
+            if src_gt is None:
+                continue
+            evidenced_gt_ids.add(src_gt.global_track_id)
+            existing = best_anchor_by_gt.get(src_gt.global_track_id)
+            if existing is None or fa.confidence * fa.quality > existing.confidence * existing.quality:
+                best_anchor_by_gt[src_gt.global_track_id] = fa
+
+        if not evidenced_gt_ids:
+            return face_anchors
+
+        # Candidate GTs for propagation: no direct face evidence this frame.
+        unevidenced = [gt for gt in global_tracks if gt.global_track_id not in evidenced_gt_ids]
+        if not unevidenced:
+            return face_anchors
+
+        threshold = self._config.cross_gt_face_propagation_threshold
+        max_props = self._config.cross_gt_face_propagation_max_gts
+        synthetic: list[FaceAnchor] = []
+        propagated_count = 0
+
+        for src_gt_id, src_anchor in best_anchor_by_gt.items():
+            if propagated_count >= max_props:
+                break
+            src_gt = next((gt for gt in global_tracks if gt.global_track_id == src_gt_id), None)
+            if src_gt is None or not src_gt.tracklet_ids:
+                continue
+
+            for dst_gt in unevidenced:
+                if propagated_count >= max_props:
+                    break
+                if not dst_gt.tracklet_ids:
+                    continue
+
+                sim = await self._gt_gallery_similarity(src_gt.tracklet_ids, dst_gt.tracklet_ids)
+                if sim < threshold:
+                    continue
+
+                # Synthetic anchor for dst_gt; confidence scaled by similarity.
+                syn = FaceAnchor(
+                    person_id=src_anchor.person_id,
+                    confidence=src_anchor.confidence * sim,
+                    quality=src_anchor.quality,
+                    tracklet_id=dst_gt.tracklet_ids[0],
+                    camera_id=dst_gt.camera_ids[0] if dst_gt.camera_ids else "",
+                    captured_at=src_anchor.captured_at,
+                )
+                synthetic.append(syn)
+                propagated_count += 1
+
+                logger.info(
+                    "face_anchor_propagated",
+                    src_gt=src_gt_id,
+                    dst_gt=dst_gt.global_track_id,
+                    person_id=src_anchor.person_id,
+                    original_confidence=round(src_anchor.confidence, 3),
+                    propagated_confidence=round(syn.confidence, 3),
+                    gallery_sim=round(sim, 4),
+                )
+
+        if synthetic:
+            return list(face_anchors) + synthetic
+        return face_anchors
+
+    async def _gt_gallery_similarity(self, tids_a: list[str], tids_b: list[str]) -> float:
+        """Mean cosine similarity between two GlobalTracks via gallery centroids.
+
+        Returns 0.0 when either side has no gallery entries.
+        """
+        import numpy as np
+
+        try:
+            entries_a = await self._gallery_repo.list_gallery_entries_for_tracklets(
+                tracklet_ids=set(tids_a), limit=20
+            )
+        except Exception:
+            entries_a = []
+
+        try:
+            entries_b = await self._gallery_repo.list_gallery_entries_for_tracklets(
+                tracklet_ids=set(tids_b), limit=20
+            )
+        except Exception:
+            entries_b = []
+
+        if not entries_a or not entries_b:
+            return 0.0
+
+        emb_a = np.mean([e.embedding for e in entries_a], axis=0)
+        emb_b = np.mean([e.embedding for e in entries_b], axis=0)
+        norm_a = float(np.linalg.norm(emb_a))
+        norm_b = float(np.linalg.norm(emb_b))
+        if norm_a < 1e-9 or norm_b < 1e-9:
+            return 0.0
+        return float(np.dot(emb_a, emb_b) / (norm_a * norm_b + 1e-9))
+
+    def get_face_locked_identity(self, global_track_id: str) -> str | None:
+        """Return the face-locked identity for a GT, or None if not locked."""
+        lock = self._face_locks.get(global_track_id)
+        return lock.identity_id if lock is not None else None
 
     def register_identity(self, identity: Identity) -> None:
         """Register a known identity for display name lookup."""

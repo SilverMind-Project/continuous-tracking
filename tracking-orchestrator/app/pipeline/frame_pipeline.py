@@ -42,6 +42,7 @@ from ..domain import (
     IdentityRevision,
     OverlapGroup,
     PostureType,
+    ResolveOutcome,
     TaggedKeyframe,
     TrackingEvent,
 )
@@ -248,6 +249,12 @@ class PipelineConfig:
     identity_high_confidence_face_threshold: float = 0.85
     # Feature flag: off by default; enable after one week soak.
     identity_committer_enabled: bool = False
+    # Retroactive cross-table rewrite on face-confirmed identity commits.
+    # Enabled by default: when any face anchor triggers a revision, the
+    # IdentityRewriter updates trajectory, dwell, and signal rows so that
+    # history reflects the now-known identity.  Set False only to disable
+    # rewrites without disabling the identity_committer_enabled path.
+    identity_rewrite_on_face_commit: bool = True
 
 
 @dataclass(frozen=True)
@@ -590,6 +597,9 @@ class FrameProcessingPipeline:
 
         if self._signal_publisher:
             await self._signal_publisher.disconnect()
+
+        if self._revision_publisher:
+            await self._revision_publisher.disconnect()
 
         if self._face_id_client:
             await self._face_id_client.disconnect()
@@ -988,8 +998,6 @@ class FrameProcessingPipeline:
                 )
         active_global_tracks: list[GlobalTrack] = []
         new_revisions: list[IdentityRevision] = []
-        from ..domain import ResolveOutcome
-
         outcome: ResolveOutcome = ResolveOutcome()
 
         if active_tracklets:
@@ -999,14 +1007,14 @@ class FrameProcessingPipeline:
             # Step 5: Cross-camera association
             active_global_tracks = await self._cross_camera.associate(
                 active_tracklets,
-                captured_at=datetime.now(UTC),
+                captured_at=event_time,
             )
 
             # Step 6: Identity resolution
             outcome = await self._identity_resolver.resolve(
                 global_tracks=active_global_tracks,
                 new_face_anchors=face_anchors,
-                captured_at=datetime.now(UTC),
+                captured_at=event_time,
             )
 
             # Apply decisions: update GlobalTrack identity assignments.
@@ -1058,7 +1066,7 @@ class FrameProcessingPipeline:
                 # carry-forwards set revises_previous=False and must not call
                 # assign_identity(None) which would clear a valid assignment.
                 for decision in outcome.decisions:
-                    if decision.revises_previous:
+                    if decision.revises_previous and decision.identity_id is not None:
                         await self._global_track_repo.assign_identity(
                             global_track_id=decision.global_track_id,
                             identity_id=decision.identity_id,
@@ -1266,10 +1274,13 @@ class FrameProcessingPipeline:
                     await self._repo.save_identity_revision(revision=rev)
 
         # Step 9a: Retroactive cross-table rewrite. Run when the committer is
-        # enabled and a revision changes identity (committer produces
-        # applies_from=gt.started_at for face fast-path rewrites).
+        # enabled OR face-commit rewrite is enabled and any revision changes
+        # identity (including face-anchor-driven revisions from the direct path).
         if (
-            self._config.identity_committer_enabled
+            (
+                self._config.identity_committer_enabled
+                or self._config.identity_rewrite_on_face_commit
+            )
             and new_revisions
             and self._identity_rewriter is not None
         ):
@@ -1366,7 +1377,7 @@ class FrameProcessingPipeline:
         assert self._transport is not None
         await self._transport.publish_event(
             camera_id=frame.camera_id,
-            event_time=datetime.now(UTC),
+            event_time=event_time,
             frame_index=frame.frame_index,
             detections=domain_detections if detections else None,
             minio_key=frame.minio_key,
@@ -1542,7 +1553,18 @@ class FrameProcessingPipeline:
                 )
             )
 
-        crop_face_results = await self._face_id_client.identify_crops(crops, crop_bboxes_norm)
+        try:
+            crop_face_results = await self._face_id_client.identify_crops(crops, crop_bboxes_norm)
+        except Exception:
+            # Connection-level failure (service down, timeout, etc.).  Update the
+            # cooldown timestamp so we don't hammer a dead service every frame.
+            self._last_face_id_call[camera_id] = datetime.now(UTC)
+            logger.warning(
+                "face_id_service_error",
+                camera_id=camera_id,
+                crop_count=len(crops),
+            )
+            return []
 
         if not crop_face_results:
             self._last_face_id_call[camera_id] = datetime.now(UTC)
