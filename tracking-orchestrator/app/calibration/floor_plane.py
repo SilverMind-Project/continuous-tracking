@@ -31,7 +31,6 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-
 # ---------------------------------------------------------------------------
 # Typed result
 # ---------------------------------------------------------------------------
@@ -191,13 +190,13 @@ class FloorPlaneFitter:
         """Return valid 3-D points in the floor-candidate region."""
         floor_row_start = int(h * (1.0 - self._floor_region_fraction))
 
-        rows, cols = np.meshgrid(
+        rows_2d, cols_2d = np.meshgrid(
             np.arange(floor_row_start, h),
             np.arange(w),
             indexing="ij",
         )
-        rows = rows.ravel()
-        cols = cols.ravel()
+        rows = rows_2d.ravel()
+        cols = cols_2d.ravel()
 
         z: npt.NDArray[np.float64] = depth_map[rows, cols].astype(np.float64)
         valid = (z > self._min_depth) & (z < self._max_depth)
@@ -225,7 +224,7 @@ class FloorPlaneFitter:
             idx = rng.choice(n, 3, replace=False)
             sample = pts[idx]
             normal, d = _fit_plane_3pts(sample[0], sample[1], sample[2])
-            if normal is None:
+            if normal is None or d is None:
                 continue
             dists = np.abs(pts @ normal + d)
             count = int((dists < self._ransac_threshold).sum())
@@ -239,7 +238,7 @@ class FloorPlaneFitter:
         inliers = pts[dists < self._ransac_threshold]
         if inliers.shape[0] >= 3:
             refined_normal, refined_d = _fit_plane_svd(inliers)
-            if refined_normal is not None:
+            if refined_normal is not None and refined_d is not None:
                 return refined_normal, refined_d
 
         return best_normal, best_d
@@ -273,8 +272,8 @@ def _fit_plane_svd(
     """Least-squares plane fit via SVD.  Returns (unit_normal, d) or (None, None)."""
     centroid = pts.mean(axis=0)
     centered = pts - centroid
-    _, _, Vt = np.linalg.svd(centered, full_matrices=False)
-    n: npt.NDArray[np.float64] = Vt[-1]  # smallest singular value → normal
+    _, _, vt = np.linalg.svd(centered, full_matrices=False)
+    n: npt.NDArray[np.float64] = vt[-1]  # smallest singular value = normal
     norm = float(np.linalg.norm(n))
     if norm < 1e-8:
         return None, None
@@ -302,7 +301,7 @@ def floor_plane_to_homography(
     onto the plane.  The X axis is the camera-right direction projected onto
     the plane; the Y axis is orthogonal (roughly camera-down on the plane).
 
-    Returns the 3×3 homography as a nested list (row-major), or ``None`` if
+    Returns the 3x3 homography as a nested list (row-major), or ``None`` if
     fewer than 4 inlier correspondences are available.
     """
     import cv2
@@ -332,7 +331,7 @@ def floor_plane_to_homography(
         x_norm = float(np.linalg.norm(x_axis))
     x_axis = x_axis / x_norm
 
-    # Y axis: cross product (normal × x_axis) gives the other in-plane direction.
+    # Y axis: cross product (normal x x_axis) gives the other in-plane direction.
     y_axis: npt.NDArray[np.float64] = np.cross(n, x_axis)
     y_norm = float(np.linalg.norm(y_axis))
     if y_norm < 1e-6:
@@ -370,8 +369,8 @@ def floor_plane_to_homography(
         idx = rng.choice(len(src), 256, replace=False)
         src, dst = src[idx], dst[idx]
 
-    H_raw, _ = cv2.findHomography(src, dst, cv2.RANSAC, ransacReprojThreshold=0.05)
-    if H_raw is None:
+    h_raw, _ = cv2.findHomography(src, dst, cv2.RANSAC, ransacReprojThreshold=0.05)
+    if h_raw is None:
         return None
 
-    return H_raw.tolist()
+    return h_raw.tolist()  # type: ignore[no-any-return]

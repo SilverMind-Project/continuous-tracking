@@ -6,13 +6,13 @@ from .homography import RESIDUAL_ERROR_M, RESIDUAL_WARN_M, compute_homography, r
 from .state import CalibrationState, calibration_state
 
 __all__ = [
+    "RESIDUAL_ERROR_M",
+    "RESIDUAL_WARN_M",
     "AutoCalibrationResult",
     "AutoCalibrator",
     "CalibrationState",
     "FloorPlaneFitter",
     "FloorPlaneResult",
-    "RESIDUAL_ERROR_M",
-    "RESIDUAL_WARN_M",
     "calibration_state",
     "compute_homography",
     "floor_plane_to_homography",

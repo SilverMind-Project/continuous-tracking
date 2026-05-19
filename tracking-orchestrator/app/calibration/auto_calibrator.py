@@ -18,24 +18,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import numpy.typing as npt
 import numpy as np
+import numpy.typing as npt
 from structlog import get_logger
 
-from app.calibration.floor_plane import FloorPlaneFitter, FloorPlaneResult, floor_plane_to_homography
+from app.calibration.floor_plane import (
+    FloorPlaneFitter,
+    FloorPlaneResult,
+    floor_plane_to_homography,
+)
 from app.inference.depth import DepthEstimator
 
 logger = get_logger(__name__)
 
 # Minimum inlier ratio before we declare the plane untrustworthy.
-_MIN_CONFIDENCE = 0.25
+_MIN_CONFIDENCE = 0.10
 
 
 @dataclass(frozen=True)
 class AutoCalibrationResult:
     """Output from :class:`AutoCalibrator`."""
 
-    #: Computed 3×3 homography (row-major nested list).
+    #: Computed 3x3 homography (row-major nested list).
     matrix: list[list[float]]
     #: Scalar confidence in [0, 1].  Values below 0.4 indicate a poor fit.
     confidence: float
@@ -157,7 +161,7 @@ class AutoCalibrator:
             matrix=matrix,
             confidence=float(plane_result.confidence),
             inlier_count=inlier_count,
-            sample_count=int(len(plane_result.inlier_mask)),
+            sample_count=len(plane_result.inlier_mask),
             depth_shape=(int(depth_map.shape[0]), int(depth_map.shape[1])),
             fov_deg=effective_fov,
         )

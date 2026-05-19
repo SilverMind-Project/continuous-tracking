@@ -1,7 +1,7 @@
 """Depth Anything v2 ViT-S Metric Indoor depth estimator backed by Triton.
 
 Input: RGB image as ``uint8`` numpy array ``(H, W, 3)``.
-Preprocessing: letterbox resize to 518×518, ImageNet normalise, CHW layout.
+Preprocessing: letterbox resize to 518x518, ImageNet normalise, CHW layout.
 
 Triton model ``depth-anything-v2`` output tensor ``depth`` shape ``[1, 518, 518]``
 (or ``[1, 1, 518, 518]`` depending on export) carrying **absolute metric depth
@@ -44,16 +44,16 @@ _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 def _preprocess(
     image: npt.NDArray[np.uint8],
 ) -> tuple[npt.NDArray[np.float32], int, int, int, int]:
-    """Letterbox-resize to 518×518, ImageNet-normalise, return (chw, pad_t, pad_b, pad_l, pad_r).
+    """Letterbox-resize to 518x518, ImageNet-normalise, return (chw, pad_t, pad_b, pad_l, pad_r).
 
     Returns CHW float32 tensor ready for batching, plus the letterbox padding
-    (in pixels within the 518×518 canvas) so the caller can recover the
+    (in pixels within the 518x518 canvas) so the caller can recover the
     unpadded region after inference.
     """
     h, w = image.shape[:2]
     scale = min(_INPUT_H / h, _INPUT_W / w)
-    new_h = max(1, int(round(h * scale)))
-    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, round(h * scale))
+    new_w = max(1, round(w * scale))
     resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
     pad_top = (_INPUT_H - new_h) // 2
@@ -80,10 +80,7 @@ def _postprocess(
 ) -> npt.NDArray[np.float32]:
     """Strip letterbox padding and resize depth map to (orig_h, orig_w)."""
     # raw may be (1, H, W) or (H, W)
-    if raw.ndim == 3:
-        depth = raw[0]
-    else:
-        depth = raw
+    depth = raw[0] if raw.ndim == 3 else raw
 
     # Crop out the padding region.
     h_end = _INPUT_H - pad_bottom if pad_bottom > 0 else _INPUT_H
@@ -91,8 +88,8 @@ def _postprocess(
     cropped = depth[pad_top:h_end, pad_left:w_end]
 
     # Resize to original image resolution.
-    resized: npt.NDArray[np.float32] = cv2.resize(
-        cropped, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR
+    resized: npt.NDArray[np.float32] = np.asarray(
+        cv2.resize(cropped, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR), dtype=np.float32
     )
     return resized
 

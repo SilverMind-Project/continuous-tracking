@@ -35,9 +35,15 @@ async def fetch_overlap_groups(client: CognitiveCompanionClient) -> list[Overlap
     for r in raw:
         gid = r.get("id")
         cam_ids = r.get("camera_ids")
-        if not isinstance(gid, str) or not gid or not isinstance(cam_ids, list) or len(cam_ids) < 2:
+        if (
+            not isinstance(gid, (str, int))
+            or not gid
+            or not isinstance(cam_ids, list)
+            or len(cam_ids) < 2
+        ):
             skipped += 1
             continue
+        gid = str(gid)
         groups.append(
             OverlapGroup(
                 group_id=gid,

@@ -39,7 +39,7 @@ def compute_homography(
             floor-plan editor.
 
     Returns:
-        ``(matrix, residuals)`` where *matrix* is the 3×3 homography as a
+        ``(matrix, residuals)`` where *matrix* is the 3x3 homography as a
         nested list (row-major) and *residuals* is a per-point list of
         reprojection errors in metres.
 
@@ -61,26 +61,24 @@ def compute_homography(
     src: npt.NDArray[np.float64] = np.array(pixel_points, dtype=np.float64)
     dst: npt.NDArray[np.float64] = np.array(floor_points, dtype=np.float64)
 
-    H_raw, _ = cv2.findHomography(src, dst, cv2.RANSAC, ransacReprojThreshold=0.05)
-    if H_raw is None:
+    h_raw, _ = cv2.findHomography(src, dst, cv2.RANSAC, ransacReprojThreshold=0.05)
+    if h_raw is None:
         raise ValueError(
             "findHomography did not converge: check that the points are not collinear "
             "and span a reasonable area of the camera view."
         )
 
-    H: npt.NDArray[np.float64] = H_raw  # (3, 3)
+    h: npt.NDArray[np.float64] = np.asarray(h_raw, dtype=np.float64)  # (3, 3)
 
     # Per-point reprojection error in floor-plan metres.
     ones = np.ones((len(src), 1), dtype=np.float64)
-    src_h = np.hstack([src, ones])          # (N, 3) homogeneous pixel coords
-    proj_h: npt.NDArray[np.float64] = (H @ src_h.T).T  # (N, 3)
+    src_h = np.hstack([src, ones])  # (N, 3) homogeneous pixel coords
+    proj_h: npt.NDArray[np.float64] = (h @ src_h.T).T  # (N, 3)
     proj = proj_h[:, :2] / proj_h[:, 2:3]  # de-homogenise
 
-    residuals: list[float] = [
-        float(np.linalg.norm(proj[i] - dst[i])) for i in range(len(src))
-    ]
+    residuals: list[float] = [float(np.linalg.norm(proj[i] - dst[i])) for i in range(len(src))]
 
-    matrix: list[list[float]] = H.tolist()
+    matrix: list[list[float]] = h.tolist()
     return matrix, residuals
 
 

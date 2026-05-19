@@ -1061,6 +1061,26 @@ class FrameProcessingPipeline:
             # Collect revisions to emit.
             new_revisions = list(outcome.revisions)
 
+            # Backfill gallery identity: once the identity resolver commits an
+            # identity for a GlobalTrack, stamp that identity onto all gallery
+            # entries for the tracklets in that GT.  This creates a virtuous
+            # cycle where future ReID gallery searches (for this person on
+            # other cameras) find identity-tagged entries and produce identity
+            # evidence — instead of mapping to "UNKNOWN".
+            if self._gallery_repo is not None and active_global_tracks:
+                for gt in active_global_tracks:
+                    # Only backfill when the GT has a committed identity on
+                    # this frame (either from the direct path or the committer).
+                    committed_id = gt.current_identity_id
+                    if not committed_id:
+                        continue
+                    tracklet_ids = set(gt.tracklet_ids)
+                    if tracklet_ids:
+                        await self._gallery_repo.update_identity_for_tracklets(
+                            tracklet_ids=tracklet_ids,
+                            identity_id=committed_id,
+                        )
+
         # Step 5b: Close trajectory dwells for terminated global tracks.
         # Runs regardless of whether active_tracklets is empty — when it is
         # empty, every previously-active track is considered terminated.

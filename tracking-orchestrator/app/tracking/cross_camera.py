@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from structlog import get_logger
 
@@ -170,22 +170,18 @@ class CrossCameraAssociator:
                         candidate_scores.append(score)
                     continue
 
-                # Check adjacency with time-bounded reachability.
-                # The time budget is the max transition time for this camera pair,
-                # capped by the age of the older tracklet (a tracklet that started
-                # 10 minutes ago can't reach a camera reachable in 30 seconds if
-                # the person already left).
                 max_transition = self._adjacency.get_max_transition(ta.camera_id, tb.camera_id)
-                if max_transition is None:
-                    continue
-                older_started = min(ta.started_at, tb.started_at)
-                budget = max_transition
-                tracklet_age = (captured_at - older_started).total_seconds()
-                if tracklet_age >= budget:
-                    budget = tracklet_age
-                if not self._adjacency.reachable(ta.camera_id, tb.camera_id, within_s=budget):
-                    continue
+                if max_transition is not None:
+                    # Check time-bounded reachability only when adjacency is configured.
+                    # The time budget is the max transition time for this camera pair,
+                    # capped by the age of the older tracklet.
+                    older_started = min(ta.started_at, tb.started_at)
+                    budget = max(max_transition, (captured_at - older_started).total_seconds())
+                    if not self._adjacency.reachable(ta.camera_id, tb.camera_id, within_s=budget):
+                        continue
 
+                # When adjacency is not configured, fall through: score based on
+                # appearance + geometry using the standard min_link_score threshold.
                 score = await self._score_pair(ta, tb)
                 if score is not None and score.combined_score >= self._config.min_link_score:
                     candidate_scores.append(score)
@@ -357,17 +353,18 @@ class CrossCameraAssociator:
                         max_transition = self._adjacency.get_max_transition(
                             existing_cam, t.camera_id
                         )
-                        if max_transition is None:
-                            continue
-                        older_time = min(gt.last_seen_at, t.started_at)
-                        budget = max_transition
-                        tracklet_age = (captured_at - older_time).total_seconds()
-                        if tracklet_age >= budget:
-                            budget = tracklet_age
-                        if not self._adjacency.reachable(
-                            existing_cam, t.camera_id, within_s=budget
-                        ):
-                            continue
+                        if max_transition is not None:
+                            # Time-bounded reachability check only when configured.
+                            older_time = min(gt.last_seen_at, t.started_at)
+                            budget = max(
+                                max_transition,
+                                (captured_at - older_time).total_seconds(),
+                            )
+                            if not self._adjacency.reachable(
+                                existing_cam, t.camera_id, within_s=budget
+                            ):
+                                continue
+                        # No adjacency configured: fall through to appearance scoring.
 
                     # Find the tracklet on existing_cam from this GlobalTrack.
                     existing_tid = next(
@@ -378,11 +375,7 @@ class CrossCameraAssociator:
                         ),
                         None,
                     )
-                    existing_tl = (
-                        tracklet_by_id.get(existing_tid)
-                        if existing_tid
-                        else (await self._repo.get_tracklet(existing_tid) if existing_tid else None)
-                    )
+                    existing_tl = tracklet_by_id.get(existing_tid) if existing_tid else None
                     score_threshold = (
                         self._config.within_group_min_score
                         if in_same_group
@@ -426,40 +419,49 @@ class CrossCameraAssociator:
                 newly_assigned.add(t.tracklet_id)
                 active_gts.append(new_gt)
 
-        # ---- Step 5: Update last_seen_at for all existing GlobalTracks ----
+        # ---- Step 5: Update last_seen_at for all active GlobalTracks ----
         # Fetch fresh state from repo (active_gts may have stale tracklet_ids
         # and camera_ids from merge_tracklets calls that updated the repo but
         # not the in-memory list).
-        updated_gts: list[GlobalTrack] = []
         fresh_active = await self._repo.list_active()
-        for gt in fresh_active:
-            updated_gts.append(
-                GlobalTrack(
-                    global_track_id=gt.global_track_id,
-                    camera_ids=gt.camera_ids,
-                    tracklet_ids=gt.tracklet_ids,
-                    started_at=gt.started_at,
-                    last_seen_at=captured_at,
-                    current_identity_id=gt.current_identity_id,
-                    state="active",
-                )
+
+        # Persist the heartbeat so the 5-minute active-window filter never
+        # evicts a GlobalTrack whose tracklet is still alive.  Without this,
+        # a tracklet longer than 5 minutes will fall off list_active() and be
+        # treated as "unassigned", creating a duplicate GlobalTrack.
+        fresh_ids = [gt.global_track_id for gt in fresh_active]
+        if fresh_ids:
+            # Use wall-clock now() rather than captured_at: merge_tracklets()
+            # already sets last_seen_at = now() (processing time), which is
+            # always >= captured_at (frame time).  Passing captured_at would
+            # make the SQL guard `last_seen_at < $2` perpetually false.
+            await self._repo.batch_update_last_seen_at(fresh_ids, datetime.now(UTC))
+
+        updated_gts = [
+            GlobalTrack(
+                global_track_id=gt.global_track_id,
+                camera_ids=gt.camera_ids,
+                tracklet_ids=gt.tracklet_ids,
+                started_at=gt.started_at,
+                last_seen_at=captured_at,
+                current_identity_id=gt.current_identity_id,
+                state="active",
             )
+            for gt in fresh_active
+        ]
 
         return updated_gts
 
     async def _score_pair(self, ta: Tracklet, tb: Tracklet) -> TrackletPairScore | None:
         """Score a candidate pair of tracklets.
 
-        Returns None if the pair cannot be scored (e.g., missing adjacency).
+        Returns None only when the floor-distance gate prunes the pair.
+        When adjacency is not configured, falls back to appearance-only scoring
+        (geo_score=1.0) so deployments without explicit calibration still benefit
+        from ReID-based cross-camera linking.
         Uses bidirectional adjacency check since cross-camera association
         works regardless of transition direction.
         """
-        max_transition = self._adjacency.get_max_transition(ta.camera_id, tb.camera_id)
-        if max_transition is None:
-            max_transition = self._adjacency.get_max_transition(tb.camera_id, ta.camera_id)
-        if max_transition is None:
-            return None
-
         # Geometry score: exponential decay of floor-plane distance when both
         # tracklets carry a calibrated last_floor_point.  Falls back to 1.0
         # (binary adjacency gate) when projection is unavailable.
@@ -523,14 +525,17 @@ class CrossCameraAssociator:
         tracklet, computes the mean embedding per tracklet, and returns the
         cosine similarity between those means.
 
-        Returns 0.0 when either tracklet has no gallery entries.
+        Returns 0.0 when neither tracklet has gallery entries.
+        When only one side has entries, returns a conservative 0.5 to allow
+        geometry-based cross-camera association while requiring spatial
+        proximity to confirm the link.
         """
         import numpy as np
 
         try:
             entries_a = await self._gallery.list_gallery_entries_for_tracklets(
                 tracklet_ids={ta.tracklet_id},
-                limit=3,
+                limit=10,
             )
         except Exception:
             entries_a = []
@@ -538,13 +543,19 @@ class CrossCameraAssociator:
         try:
             entries_b = await self._gallery.list_gallery_entries_for_tracklets(
                 tracklet_ids={tb.tracklet_id},
-                limit=3,
+                limit=10,
             )
         except Exception:
             entries_b = []
 
-        if not entries_a or not entries_b:
+        if not entries_a and not entries_b:
             return 0.0
+
+        # When only one side has gallery evidence, return a conservative
+        # non-zero score.  Geometry must carry the pair above the link
+        # threshold, preventing false positives from appearance alone.
+        if not entries_a or not entries_b:
+            return 0.5
 
         emb_a = np.mean([e.embedding for e in entries_a], axis=0)
         emb_b = np.mean([e.embedding for e in entries_b], axis=0)

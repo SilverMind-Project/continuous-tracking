@@ -4,10 +4,10 @@ These endpoints are NOT exposed publicly.  The CC backend is the only
 authorized caller, authenticated via a short-lived service JWT.
 
 Routes:
-    POST /internal/calibration/homography/fit     – compute matrix from raw points
-    POST /internal/calibration/homography         – store a pre-computed matrix
-    GET  /internal/calibration/homography/{id}    – retrieve stored matrix
-    POST /internal/calibration/auto/{camera_id}   – depth-based auto-calibration
+    POST /internal/calibration/homography/fit     - compute matrix from raw points
+    POST /internal/calibration/homography         - store a pre-computed matrix
+    GET  /internal/calibration/homography/{id}    - retrieve stored matrix
+    POST /internal/calibration/auto/{camera_id}   - depth-based auto-calibration
     POST /internal/calibration/privacy_zones
     POST /internal/calibration/camera_adjacency
     POST /internal/calibration/reload
@@ -18,9 +18,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated, Any
 
+import numpy.typing as npt
 from fastapi import APIRouter, Body, HTTPException, status
-from structlog import get_logger
 from pydantic import BaseModel, Field, field_validator, model_validator
+from structlog import get_logger
 
 from app.calibration.homography import (
     RESIDUAL_ERROR_M,
@@ -39,13 +40,13 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/internal/calibration", tags=["calibration-internal"])
 
 # Module-level singletons wired from the app lifespan.
-_auto_calibrator: "AutoCalibrator | None" = None
-_frame_fetcher: "MinioFrameFetcher | None" = None
+_auto_calibrator: AutoCalibrator | None = None
+_frame_fetcher: MinioFrameFetcher | None = None
 
 
 def set_auto_calibration_context(
-    auto_calibrator: "AutoCalibrator | None",
-    frame_fetcher: "MinioFrameFetcher | None",
+    auto_calibrator: AutoCalibrator | None,
+    frame_fetcher: MinioFrameFetcher | None,
 ) -> None:
     """Wire the auto-calibrator and MinIO fetcher from the app lifespan."""
     global _auto_calibrator, _frame_fetcher
@@ -169,7 +170,7 @@ class AutoCalibrateRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _check_source(self) -> "AutoCalibrateRequest":
+    def _check_source(self) -> AutoCalibrateRequest:
         if not self.minio_key and not self.snapshot_bytes:
             raise ValueError("Provide either minio_key or snapshot_bytes.")
         if self.minio_key and self.snapshot_bytes:
@@ -217,7 +218,7 @@ def _get_state() -> CalibrationState:
 async def post_homography_fit(
     body: Annotated[HomographyFitRequest, Body()],
 ) -> HomographyFitResult:
-    """Fit a 3×3 homography from pixel↔floor-metre correspondences.
+    """Fit a 3x3 homography from pixel-to-floor-metre correspondences.
 
     Uses OpenCV ``findHomography`` (RANSAC) server-side.  Returns the matrix
     and per-point reprojection errors.  Also stores the result in the in-memory
@@ -345,10 +346,12 @@ async def post_auto_calibrate(
                     "message": "snapshot_bytes could not be decoded as a JPEG image.",
                 },
             )
-        image = cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
-    else:
-        from app.transport.minio_frames import MinioFrameFetcher
+        import numpy as np
 
+        image: npt.NDArray[np.uint8] = np.asarray(
+            cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB), dtype=np.uint8
+        )
+    else:
         fetcher: MinioFrameFetcher | None = _frame_fetcher
         if fetcher is None:
             raise HTTPException(
@@ -359,6 +362,7 @@ async def post_auto_calibrate(
                 },
             )
 
+        assert body.minio_key is not None  # enforced by AutoCalibrateRequest validator
         try:
             image = await fetcher.fetch_rgb(body.minio_key)
         except Exception as exc:
@@ -422,7 +426,9 @@ async def post_auto_calibrate(
             "Consider verifying with a few manual calibration points."
         )
     if body.fov_deg == 70.0:
-        fov_note = " Default FoV of 70° was used — for best accuracy, enter your camera's actual FoV."
+        fov_note = (
+            " Default FoV of 70 deg was used; enter your camera's actual FoV for best accuracy."
+        )
         warning = (warning or "") + fov_note
 
     return AutoCalibrateResult(

@@ -134,6 +134,19 @@ class GalleryRepository(ABC):
         a GlobalTrack's existing gallery entries.
         """
 
+    @abstractmethod
+    async def update_identity_for_tracklets(
+        self,
+        tracklet_ids: set[str],
+        identity_id: str,
+    ) -> int:
+        """Backfill identity_id on all gallery entries for the given tracklets.
+
+        Called after the identity resolver commits an identity so that
+        future ReID gallery searches can use these entries as identity
+        evidence.  Returns the number of rows updated.
+        """
+
 
 class SettingsRepository(ABC):
     """Persist camera and stream configuration."""
@@ -295,6 +308,20 @@ class GlobalTrackRepository(ABC):
         the ``"UNKNOWN"`` key). Written every frame; does not create a revision.
         """
 
+    @abstractmethod
+    async def batch_update_last_seen_at(
+        self,
+        global_track_ids: list[str],
+        at: datetime,
+    ) -> None:
+        """Refresh last_seen_at for all given global tracks.
+
+        Called every frame by CrossCameraAssociator so the active-track window
+        (``last_seen_at > now() - 5 minutes``) never evicts a track whose
+        tracklet is still alive.  Uses a single UPDATE rather than per-row saves
+        to keep per-frame DB overhead low.
+        """
+
 
 class InMemoryTrackingRepository(TrackingRepository):
     """In-memory store for tracking data."""
@@ -448,6 +475,27 @@ class InMemoryGalleryRepository(GalleryRepository):
         ]
         entries.sort(key=lambda e: e.seen_at, reverse=True)
         return entries[:limit]
+
+    async def update_identity_for_tracklets(
+        self,
+        tracklet_ids: set[str],
+        identity_id: str,
+    ) -> int:
+        updated = 0
+        for entry_id, entry in self._entries.items():
+            if entry.origin_tracklet_id in tracklet_ids and not entry.identity_id:
+                # Replace with an updated copy (GalleryEmbedding is frozen).
+                self._entries[entry_id] = GalleryEmbedding(
+                    gallery_entry_id=entry.gallery_entry_id,
+                    identity_id=identity_id,
+                    embedding=entry.embedding,
+                    seen_at=entry.seen_at,
+                    quality=entry.quality,
+                    origin_tracklet_id=entry.origin_tracklet_id,
+                    face_confirmed=entry.face_confirmed,
+                )
+                updated += 1
+        return updated
 
 
 class InMemorySettingsRepository(SettingsRepository):
@@ -707,6 +755,24 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
         # In-memory: no-op. The posterior is only useful for the CC inspector
         # drawer which reads the Postgres column directly.
         pass
+
+    async def batch_update_last_seen_at(
+        self,
+        global_track_ids: list[str],
+        at: datetime,
+    ) -> None:
+        for gt_id in global_track_ids:
+            track = self._tracks.get(gt_id)
+            if track is not None and track.last_seen_at < at:
+                self._tracks[gt_id] = GlobalTrack(
+                    global_track_id=track.global_track_id,
+                    camera_ids=track.camera_ids,
+                    tracklet_ids=track.tracklet_ids,
+                    started_at=track.started_at,
+                    last_seen_at=at,
+                    current_identity_id=track.current_identity_id,
+                    state=track.state,
+                )
 
 
 class TrajectoryRepository(ABC):

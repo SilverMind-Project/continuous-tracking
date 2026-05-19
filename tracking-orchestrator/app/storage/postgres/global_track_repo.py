@@ -75,10 +75,27 @@ SET current_identity_id = $2, updated_at = now()
 WHERE global_track_id = $1
 """
 
+_SQL_BACKFILL_GALLERY_IDENTITY = """
+UPDATE continuous_tracking.reid_gallery
+SET identity_id = $2
+WHERE origin_tracklet_id = ANY(
+    SELECT unnest(tracklet_ids)
+    FROM continuous_tracking.global_tracks
+    WHERE global_track_id = $1
+)
+  AND identity_id IS DISTINCT FROM $2
+"""
+
 _SQL_CLOSE_GLOBAL_TRACK = """
 UPDATE continuous_tracking.global_tracks
 SET state = 'closed', updated_at = now()
 WHERE global_track_id = $1 AND state = 'active'
+"""
+
+_SQL_BATCH_UPDATE_LAST_SEEN = """
+UPDATE continuous_tracking.global_tracks
+SET last_seen_at = GREATEST(last_seen_at, $2)
+WHERE global_track_id = ANY($1::uuid[])
 """
 
 
@@ -202,6 +219,10 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
         del candidates
         async with self._pool.acquire() as conn:
             await conn.execute(_SQL_ASSIGN_IDENTITY, global_track_id, identity_id)
+            if identity_id:
+                await conn.execute(
+                    _SQL_BACKFILL_GALLERY_IDENTITY, global_track_id, identity_id
+                )
 
     async def get_by_tracklet_id(self, tracklet_id: str) -> GlobalTrack | None:
         async with self._pool.acquire() as conn:
@@ -211,6 +232,20 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
     async def close_global_track(self, global_track_id: str) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(_SQL_CLOSE_GLOBAL_TRACK, global_track_id)
+
+    async def batch_update_last_seen_at(
+        self,
+        global_track_ids: list[str],
+        at: datetime,
+    ) -> None:
+        if not global_track_ids:
+            return
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                _SQL_BATCH_UPDATE_LAST_SEEN,
+                [uuid.UUID(gid) for gid in global_track_ids],
+                at,
+            )
 
     async def update_last_posterior(
         self,

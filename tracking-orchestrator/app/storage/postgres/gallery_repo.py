@@ -107,6 +107,13 @@ _SQL_LIST_GALLERY_FOR_TRACKLETS = """
     LIMIT $2
 """
 
+_SQL_UPDATE_IDENTITY_FOR_TRACKLETS = """
+    UPDATE continuous_tracking.reid_gallery
+    SET identity_id = $2, updated_at = now()
+    WHERE origin_tracklet_id = ANY($1::uuid[])
+      AND (identity_id = '' OR identity_id IS NULL)
+"""
+
 
 class PostgresGalleryRepository(GalleryRepository):
     """Postgres implementation of the GalleryRepository.
@@ -272,6 +279,30 @@ class PostgresGalleryRepository(GalleryRepository):
             )
             for row in rows
         ]
+
+    async def update_identity_for_tracklets(
+        self,
+        tracklet_ids: set[str],
+        identity_id: str,
+    ) -> int:
+        """Backfill identity_id on gallery entries for the given tracklets."""
+        if not tracklet_ids or not identity_id:
+            return 0
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                _SQL_UPDATE_IDENTITY_FOR_TRACKLETS,
+                list(tracklet_ids),
+                identity_id,
+            )
+        updated = int(result.split()[-1]) if result else 0
+        if updated:
+            logger.debug(
+                "gallery_identity_backfilled",
+                tracklet_count=len(tracklet_ids),
+                updated_rows=updated,
+                identity_id=identity_id,
+            )
+        return updated
 
 
 def _embedding_to_pgvector(embedding: list[float]) -> str:

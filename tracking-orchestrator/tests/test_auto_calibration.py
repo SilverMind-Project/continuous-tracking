@@ -19,9 +19,13 @@ from app.calibration.floor_plane import (
     _fit_plane_svd,
     floor_plane_to_homography,
 )
-from app.calibration.homography import RESIDUAL_ERROR_M, RESIDUAL_WARN_M, compute_homography, residual_status
+from app.calibration.homography import (
+    RESIDUAL_ERROR_M,
+    RESIDUAL_WARN_M,
+    compute_homography,
+    residual_status,
+)
 from app.inference.depth import DepthEstimator
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,7 +42,7 @@ def _make_synthetic_depth(
     """Generate a synthetic depth map where the lower 60% is a flat floor."""
     depth = np.full((h, w), fill_value=10.0, dtype=np.float32)
     fx = w / (2.0 * math.tan(math.radians(fov_deg / 2.0)))
-    cx, cy = w / 2.0, h / 2.0
+    cy = h / 2.0
 
     floor_start = int(h * 0.4)
     rows = np.arange(floor_start, h)
@@ -171,16 +175,16 @@ def test_floor_plane_fitter_too_few_valid() -> None:
 
 
 def test_floor_plane_to_homography_from_synthetic() -> None:
-    """floor_plane_to_homography should return a 3×3 list given good inliers."""
+    """floor_plane_to_homography should return a 3x3 list given good inliers."""
     depth = _make_synthetic_depth(h=480, w=640)
     fitter = FloorPlaneFitter(fov_deg=70.0, max_samples=2048)
     rng = np.random.default_rng(0)
     result = fitter.fit(depth, rng=rng)
     assert result is not None
-    H = floor_plane_to_homography(result, image_h=480, image_w=640, fov_deg=70.0)
-    assert H is not None
-    assert len(H) == 3
-    assert all(len(row) == 3 for row in H)
+    hom = floor_plane_to_homography(result, image_h=480, image_w=640, fov_deg=70.0)
+    assert hom is not None
+    assert len(hom) == 3
+    assert all(len(row) == 3 for row in hom)
 
 
 # ---------------------------------------------------------------------------
