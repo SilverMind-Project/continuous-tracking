@@ -49,7 +49,7 @@ class FaceIdentificationClient:
         self,
         base_url: str,
         timeout_s: float = 2.0,
-        min_confidence: float = 0.4,
+        min_confidence: float = 0.5,
         max_image_dim: int = 640,
     ) -> None:
         self._base_url = base_url.rstrip("/")

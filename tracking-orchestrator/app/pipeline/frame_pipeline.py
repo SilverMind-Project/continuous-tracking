@@ -221,7 +221,7 @@ class PipelineConfig:
     face_id_timeout_s: float = 2.0
     # Allow running without a detector (skeleton mode). Off by default; enable only in tests.
     allow_skeleton: bool = False
-    face_id_min_confidence: float = 0.4
+    face_id_min_confidence: float = 0.5
     face_id_enabled: bool = True
     # Per-camera overrides: camera_id -> enabled flag and optional higher threshold.
     # Top-down cameras should set enabled=false; face-level cameras with
@@ -238,7 +238,7 @@ class PipelineConfig:
     detection_iou_dedup_threshold: float = 0.55
 
     # Per-camera tracker dedup IoU threshold (see TrackerConfig.dedup_iou_threshold).
-    tracker_dedup_iou_threshold: float = 0.7
+    tracker_dedup_iou_threshold: float = 0.6
 
     # Stability gate: tracklets must survive this many frames before being
     # exposed to downstream pipeline stages and publication.
@@ -246,7 +246,7 @@ class PipelineConfig:
 
     # IdentityCommitter — buffered windowed commit (see IdentityCommitter).
     identity_commit_window_s: float = 3.0
-    identity_high_confidence_face_threshold: float = 0.85
+    identity_high_confidence_face_threshold: float = 0.80
     # Feature flag: off by default; enable after one week soak.
     identity_committer_enabled: bool = False
     # Retroactive cross-table rewrite on face-confirmed identity commits.

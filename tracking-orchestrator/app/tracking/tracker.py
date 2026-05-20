@@ -168,7 +168,7 @@ class TrackerConfig:
     # Effective as: accept match when iou_cost <= (1 - match_thresh).
     # Lowered from 0.4 → 0.2: accept matches at IoU ≥ 0.2 so that bbox
     # shift from turning-in-place does not break the track.
-    match_thresh: float = 0.2
+    match_thresh: float = 0.3
 
     # Frames without a match before a track is terminated.
     max_time_lost: int = 30
