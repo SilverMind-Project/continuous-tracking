@@ -63,6 +63,7 @@ type CameraDefaults struct {
 	FrameIntervalMs         int     `yaml:"frame_interval_ms"`
 	MotionThreshold         float64 `yaml:"motion_threshold"`
 	ReconnectBackoffSeconds float64 `yaml:"reconnect_backoff_s"`
+	StaticSampleIntervalS   int     `yaml:"static_sample_interval_s"`
 }
 
 // CameraConfig describes a single RTSP camera stream as sourced from the
@@ -75,6 +76,7 @@ type CameraConfig struct {
 	FrameIntervalMs         int
 	MotionThreshold         float64
 	ReconnectBackoffSeconds float64
+	StaticSampleIntervalS   int
 	Enabled                 bool
 	RotationDegrees         int
 }
@@ -128,6 +130,7 @@ func DefaultConfig() Config {
 			FrameIntervalMs:         500,
 			MotionThreshold:         0.02,
 			ReconnectBackoffSeconds: 2.0,
+			StaticSampleIntervalS:   0,
 		},
 		AssignedCameras: "ALL",
 	}
@@ -242,6 +245,11 @@ func Load() (Config, error) {
 	if v := os.Getenv("DEFAULT_RECONNECT_BACKOFF_S"); v != "" {
 		if n, err := strconv.ParseFloat(v, 64); err == nil {
 			cfg.CameraDefaults.ReconnectBackoffSeconds = n
+		}
+	}
+	if v := os.Getenv("DEFAULT_STATIC_SAMPLE_INTERVAL_S"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.CameraDefaults.StaticSampleIntervalS = n
 		}
 	}
 

@@ -38,6 +38,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Go2RTC.TimeoutSeconds != 10 {
 		t.Errorf("go2rtc timeout: got %d, want 10", cfg.Go2RTC.TimeoutSeconds)
 	}
+	if cfg.CameraDefaults.StaticSampleIntervalS != 0 {
+		t.Errorf("static_sample_interval_s: got %d, want 0", cfg.CameraDefaults.StaticSampleIntervalS)
+	}
 }
 
 func TestGo2RTCConfigFromYAML(t *testing.T) {

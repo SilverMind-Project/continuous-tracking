@@ -35,12 +35,13 @@ type Publisher interface {
 // Worker polls go2rtc at a fixed interval, gates on motion, and publishes
 // motion-bearing frames to MinIO + Redis Streams.
 type Worker struct {
-	cam     config.CameraConfig
-	fetcher JPEGFetcher
-	gate    *motion.Gate
-	pub     Publisher
-	log     *zap.Logger
-	seq     int64
+	cam         config.CameraConfig
+	fetcher     JPEGFetcher
+	gate        *motion.Gate
+	pub         Publisher
+	log         *zap.Logger
+	seq         int64
+	lastPublish time.Time
 }
 
 // NewWorker creates a Worker for the given camera.
@@ -121,8 +122,10 @@ func (w *Worker) poll(ctx context.Context) {
 	}
 
 	if w.gate.IsStatic(img) {
-		metrics.FramesFilteredTotal.WithLabelValues(w.cam.ID, "motion").Inc()
-		return
+		if w.cam.StaticSampleIntervalS <= 0 || time.Since(w.lastPublish) < time.Duration(w.cam.StaticSampleIntervalS)*time.Second {
+			metrics.FramesFilteredTotal.WithLabelValues(w.cam.ID, "motion").Inc()
+			return
+		}
 	}
 
 	w.seq++
@@ -138,5 +141,7 @@ func (w *Worker) poll(ctx context.Context) {
 	}
 	if err := w.pub.Publish(ctx, meta, jpegBytes); err != nil {
 		w.log.Warn("publish_failed", zap.String("camera_id", w.cam.ID), zap.Error(err))
+		return
 	}
+	w.lastPublish = now
 }

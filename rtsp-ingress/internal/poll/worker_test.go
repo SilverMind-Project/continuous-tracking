@@ -317,6 +317,28 @@ func TestWorker_PublishErrorDoesNotStopWorker(t *testing.T) {
 	w.Run(ctx) // must not panic
 }
 
+func TestWorker_StaticSampleForcesPeriodicPublish(t *testing.T) {
+	// Identical white frames: normally all but the first would be filtered.
+	// With StaticSampleIntervalS set, frames should still publish periodically.
+	white := solidJPEG(t, 64, 48, color.White)
+	fetcher := &fakeFetcher{data: white}
+	pub := &fakePublisher{}
+	cam := makeCam(50)
+	cam.StaticSampleIntervalS = 1 // force publish every second even when static
+	gate := motion.New(0.001)
+	w := poll.NewWorker(cam, fetcher, gate, pub, zap.NewNop())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	w.Run(ctx)
+
+	// First frame always publishes (baseline). After 1 s of static frames,
+	// the static sample interval should trigger at least one more publish.
+	if pub.callCount() < 2 {
+		t.Errorf("expected >=2 publishes with static_sample_interval_s=1 over 1.2 s, got %d", pub.callCount())
+	}
+}
+
 func TestWorker_ImageDimensionsInMeta(t *testing.T) {
 	// Verify the published FrameReady carries correct width/height.
 	const W, H = 80, 60
