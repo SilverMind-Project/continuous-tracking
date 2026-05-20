@@ -59,6 +59,24 @@ WHERE state = 'active'
 ORDER BY last_seen_at DESC
 """
 
+_SQL_LIST_SINCE = """
+SELECT global_track_id, camera_ids, tracklet_ids, started_at,
+       last_seen_at, current_identity_id, state, last_posterior_jsonb
+FROM continuous_tracking.global_tracks
+WHERE last_seen_at >= $1
+ORDER BY last_seen_at DESC
+LIMIT $2
+"""
+
+_SQL_LIST_SINCE_ACTIVE = """
+SELECT global_track_id, camera_ids, tracklet_ids, started_at,
+       last_seen_at, current_identity_id, state, last_posterior_jsonb
+FROM continuous_tracking.global_tracks
+WHERE last_seen_at >= $1 AND state = 'active'
+ORDER BY last_seen_at DESC
+LIMIT $2
+"""
+
 _SQL_GET_BY_TRACKLET = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
        last_seen_at, current_identity_id, state, last_posterior_jsonb
@@ -138,6 +156,12 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
     async def list_active(self) -> list[GlobalTrack]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(_SQL_LIST_ACTIVE)
+        return [_row_to_global_track(row) for row in rows]
+
+    async def list_since(self, since: datetime, open_only: bool = False, limit: int = 500) -> list[GlobalTrack]:
+        sql = _SQL_LIST_SINCE_ACTIVE if open_only else _SQL_LIST_SINCE
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, since, limit)
         return [_row_to_global_track(row) for row in rows]
 
     async def merge_tracklets(

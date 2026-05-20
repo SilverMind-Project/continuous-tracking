@@ -51,6 +51,7 @@ from ..inference.face_id_client import FaceIdentificationClient
 from ..inference.pose import PoseEstimator
 from ..inference.schemas import DetectionBox, Embedding, PoseResult
 from ..observability import metrics as _metrics
+from ..pipeline.batcher import FrameBatcher
 from ..pipeline.privacy import PrivacyZoneFilter
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..services.identity_rewriter import (
@@ -255,6 +256,12 @@ class PipelineConfig:
     # history reflects the now-known identity.  Set False only to disable
     # rewrites without disabling the identity_committer_enabled path.
     identity_rewrite_on_face_commit: bool = True
+    # Frame batching — buffer frames for a configurable time window,
+    # group by camera_id, then flush each camera's batch sequentially
+    # while running *different* cameras concurrently.
+    # Set batch_window_s=0 to disable batching (default behaviour).
+    batch_window_s: float = 0.0
+    max_batch_size: int = 4
 
 
 @dataclass(frozen=True)
@@ -341,6 +348,8 @@ class FrameProcessingPipeline:
         _trail_maxlen = 12
         self._trail_by_tracklet: dict[str, deque[tuple[float, float]]] = {}
         self._TRAIL_MAXLEN = _trail_maxlen
+        # Frame batcher (optional; None when batch_window_s=0).
+        self._batcher: FrameBatcher | None = None
 
     @property
     def is_running(self) -> bool:
@@ -527,6 +536,19 @@ class FrameProcessingPipeline:
                 baseline_repo=baseline_repo,
             )
 
+       # Frame batcher — buffer frames for parallel cross-camera processing.
+        if self._config.batch_window_s > 0:
+            self._batcher = FrameBatcher(
+                batch_window_s=self._config.batch_window_s,
+                max_batch_size=self._config.max_batch_size,
+                handler=self._handle_batch,
+            )
+            logger.info(
+                "Frame batcher enabled",
+                batch_window_s=self._config.batch_window_s,
+                max_batch_size=self._config.max_batch_size,
+            )
+
         # Face identification client — calls person-identification-service.
         if self._config.face_id_enabled and self._config.face_id_url:
             self._face_id_client = FaceIdentificationClient(
@@ -604,6 +626,9 @@ class FrameProcessingPipeline:
         if self._face_id_client:
             await self._face_id_client.disconnect()
 
+        if self._batcher:
+            await self._batcher.close()
+
         self._tasks.clear()
         logger.info("Pipeline stopped")
 
@@ -665,6 +690,17 @@ class FrameProcessingPipeline:
         logger.info("Signal loop stopped")
 
     async def _handle_frame(self, frame: FrameReady) -> None:
+        """Push a frame into the batcher (or process directly when batching is off)."""
+        if self._batcher is not None:
+            try:
+                await self._batcher.push(frame)
+            except Exception:
+                logger.exception("Batcher push failed, processing frame directly")
+                await self._process_frame_direct(frame)
+        else:
+            await self._process_frame_direct(frame)
+
+    async def _process_frame_direct(self, frame: FrameReady) -> None:
         """Process and ACK one frame under global and per-camera concurrency gates."""
         assert self._transport is not None
         if self._frame_semaphore is None:
@@ -695,6 +731,43 @@ class FrameProcessingPipeline:
                     success=False,
                     error_code="processing_error",
                 )
+
+    async def _handle_batch(self, camera_id: str, frames: list[FrameReady]) -> None:
+        """Process a batch of frames for one camera (called by FrameBatcher).
+
+        Frames are already sorted by frame_index. Each camera's frames
+        are processed sequentially; different cameras run concurrently.
+        """
+        assert self._transport is not None
+        if self._frame_semaphore is None:
+            self._frame_semaphore = asyncio.Semaphore(max(1, self._config.max_concurrent_frames))
+
+        camera_lock = self._camera_locks.setdefault(camera_id, asyncio.Lock())
+        async with self._frame_semaphore, camera_lock:
+            for frame in frames:
+                start = time.monotonic()
+                try:
+                    await self._ensure_camera_row(frame.camera_id)
+                    await self._process_frame(frame)
+                    await self._transport.ack_frame(frame)
+                    latency_us = int((time.monotonic() - start) * 1e6)
+                    logger.debug(
+                        "Frame processed",
+                        camera_id=frame.camera_id,
+                        frame_index=frame.frame_index,
+                        latency_us=latency_us,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Frame processing failed",
+                        camera_id=frame.camera_id,
+                        frame_index=frame.frame_index,
+                    )
+                    await self._transport.publish_response(
+                        frame,
+                        success=False,
+                        error_code="processing_error",
+                    )
 
     async def _ensure_camera_row(self, camera_id: str) -> None:
         """Lazily seed an FK-anchor row in ``cameras`` on first sight per process.
@@ -882,16 +955,21 @@ class FrameProcessingPipeline:
 
         if detections:
             crops = [_crop_detection(image, det) for det in detections]
-            embeddings = (
-                await self._reid_embedder.embed_batch(crops)
-                if self._reid_embedder is not None
-                else []
-            )
 
-            # Pose estimation: run RTMPose on the same crops (reuse, no re-crop).
-            pose_results: list[PoseResult | None] = []
-            if self._pose_estimator is not None and self._config.pose_enabled:
-                pose_results = await self._run_pose(crops, detections)
+            # ReID and pose both operate on the same crops — run in parallel.
+            async def _do_reid() -> list[Embedding]:
+                if self._reid_embedder is not None:
+                    return await self._reid_embedder.embed_batch(crops)
+                return []
+
+            async def _do_pose() -> list[PoseResult | None]:
+                if self._pose_estimator is not None and self._config.pose_enabled:
+                    return await self._run_pose(crops, detections)
+                return []
+
+            embeddings, pose_results = await asyncio.gather(
+                _do_reid(), _do_pose(),
+            )
 
             for det_idx, det in enumerate(detections):
                 bbox = BoundingBox(

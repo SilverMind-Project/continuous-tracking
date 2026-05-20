@@ -208,6 +208,29 @@ class TestClassifyPosture:
         )
         assert classify_posture(pose, _BBOX_PORTRAIT) == "unknown"
 
+    def test_sitting_upright_foreshortened_knee(self) -> None:
+        """Upright sitting: vertical torso, knees near hip height, ankles hanging below.
+
+        This is the camera-projection failure mode: a person sitting upright in a
+        chair viewed from the front or overhead produces a 2D knee angle well above
+        130° (the depth axis collapses a true 90° bend into 140°+).  The shin-drop
+        signal (knees near hips, ankles clearly below) must classify this as
+        sitting without any torso tilt or a small 2D knee angle.
+        """
+        pose = _pose(
+            left_shoulder=_keypoint(0.4, 0.2),
+            right_shoulder=_keypoint(0.6, 0.2),
+            left_hip=_keypoint(0.4, 0.5),
+            right_hip=_keypoint(0.6, 0.5),
+            # Knees just below hips (thighs roughly horizontal).
+            left_knee=_keypoint(0.4, 0.6),
+            right_knee=_keypoint(0.6, 0.6),
+            # Ankles well below, shins hanging near-vertical.
+            left_ankle=_keypoint(0.4, 0.9),
+            right_ankle=_keypoint(0.6, 0.9),
+        )
+        assert classify_posture(pose, _BBOX_PORTRAIT) == "sitting"
+
 
 # ---------------------------------------------------------------------------
 # PostureHysteresis

@@ -1,24 +1,62 @@
 """Posture classifier from RTMPose COCO-17 keypoints.
 
-Pure functions for per-frame classification, plus a stateful hysteresis
-wrapper for temporal smoothing across consecutive frames.
+Architecture
+------------
+Feature extraction is separated from classification so each stage is independently
+testable and the classification rules remain legible.
+
+  1. ``_extract_features`` — geometric features derived from the skeleton, normalised
+     by torso length so thresholds are scale- and camera-distance-invariant.
+  2. Three scorer functions — ``_score_lying``, ``_score_sitting``,
+     ``_score_standing_or_walking`` — each return a float in [0, 1].  Soft scoring
+     lets multiple signals accumulate evidence rather than firing on any single
+     hard threshold, which reduces false positives on ambiguous poses (e.g. a
+     person leaning forward is not immediately classified as sitting just because
+     the torso is tilted).
+  3. ``classify_posture`` picks the highest-scoring class; falls back to
+     ``"unknown"`` when no class clears the evidence floor.
+  4. ``PostureHysteresis`` — stateful temporal smoother (unchanged).
 """
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from ..domain import BoundingBox, PostureType
 from ..inference.schemas import Keypoint, PoseResult
 
+# ── Keypoint confidence floor ─────────────────────────────────────────────────
 _SCORE_FLOOR = 0.3
-_TORSO_HORIZONTAL_MAX_DEG = 30.0  # torso within this of horizontal → lying
-_SEATED_TORSO_ANGLE_MIN_DEG = 30.0  # torso beyond this from vertical → sitting
-_KNEE_ANGLE_SITTING_MIN_DEG = 60.0  # knee bent beyond this → sitting
-_KNEE_ANGLE_SITTING_MAX_DEG = 130.0  # beyond this is not a chair sitting posture
-_HEAD_TORSO_DEVIATION_MAX = 0.5  # nose within this fraction of torso length → lying
+
+# ── Geometric thresholds (in degrees) ─────────────────────────────────────────
+_TORSO_HORIZONTAL_ONSET_DEG = 60.0   # torso above this angle from vertical → could be lying
+_SEATED_TORSO_ANGLE_MIN_DEG = 30.0   # torso tilted beyond this → sitting signal
+_KNEE_ANGLE_SITTING_MIN_DEG = 60.0   # knee bent beyond this → sitting signal
+_KNEE_ANGLE_SITTING_MAX_DEG = 150.0  # wider than the naive 90° range: 2D projection
+                                      # from overhead/front cameras foreshortens the knee,
+                                      # making a true 90° bend appear as 130-150° in image space.
+_KNEE_BENT_GUARD_MAX_DEG = 130.0     # conservative upper bound for the standing hard-veto;
+                                      # kept below _KNEE_ANGLE_SITTING_MAX_DEG so a walking
+                                      # person with a mildly bent stride knee (135°) is not
+                                      # misclassified as "unknown" by the guard.
+
+# ── Normalised-skeleton thresholds ────────────────────────────────────────────
+# Distances are expressed in torso-length units after normalising hip-midpoint
+# to the origin and scaling by shoulder-to-hip distance.
+_HEAD_TORSO_DEVIATION_MAX = 0.5      # nose within this fraction of torso length → lying
+_KNEE_HIP_PROXIMITY_MAX = 0.5        # knee within this fraction of torso → near-hip (sitting)
+_KNEE_HIP_STANDING_BLOCK = 0.4       # norm_knee_dy below this → block standing (knees near hips
+                                      # are incompatible with an upright standing posture)
+
+# ── Composite evidence floor ──────────────────────────────────────────────────
+_MIN_EVIDENCE = 0.5                  # minimum scorer output to commit a posture class
+
+# ── Motion threshold ──────────────────────────────────────────────────────────
 _WALKING_VELOCITY_THRESHOLD = 0.008  # mean keypoint velocity (normalised px/frame)
 
+
+# ── Primitive helpers ─────────────────────────────────────────────────────────
 
 def _midpoint(a: Keypoint, b: Keypoint) -> tuple[float, float]:
     return (a.x + b.x) / 2.0, (a.y + b.y) / 2.0
@@ -29,41 +67,32 @@ def _visible(*keypoints: Keypoint) -> bool:
 
 
 def _min_score(*keypoints: Keypoint) -> float:
-    """Minimum confidence among keypoints, used to weight geometric features."""
     return min(k.score for k in keypoints) if keypoints else 0.0
 
+
+# ── Raw geometric measures ────────────────────────────────────────────────────
 
 def _torso_angle_deg(pose: PoseResult) -> float | None:
     """Angle of the torso vector (shoulder-midpoint → hip-midpoint) from vertical.
 
-    0° = vertical, 90° = horizontal. Returns None when required keypoints
-    are below the confidence floor.
+    0° = vertical, 90° = horizontal.  Uses ``abs(dx)`` so forward and backward
+    lean both read as tilt away from vertical — the classifier cares about
+    magnitude, not direction.
     """
-    needed = [
-        pose.get("left_shoulder"),
-        pose.get("right_shoulder"),
-        pose.get("left_hip"),
-        pose.get("right_hip"),
-    ]
-    if not _visible(*needed):
+    ls, rs = pose.get("left_shoulder"), pose.get("right_shoulder")
+    lh, rh = pose.get("left_hip"), pose.get("right_hip")
+    if not _visible(ls, rs, lh, rh):
         return None
-    sx, sy = _midpoint(needed[0], needed[1])
-    hx, hy = _midpoint(needed[2], needed[3])
+    sx, sy = _midpoint(ls, rs)
+    hx, hy = _midpoint(lh, rh)
     dx, dy = hx - sx, hy - sy
     if dx == 0 and dy == 0:
         return None
-    angle_rad = math.atan2(abs(dx), abs(dy))
-    return math.degrees(angle_rad)
+    return math.degrees(math.atan2(abs(dx), abs(dy)))
 
 
 def _knee_angle_deg(pose: PoseResult, side: str) -> float | None:
-    """Angle at the knee joint for one leg.
-
-    Computes the angle between the thigh vector (hip→knee) and shin vector
-    (knee→ankle). 0° = leg straight, ~90° = knee bent at right angle.
-
-    Returns None when required keypoints are below the confidence floor.
-    """
+    """Angle at the knee joint: 0° = leg straight, ~90° = right-angle bend."""
     hip = pose.get(f"{side}_hip")
     knee = pose.get(f"{side}_knee")
     ankle = pose.get(f"{side}_ankle")
@@ -76,63 +105,256 @@ def _knee_angle_deg(pose: PoseResult, side: str) -> float | None:
     norm_s = math.sqrt(sx * sx + sy * sy)
     if norm_t == 0 or norm_s == 0:
         return None
-    cos_angle = max(-1.0, min(1.0, dot / (norm_t * norm_s)))
-    return math.degrees(math.acos(cos_angle))
+    return math.degrees(math.acos(max(-1.0, min(1.0, dot / (norm_t * norm_s)))))
 
 
 def _best_knee_angle_deg(pose: PoseResult) -> tuple[float, float] | None:
-    """Return (min_angle, avg_score) for the most informative leg.
-
-    The more bent knee (smaller angle) is the stronger sitting signal.
-    """
+    """(min_knee_angle_deg, keypoint_confidence) for the most bent visible leg."""
     left = _knee_angle_deg(pose, "left")
     right = _knee_angle_deg(pose, "right")
 
-    if left is not None and right is not None:
-        left_score = _min_score(pose.get("left_hip"), pose.get("left_knee"), pose.get("left_ankle"))
-        right_score = _min_score(
-            pose.get("right_hip"), pose.get("right_knee"), pose.get("right_ankle")
+    def _score(side: str) -> float:
+        return _min_score(
+            pose.get(f"{side}_hip"), pose.get(f"{side}_knee"), pose.get(f"{side}_ankle")
         )
-        # Use the more bent knee (smaller angle) as the signal.
-        if left <= right:
-            return (left, left_score)
-        return (right, right_score)
 
+    if left is not None and right is not None:
+        if left <= right:
+            return (left, _score("left"))
+        return (right, _score("right"))
     if left is not None:
-        return (
-            left,
-            _min_score(pose.get("left_hip"), pose.get("left_knee"), pose.get("left_ankle")),
-        )
+        return (left, _score("left"))
     if right is not None:
-        return (
-            right,
-            _min_score(pose.get("right_hip"), pose.get("right_knee"), pose.get("right_ankle")),
-        )
+        return (right, _score("right"))
     return None
 
 
 def _head_torso_deviation(pose: PoseResult) -> float | None:
-    """Vertical deviation of nose from the shoulder-hip midpoint, normalized by torso length.
+    """Lateral displacement of the nose from the torso midline, normalised by torso length.
 
-    A lying person's head is roughly in line with the torso (small deviation).
-    A standing/sitting person's head is well above the shoulders (large deviation).
-    Returns None when required keypoints are below the confidence floor.
+    A lying person's head is roughly in line with the torso (small value).
+    A standing or sitting person's head is well above the shoulders (large value).
     """
     nose = pose.get("nose")
-    shoulders = [pose.get("left_shoulder"), pose.get("right_shoulder")]
-    hips = [pose.get("left_hip"), pose.get("right_hip")]
-    if not _visible(nose, *shoulders, *hips):
+    ls, rs = pose.get("left_shoulder"), pose.get("right_shoulder")
+    lh, rh = pose.get("left_hip"), pose.get("right_hip")
+    if not _visible(nose, ls, rs, lh, rh):
         return None
-    sx, sy = _midpoint(shoulders[0], shoulders[1])
-    hx, hy = _midpoint(hips[0], hips[1])
+    sx, sy = _midpoint(ls, rs)
+    hx, hy = _midpoint(lh, rh)
     torso_len = math.sqrt((hx - sx) ** 2 + (hy - sy) ** 2)
     if torso_len == 0:
         return None
-    # Distance from nose to the torso midline, normalized by torso length.
-    # For a lying person (torso horizontal), nose is near the torso line.
     mid_y = (sy + hy) / 2.0
     return abs(nose.y - mid_y) / torso_len
 
+
+# ── Feature dataclass ─────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class PostureFeatures:
+    """Scale-normalised geometric features derived from one skeleton frame.
+
+    All distance features are expressed in torso-length units (shoulder-to-hip
+    distance = 1.0), making the thresholds in the scorer functions independent
+    of camera distance and subject size.
+    """
+
+    torso_angle_deg: float | None
+    """0° = vertical spine, 90° = fully horizontal.  None when shoulders/hips invisible."""
+
+    min_knee_angle_deg: float | None
+    """Angle at the most-bent visible knee.  None when neither leg is visible."""
+
+    knee_confidence: float
+    """Min keypoint score of the best knee triplet; 0.0 when no knees are visible."""
+
+    norm_knee_dy: float | None
+    """(knee_mid_y - hip_mid_y) / torso_len.  Positive = knees below hips (image coords)."""
+
+    norm_ankle_dy: float | None
+    """(ankle_mid_y - hip_mid_y) / torso_len.  Combined with norm_knee_dy, encodes the
+    shin-drop geometry that distinguishes sitting (knees near hips, ankles hanging below)
+    from standing (both well below) and lying (both near hips)."""
+
+    head_spine_deviation: float | None
+    """Vertical displacement of nose from torso centre, normalised by torso length."""
+
+    kinematic_ordering: bool
+    """True when knee_y > hip_y (and ankle_y > knee_y when ankles are visible)."""
+
+
+def _extract_features(pose: PoseResult) -> PostureFeatures:
+    """Derive ``PostureFeatures`` from raw COCO-17 keypoints."""
+    torso_angle = _torso_angle_deg(pose)
+
+    # Torso-length normalisation for knee and ankle heights.
+    ls, rs = pose.get("left_shoulder"), pose.get("right_shoulder")
+    lh, rh = pose.get("left_hip"), pose.get("right_hip")
+    norm_knee_dy: float | None = None
+    norm_ankle_dy: float | None = None
+    if _visible(ls, rs, lh, rh):
+        sx, sy = _midpoint(ls, rs)
+        hx, hy = _midpoint(lh, rh)
+        torso_len = math.sqrt((hx - sx) ** 2 + (hy - sy) ** 2)
+        if torso_len > 0:
+            lk, rk = pose.get("left_knee"), pose.get("right_knee")
+            if _visible(lk, rk):
+                norm_knee_dy = ((lk.y + rk.y) / 2.0 - hy) / torso_len
+            la, ra = pose.get("left_ankle"), pose.get("right_ankle")
+            if _visible(la, ra):
+                norm_ankle_dy = ((la.y + ra.y) / 2.0 - hy) / torso_len
+
+    # Knee angle (most bent).
+    knee_result = _best_knee_angle_deg(pose)
+    min_knee_angle: float | None = None
+    knee_confidence = 0.0
+    if knee_result is not None:
+        min_knee_angle, knee_confidence = knee_result
+
+    # Head-spine deviation (lying detection).
+    head_dev = _head_torso_deviation(pose)
+
+    # Kinematic ordering: ankle > knee > hip in image y (downward).
+    lk2, rk2 = pose.get("left_knee"), pose.get("right_knee")
+    la, ra = pose.get("left_ankle"), pose.get("right_ankle")
+    lh2, rh2 = pose.get("left_hip"), pose.get("right_hip")
+    kinematic_ordering = False
+    if _visible(lh2, rh2, lk2, rk2):
+        hip_y = (lh2.y + rh2.y) / 2.0
+        knee_y = (lk2.y + rk2.y) / 2.0
+        if knee_y > hip_y:
+            kinematic_ordering = (la.y + ra.y) / 2.0 > knee_y if _visible(la, ra) else True
+
+    return PostureFeatures(
+        torso_angle_deg=torso_angle,
+        min_knee_angle_deg=min_knee_angle,
+        knee_confidence=knee_confidence,
+        norm_knee_dy=norm_knee_dy,
+        norm_ankle_dy=norm_ankle_dy,
+        head_spine_deviation=head_dev,
+        kinematic_ordering=kinematic_ordering,
+    )
+
+
+# ── Soft evidence scorers ─────────────────────────────────────────────────────
+
+def _score_lying(feats: PostureFeatures) -> float:
+    """Evidence that the person is lying down.
+
+    Requires the torso to be substantially horizontal *and* the head to be
+    roughly in line with the torso (not elevated above the shoulders as in all
+    upright postures).  Both signals must co-occur — a tilted torso alone (e.g.
+    someone reclined in a chair) is suppressed by a large head-spine deviation.
+    """
+    if feats.torso_angle_deg is None:
+        return 0.0
+    # Grows from 0 at the lying onset threshold to 1.0 at fully horizontal.
+    horizontal = max(0.0, (feats.torso_angle_deg - _TORSO_HORIZONTAL_ONSET_DEG) /
+                    (90.0 - _TORSO_HORIZONTAL_ONSET_DEG))
+    if horizontal == 0.0:
+        return 0.0
+    if feats.head_spine_deviation is None:
+        head_aligned = 0.5  # uncertain — give partial credit
+    else:
+        head_aligned = max(0.0, 1.0 - feats.head_spine_deviation / _HEAD_TORSO_DEVIATION_MAX)
+    return horizontal * head_aligned
+
+
+def _score_sitting(feats: PostureFeatures) -> float:
+    """Evidence that the person is sitting.
+
+    Three signals contribute additively:
+
+    **Torso tilt** — tilting the trunk forward increases sitting evidence.
+
+    **Knee bend** — a bent knee (60-150°) adds evidence.  The wider upper bound
+    (vs the standing guard's 130°) handles camera-projection foreshortening: an
+    overhead or front camera collapses the depth axis, making a true 90° seated
+    knee look anywhere from 90° to 150° in 2D.  Higher keypoint confidence is
+    required when the torso provides no corroborating tilt signal.
+
+    **Shin drop** — the most camera-angle-invariant sitting cue: knees near hip
+    height *and* ankles hanging well below.  This pattern (thighs horizontal,
+    shins vertical) is preserved in 2D projection regardless of camera azimuth.
+    Gated on ``knee_confidence ≥ 0.5`` to avoid rewarding low-confidence poses
+    (e.g. ambiguous wide-stance squats where keypoints are uncertain).
+
+    A fourth weak signal fires when the torso is already tilted and knees are at
+    hip height — useful for reclined or transitional poses where ankles may be
+    outside the camera frame.
+    """
+    torso_tilt = feats.torso_angle_deg or 0.0
+    score = 0.0
+
+    # Torso-tilt contribution: 0 at 30°, caps at 0.4 at 60°.
+    tilt = max(0.0, min(0.4, 0.4 * (torso_tilt - _SEATED_TORSO_ANGLE_MIN_DEG) / 30.0))
+    score += tilt
+
+    # Knee-bend contribution.
+    if feats.min_knee_angle_deg is not None:
+        ka = feats.min_knee_angle_deg
+        if _KNEE_ANGLE_SITTING_MIN_DEG <= ka <= _KNEE_ANGLE_SITTING_MAX_DEG:
+            # Require stronger confidence when torso evidence is absent.
+            knee_conf_threshold = 0.3 if torso_tilt > _SEATED_TORSO_ANGLE_MIN_DEG else 0.5
+            score += 0.4 * min(1.0, feats.knee_confidence / knee_conf_threshold)
+
+    # Shin-drop leg geometry: knees near hip height, ankles hanging below.
+    # shin_drop = (ankle - knee) in torso-length units; large for sitting, small for lying.
+    if (feats.knee_confidence >= 0.5
+            and feats.norm_knee_dy is not None
+            and feats.norm_knee_dy < _KNEE_HIP_PROXIMITY_MAX
+            and feats.norm_ankle_dy is not None
+            and feats.norm_ankle_dy > feats.norm_knee_dy + 0.4):
+        shin_drop = feats.norm_ankle_dy - feats.norm_knee_dy
+        score += 0.5 * min(1.0, shin_drop / 0.6)
+
+    # Weak corroborating signal: knees at hip height when torso is already tilted.
+    # Handles reclined/transitional poses where ankles may be out of frame.
+    if (feats.norm_knee_dy is not None
+            and abs(feats.norm_knee_dy) < _KNEE_HIP_PROXIMITY_MAX
+            and torso_tilt > _SEATED_TORSO_ANGLE_MIN_DEG):
+        tilt_factor = (torso_tilt - _SEATED_TORSO_ANGLE_MIN_DEG) / 60.0
+        score += 0.15 * min(1.0, tilt_factor)
+
+    return min(1.0, score)
+
+
+def _score_standing_or_walking(feats: PostureFeatures) -> float:
+    """Evidence that the person is standing (or walking).
+
+    Two hard vetos suppress this class:
+
+    **Bent knees** — uses the conservative ``_KNEE_BENT_GUARD_MAX_DEG`` (130°)
+    rather than the wider scoring range (150°), so a walking person whose stride
+    briefly bends a knee to 135° is not misclassified as "unknown".
+
+    **Knees near hips** — ``norm_knee_dy < _KNEE_HIP_STANDING_BLOCK`` means the
+    knees are physically close to the hips in the image, which is incompatible
+    with upright standing regardless of what the ankle positions or torso angle
+    suggest.  This is the key fix for upright sitters: a seated person's kinematic
+    ordering (ankle.y > knee.y > hip.y) can superficially match standing when the
+    torso is vertical, but the small norm_knee_dy betrays the sitting geometry.
+    """
+    knees_bent = (
+        feats.min_knee_angle_deg is not None
+        and _KNEE_ANGLE_SITTING_MIN_DEG <= feats.min_knee_angle_deg <= _KNEE_BENT_GUARD_MAX_DEG
+    )
+    knees_near_hips = (
+        feats.norm_knee_dy is not None and feats.norm_knee_dy < _KNEE_HIP_STANDING_BLOCK
+    )
+    if knees_bent or knees_near_hips:
+        return 0.0
+
+    score = 0.0
+    if feats.torso_angle_deg is not None and feats.torso_angle_deg < _SEATED_TORSO_ANGLE_MIN_DEG:
+        score += 0.5
+    if feats.kinematic_ordering:
+        score += 0.5
+    return min(1.0, score)
+
+
+# ── Public classifier ─────────────────────────────────────────────────────────
 
 def classify_posture(
     pose: PoseResult,
@@ -141,107 +363,37 @@ def classify_posture(
 ) -> PostureType:
     """Classify posture from COCO-17 keypoints and optional motion energy.
 
-    Rules (each uses only keypoints with score ≥ 0.3):
+    Extracts scale-normalised geometric features, computes a soft evidence
+    score for each posture class, then returns the highest-scoring class.
+    Falls back to ``"unknown"`` when no class clears ``_MIN_EVIDENCE``.
 
-      - **lying**: torso near horizontal AND head roughly in line with torso.
-      - **sitting**: torso tilted beyond threshold from vertical, OR knee angle
-        in the bent range (60-130 degrees). Uses the more bent knee.
-      - **walking**: near-vertical torso, ankle-below-knee-below-hip ordering,
-        AND motion_energy above the walking threshold. Falls back to
-        ``"standing"`` when motion_energy is unavailable.
-      - **standing**: ankles below knees below hips, near-vertical torso.
-        Fallback when only a vertical torso is visible.
-      - **unknown**: insufficient visible keypoints.
+    - **lying**: horizontal torso with head in line with torso midline.
+    - **sitting**: tilted torso, or bent knee with sufficient keypoint confidence.
+    - **walking**: standing geometry with motion energy above the velocity threshold.
+    - **standing**: standing geometry without sufficient motion energy.
+    - **unknown**: insufficient visible keypoints or ambiguous pose.
     """
-    torso_deg = _torso_angle_deg(pose)
-    knee_info = _best_knee_angle_deg(pose)
+    feats = _extract_features(pose)
 
-    # -- lying ----------------------------------------------------------------
-    if torso_deg is not None and torso_deg > (90.0 - _TORSO_HORIZONTAL_MAX_DEG):
-        head_dev = _head_torso_deviation(pose)
-        if head_dev is not None and head_dev < _HEAD_TORSO_DEVIATION_MAX:
-            return "lying"
+    lying = _score_lying(feats)
+    sitting = _score_sitting(feats)
+    standing_walking = _score_standing_or_walking(feats)
 
-    # -- sitting --------------------------------------------------------------
-    # Torso tilt beyond threshold.
-    if torso_deg is not None and torso_deg > _SEATED_TORSO_ANGLE_MIN_DEG:
-        # Knee angle must also be consistent with sitting (bent) — a tilted
-        # torso with straight legs is more likely a person leaning, not sitting.
-        if knee_info is not None:
-            knee_angle, _ = knee_info
-            if _KNEE_ANGLE_SITTING_MIN_DEG <= knee_angle <= _KNEE_ANGLE_SITTING_MAX_DEG:
-                return "sitting"
-        # No knee info but torso is tilted: weak sitting signal.
-        left_knee = pose.get("left_knee")
-        right_knee = pose.get("right_knee")
-        left_hip = pose.get("left_hip")
-        right_hip = pose.get("right_hip")
-        if _visible(left_hip, right_hip, left_knee, right_knee):
-            knee_y_mid = (left_knee.y + right_knee.y) / 2.0
-            hip_y_mid = (left_hip.y + right_hip.y) / 2.0
-            if abs(knee_y_mid - hip_y_mid) < 0.12:
-                return "sitting"
+    best = max(lying, sitting, standing_walking)
+    if best < _MIN_EVIDENCE:
+        return "unknown"
 
-    # Knee angle alone (independent of torso tilt).
-    if knee_info is not None:
-        knee_angle, knee_score = knee_info
-        if _KNEE_ANGLE_SITTING_MIN_DEG <= knee_angle <= _KNEE_ANGLE_SITTING_MAX_DEG:
-            # Require stronger evidence when torso isn't also tilted.
-            if torso_deg is not None and torso_deg > _SEATED_TORSO_ANGLE_MIN_DEG:
-                return "sitting"
-            # Knee-only: require higher-confidence keypoints.
-            if knee_score >= 0.5:
-                return "sitting"
+    # Resolve the winner.  Ties broken by clinical priority: lying > sitting > standing.
+    if lying >= sitting and lying >= standing_walking:
+        return "lying"
+    if sitting >= standing_walking:
+        return "sitting"
+    if motion_energy is not None and motion_energy > _WALKING_VELOCITY_THRESHOLD:
+        return "walking"
+    return "standing"
 
-    # -- walking / standing ---------------------------------------------------
-    # Guard: if the knees are visibly bent (in the sitting angle range), do
-    # not classify as standing or walking regardless of torso angle.  This
-    # prevents low-confidence bent-knee sitting poses from being misclassified
-    # as standing when the torso happens to be vertical.
-    knees_bent = (
-        knee_info is not None
-        and _KNEE_ANGLE_SITTING_MIN_DEG <= knee_info[0] <= _KNEE_ANGLE_SITTING_MAX_DEG
-    )
 
-    left_knee = pose.get("left_knee")
-    right_knee = pose.get("right_knee")
-    left_ankle = pose.get("left_ankle")
-    right_ankle = pose.get("right_ankle")
-    left_hip = pose.get("left_hip")
-    right_hip = pose.get("right_hip")
-
-    knees_ok = _visible(left_knee, right_knee)
-    ankles_ok = _visible(left_ankle, right_ankle)
-    hips_ok = _visible(left_hip, right_hip)
-
-    if hips_ok and knees_ok and not knees_bent:
-        # Check ankle-below-knee-below-hip ordering.
-        hip_y_mid = (left_hip.y + right_hip.y) / 2.0
-        knee_y_mid = (left_knee.y + right_knee.y) / 2.0
-        has_ordering = knee_y_mid > hip_y_mid
-        if ankles_ok:
-            ankle_y_mid = (left_ankle.y + right_ankle.y) / 2.0
-            has_ordering = ankle_y_mid > knee_y_mid and knee_y_mid > hip_y_mid
-
-        if has_ordering:
-            if torso_deg is not None and torso_deg < _SEATED_TORSO_ANGLE_MIN_DEG:
-                if motion_energy is not None and motion_energy > _WALKING_VELOCITY_THRESHOLD:
-                    return "walking"
-                return "standing"
-            if torso_deg is None:
-                if motion_energy is not None and motion_energy > _WALKING_VELOCITY_THRESHOLD:
-                    return "walking"
-                return "standing"
-
-    # Standing fallback: near-vertical torso with visible shoulders/hips,
-    # and no evidence of bent knees.
-    if torso_deg is not None and torso_deg < _SEATED_TORSO_ANGLE_MIN_DEG and not knees_bent:
-        if motion_energy is not None and motion_energy > _WALKING_VELOCITY_THRESHOLD:
-            return "walking"
-        return "standing"
-
-    return "unknown"
-
+# ── Temporal smoother ─────────────────────────────────────────────────────────
 
 class PostureHysteresis:
     """Requires N consecutive frames of a new posture before committing the change.
@@ -271,13 +423,11 @@ class PostureHysteresis:
         if raw == candidate:
             count += 1
             if count >= self._required:
-                # Commit the candidate.
                 self._state[track_id] = (raw, raw, count)
                 return raw
             self._state[track_id] = (committed, candidate, count)
             return committed
         else:
-            # New candidate resets the counter but does not flip immediately.
             self._state[track_id] = (committed, raw, 1)
             return committed
 

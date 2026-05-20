@@ -318,6 +318,7 @@ def _point_to_dict(p: Any) -> dict[str, Any]:
         "ground_x": p.ground_x,
         "ground_y": p.ground_y,
         "posture": p.posture,
+        "motion_energy": p.motion_energy,
         "identity_confidence": p.identity_confidence,
     }
 

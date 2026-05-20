@@ -7,6 +7,7 @@ low-rate reads live here (the hot tracking-event path is the Redis stream).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -79,6 +80,7 @@ def set_context(
 @router.get("/internal/global_tracks")
 async def list_global_tracks(
     open_only: bool = Query(True, description="Only return tracks with state='active'"),
+    since: str | None = Query(None, description="ISO-8601 timestamp; return tracks last seen at or after this time (enables closed-track history)"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     camera_id: str | None = Query(None),
@@ -91,9 +93,20 @@ async def list_global_tracks(
     ctx: _LiveContext = Depends(get_context),
 ) -> dict[str, Any]:
     """Return a summary of global tracks for the Live and Corrections views."""
-    tracks = await ctx.global_track_repo.list_active()
-    if not open_only:
-        pass  # list_active() returns all state='active' tracks; open_only is reserved for future closed-track queries.
+    if since is not None:
+        try:
+            since_dt = datetime.fromisoformat(since)
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=UTC)
+        except ValueError:
+            since_dt = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        tracks = await ctx.global_track_repo.list_since(since_dt, open_only=open_only, limit=limit + offset + 500)
+    elif open_only:
+        tracks = await ctx.global_track_repo.list_active()
+    else:
+        # open_only=False without since: return today's tracks
+        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        tracks = await ctx.global_track_repo.list_since(today_start, open_only=False, limit=limit + offset + 500)
     if min_duration_s > 0:
         tracks = [
             t for t in tracks if (t.last_seen_at - t.started_at).total_seconds() >= min_duration_s

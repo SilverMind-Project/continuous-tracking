@@ -81,6 +81,9 @@ class Metrics:
     frame_end_to_end_latency_ms: Histogram
     triton_inference_latency_ms: Histogram
 
+    # ---- Batching ----------------------------------------------------
+    batch_size_metric: Histogram
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -243,6 +246,11 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Per-model Triton gRPC inference latency.",
             LATENCY_BUCKETS_MS,
             ["model"],
+        ),
+        batch_size_metric=_hist(
+            "cts_batch_size",
+            "Number of frames accumulated in a batch flush (across cameras).",
+            (1, 2, 3, 4, 5, 6, 8, 12, 16),
         ),
     )
 
