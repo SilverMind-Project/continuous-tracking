@@ -433,9 +433,7 @@ class IdentityResolver:
             window = embs[-self._config.embedding_coherence_window :]
             norms = np.linalg.norm(window, axis=1, keepdims=True)
             normed = window / np.maximum(norms, 1e-8)
-            consecutive_sims = [
-                float(normed[i] @ normed[i + 1]) for i in range(len(normed) - 1)
-            ]
+            consecutive_sims = [float(normed[i] @ normed[i + 1]) for i in range(len(normed) - 1)]
             coherence_active = (
                 bool(consecutive_sims)
                 and min(consecutive_sims) >= self._config.embedding_coherence_min_sim
@@ -713,7 +711,9 @@ class IdentityResolver:
             # identities — applying the threshold here would clear a valid
             # face-confirmed identity on every quiet frame.
             new_id = prev_id
-        elif evidence_ok and top_prob >= effective_commit_prob and margin >= effective_commit_margin:
+        elif (
+            evidence_ok and top_prob >= effective_commit_prob and margin >= effective_commit_margin
+        ):
             new_id = top_id if top_id != "UNKNOWN" else None
         else:
             new_id = None  # Committed as UNKNOWN.
@@ -902,7 +902,9 @@ class IdentityResolver:
                 continue
             evidenced_gt_ids.add(src_gt.global_track_id)
             existing = best_anchor_by_gt.get(src_gt.global_track_id)
-            if existing is None or fa.confidence * fa.quality > existing.confidence * existing.quality:
+            if existing is None or (
+                fa.confidence * fa.quality > existing.confidence * existing.quality
+            ):
                 best_anchor_by_gt[src_gt.global_track_id] = fa
 
         if not evidenced_gt_ids:

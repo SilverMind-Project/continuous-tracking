@@ -257,8 +257,16 @@ class GlobalTrackRepository(ABC):
         """List all active global tracks."""
 
     @abstractmethod
-    async def list_since(self, since: datetime, open_only: bool = False, limit: int = 500) -> list[GlobalTrack]:
-        """List tracks last seen at or after *since*. Includes closed tracks when open_only=False."""
+    async def list_since(
+        self,
+        since: datetime,
+        open_only: bool = False,
+        limit: int = 500,
+    ) -> list[GlobalTrack]:
+        """List tracks last seen at or after *since*.
+
+        Includes closed tracks when ``open_only=False``.
+        """
 
     @abstractmethod
     async def merge_tracklets(
@@ -652,9 +660,15 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
     async def list_active(self) -> list[GlobalTrack]:
         return [t for t in self._tracks.values() if t.state == "active"]
 
-    async def list_since(self, since: datetime, open_only: bool = False, limit: int = 500) -> list[GlobalTrack]:
+    async def list_since(
+        self,
+        since: datetime,
+        open_only: bool = False,
+        limit: int = 500,
+    ) -> list[GlobalTrack]:
         tracks = [
-            t for t in self._tracks.values()
+            t
+            for t in self._tracks.values()
             if t.last_seen_at >= since and (not open_only or t.state == "active")
         ]
         tracks.sort(key=lambda t: t.last_seen_at, reverse=True)

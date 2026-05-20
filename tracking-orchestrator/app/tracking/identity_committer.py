@@ -84,9 +84,7 @@ class IdentityCommitter:
             else:
                 chosen_entry = latest_entry
 
-            max_conf = max(
-                e[2] for e in entries if e[1] == chosen_entry[1]
-            )
+            max_conf = max(e[2] for e in entries if e[1] == chosen_entry[1])
             decisions.append(
                 CommitDecision(
                     global_track_id=gt_id,

@@ -536,7 +536,7 @@ class FrameProcessingPipeline:
                 baseline_repo=baseline_repo,
             )
 
-       # Frame batcher — buffer frames for parallel cross-camera processing.
+        # Frame batcher — buffer frames for parallel cross-camera processing.
         if self._config.batch_window_s > 0:
             self._batcher = FrameBatcher(
                 batch_window_s=self._config.batch_window_s,
@@ -968,7 +968,8 @@ class FrameProcessingPipeline:
                 return []
 
             embeddings, pose_results = await asyncio.gather(
-                _do_reid(), _do_pose(),
+                _do_reid(),
+                _do_pose(),
             )
 
             for det_idx, det in enumerate(detections):

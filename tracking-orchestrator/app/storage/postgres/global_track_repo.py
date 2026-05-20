@@ -158,7 +158,12 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
             rows = await conn.fetch(_SQL_LIST_ACTIVE)
         return [_row_to_global_track(row) for row in rows]
 
-    async def list_since(self, since: datetime, open_only: bool = False, limit: int = 500) -> list[GlobalTrack]:
+    async def list_since(
+        self,
+        since: datetime,
+        open_only: bool = False,
+        limit: int = 500,
+    ) -> list[GlobalTrack]:
         sql = _SQL_LIST_SINCE_ACTIVE if open_only else _SQL_LIST_SINCE
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(sql, since, limit)
@@ -243,9 +248,7 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
         async with self._pool.acquire() as conn:
             await conn.execute(_SQL_ASSIGN_IDENTITY, global_track_id, identity_id)
             if identity_id:
-                await conn.execute(
-                    _SQL_BACKFILL_GALLERY_IDENTITY, global_track_id, identity_id
-                )
+                await conn.execute(_SQL_BACKFILL_GALLERY_IDENTITY, global_track_id, identity_id)
 
     async def get_by_tracklet_id(self, tracklet_id: str) -> GlobalTrack | None:
         async with self._pool.acquire() as conn:

@@ -11,21 +11,20 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from ..observability import metrics
 
 if TYPE_CHECKING:
-    from typing import Callable, Coroutine
-
     from ..transport.redis_streams import FrameReady
 
 
 class FrameBatcherProtocol(Protocol):
     """Abstract interface for frame batching behaviour."""
 
-    async def push(self, frame: "FrameReady") -> None:
+    async def push(self, frame: FrameReady) -> None:
         """Push a frame into the batcher. May flush internally."""
 
     async def flush(self) -> None:
@@ -36,7 +35,7 @@ class FrameBatcherProtocol(Protocol):
 class _CameraBuffer:
     """Mutable buffer for a single camera's frames."""
 
-    frames: list["FrameReady"] = field(default_factory=list)
+    frames: list[FrameReady] = field(default_factory=list)
     last_update: float = field(default_factory=time.monotonic)
 
 
@@ -58,7 +57,7 @@ class FrameBatcher:
         sorted by ``frame_index`` (ascending).
     """
 
-    handler: "Callable[[str, list[FrameReady]], Coroutine[None, None, None]]"
+    handler: Callable[[str, list[FrameReady]], Coroutine[None, None, None]]
 
     batch_window_s: float = 0.5
     max_batch_size: int = 4
@@ -76,7 +75,7 @@ class FrameBatcher:
     # Public API
     # ------------------------------------------------------------------
 
-    async def push(self, frame: "FrameReady") -> None:
+    async def push(self, frame: FrameReady) -> None:
         """Push a frame into the batcher.
 
         If the batch exceeds ``max_batch_size`` after this push, the
@@ -128,7 +127,7 @@ class FrameBatcher:
         self._cameras.clear()
 
         # Sort each camera's frames by frame_index.
-        batches: list[tuple[str, list["FrameReady"]]] = []
+        batches: list[tuple[str, list[FrameReady]]] = []
         for cam_id, buf in cameras.items():
             buf.frames.sort(key=lambda f: f.frame_index)
             batches.append((cam_id, buf.frames))
@@ -137,9 +136,7 @@ class FrameBatcher:
             return
 
         # Run each camera's handler concurrently.
-        coros = [
-            self.handler(cam_id, frames) for cam_id, frames in batches
-        ]
+        coros = [self.handler(cam_id, frames) for cam_id, frames in batches]
         await asyncio.gather(*coros, return_exceptions=True)
 
     async def close(self) -> None:

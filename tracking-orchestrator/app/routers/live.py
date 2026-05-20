@@ -80,7 +80,13 @@ def set_context(
 @router.get("/internal/global_tracks")
 async def list_global_tracks(
     open_only: bool = Query(True, description="Only return tracks with state='active'"),
-    since: str | None = Query(None, description="ISO-8601 timestamp; return tracks last seen at or after this time (enables closed-track history)"),
+    since: str | None = Query(
+        None,
+        description=(
+            "ISO-8601 timestamp; return tracks last seen at or after this "
+            "time (enables closed-track history)"
+        ),
+    ),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     camera_id: str | None = Query(None),
@@ -100,13 +106,17 @@ async def list_global_tracks(
                 since_dt = since_dt.replace(tzinfo=UTC)
         except ValueError:
             since_dt = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        tracks = await ctx.global_track_repo.list_since(since_dt, open_only=open_only, limit=limit + offset + 500)
+        tracks = await ctx.global_track_repo.list_since(
+            since_dt, open_only=open_only, limit=limit + offset + 500
+        )
     elif open_only:
         tracks = await ctx.global_track_repo.list_active()
     else:
         # open_only=False without since: return today's tracks
         today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        tracks = await ctx.global_track_repo.list_since(today_start, open_only=False, limit=limit + offset + 500)
+        tracks = await ctx.global_track_repo.list_since(
+            today_start, open_only=False, limit=limit + offset + 500
+        )
     if min_duration_s > 0:
         tracks = [
             t for t in tracks if (t.last_seen_at - t.started_at).total_seconds() >= min_duration_s

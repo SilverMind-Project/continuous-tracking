@@ -130,9 +130,9 @@ class TestFrameBatcher:
         await batcher.close()
 
     @pytest.mark.asyncio
-    async def test_per_camera_sequential_ordering(self, fake_frame: Callable[[], _FakeFrame]) -> (
-        None
-    ):
+    async def test_per_camera_sequential_ordering(
+        self, fake_frame: Callable[[], _FakeFrame]
+    ) -> None:
         """Frames from the same camera should be processed in frame_index order."""
         handlers: list[tuple[str, list[_FakeFrame]]] = []
 
@@ -160,9 +160,9 @@ class TestFrameBatcher:
         await batcher.close()
 
     @pytest.mark.asyncio
-    async def test_cross_camera_parallel_via_gather(self, fake_frame: Callable[[], _FakeFrame]) -> (
-        None
-    ):
+    async def test_cross_camera_parallel_via_gather(
+        self, fake_frame: Callable[[], _FakeFrame]
+    ) -> None:
         """Different cameras should be processed concurrently (via asyncio.gather)."""
         order: list[str] = []
 
@@ -299,9 +299,7 @@ class TestFrameBatcher:
         await batcher2.close()
 
     @pytest.mark.asyncio
-    async def test_delayed_flush_cancellation(self, fake_frame: Callable[[], _FakeFrame]) -> (
-        None
-    ):
+    async def test_delayed_flush_cancellation(self, fake_frame: Callable[[], _FakeFrame]) -> None:
         """A new push should cancel any pending delayed flush."""
         handlers: list[tuple[str, list[_FakeFrame]]] = []
 

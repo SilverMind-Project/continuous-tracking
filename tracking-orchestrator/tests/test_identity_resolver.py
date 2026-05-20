@@ -518,7 +518,6 @@ class TestIdentityResolver:
         )
         assert len(outcome2.revisions) == 0  # rate-limited
 
-
     @pytest.mark.asyncio
     async def test_maintenance_window_survives_many_enrolled_identities(
         self,
@@ -588,7 +587,9 @@ class TestIdentityResolver:
         # The important check is that with a longer identity list it would
         # fail, but here we verify the expired-window path produces a
         # non-maintenance decision.
-        assert not decision.revises_previous or decision.identity_id is None or decision.identity_id == "grandma"
+        assert not decision.revises_previous or (
+            decision.identity_id is None or decision.identity_id == "grandma"
+        )
 
     @pytest.mark.asyncio
     async def test_weak_reid_evidence_does_not_clear_committed_identity(

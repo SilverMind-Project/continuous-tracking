@@ -504,9 +504,7 @@ class CrossCameraAssociator:
 
         return updated_gts
 
-    async def _gt_pair_gallery_similarity(
-        self, tids_a: list[str], tids_b: list[str]
-    ) -> float:
+    async def _gt_pair_gallery_similarity(self, tids_a: list[str], tids_b: list[str]) -> float:
         """Mean cosine similarity between two GlobalTracks via their gallery embeddings.
 
         Queries all tracklets in each GT, computes a centroid, and returns cosine
@@ -539,9 +537,7 @@ class CrossCameraAssociator:
             return 0.0
         return float(np.dot(emb_a, emb_b) / (norm_a * norm_b + 1e-9))
 
-    async def _consolidate_overlap_group_gts(
-        self, active_gts: list[GlobalTrack]
-    ) -> None:
+    async def _consolidate_overlap_group_gts(self, active_gts: list[GlobalTrack]) -> None:
         """Merge fragmented GlobalTracks within the same overlap group.
 
         Race condition: two concurrent associate() calls can each see an empty

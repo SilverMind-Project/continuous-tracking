@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.tracking.identity_committer import CommitDecision, IdentityCommitter
+from app.tracking.identity_committer import IdentityCommitter
 
 
 def _committer(window_s: float = 3.0) -> IdentityCommitter:
@@ -63,9 +63,9 @@ class TestIdentityCommitter:
         t1 = t0 + timedelta(seconds=1)
         t2 = t1 + timedelta(seconds=1)
         c._buffer["gt-1"] = [
-            (t0, None, 0.4, ""),      # before face fired
+            (t0, None, 0.4, ""),  # before face fired
             (t1, "alice", 0.92, "face_high_confidence"),
-            (t2, None, 0.57, ""),     # maintenance bug (pre-fix) produced None
+            (t2, None, 0.57, ""),  # maintenance bug (pre-fix) produced None
         ]
         decisions = c.flush()
         assert decisions[0].identity_id == "alice", (

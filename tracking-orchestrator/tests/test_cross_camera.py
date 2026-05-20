@@ -562,6 +562,7 @@ class TestCrossCameraAssociator:
         person observed from different cameras in the same overlap group.
         """
         import numpy as np
+
         from app.domain import OverlapGroup
 
         np.random.seed(42)
@@ -619,6 +620,7 @@ class TestCrossCameraAssociator:
         """Two GTs in the same overlap group with DIFFERENT committed identities
         must never be consolidated — they are different enrolled people."""
         import numpy as np
+
         from app.domain import OverlapGroup
 
         np.random.seed(42)
@@ -775,6 +777,7 @@ class TestCrossCameraAssociator:
         """Two GTs in the same overlap group with dissimilar embeddings
         must not be consolidated — they are different people."""
         import numpy as np
+
         from app.domain import OverlapGroup
 
         np.random.seed(99)
