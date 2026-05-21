@@ -86,7 +86,7 @@ from ..tracking.tracker import PerCameraTrackers, TrackerConfig
 from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
 from ..trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
 from ..trajectory.motion_energy import MotionEnergyTracker
-from ..trajectory.posture import classify_posture
+from ..trajectory.posture import GlobalPostureTracker, classify_posture
 from ..trajectory.trajectory_writer import TrajectoryWriter
 from ..transport.redis_streams import (
     FrameReady,
@@ -342,6 +342,7 @@ class FrameProcessingPipeline:
         # Pose estimation (RTMPose) + motion energy tracking.
         self._pose_estimator: PoseEstimator | None = None
         self._motion_energy_tracker: MotionEnergyTracker | None = None
+        self._posture_tracker: GlobalPostureTracker | None = None
         # Phase 1: cross-table identity rewriter (orchestrator side).
         self._identity_rewriter: IdentityRewriter | None = None
         # Phase 7: per-tracklet trail deque (last 12 normalised foot-points).
@@ -430,6 +431,7 @@ class FrameProcessingPipeline:
         # Pose estimation
         self._pose_estimator = pose_estimator
         self._motion_energy_tracker = MotionEnergyTracker() if pose_estimator is not None else None
+        self._posture_tracker = GlobalPostureTracker(required_consecutive=2)
 
         # Identity rewriter (orchestrator side)
         self._identity_rewriter = identity_rewriter or InMemoryIdentityRewriter()
@@ -1192,6 +1194,8 @@ class FrameProcessingPipeline:
                     await self._trajectory_writer.close_track(gt_id, closed_at=traj_close_time)
                 if self._motion_energy_tracker is not None:
                     self._motion_energy_tracker.evict_track(gt_id)
+                if self._posture_tracker is not None:
+                    self._posture_tracker.evict_track(gt_id)
         self._prev_active_gt_ids = current_gt_ids
 
         # Step 7: Write trajectory points and manage room dwells.
@@ -1224,9 +1228,14 @@ class FrameProcessingPipeline:
                 # homography, falling back to uncalibrated (0,0) when no
                 # homography is configured for this camera.
                 gt_bbox_entry = gt_bbox.get(decision.global_track_id)
+                if gt_bbox_entry is None:
+                    # Skip writing trajectory points if this track is not visible
+                    # on the current camera in this frame.
+                    continue
+
                 floor_point = (
                     self._floor_projector.project(frame.camera_id, gt_bbox_entry)
-                    if gt_bbox_entry is not None and self._floor_projector is not None
+                    if self._floor_projector is not None
                     else FloorPoint(0, 0)
                 )
                 _top_id, top_prob = decision.posterior.top_identity()
@@ -1235,42 +1244,65 @@ class FrameProcessingPipeline:
                 # via detection_id → tracklet → global_track chain.
                 gt_posture: PostureType = "unknown"
                 gt_motion_energy: float | None = None
-                if self._motion_energy_tracker is not None and gt_bbox_entry is not None:
-                    # Find a detection_id belonging to this global_track_id.
-                    for domain_det in domain_detections:
-                        tid = (
-                            self._tracklet_manager.get_tracklet_id_for_detection(
-                                domain_det.detection_id
-                            )
-                            if self._tracklet_manager
-                            else ""
+                
+                # Find a detection_id belonging to this global_track_id.
+                pose = None
+                matching_detection_id = None
+                for domain_det in domain_detections:
+                    tid = (
+                        self._tracklet_manager.get_tracklet_id_for_detection(
+                            domain_det.detection_id
                         )
-                        if not tid:
-                            continue
-                        # Check if this tracklet belongs to the current gt decision.
-                        gt_for_det = next(
-                            (
-                                gt.global_track_id
-                                for gt in active_global_tracks
-                                if tid in gt.tracklet_ids
-                            ),
-                            "",
+                        if self._tracklet_manager
+                        else ""
+                    )
+                    if not tid:
+                        continue
+                    # Check if this tracklet belongs to the current gt decision.
+                    gt_for_det = next(
+                        (
+                            gt.global_track_id
+                            for gt in active_global_tracks
+                            if tid in gt.tracklet_ids
+                        ),
+                        "",
+                    )
+                    if gt_for_det != decision.global_track_id:
+                        continue
+                    pose = det_pose_result.get(domain_det.detection_id)
+                    matching_detection_id = domain_det.detection_id
+                    break
+
+                if pose is not None:
+                    if self._motion_energy_tracker is not None:
+                        bbox_diag = (gt_bbox_entry.width**2 + gt_bbox_entry.height**2) ** 0.5
+                        me = self._motion_energy_tracker.update(
+                            decision.global_track_id,
+                            pose,
+                            traj_time,
+                            bbox_diag_px=bbox_diag,
                         )
-                        if gt_for_det != decision.global_track_id:
-                            continue
-                        # Use the first matching detection's posture + pose.
-                        gt_posture = det_posture.get(domain_det.detection_id, "unknown")
-                        pose = det_pose_result.get(domain_det.detection_id)
-                        if pose is not None:
-                            bbox_diag = (gt_bbox_entry.width**2 + gt_bbox_entry.height**2) ** 0.5
-                            me = self._motion_energy_tracker.update(
-                                decision.global_track_id,
-                                pose,
-                                traj_time,
-                                bbox_diag_px=bbox_diag,
-                            )
-                            gt_motion_energy = me.mean_keypoint_velocity_px_s
-                        break
+                        gt_motion_energy = me.mean_keypoint_velocity_px_s
+
+                    if self._posture_tracker is not None:
+                        gt_obj = next(
+                            (gt for gt in active_global_tracks if gt.global_track_id == decision.global_track_id),
+                            None,
+                        )
+                        active_camera_ids = gt_obj.camera_ids if gt_obj else [frame.camera_id]
+                        gt_posture = self._posture_tracker.update(
+                            global_track_id=decision.global_track_id,
+                            camera_id=frame.camera_id,
+                            pose=pose,
+                            bbox=gt_bbox_entry,
+                            active_camera_ids=active_camera_ids,
+                            motion_energy=gt_motion_energy,
+                        )
+                        if matching_detection_id is not None:
+                            det_posture[matching_detection_id] = gt_posture
+                else:
+                    if matching_detection_id is not None:
+                        gt_posture = det_posture.get(matching_detection_id, "unknown")
 
                 await self._trajectory_writer.write(
                     identity_id=decision.identity_id,

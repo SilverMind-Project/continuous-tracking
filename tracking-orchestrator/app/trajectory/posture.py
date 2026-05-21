@@ -167,6 +167,9 @@ class PostureFeatures:
     """0° = vertical spine, 90° = fully horizontal.  None when shoulders/hips invisible."""
 
     min_knee_angle_deg: float | None
+    """Angle at the least-bent visible knee (straightest leg).  None when neither leg is visible."""
+
+    max_knee_angle_deg: float | None
     """Angle at the most-bent visible knee.  None when neither leg is visible."""
 
     knee_confidence: float
@@ -174,6 +177,10 @@ class PostureFeatures:
 
     norm_knee_dy: float | None
     """(knee_mid_y - hip_mid_y) / torso_len.  Positive = knees below hips (image coords)."""
+
+    norm_knee_dx: float | None
+    """abs(knee_mid_x - hip_mid_x) / torso_len.  Large when thighs spread laterally (chair
+    sitting from front), even when ankles are occluded.  None when hips/knees invisible."""
 
     norm_ankle_dy: float | None
     """(ankle_mid_y - hip_mid_y) / torso_len.  Combined with norm_knee_dy, encodes the
@@ -195,6 +202,7 @@ def _extract_features(pose: PoseResult) -> PostureFeatures:
     ls, rs = pose.get("left_shoulder"), pose.get("right_shoulder")
     lh, rh = pose.get("left_hip"), pose.get("right_hip")
     norm_knee_dy: float | None = None
+    norm_knee_dx: float | None = None
     norm_ankle_dy: float | None = None
     if _visible(ls, rs, lh, rh):
         sx, sy = _midpoint(ls, rs)
@@ -204,16 +212,47 @@ def _extract_features(pose: PoseResult) -> PostureFeatures:
             lk, rk = pose.get("left_knee"), pose.get("right_knee")
             if _visible(lk, rk):
                 norm_knee_dy = ((lk.y + rk.y) / 2.0 - hy) / torso_len
+                # Lateral spread: half the inter-knee x-distance, normalised by torso length.
+                # Wide lateral spread with knees near hip height = thighs horizontal
+                # (chair-sitting from front camera), visible even when ankles are occluded.
+                norm_knee_dx = abs(lk.x - rk.x) / 2.0 / torso_len
             la, ra = pose.get("left_ankle"), pose.get("right_ankle")
             if _visible(la, ra):
                 norm_ankle_dy = ((la.y + ra.y) / 2.0 - hy) / torso_len
 
-    # Knee angle (most bent).
-    knee_result = _best_knee_angle_deg(pose)
-    min_knee_angle: float | None = None
-    knee_confidence = 0.0
-    if knee_result is not None:
-        min_knee_angle, knee_confidence = knee_result
+    # Knee angles.
+    left_angle = _knee_angle_deg(pose, "left")
+    right_angle = _knee_angle_deg(pose, "right")
+
+    def _side_conf(side: str) -> float:
+        return _min_score(
+            pose.get(f"{side}_hip"), pose.get(f"{side}_knee"), pose.get(f"{side}_ankle")
+        )
+
+    left_conf = _side_conf("left") if left_angle is not None else 0.0
+    right_conf = _side_conf("right") if right_angle is not None else 0.0
+
+    min_knee_angle_deg: float | None = None
+    max_knee_angle_deg: float | None = None
+    knee_confidence: float = 0.0
+
+    if left_angle is not None and right_angle is not None:
+        if left_angle <= right_angle:
+            min_knee_angle_deg = left_angle
+            max_knee_angle_deg = right_angle
+            knee_confidence = right_conf
+        else:
+            min_knee_angle_deg = right_angle
+            max_knee_angle_deg = left_angle
+            knee_confidence = left_conf
+    elif left_angle is not None:
+        min_knee_angle_deg = left_angle
+        max_knee_angle_deg = left_angle
+        knee_confidence = left_conf
+    elif right_angle is not None:
+        min_knee_angle_deg = right_angle
+        max_knee_angle_deg = right_angle
+        knee_confidence = right_conf
 
     # Head-spine deviation (lying detection).
     head_dev = _head_torso_deviation(pose)
@@ -231,9 +270,11 @@ def _extract_features(pose: PoseResult) -> PostureFeatures:
 
     return PostureFeatures(
         torso_angle_deg=torso_angle,
-        min_knee_angle_deg=min_knee_angle,
+        min_knee_angle_deg=min_knee_angle_deg,
+        max_knee_angle_deg=max_knee_angle_deg,
         knee_confidence=knee_confidence,
         norm_knee_dy=norm_knee_dy,
+        norm_knee_dx=norm_knee_dx,
         norm_ankle_dy=norm_ankle_dy,
         head_spine_deviation=head_dev,
         kinematic_ordering=kinematic_ordering,
@@ -271,45 +312,63 @@ def _score_lying(feats: PostureFeatures) -> float:
 def _score_sitting(feats: PostureFeatures) -> float:
     """Evidence that the person is sitting.
 
-    Three signals contribute additively:
+    Five signals contribute additively:
 
     **Torso tilt** — tilting the trunk forward increases sitting evidence.
 
-    **Knee bend** — a bent knee (60-150°) adds evidence.  The wider upper bound
-    (vs the standing guard's 130°) handles camera-projection foreshortening: an
-    overhead or front camera collapses the depth axis, making a true 90° seated
-    knee look anywhere from 90° to 150° in 2D.  Higher keypoint confidence is
-    required when the torso provides no corroborating tilt signal.
+    **Knee bend** — a bent knee (55-150°) adds evidence.  We look at the most
+    bent knee (max_knee_angle_deg) to handle cases where one leg is extended.
+    Higher confidence is required when the torso provides no tilt signal.
+
+    **Horizontal thigh / Knee proximity** — when knees are near hip height vertically,
+    combined with knee bend, indicating the thigh is flat. This resolves sitting
+    for upright sitters when ankles are occluded.
+
+    **Lateral knee spread** — ankles-free signal: knees far apart laterally with
+    knees near hip height indicates thighs horizontal (front-facing chair sit).
+    Requires only visible hips + knees, no ankle visibility needed.
 
     **Shin drop** — the most camera-angle-invariant sitting cue: knees near hip
-    height *and* ankles hanging well below.  This pattern (thighs horizontal,
-    shins vertical) is preserved in 2D projection regardless of camera azimuth.
-    Gated on ``knee_confidence ≥ 0.5`` to avoid rewarding low-confidence poses
-    (e.g. ambiguous wide-stance squats where keypoints are uncertain).
-
-    A fourth weak signal fires when the torso is already tilted and knees are at
-    hip height — useful for reclined or transitional poses where ankles may be
-    outside the camera frame.
+    height *and* ankles hanging below.
     """
     torso_tilt = feats.torso_angle_deg or 0.0
     score = 0.0
 
-    # Torso-tilt contribution: 0 at 30°, caps at 0.4 at 60°.
+    # 1. Torso-tilt contribution: 0 at 30°, caps at 0.4 at 60°.
     tilt = max(0.0, min(0.4, 0.4 * (torso_tilt - _SEATED_TORSO_ANGLE_MIN_DEG) / 30.0))
     score += tilt
 
-    # Knee-bend contribution.
-    if feats.min_knee_angle_deg is not None:
-        ka = feats.min_knee_angle_deg
-        if _KNEE_ANGLE_SITTING_MIN_DEG <= ka <= _KNEE_ANGLE_SITTING_MAX_DEG:
+    # 2. Knee-bend contribution (using the most bent knee).
+    if feats.max_knee_angle_deg is not None:
+        ka = feats.max_knee_angle_deg
+        if 55.0 <= ka <= _KNEE_ANGLE_SITTING_MAX_DEG:
             # Require stronger confidence when torso evidence is absent.
             knee_conf_threshold = 0.3 if torso_tilt > _SEATED_TORSO_ANGLE_MIN_DEG else 0.5
             score += 0.4 * min(1.0, feats.knee_confidence / knee_conf_threshold)
 
-    # Shin-drop leg geometry: knees near hip height, ankles hanging below.
-    # shin_drop = (ankle - knee) in torso-length units; large for sitting, small for lying.
+    # 3. Horizontal thighs: knees near hip height + bent knee angle.
     if (
-        feats.knee_confidence >= 0.5
+        feats.norm_knee_dy is not None
+        and feats.norm_knee_dy < _KNEE_HIP_PROXIMITY_MAX
+        and feats.max_knee_angle_deg is not None
+        and feats.max_knee_angle_deg >= 55.0
+    ):
+        score += 0.4 * min(1.0, feats.knee_confidence / 0.4)
+
+    # 4. Lateral knee spread: knees far apart horizontally + knees near hip height.
+    # Captures front-facing chair sit even when ankles are fully occluded.
+    # norm_knee_dx > 0.6 means knees are at least 0.6 torso-lengths from hip midpoint.
+    if (
+        feats.norm_knee_dy is not None
+        and feats.norm_knee_dy < _KNEE_HIP_PROXIMITY_MAX
+        and feats.norm_knee_dx is not None
+        and feats.norm_knee_dx > 0.6
+    ):
+        score += 0.5 * min(1.0, feats.norm_knee_dx / 1.0)
+
+    # 5. Shin-drop leg geometry: knees near hip height, ankles hanging below.
+    if (
+        feats.knee_confidence >= 0.4
         and feats.norm_knee_dy is not None
         and feats.norm_knee_dy < _KNEE_HIP_PROXIMITY_MAX
         and feats.norm_ankle_dy is not None
@@ -318,8 +377,7 @@ def _score_sitting(feats: PostureFeatures) -> float:
         shin_drop = feats.norm_ankle_dy - feats.norm_knee_dy
         score += 0.5 * min(1.0, shin_drop / 0.6)
 
-    # Weak corroborating signal: knees at hip height when torso is already tilted.
-    # Handles reclined/transitional poses where ankles may be out of frame.
+    # 6. Weak corroborating signal: knees at hip height when torso is already tilted.
     if (
         feats.norm_knee_dy is not None
         and abs(feats.norm_knee_dy) < _KNEE_HIP_PROXIMITY_MAX
@@ -336,23 +394,20 @@ def _score_standing_or_walking(feats: PostureFeatures) -> float:
 
     Two hard vetos suppress this class:
 
-    **Bent knees** — uses the conservative ``_KNEE_BENT_GUARD_MAX_DEG`` (130°)
-    rather than the wider scoring range (150°), so a walking person whose stride
-    briefly bends a knee to 135° is not misclassified as "unknown".
+    **Bent knees** — uses the conservative ``_KNEE_BENT_GUARD_MAX_DEG`` (130°).
+    Vetoes standing if BOTH legs are bent (which indicates sitting or squatting).
+    Since min_knee_angle_deg is the straightest leg, if min_knee_angle_deg >= 55.0,
+    then both legs are bent.
 
-    **Knees near hips** — ``norm_knee_dy < _KNEE_HIP_STANDING_BLOCK`` means the
-    knees are physically close to the hips in the image, which is incompatible
-    with upright standing regardless of what the ankle positions or torso angle
-    suggest.  This is the key fix for upright sitters: a seated person's kinematic
-    ordering (ankle.y > knee.y > hip.y) can superficially match standing when the
-    torso is vertical, but the small norm_knee_dy betrays the sitting geometry.
+    **Knees near hips** — norm_knee_dy < 0.55 means the knees are close to the
+    hips vertically, which is physically incompatible with upright standing.
     """
     knees_bent = (
         feats.min_knee_angle_deg is not None
-        and _KNEE_ANGLE_SITTING_MIN_DEG <= feats.min_knee_angle_deg <= _KNEE_BENT_GUARD_MAX_DEG
+        and 55.0 <= feats.min_knee_angle_deg <= _KNEE_BENT_GUARD_MAX_DEG
     )
     knees_near_hips = (
-        feats.norm_knee_dy is not None and feats.norm_knee_dy < _KNEE_HIP_STANDING_BLOCK
+        feats.norm_knee_dy is not None and feats.norm_knee_dy < 0.55
     )
     if knees_bent or knees_near_hips:
         return 0.0
@@ -447,3 +502,93 @@ class PostureHysteresis:
     def evict(self, track_id: str) -> None:
         """Remove state for a closed track."""
         self._state.pop(track_id, None)
+
+
+class GlobalPostureTracker:
+    """Stateful posture tracker that aggregates evidence across cameras and smooths transitions.
+
+    Maintains:
+    1. Per-camera soft posture scores for each active global track, preventing
+       partial views on one camera from degrading high-confidence views from another.
+    2. A temporal smoother (PostureHysteresis) at the global track level.
+    """
+
+    def __init__(self, required_consecutive: int = 2) -> None:
+        # global_track_id -> camera_id -> dict of soft scores
+        self._camera_scores: dict[str, dict[str, dict[str, float]]] = {}
+        # global_track_id -> PostureHysteresis
+        self._hysteresis: dict[str, PostureHysteresis] = {}
+        self._required_consecutive = required_consecutive
+
+    def update(
+        self,
+        global_track_id: str,
+        camera_id: str,
+        pose: PoseResult,
+        bbox: BoundingBox,
+        active_camera_ids: list[str] | tuple[str, ...] | set[str],
+        motion_energy: float | None = None,
+    ) -> PostureType:
+        """Update posture scores for a track on a camera, and return the smoothed global posture."""
+        # 1. Compute soft scores for this frame
+        feats = _extract_features(pose)
+        scores = {
+            "lying": _score_lying(feats),
+            "sitting": _score_sitting(feats),
+            "standing_walking": _score_standing_or_walking(feats),
+        }
+
+        # 2. Store the soft scores
+        if global_track_id not in self._camera_scores:
+            self._camera_scores[global_track_id] = {}
+        self._camera_scores[global_track_id][camera_id] = scores
+
+        # 3. Fuse scores across all active cameras currently associated with the track
+        fused = {
+            "lying": 0.0,
+            "sitting": 0.0,
+            "standing_walking": 0.0,
+        }
+        for c in ["lying", "sitting", "standing_walking"]:
+            max_val = 0.0
+            for cam in active_camera_ids:
+                cam_scores = self._camera_scores[global_track_id].get(cam)
+                if cam_scores is not None:
+                    max_val = max(max_val, cam_scores[c])
+            fused[c] = max_val
+
+        # 4. Resolve the winner using clinical priority rules
+        best = max(fused["lying"], fused["sitting"], fused["standing_walking"])
+        if best < _MIN_EVIDENCE:
+            raw_posture: PostureType = "unknown"
+        else:
+            if fused["lying"] >= fused["sitting"] and fused["lying"] >= fused["standing_walking"]:
+                raw_posture = "lying"
+            elif fused["sitting"] >= fused["standing_walking"]:
+                raw_posture = "sitting"
+            else:
+                if motion_energy is not None and motion_energy > _WALKING_VELOCITY_THRESHOLD:
+                    raw_posture = "walking"
+                else:
+                    raw_posture = "standing"
+
+        # 5. Smooth via hysteresis
+        if global_track_id not in self._hysteresis:
+            self._hysteresis[global_track_id] = PostureHysteresis(self._required_consecutive)
+
+        return self._hysteresis[global_track_id].update(global_track_id, raw_posture)
+
+    def evict_track(self, global_track_id: str) -> None:
+        """Evict history for a closed track."""
+        self._camera_scores.pop(global_track_id, None)
+        if global_track_id in self._hysteresis:
+            self._hysteresis[global_track_id].evict(global_track_id)
+            self._hysteresis.pop(global_track_id, None)
+
+    def clear(self) -> None:
+        """Clear all tracking state."""
+        self._camera_scores.clear()
+        for track_id, hyst in list(self._hysteresis.items()):
+            hyst.evict(track_id)
+        self._hysteresis.clear()
+
