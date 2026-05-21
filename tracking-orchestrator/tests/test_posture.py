@@ -318,7 +318,10 @@ class TestGlobalPostureTracker:
             right_ankle=_keypoint(0.6, 0.85),
         )
         tracker = GlobalPostureTracker(required_consecutive=2)
-        assert tracker.update("gt-1", "cam-1", pose, _BBOX_PORTRAIT, ["cam-1"], motion_energy=0.012) == "walking"
+        assert (
+            tracker.update("gt-1", "cam-1", pose, _BBOX_PORTRAIT, ["cam-1"], motion_energy=0.012)
+            == "walking"
+        )
 
     def test_multi_camera_fusion_and_partial_view(self) -> None:
         # Camera 1 sees a clear sitting pose
@@ -332,7 +335,7 @@ class TestGlobalPostureTracker:
             left_ankle=_keypoint(0.65, 0.85),
             right_ankle=_keypoint(0.75, 0.85),
         )
-        # Camera 2 has a partial view (knees and ankles missing/low confidence, torso tilted/leaning at ~37 degrees)
+        # Camera 2: partial view (knees/ankles missing/low confidence, torso tilted at ~37 deg)
         pose_partial = _pose(
             left_shoulder=_keypoint(0.3, 0.2),
             right_shoulder=_keypoint(0.5, 0.2),
@@ -344,7 +347,7 @@ class TestGlobalPostureTracker:
             right_ankle=_keypoint(0.75, 0.85, score=0.1),
         )
         tracker = GlobalPostureTracker(required_consecutive=2)
-        
+
         # Initialize track with Camera 2's partial view (starts as unknown)
         res1 = tracker.update("gt-1", "cam-2", pose_partial, _BBOX_PORTRAIT, ["cam-1", "cam-2"])
         assert res1 == "unknown"
@@ -375,7 +378,7 @@ class TestGlobalPostureTracker:
         tracker = GlobalPostureTracker(required_consecutive=2)
         assert tracker.update("gt-1", "cam-1", pose, _BBOX_PORTRAIT, ["cam-1"]) == "standing"
         tracker.evict_track("gt-1")
-        
+
         # New pose is sitting
         pose_sitting = _pose(
             left_shoulder=_keypoint(0.4, 0.2),
@@ -387,7 +390,7 @@ class TestGlobalPostureTracker:
             left_ankle=_keypoint(0.65, 0.85),
             right_ankle=_keypoint(0.75, 0.85),
         )
-        # Because we evicted gt-1, it is a first observation again, so it commits sitting immediately
+        # Evicted gt-1: first observation again, so sitting commits immediately
         assert tracker.update("gt-1", "cam-1", pose_sitting, _BBOX_PORTRAIT, ["cam-1"]) == "sitting"
 
 

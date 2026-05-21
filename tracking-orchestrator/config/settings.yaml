@@ -92,6 +92,15 @@ signal:
 
 # Pipeline tuning
 pipeline:
+  # Posture detection strategy
+  posture:
+    # Whether to run the depth slow-path for occluded persons.
+    # Requires triton.depth_enabled = true.
+    depth_slow_path_enabled: "${POSTURE_DEPTH_SLOW_PATH_ENABLED:-false}"
+    # Minimum seconds between depth inference runs per tracklet.
+    depth_slow_path_min_interval_s: "${POSTURE_DEPTH_SLOW_PATH_MIN_INTERVAL_S:-15.0}"
+    # Maximum age of a cached slow-path result before it is discarded.
+    depth_slow_path_max_age_s: "${POSTURE_DEPTH_SLOW_PATH_MAX_AGE_S:-60.0}"
   detector_confidence: "${DETECTOR_CONFIDENCE:-0.35}"
   max_concurrent_frames: "${MAX_CONCURRENT_FRAMES:-4}"
   allow_skeleton: "${PIPELINE_ALLOW_SKELETON:-false}"
@@ -120,6 +129,58 @@ pipeline:
 cognitive_companion:
   url: "${CC_API_URL:-}"
   api_key: "${CC_INGRESS_API_KEY:-}"
+
+# Identity resolver — Bayesian posterior parameters
+resolver:
+  commit_prob: "${RESOLVER_COMMIT_PROB:-0.65}"
+  commit_margin: "${RESOLVER_COMMIT_MARGIN:-0.15}"
+  reid_decision_sim: "${RESOLVER_REID_DECISION_SIM:-0.70}"
+  revision_horizon_s: "${RESOLVER_REVISION_HORIZON_S:-600.0}"
+  max_revisions_per_gt_per_minute: "${RESOLVER_MAX_REVISIONS_PER_GT_PER_MINUTE:-3}"
+  unknown_mass: "${RESOLVER_UNKNOWN_MASS:-0.05}"
+  prior_weight: "${RESOLVER_PRIOR_WEIGHT:-0.6}"
+  face_weight_multiplier: "${RESOLVER_FACE_WEIGHT_MULTIPLIER:-3.0}"
+  commit_prob_dense: "${RESOLVER_COMMIT_PROB_DENSE:-0.80}"
+  commit_margin_dense: "${RESOLVER_COMMIT_MARGIN_DENSE:-0.20}"
+  prior_maintenance_max_age_s: "${RESOLVER_PRIOR_MAINTENANCE_MAX_AGE_S:-120.0}"
+  identified_entry_boost_min_sim: "${RESOLVER_IDENTIFIED_ENTRY_BOOST_MIN_SIM:-0.65}"
+  identified_entry_min_likelihood: "${RESOLVER_IDENTIFIED_ENTRY_MIN_LIKELIHOOD:-0.80}"
+  enable_embedding_coherence_boost: "${RESOLVER_ENABLE_EMBEDDING_COHERENCE_BOOST:-false}"
+  embedding_coherence_window: "${RESOLVER_EMBEDDING_COHERENCE_WINDOW:-5}"
+  embedding_coherence_min_sim: "${RESOLVER_EMBEDDING_COHERENCE_MIN_SIM:-0.70}"
+  embedding_coherence_boost: "${RESOLVER_EMBEDDING_COHERENCE_BOOST:-2.0}"
+  face_commit_min_confidence: "${RESOLVER_FACE_COMMIT_MIN_CONFIDENCE:-0.70}"
+  face_lock_maintenance_max_age_s: "${RESOLVER_FACE_LOCK_MAINTENANCE_MAX_AGE_S:-300}"
+  cross_gt_face_propagation_threshold: "${RESOLVER_CROSS_GT_FACE_PROPAGATION_THRESHOLD:-0.65}"
+  cross_gt_face_propagation_max_gts: "${RESOLVER_CROSS_GT_FACE_PROPAGATION_MAX_GTS:-4}"
+
+# Tracklet lifecycle
+tracklet:
+  min_hit_ratio: "${TRACKLET_MIN_HIT_RATIO:-0.5}"
+  close_grace_frames: "${TRACKLET_CLOSE_GRACE_FRAMES:-15}"
+  gallery_min_quality: "${TRACKLET_GALLERY_MIN_QUALITY:-0.5}"
+  gallery_max_per_tracklet: "${TRACKLET_GALLERY_MAX_PER_TRACKLET:-20}"
+  min_detection_confidence: "${TRACKLET_MIN_DETECTION_CONFIDENCE:-0.3}"
+  enabled: "${TRACKLET_ENABLED:-true}"
+  # min_frames_to_publish is controlled by pipeline.tracker.min_frames_to_publish
+
+# Cross-camera association
+cross_camera:
+  alpha: "${CC_ALPHA:-0.7}"
+  floor_sigma_m: "${CC_FLOOR_SIGMA_M:-1.5}"
+  max_floor_distance_m: "${CC_MAX_FLOOR_DISTANCE_M:-8.0}"
+  min_link_score: "${CC_MIN_LINK_SCORE:-0.55}"
+  unknown_merge_appearance_threshold: "${CC_UNKNOWN_MERGE_APPEARANCE_THRESHOLD:-0.92}"
+  within_group_min_score: "${CC_WITHIN_GROUP_MIN_SCORE:-0.35}"
+  inter_gt_consolidation_appearance_threshold: "${CC_INTER_GT_CONSOLIDATION_APPEARANCE_THRESHOLD:-0.88}"
+  known_identity_reentry_threshold: "${CC_KNOWN_IDENTITY_REENTRY_THRESHOLD:-0.72}"
+  same_camera_reentry_max_gap_s: "${CC_SAME_CAMERA_REENTRY_MAX_GAP_S:-30.0}"
+
+# Keyframe sampler
+sampler:
+  keyframe_min_interval_s: "${SAMPLER_KEYFRAME_MIN_INTERVAL_S:-30.0}"
+  periodic_expires_hours: "${SAMPLER_PERIODIC_EXPIRES_HOURS:-72}"
+  trigger_expires_days: "${SAMPLER_TRIGGER_EXPIRES_DAYS:-30}"
 
 # Environment label (dev / staging / production)
 env: "${CTS_ENV:-production}"

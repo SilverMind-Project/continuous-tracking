@@ -31,11 +31,15 @@ from ..domain import (
     PosteriorDist,
 )
 from ..storage.base import (
+    DoNotFuseRepository,
     GlobalTrackRepository,
+    InMemoryDoNotFuseRepository,
     InMemoryGlobalTrackRepository,
     InMemoryTrackingRepository,
     TrackingRepository,
 )
+from ..tracking.global_track_merger import GlobalTrackMerger
+from ..tracking.tracklet_unmerge_service import TrackletUnmergeService
 from ..transport.revision_publisher import RevisionPublisher
 
 logger = get_logger(__name__)
@@ -55,12 +59,16 @@ class _CorrectionContext:
     tracking_repo: TrackingRepository
     global_track_repo: GlobalTrackRepository
     publisher: RevisionPublisher | None
+    dnf_repo: DoNotFuseRepository | None = None
+    merger: GlobalTrackMerger | None = None
 
 
 _ctx: _CorrectionContext = _CorrectionContext(
     tracking_repo=InMemoryTrackingRepository(),
     global_track_repo=InMemoryGlobalTrackRepository(),
     publisher=None,
+    dnf_repo=InMemoryDoNotFuseRepository(),
+    merger=None,
 )
 
 
@@ -72,6 +80,8 @@ def set_context(
     tracking_repo: TrackingRepository,
     global_track_repo: GlobalTrackRepository,
     publisher: RevisionPublisher | None,
+    dnf_repo: DoNotFuseRepository | None = None,
+    merger: GlobalTrackMerger | None = None,
 ) -> None:
     """Wire production repositories + publisher at startup (called from lifespan)."""
     global _ctx
@@ -79,6 +89,8 @@ def set_context(
         tracking_repo=tracking_repo,
         global_track_repo=global_track_repo,
         publisher=publisher,
+        dnf_repo=dnf_repo,
+        merger=merger,
     )
 
 
@@ -219,4 +231,116 @@ async def apply_correction(
         previous_identity_id=previous_identity_id,
         new_identity_id=new_identity_id,
         applied_at=now.isoformat(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /internal/corrections/unmerge_tracklet
+# ---------------------------------------------------------------------------
+
+
+class TrackletUnmergeRequest(BaseModel):
+    """Body for ``POST /internal/corrections/unmerge_tracklet``."""
+
+    tracklet_id: str = Field(..., min_length=1, max_length=128)
+    requested_by: str = Field(default="caregiver", max_length=128)
+
+
+class TrackletUnmergeResponse(BaseModel):
+    tracklet_id: str
+    original_global_track_id: str
+    new_global_track_id: str
+
+
+@router.post(
+    "/internal/corrections/unmerge_tracklet",
+    response_model=TrackletUnmergeResponse,
+)
+async def unmerge_tracklet(
+    body: TrackletUnmergeRequest,
+    ctx: _CorrectionContext = Depends(get_context),
+) -> TrackletUnmergeResponse:
+    """Detach a tracklet from its current global track.
+
+    Creates a new GlobalTrack for the detached tracklet and adds a
+    do_not_fuse hint so the cross-camera associator will not re-fuse
+    the pair on the next association frame.
+    """
+    if ctx.dnf_repo is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "unmerge.unavailable",
+                "message": "Do-not-fuse repository is not configured.",
+            },
+        )
+
+    svc = TrackletUnmergeService(
+        global_track_repo=ctx.global_track_repo,
+        dnf_repo=ctx.dnf_repo,
+    )
+
+    try:
+        result = await svc.unmerge(
+            tracklet_id=body.tracklet_id,
+            requested_by=body.requested_by,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "tracklet.not_found",
+                "message": str(exc),
+            },
+        ) from exc
+
+    return TrackletUnmergeResponse(
+        tracklet_id=result.tracklet_id,
+        original_global_track_id=result.original_global_track_id,
+        new_global_track_id=result.new_global_track_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /internal/corrections/merge_global_tracks
+# ---------------------------------------------------------------------------
+
+
+class GlobalTrackMergeRequest(BaseModel):
+    source_id: str
+    target_id: str
+    merged_by: str = "caregiver"
+
+
+class GlobalTrackMergeResponse(BaseModel):
+    source_id: str
+    target_id: str
+    merged_at: datetime
+
+
+@router.post(
+    "/internal/corrections/merge_global_tracks",
+    response_model=GlobalTrackMergeResponse,
+)
+async def merge_global_tracks(
+    body: GlobalTrackMergeRequest,
+    ctx: _CorrectionContext = Depends(get_context),
+) -> GlobalTrackMergeResponse:
+    if ctx.merger is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "merge.unavailable",
+                "message": "Global track merge is not configured.",
+            },
+        )
+    await ctx.merger.merge(
+        source_id=body.source_id,
+        target_id=body.target_id,
+        merged_by=body.merged_by,
+    )
+    return GlobalTrackMergeResponse(
+        source_id=body.source_id,
+        target_id=body.target_id,
+        merged_at=datetime.now(UTC),
     )

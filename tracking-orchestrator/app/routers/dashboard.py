@@ -8,6 +8,8 @@ Routes:
     GET /internal/dashboard/trajectory
     GET /internal/dashboard/dwell_summary
     GET /internal/keyframes
+    GET /internal/keyframes/{keyframe_id}/bboxes
+    PUT /internal/bboxes/{annotation_id}/override
 """
 
 from __future__ import annotations
@@ -16,9 +18,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 
 from app.storage.base import (
+    BboxAnnotationRepository,
     DementiaSignalRepository,
+    InMemoryBboxAnnotationRepository,
     InMemoryDementiaSignalRepository,
     InMemoryKeyframeRepository,
     InMemoryTrajectoryRepository,
@@ -35,6 +40,7 @@ router = APIRouter(tags=["dashboard-internal"])
 _signal_repo: DementiaSignalRepository = InMemoryDementiaSignalRepository()
 _trajectory_repo: TrajectoryRepository = InMemoryTrajectoryRepository()
 _keyframe_repo: KeyframeRepository = InMemoryKeyframeRepository()
+_bbox_repo: BboxAnnotationRepository = InMemoryBboxAnnotationRepository()
 
 
 def get_signal_repo() -> DementiaSignalRepository:
@@ -49,6 +55,10 @@ def get_keyframe_repo() -> KeyframeRepository:
     return _keyframe_repo
 
 
+def get_bbox_repo() -> BboxAnnotationRepository:
+    return _bbox_repo
+
+
 def set_repos(
     signal: DementiaSignalRepository,
     trajectory: TrajectoryRepository,
@@ -59,6 +69,12 @@ def set_repos(
     _signal_repo = signal
     _trajectory_repo = trajectory
     _keyframe_repo = keyframe
+
+
+def set_bbox_repo(bbox: BboxAnnotationRepository) -> None:
+    """Wire the production bbox annotation repository."""
+    global _bbox_repo
+    _bbox_repo = bbox
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +305,65 @@ async def retain_keyframe(
 
 
 # ---------------------------------------------------------------------------
+# GET /internal/keyframes/{keyframe_id}/bboxes
+# ---------------------------------------------------------------------------
+
+
+@router.get("/internal/keyframes/{keyframe_id}/bboxes")
+async def get_keyframe_bboxes(
+    keyframe_id: str,
+    repo: BboxAnnotationRepository = Depends(get_bbox_repo),
+) -> dict[str, Any]:
+    """Return YOLO bounding-box annotations for a tagged keyframe."""
+    bboxes = await repo.get_bbox_annotations_for_keyframe(keyframe_id)
+    return {"bboxes": [_bbox_to_dict(b) for b in bboxes], "count": len(bboxes)}
+
+
+# ---------------------------------------------------------------------------
+# PUT /internal/bboxes/{annotation_id}/override
+# ---------------------------------------------------------------------------
+
+
+class BboxOverrideBody(BaseModel):
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    override_by: str = "caregiver"
+
+
+@router.put("/internal/bboxes/{annotation_id}/override")
+async def override_bbox(
+    annotation_id: str,
+    body: BboxOverrideBody,
+    repo: BboxAnnotationRepository = Depends(get_bbox_repo),
+) -> dict[str, Any]:
+    """Persist a user-drawn bounding-box override.
+
+    Returns the full updated annotation.  Raises 404 when the annotation
+    does not exist.
+    """
+    await repo.save_override_bbox(
+        annotation_id=annotation_id,
+        x1=body.x1,
+        y1=body.y1,
+        x2=body.x2,
+        y2=body.y2,
+        override_by=body.override_by,
+    )
+    updated = await repo.get_annotation_by_id(annotation_id)
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "bbox_annotation.not_found",
+                "message": f"Bbox annotation {annotation_id} not found.",
+            },
+        )
+    return _bbox_to_dict(updated)
+
+
+# ---------------------------------------------------------------------------
 # Serialisation helpers
 # ---------------------------------------------------------------------------
 
@@ -339,4 +414,28 @@ def _keyframe_to_dict(k: Any) -> dict[str, Any]:
         "person_id": annotations.get("identity_id") or None,
         "signal_type": annotations.get("signal_type") or None,
         "severity": annotations.get("severity") or None,
+    }
+
+
+def _bbox_to_dict(b: Any) -> dict[str, Any]:
+    return {
+        "id": getattr(b, "id", None),
+        "keyframe_id": b.keyframe_id,
+        "tracklet_id": b.tracklet_id,
+        "camera_id": b.camera_id,
+        "x1": b.x1,
+        "y1": b.y1,
+        "x2": b.x2,
+        "y2": b.y2,
+        "detection_confidence": b.detection_confidence,
+        "frame_width": b.frame_width,
+        "frame_height": b.frame_height,
+        "identity_id": b.identity_id,
+        "created_at": b.created_at.isoformat(),
+        "override_x1": getattr(b, "override_x1", None),
+        "override_y1": getattr(b, "override_y1", None),
+        "override_x2": getattr(b, "override_x2", None),
+        "override_y2": getattr(b, "override_y2", None),
+        "override_by": getattr(b, "override_by", None),
+        "override_at": b.override_at.isoformat() if getattr(b, "override_at", None) else None,
     }

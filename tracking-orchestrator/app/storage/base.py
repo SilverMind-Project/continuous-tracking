@@ -7,8 +7,10 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 from ..domain import (
+    BboxAnnotation,
     CameraConfig,
     DementiaSignal,
     Detection,
@@ -297,6 +299,18 @@ class GlobalTrackRepository(ABC):
     @abstractmethod
     async def get_by_tracklet_id(self, tracklet_id: str) -> GlobalTrack | None:
         """Find the global track that contains a given tracklet ID."""
+
+    @abstractmethod
+    async def remove_tracklet(
+        self, global_track_id: str, tracklet_id: str
+    ) -> GlobalTrack | None:
+        """Remove a tracklet from a global track.
+
+        Returns the updated GlobalTrack, or None if the global track
+        does not exist.  If the global track has only this tracklet
+        remaining it is closed rather than left empty.
+        """
+        ...
 
     @abstractmethod
     async def close_global_track(self, global_track_id: str) -> None:
@@ -759,6 +773,37 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
             return None
         return self._tracks.get(gt_id)
 
+    async def remove_tracklet(
+        self, global_track_id: str, tracklet_id: str
+    ) -> GlobalTrack | None:
+        track = self._tracks.get(global_track_id)
+        if track is None:
+            return None
+        new_tids = [tid for tid in track.tracklet_ids if tid != tracklet_id]
+        if not new_tids:
+            self._tracks[global_track_id] = GlobalTrack(
+                global_track_id=track.global_track_id,
+                camera_ids=track.camera_ids,
+                tracklet_ids=[],
+                started_at=track.started_at,
+                last_seen_at=track.last_seen_at,
+                current_identity_id=track.current_identity_id,
+                state="closed",
+            )
+            self._by_tracklet.pop(tracklet_id, None)
+            return self._tracks[global_track_id]
+        self._tracks[global_track_id] = GlobalTrack(
+            global_track_id=track.global_track_id,
+            camera_ids=track.camera_ids,
+            tracklet_ids=new_tids,
+            started_at=track.started_at,
+            last_seen_at=track.last_seen_at,
+            current_identity_id=track.current_identity_id,
+            state=track.state,
+        )
+        self._by_tracklet.pop(tracklet_id, None)
+        return self._tracks[global_track_id]
+
     async def close_global_track(self, global_track_id: str) -> None:
         track = self._tracks.get(global_track_id)
         if track is not None and track.state == "active":
@@ -971,6 +1016,132 @@ class InMemoryKeyframeRepository(KeyframeRepository):
             results = [k for k in results if k.captured_at >= after]
         results.sort(key=lambda k: k.captured_at, reverse=True)
         return results[:limit]
+
+
+class DoNotFuseRepository(Protocol):
+    """Persist pairs of (tracklet_id, global_track_id) that must never be fused."""
+
+    async def add_hint(
+        self, tracklet_id: str, global_track_id: str, created_by: str = "system"
+    ) -> None: ...
+
+    async def is_blocked(self, tracklet_id: str, global_track_id: str) -> bool: ...
+
+    async def get_hints_for_tracklet(self, tracklet_id: str) -> list[str]:
+        """Returns list of global_track_ids blocked for this tracklet."""
+        ...
+
+    async def remove_hint(self, tracklet_id: str, global_track_id: str) -> None:
+        """Allow re-fusion (used if caregiver reverses the correction)."""
+        ...
+
+
+class InMemoryDoNotFuseRepository:
+    """In-memory store for do-not-fuse hints."""
+
+    def __init__(self) -> None:
+        self._hints: set[tuple[str, str]] = set()
+
+    async def add_hint(
+        self, tracklet_id: str, global_track_id: str, created_by: str = "system"
+    ) -> None:
+        self._hints.add((tracklet_id, global_track_id))
+
+    async def is_blocked(self, tracklet_id: str, global_track_id: str) -> bool:
+        return (tracklet_id, global_track_id) in self._hints
+
+    async def get_hints_for_tracklet(self, tracklet_id: str) -> list[str]:
+        return [gt for (tr, gt) in self._hints if tr == tracklet_id]
+
+    async def remove_hint(self, tracklet_id: str, global_track_id: str) -> None:
+        self._hints.discard((tracklet_id, global_track_id))
+
+
+class BboxAnnotationRepository(Protocol):
+    """Persist YOLO bounding-box annotations per keyframe."""
+
+    async def save_bbox_annotations(
+        self, annotations: list[BboxAnnotation]
+    ) -> None: ...
+
+    async def get_bbox_annotations_for_keyframe(
+        self, keyframe_id: str
+    ) -> list[BboxAnnotation]: ...
+
+    async def get_bbox_annotations_for_tracklet(
+        self, tracklet_id: str
+    ) -> list[BboxAnnotation]: ...
+
+    async def update_identity_id(
+        self, tracklet_id: str, identity_id: str
+    ) -> None:
+        """Called by IdentityRewriter when an identity is revised."""
+        ...
+
+    async def save_override_bbox(
+        self,
+        annotation_id: str,
+        x1: float, y1: float, x2: float, y2: float,
+        override_by: str,
+    ) -> None:
+        """Persist a user-drawn bbox override (written by M4 frontend path)."""
+        ...
+
+    async def get_annotation_by_id(
+        self, annotation_id: str
+    ) -> BboxAnnotation | None:
+        """Return a single bbox annotation by its UUID, or None."""
+        ...
+
+
+class InMemoryBboxAnnotationRepository:
+    """In-memory store for bbox annotations."""
+
+    def __init__(self) -> None:
+        self._rows: dict[str, BboxAnnotation] = {}
+        self._by_keyframe: dict[str, list[str]] = {}
+        self._by_tracklet: dict[str, list[str]] = {}
+
+    async def save_bbox_annotations(self, annotations: list[BboxAnnotation]) -> None:
+        for ann in annotations:
+            ann_id = str(uuid.uuid4())
+            ann_with_id = BboxAnnotation(
+                **{**ann.__dict__, "id": ann_id}
+            )
+            self._rows[ann_id] = ann_with_id
+            self._by_keyframe.setdefault(ann.keyframe_id, []).append(ann_id)
+            self._by_tracklet.setdefault(ann.tracklet_id, []).append(ann_id)
+
+    async def get_bbox_annotations_for_keyframe(self, keyframe_id: str) -> list[BboxAnnotation]:
+        return [self._rows[i] for i in self._by_keyframe.get(keyframe_id, [])]
+
+    async def get_bbox_annotations_for_tracklet(self, tracklet_id: str) -> list[BboxAnnotation]:
+        return [self._rows[i] for i in self._by_tracklet.get(tracklet_id, [])]
+
+    async def get_annotation_by_id(self, annotation_id: str) -> BboxAnnotation | None:
+        return self._rows.get(annotation_id)
+
+    async def update_identity_id(self, tracklet_id: str, identity_id: str) -> None:
+        for ann_id, ann in list(self._rows.items()):
+            if ann.tracklet_id == tracklet_id:
+                self._rows[ann_id] = BboxAnnotation(
+                    **{**ann.__dict__, "identity_id": identity_id}
+                )
+
+    async def save_override_bbox(
+        self, annotation_id: str,
+        x1: float, y1: float, x2: float, y2: float,
+        override_by: str,
+    ) -> None:
+        if annotation_id in self._rows:
+            ann = self._rows[annotation_id]
+            self._rows[annotation_id] = BboxAnnotation(
+                **{**ann.__dict__,
+                   "override_x1": x1, "override_y1": y1,
+                   "override_x2": x2, "override_y2": y2,
+                   "override_by": override_by,
+                   "override_at": datetime.now(UTC)}
+            )
 
 
 class DementiaSignalRepository(ABC):

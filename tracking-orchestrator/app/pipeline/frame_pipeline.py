@@ -59,10 +59,13 @@ from ..services.identity_rewriter import (
     InMemoryIdentityRewriter,
 )
 from ..storage.base import (
+    BboxAnnotationRepository,
     BehaviorBaselineRepository,
     DementiaSignalRepository,
+    DoNotFuseRepository,
     GalleryRepository,
     GlobalTrackRepository,
+    InMemoryBboxAnnotationRepository,
     InMemoryBehaviorBaselineRepository,
     InMemoryDementiaSignalRepository,
     InMemoryGalleryRepository,
@@ -87,6 +90,7 @@ from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
 from ..trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
 from ..trajectory.motion_energy import MotionEnergyTracker
 from ..trajectory.posture import GlobalPostureTracker, classify_posture
+from ..trajectory.posture_strategy import PostureStrategy
 from ..trajectory.trajectory_writer import TrajectoryWriter
 from ..transport.redis_streams import (
     FrameReady,
@@ -343,8 +347,11 @@ class FrameProcessingPipeline:
         self._pose_estimator: PoseEstimator | None = None
         self._motion_energy_tracker: MotionEnergyTracker | None = None
         self._posture_tracker: GlobalPostureTracker | None = None
+        self._posture_strategy: PostureStrategy | None = None
         # Phase 1: cross-table identity rewriter (orchestrator side).
         self._identity_rewriter: IdentityRewriter | None = None
+        # M3: Bbox annotation repository for per-keyframe bbox persistence.
+        self._bbox_repo: BboxAnnotationRepository | None = None
         # Phase 7: per-tracklet trail deque (last 12 normalised foot-points).
         _trail_maxlen = 12
         self._trail_by_tracklet: dict[str, deque[tuple[float, float]]] = {}
@@ -393,9 +400,15 @@ class FrameProcessingPipeline:
         reid_embedder: ReidEmbedderProtocol | None = None,
         # Pose estimator (RTMPose) — optional; if None, posture defaults to "unknown".
         pose_estimator: PoseEstimator | None = None,
+        # Posture strategy — pluggable; defaults to RTMPose-only when None.
+        posture_strategy: PostureStrategy | None = None,
         # Identity rewriter — rewrites trajectory/dwell/signal rows on revision.
         # Defaults to InMemory no-op; inject PostgresIdentityRewriter in production.
         identity_rewriter: IdentityRewriter | None = None,
+        # Bbox annotation repository — persists per-keyframe YOLO bboxes.
+        bbox_repo: BboxAnnotationRepository | None = None,
+        # Do-not-fuse hints repository — blocks re-fusion of unmerged tracklets.
+        dnf_repo: DoNotFuseRepository | None = None,
     ) -> None:
         """Initialize all pipeline components.
 
@@ -430,11 +443,15 @@ class FrameProcessingPipeline:
 
         # Pose estimation
         self._pose_estimator = pose_estimator
+        self._posture_strategy = posture_strategy
         self._motion_energy_tracker = MotionEnergyTracker() if pose_estimator is not None else None
         self._posture_tracker = GlobalPostureTracker(required_consecutive=2)
 
         # Identity rewriter (orchestrator side)
         self._identity_rewriter = identity_rewriter or InMemoryIdentityRewriter()
+
+        # Bbox annotation repository
+        self._bbox_repo = bbox_repo or InMemoryBboxAnnotationRepository()
 
         # Tracklet manager
         tracker = PerCameraTrackers(
@@ -473,7 +490,9 @@ class FrameProcessingPipeline:
             global_track_repo=self._global_track_repo,
             config=self._config.cross_cam,
             floor_projector=self._floor_projector,
+            dnf_repo=dnf_repo,
         )
+        self._dnf_repo = dnf_repo
         self._sync_adjacency()
 
         self._identity_resolver = IdentityResolver(
@@ -504,6 +523,7 @@ class FrameProcessingPipeline:
         self._keyframe_sampler = KeyframeSampler(
             repo=keyframe_repo or InMemoryKeyframeRepository(),
             config=self._config.sampler,
+            bbox_repo=bbox_repo or InMemoryBboxAnnotationRepository(),
         )
 
         self._scene_publisher = SceneSamplesPublisher(
@@ -815,6 +835,7 @@ class FrameProcessingPipeline:
                 global_track_repo=self._global_track_repo,
                 config=self._config.cross_cam,
                 floor_projector=self._floor_projector,
+                dnf_repo=self._dnf_repo,
             )
 
     def set_overlap_groups(self, groups: list[OverlapGroup]) -> None:
@@ -960,6 +981,8 @@ class FrameProcessingPipeline:
 
             # ReID and pose both operate on the same crops — run in parallel.
             async def _do_reid() -> list[Embedding]:
+                # Crop to YOLO bbox before embedding: ReID must see only the person's
+                # pixel region, not the full frame, or gallery distances collapse to noise.
                 if self._reid_embedder is not None:
                     return await self._reid_embedder.embed_batch(crops)
                 return []
@@ -983,11 +1006,7 @@ class FrameProcessingPipeline:
                 )
                 emb = embeddings[det_idx] if det_idx < len(embeddings) else None
 
-                # Classify posture for this detection.
-                posture: PostureType = "unknown"
                 pose_result = pose_results[det_idx] if det_idx < len(pose_results) else None
-                if pose_result is not None:
-                    posture = classify_posture(pose_result, bbox)
 
                 domain_det = Detection(
                     detection_id=str(uuid.uuid4()),
@@ -999,13 +1018,14 @@ class FrameProcessingPipeline:
                     confidence=det.confidence,
                 )
                 domain_detections.append(domain_det)
-                det_posture[domain_det.detection_id] = posture
                 if pose_result is not None:
                     det_pose_result[domain_det.detection_id] = pose_result
 
         # Step 3: Per-camera tracking — run even with 0 detections so the
         # BoT-SORT Kalman filter ages out lost tracklets instead of keeping
         # them alive indefinitely when nobody is in frame.
+        # Always call update, even with zero detections: BoT-SORT ages lost
+        # tracklets toward close_grace_frames and must not be skipped.
         local_tracks = self._tracker.update(
             camera_id=frame.camera_id,
             detections=domain_detections,
@@ -1244,7 +1264,7 @@ class FrameProcessingPipeline:
                 # via detection_id → tracklet → global_track chain.
                 gt_posture: PostureType = "unknown"
                 gt_motion_energy: float | None = None
-                
+
                 # Find a detection_id belonging to this global_track_id.
                 pose = None
                 matching_detection_id = None
@@ -1286,7 +1306,11 @@ class FrameProcessingPipeline:
 
                     if self._posture_tracker is not None:
                         gt_obj = next(
-                            (gt for gt in active_global_tracks if gt.global_track_id == decision.global_track_id),
+                            (
+                                gt
+                                for gt in active_global_tracks
+                                if gt.global_track_id == decision.global_track_id
+                            ),
                             None,
                         )
                         active_camera_ids = gt_obj.camera_ids if gt_obj else [frame.camera_id]
@@ -1352,6 +1376,16 @@ class FrameProcessingPipeline:
                         "y_max": tracklet.last_bbox.y_max,
                     }
 
+                # Build bbox data for annotation persistence.
+                bbox_data: tuple[float, float, float, float] | None = None
+                if tracklet.last_bbox is not None:
+                    bbox_data = (
+                        float(tracklet.last_bbox.x_min),
+                        float(tracklet.last_bbox.y_min),
+                        float(tracklet.last_bbox.x_max),
+                        float(tracklet.last_bbox.y_max),
+                    )
+
                 sampled: TaggedKeyframe | None
                 # Trigger on identity revision.
                 if gt_id in revised_gt_ids:
@@ -1363,6 +1397,11 @@ class FrameProcessingPipeline:
                         captured_at=sample_time,
                         annotations=annotations,
                         tag_reason="identity_changed",
+                        detection_bbox=bbox_data,
+                        detection_confidence=1.0,
+                        detection_frame_width=effective_width,
+                        detection_frame_height=effective_height,
+                        detection_identity_id=identity_id or None,
                     )
                 else:
                     sampled = await self._keyframe_sampler.maybe_sample(
@@ -1372,6 +1411,11 @@ class FrameProcessingPipeline:
                         minio_key=frame.minio_key,
                         captured_at=sample_time,
                         annotations=annotations,
+                        detection_bbox=bbox_data,
+                        detection_confidence=1.0,
+                        detection_frame_width=effective_width,
+                        detection_frame_height=effective_height,
+                        detection_identity_id=identity_id or None,
                     )
 
                 if sampled is not None and self._scene_publisher:
@@ -1410,6 +1454,17 @@ class FrameProcessingPipeline:
                     applies_to=rewrite_time,
                 )
 
+        # Step 9a-2: Update bbox annotations for all tracklets in each revision.
+        if (
+            new_revisions
+            and self._bbox_repo is not None
+        ):
+            for rev in new_revisions:
+                if rev.new_identity_id is None:
+                    continue
+                for tid in rev.tracklet_ids:
+                    await self._bbox_repo.update_identity_id(tid, rev.new_identity_id)
+
         # Step 9b: Back-fill tracklet_id and global_track_id onto each
         # Detection so the serialised proto carries identity context for the
         # CC subscriber and the live-view overlay.
@@ -1425,6 +1480,24 @@ class FrameProcessingPipeline:
                 gt_id = tracklet_to_gt.get(tid, "")
                 updated.append(replace(domain_det, tracklet_id=tid, global_track_id=gt_id))
             domain_detections = updated
+
+        # Classify posture per detection through the pluggable strategy.
+        # Runs after tracklet assignment so the strategy has access to
+        # detection.tracklet_id for per-tracklet caching (depth slow-path).
+        # Only fills entries not already set by GlobalPostureTracker.
+        for domain_det in domain_detections:
+            if domain_det.detection_id in det_posture:
+                continue
+            pose_result = det_pose_result.get(domain_det.detection_id)
+            if self._posture_strategy is not None:
+                posture = await self._posture_strategy.infer(
+                    image, domain_det, pose_result,
+                )
+            elif pose_result is not None:
+                posture = classify_posture(pose_result, domain_det.bbox)
+            else:
+                posture = "unknown"
+            det_posture[domain_det.detection_id] = posture
 
         # Step 9c (Phase 7): Update per-tracklet trail deques with the current
         # foot-point (bbox bottom-centre in normalised camera coords).

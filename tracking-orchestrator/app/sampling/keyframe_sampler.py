@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ..domain import TaggedKeyframe
-from ..storage.base import KeyframeRepository
+from ..domain import BboxAnnotation, TaggedKeyframe
+from ..storage.base import BboxAnnotationRepository, KeyframeRepository
 
 
 @dataclass(frozen=True)
@@ -65,9 +65,11 @@ class KeyframeSampler:
         self,
         repo: KeyframeRepository,
         config: SamplerConfig | None = None,
+        bbox_repo: BboxAnnotationRepository | None = None,
     ) -> None:
         self._repo = repo
         self._config = config or SamplerConfig()
+        self._bbox_repo = bbox_repo
         # Last time a periodic sample was taken per tracklet_id.
         self._last_sample: dict[str, datetime] = {}
 
@@ -79,6 +81,12 @@ class KeyframeSampler:
         minio_key: str,
         captured_at: datetime,
         annotations: dict[str, Any],
+        *,
+        detection_bbox: tuple[float, float, float, float] | None = None,
+        detection_confidence: float = 0.0,
+        detection_frame_width: int = 0,
+        detection_frame_height: int = 0,
+        detection_identity_id: str | None = None,
     ) -> TaggedKeyframe | None:
         """Sample a periodic keyframe if the interval has elapsed.
 
@@ -92,8 +100,9 @@ class KeyframeSampler:
                 return None
 
         expires_at = captured_at + timedelta(hours=self._config.periodic_expires_hours)
+        keyframe_id = str(uuid.uuid4())
         keyframe = TaggedKeyframe(
-            keyframe_id=str(uuid.uuid4()),
+            keyframe_id=keyframe_id,
             tracklet_id=tracklet_id,
             global_track_id=global_track_id,
             camera_id=camera_id,
@@ -105,6 +114,25 @@ class KeyframeSampler:
         )
         await self._repo.save_keyframe(keyframe)
         self._last_sample[tracklet_id] = captured_at
+
+        if self._bbox_repo is not None and detection_bbox is not None:
+            await self._bbox_repo.save_bbox_annotations([
+                BboxAnnotation(
+                    keyframe_id=keyframe_id,
+                    tracklet_id=tracklet_id,
+                    camera_id=camera_id,
+                    x1=detection_bbox[0],
+                    y1=detection_bbox[1],
+                    x2=detection_bbox[2],
+                    y2=detection_bbox[3],
+                    detection_confidence=detection_confidence,
+                    frame_width=detection_frame_width,
+                    frame_height=detection_frame_height,
+                    identity_id=detection_identity_id,
+                    created_at=datetime.now(UTC),
+                )
+            ])
+
         return keyframe
 
     async def trigger_sample(
@@ -116,6 +144,12 @@ class KeyframeSampler:
         captured_at: datetime,
         annotations: dict[str, Any],
         tag_reason: str,
+        *,
+        detection_bbox: tuple[float, float, float, float] | None = None,
+        detection_confidence: float = 0.0,
+        detection_frame_width: int = 0,
+        detection_frame_height: int = 0,
+        detection_identity_id: str | None = None,
     ) -> TaggedKeyframe:
         """Force a keyframe sample outside the periodic schedule.
 
@@ -125,8 +159,9 @@ class KeyframeSampler:
         at the normal interval after the last periodic one).
         """
         expires_at = captured_at + timedelta(days=self._config.trigger_expires_days)
+        keyframe_id = str(uuid.uuid4())
         keyframe = TaggedKeyframe(
-            keyframe_id=str(uuid.uuid4()),
+            keyframe_id=keyframe_id,
             tracklet_id=tracklet_id,
             global_track_id=global_track_id,
             camera_id=camera_id,
@@ -137,6 +172,25 @@ class KeyframeSampler:
             expires_at=expires_at,
         )
         await self._repo.save_keyframe(keyframe)
+
+        if self._bbox_repo is not None and detection_bbox is not None:
+            await self._bbox_repo.save_bbox_annotations([
+                BboxAnnotation(
+                    keyframe_id=keyframe_id,
+                    tracklet_id=tracklet_id,
+                    camera_id=camera_id,
+                    x1=detection_bbox[0],
+                    y1=detection_bbox[1],
+                    x2=detection_bbox[2],
+                    y2=detection_bbox[3],
+                    detection_confidence=detection_confidence,
+                    frame_width=detection_frame_width,
+                    frame_height=detection_frame_height,
+                    identity_id=detection_identity_id,
+                    created_at=datetime.now(UTC),
+                )
+            ])
+
         return keyframe
 
     def reset_tracklet(self, tracklet_id: str) -> None:

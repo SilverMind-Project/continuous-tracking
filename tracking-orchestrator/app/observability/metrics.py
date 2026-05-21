@@ -81,6 +81,10 @@ class Metrics:
     frame_end_to_end_latency_ms: Histogram
     triton_inference_latency_ms: Histogram
 
+    # ---- Posture slow-path -------------------------------------------
+    cts_posture_slow_path_runs_total: Counter
+    cts_posture_slow_path_latency_seconds: Histogram
+
     # ---- Batching ----------------------------------------------------
     batch_size_metric: Histogram
 
@@ -246,6 +250,16 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Per-model Triton gRPC inference latency.",
             LATENCY_BUCKETS_MS,
             ["model"],
+        ),
+        cts_posture_slow_path_runs_total=_counter(
+            "cts_posture_slow_path_runs_total",
+            "Number of depth-based posture inference runs.",
+            ["camera_id"],
+        ),
+        cts_posture_slow_path_latency_seconds=_hist(
+            "cts_posture_slow_path_latency_seconds",
+            "Latency of depth-based posture inference.",
+            (0.05, 0.1, 0.2, 0.5, 1.0, 2.0),
         ),
         batch_size_metric=_hist(
             "cts_batch_size",

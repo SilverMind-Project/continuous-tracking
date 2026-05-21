@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from structlog import get_logger
 
 from ..domain import CameraId, GlobalTrack, Tracklet, TrackletId
-from ..storage.base import GalleryRepository, GlobalTrackRepository
+from ..storage.base import DoNotFuseRepository, GalleryRepository, GlobalTrackRepository
 from .camera_adjacency import CameraAdjacency
 from .floor_projector import FloorProjector
 
@@ -124,12 +124,14 @@ class CrossCameraAssociator:
         global_track_repo: GlobalTrackRepository,
         config: CrossCamConfig | None = None,
         floor_projector: FloorProjector | None = None,
+        dnf_repo: DoNotFuseRepository | None = None,
     ) -> None:
         self._gallery = gallery
         self._adjacency = adjacency
         self._repo = global_track_repo
         self._config = config or CrossCamConfig()
         self._floor_projector = floor_projector
+        self._dnf_repo = dnf_repo
 
     async def associate(
         self,
@@ -150,6 +152,14 @@ class CrossCameraAssociator:
 
         # ---- Step 0: Build tracklet lookup ----
         tracklet_by_id: dict[TrackletId, Tracklet] = {t.tracklet_id: t for t in open_tracklets}
+
+        # ---- Step 0b: Pre-load blocked (tracklet, global_track) pairs ----
+        blocked_pairs: set[tuple[str, str]] = set()
+        if self._dnf_repo is not None:
+            for tid in tracklet_by_id:
+                blocked_gts = await self._dnf_repo.get_hints_for_tracklet(tid)
+                for gt in blocked_gts:
+                    blocked_pairs.add((tid, gt))
 
         # ---- Step 1: Group tracklets by existing GlobalTrack ----
         existing_gt_map: dict[TrackletId, str] = {}
@@ -254,6 +264,16 @@ class CrossCameraAssociator:
                         (gt for gt in active_gts if gt.global_track_id == gt_id), None
                     )
                     if existing_gt:
+                        # Check do_not_fuse: if the new tracklet is blocked
+                        # against this existing GlobalTrack, skip this pair.
+                        new_tid = new_tids[0]
+                        if (new_tid, existing_gt.global_track_id) in blocked_pairs:
+                            logger.debug(
+                                "cross_camera_blocked_by_dnf",
+                                tracklet_id=new_tid,
+                                global_track_id=existing_gt.global_track_id,
+                            )
+                            continue
                         merged = await self._repo.merge_tracklets(
                             tracklet_ids=new_tids,
                             camera_ids=new_cids,
@@ -360,6 +380,13 @@ class CrossCameraAssociator:
                             and gap_s <= self._config.same_camera_reentry_max_gap_s
                             else self._config.unknown_merge_appearance_threshold
                         )
+                        if (t.tracklet_id, gt.global_track_id) in blocked_pairs:
+                            logger.debug(
+                                "same_camera_reentry_blocked_by_dnf",
+                                tracklet_id=t.tracklet_id,
+                                global_track_id=gt.global_track_id,
+                            )
+                            continue
                         if app_sim >= reentry_threshold:
                             logger.debug(
                                 "same_camera_reentry_merge",
@@ -440,6 +467,14 @@ class CrossCameraAssociator:
                         )
                         if score is not None and score.combined_score < score_threshold:
                             continue  # skip if score below threshold
+                    # Check do_not_fuse before extending this GlobalTrack.
+                    if (t.tracklet_id, gt.global_track_id) in blocked_pairs:
+                        logger.debug(
+                            "cross_camera_remaining_blocked_by_dnf",
+                            tracklet_id=t.tracklet_id,
+                            global_track_id=gt.global_track_id,
+                        )
+                        continue
                     # Extend this GlobalTrack.
                     merged = await self._repo.merge_tracklets(
                         tracklet_ids=[t.tracklet_id],

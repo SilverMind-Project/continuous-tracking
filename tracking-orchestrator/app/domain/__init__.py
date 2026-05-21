@@ -475,6 +475,32 @@ class TaggedKeyframe:
     expires_at: datetime
 
 
+@dataclass(frozen=True)
+class BboxAnnotation:
+    """YOLO bounding box for one tracked person in one keyframe."""
+
+    keyframe_id: str  # FK to tagged_keyframes.id
+    tracklet_id: str  # FK to tracklets.id
+    camera_id: str
+    x1: float  # pixels, top-left x, in original frame resolution
+    y1: float  # pixels, top-left y
+    x2: float  # pixels, bottom-right x
+    y2: float  # pixels, bottom-right y
+    detection_confidence: float
+    frame_width: int  # original frame width (needed for normalisation in frontend)
+    frame_height: int  # original frame height
+    identity_id: str | None = None  # None if not yet resolved
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    id: str | None = None  # DB-generated UUID; None for new annotations before persist
+    # User-drawn override bbox (M4 will write to these columns)
+    override_x1: float | None = None
+    override_y1: float | None = None
+    override_x2: float | None = None
+    override_y2: float | None = None
+    override_by: str | None = None
+    override_at: datetime | None = None
+
+
 ActivityType = Literal[
     "entry",
     "exit",

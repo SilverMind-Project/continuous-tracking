@@ -825,3 +825,49 @@ class TestCrossCameraAssociator:
         active_ids = {gt.global_track_id for gt in active}
         assert "gt-x" in active_ids, "GT-X must stay active"
         assert "gt-y" in active_ids, "GT-Y must stay active"
+
+
+# ---------------------------------------------------------------------------
+# do_not_fuse integration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_blocked_pair_prevents_same_camera_reentry(
+    adjacency: CameraAdjacency,
+    global_track_repo: InMemoryGlobalTrackRepository,
+    gallery: InMemoryGalleryRepository,
+) -> None:
+    """When a (tracklet, global_track) pair is blocked, the same-camera
+    re-entry path must not merge them."""
+    from app.storage.base import InMemoryDoNotFuseRepository
+
+    dnf = InMemoryDoNotFuseRepository()
+    assoc = CrossCameraAssociator(
+        gallery=gallery,
+        adjacency=adjacency,
+        global_track_repo=global_track_repo,
+        dnf_repo=dnf,
+    )
+    emb = [0.1, 0.1, 0.1]
+    now = datetime.now(UTC)
+
+    # Create a global track via a first tracklet.
+    t1 = _make_tracklet("t1", "cam_a")
+    gallery._entries["e1"] = _make_gallery_entry("t1", "cam_a", embedding=emb)
+    gts = await assoc.associate([t1], captured_at=now)
+    gt_id = gts[0].global_track_id
+
+    # Block the pair.
+    await dnf.add_hint("t2", gt_id)
+
+    # Second tracklet on same camera with high appearance similarity.
+    t2 = _make_tracklet("t2", "cam_a")
+    gallery._entries["e2"] = _make_gallery_entry("t2", "cam_a", embedding=emb)
+
+    gts_after = await assoc.associate([t2], captured_at=now)
+    gt_ids_after = {gt.global_track_id for gt in gts_after}
+
+    # The blocked pair prevents re-entry merge: t2 should get its own GT.
+    assert gt_id in gt_ids_after, "Original GT must remain active"
+    assert len(gt_ids_after) == 2, "t2 must have created a new GT instead of merging"

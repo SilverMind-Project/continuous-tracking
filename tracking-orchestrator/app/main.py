@@ -44,10 +44,13 @@ from .routers.gallery import router as gallery_router
 from .routers.live import router as live_router
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
+from .sampling.keyframe_sampler import SamplerConfig
 from .services.cc_client import CognitiveCompanionClient
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
 from .services.overlap_group_sync import fetch_adjacency_edges, fetch_overlap_groups
 from .storage.migrations import MigrationRunner
+from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
+from .storage.postgres.do_not_fuse import PostgresDoNotFuseRepository
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.global_track_repo import PostgresGlobalTrackRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
@@ -55,6 +58,13 @@ from .storage.postgres.settings_repo import PostgresSettingsRepository
 from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.tracking_repo import PostgresTrackingRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
+from .tracking.cross_camera import CrossCamConfig
+from .tracking.global_track_merger import GlobalTrackMerger
+from .tracking.identity_resolver import ResolverConfig
+from .tracking.tracklet_manager import TrackletConfig
+from .trajectory.depth_posture_strategy import DepthPostureStrategy
+from .trajectory.fused_posture_strategy import FusedPostureStrategy
+from .trajectory.posture_strategy import RTMPosePostureStrategy
 from .transport.minio_frames import MinioFrameConfig, MinioFrameFetcher
 from .transport.redis_streams import TransportConfig
 
@@ -149,6 +159,89 @@ def _apply_confidence_fallback(cfgs: dict[str, FaceIdCameraConfig]) -> None:
             )
 
 
+def _str_to_bool(v: object) -> bool:
+    """Convert a string or bool to a Python bool."""
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() in ("1", "true", "yes")
+
+
+def _build_resolver_config(s: Any) -> ResolverConfig:
+    """Build ResolverConfig from parsed settings (dot-notation access)."""
+    r = s.get("resolver", {})
+    return ResolverConfig(
+        commit_prob=float(r.get("commit_prob", 0.65)),
+        commit_margin=float(r.get("commit_margin", 0.15)),
+        reid_decision_sim=float(r.get("reid_decision_sim", 0.70)),
+        revision_horizon_s=float(r.get("revision_horizon_s", 600.0)),
+        max_revisions_per_gt_per_minute=int(r.get("max_revisions_per_gt_per_minute", 3)),
+        unknown_mass=float(r.get("unknown_mass", 0.05)),
+        prior_weight=float(r.get("prior_weight", 0.6)),
+        face_weight_multiplier=float(r.get("face_weight_multiplier", 3.0)),
+        commit_prob_dense=float(r.get("commit_prob_dense", 0.80)),
+        commit_margin_dense=float(r.get("commit_margin_dense", 0.20)),
+        prior_maintenance_max_age_s=float(r.get("prior_maintenance_max_age_s", 120.0)),
+        identified_entry_boost_min_sim=float(r.get("identified_entry_boost_min_sim", 0.65)),
+        identified_entry_min_likelihood=float(r.get("identified_entry_min_likelihood", 0.80)),
+        enable_embedding_coherence_boost=_str_to_bool(
+            r.get("enable_embedding_coherence_boost", False)
+        ),
+        embedding_coherence_window=int(r.get("embedding_coherence_window", 5)),
+        embedding_coherence_min_sim=float(r.get("embedding_coherence_min_sim", 0.70)),
+        embedding_coherence_boost=float(r.get("embedding_coherence_boost", 2.0)),
+        face_commit_min_confidence=float(r.get("face_commit_min_confidence", 0.70)),
+        face_lock_maintenance_max_age_s=float(r.get("face_lock_maintenance_max_age_s", 300)),
+        cross_gt_face_propagation_threshold=float(
+            r.get("cross_gt_face_propagation_threshold", 0.65)
+        ),
+        cross_gt_face_propagation_max_gts=int(r.get("cross_gt_face_propagation_max_gts", 4)),
+    )
+
+
+def _build_tracklet_config(s: Any) -> TrackletConfig:
+    """Build TrackletConfig from parsed settings."""
+    t = s.get("tracklet", {})
+    return TrackletConfig(
+        min_hit_ratio=float(t.get("min_hit_ratio", 0.5)),
+        close_grace_frames=int(t.get("close_grace_frames", 15)),
+        gallery_min_quality=float(t.get("gallery_min_quality", 0.5)),
+        gallery_max_per_tracklet=int(t.get("gallery_max_per_tracklet", 20)),
+        min_detection_confidence=float(t.get("min_detection_confidence", 0.3)),
+        enabled=_str_to_bool(t.get("enabled", True)),
+        min_frames_to_publish=int(s.get("pipeline.tracker.min_frames_to_publish", 3)),
+    )
+
+
+def _build_cross_cam_config(s: Any) -> CrossCamConfig:
+    """Build CrossCamConfig from parsed settings."""
+    cc = s.get("cross_camera", {})
+    return CrossCamConfig(
+        alpha=float(cc.get("alpha", 0.7)),
+        floor_sigma_m=float(cc.get("floor_sigma_m", 1.5)),
+        max_floor_distance_m=float(cc.get("max_floor_distance_m", 8.0)),
+        min_link_score=float(cc.get("min_link_score", 0.55)),
+        unknown_merge_appearance_threshold=float(
+            cc.get("unknown_merge_appearance_threshold", 0.92)
+        ),
+        within_group_min_score=float(cc.get("within_group_min_score", 0.35)),
+        inter_gt_consolidation_appearance_threshold=float(
+            cc.get("inter_gt_consolidation_appearance_threshold", 0.88)
+        ),
+        known_identity_reentry_threshold=float(cc.get("known_identity_reentry_threshold", 0.72)),
+        same_camera_reentry_max_gap_s=float(cc.get("same_camera_reentry_max_gap_s", 30.0)),
+    )
+
+
+def _build_sampler_config(s: Any) -> SamplerConfig:
+    """Build SamplerConfig from parsed settings."""
+    sp = s.get("sampler", {})
+    return SamplerConfig(
+        keyframe_min_interval_s=float(sp.get("keyframe_min_interval_s", 30.0)),
+        periodic_expires_hours=int(sp.get("periodic_expires_hours", 72)),
+        trigger_expires_days=int(sp.get("trigger_expires_days", 30)),
+    )
+
+
 # Module-level asyncpg pool so shutdown can close it.
 _pool: Any = None  # asyncpg.Pool | None
 _triton_client: TritonGrpcClient | None = None
@@ -179,8 +272,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     overlap_groups = await fetch_overlap_groups(cc_client)
     adjacency_edges_raw = await fetch_adjacency_edges(cc_client)
 
+    # Build config objects from settings (env-interpolated YAML).
+    resolver_config = _build_resolver_config(settings)
+    tracklet_config = _build_tracklet_config(settings)
+    cross_cam_config = _build_cross_cam_config(settings)
+    sampler_config = _build_sampler_config(settings)
+
     config = PipelineConfig(
         transport=TransportConfig(redis_url=redis_url),
+        resolver=resolver_config,
+        tracklet=tracklet_config,
+        cross_cam=cross_cam_config,
+        sampler=sampler_config,
         face_id_url=face_id_url,
         face_id_cooldown_s=float(settings.get("face_id.cooldown_s", "5.0")),
         face_id_timeout_s=float(settings.get("face_id.timeout_s", "2.0")),
@@ -261,6 +364,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         keyframe_repo = PostgresKeyframeRepository(_pool)
         signal_repo = PostgresDementiaSignalRepository(_pool)
         settings_repo = PostgresSettingsRepository(_pool)
+        bbox_repo = PostgresBboxAnnotationRepository(_pool)
+        dnf_repo = PostgresDoNotFuseRepository(_pool)
     else:
         tracking_repo = None
         gallery_repo = None
@@ -269,6 +374,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         keyframe_repo = None
         signal_repo = None
         settings_repo = None
+        bbox_repo = None
 
     # -- Triton --
     triton_url = settings.get("triton.url", "")
@@ -354,6 +460,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         set_auto_calibration_context(auto_calibrator=None, frame_fetcher=_frame_fetcher)
         logger.info("auto_calibrator_disabled", reason="triton_not_connected_or_depth_disabled")
 
+    # -- Wire posture strategy --
+    fast_strategy = RTMPosePostureStrategy()
+
+    depth_slow_path_enabled = str(
+        settings.get("pipeline.posture.depth_slow_path_enabled", "false")
+    ).lower() in ("1", "true", "yes")
+
+    if depth_estimator is not None and depth_slow_path_enabled:
+        slow_strategy = DepthPostureStrategy(depth_estimator)
+        posture_strategy: RTMPosePostureStrategy | FusedPostureStrategy = FusedPostureStrategy(
+            fast=fast_strategy,
+            slow=slow_strategy,
+            slow_path_min_interval_s=float(
+                settings.get("pipeline.posture.depth_slow_path_min_interval_s", "15.0")
+            ),
+            slow_path_max_age_s=float(
+                settings.get("pipeline.posture.depth_slow_path_max_age_s", "60.0")
+            ),
+        )
+        logger.info(
+            "Posture strategy: fused (RTMPose + Depth slow-path)",
+            slow_path_interval_s=settings.get(
+                "pipeline.posture.depth_slow_path_min_interval_s", "15.0"
+            ),
+        )
+    else:
+        posture_strategy = fast_strategy
+        logger.info("Posture strategy: RTMPose only (depth slow-path disabled)")
+
     # -- Wire everything and start --
     identity_rewriter = (
         PostgresIdentityRewriter(_pool) if _pool is not None else InMemoryIdentityRewriter()
@@ -370,7 +505,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         frame_fetcher=_frame_fetcher,
         reid_embedder=reid_embedder,
         pose_estimator=pose_estimator,
+        posture_strategy=posture_strategy,
         identity_rewriter=identity_rewriter,
+        bbox_repo=bbox_repo,
+        dnf_repo=dnf_repo,
     )
     _pipeline.set_overlap_groups(overlap_groups)
 
@@ -397,10 +535,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Wire router modules to share the pipeline's repositories.
     if _pipeline.tracking_repo is not None and _pipeline.global_track_repo is not None:
+        global_track_merger = GlobalTrackMerger(_pool) if _pool is not None else None
         corrections_router_mod.set_context(
             tracking_repo=_pipeline.tracking_repo,
             global_track_repo=_pipeline.global_track_repo,
             publisher=_pipeline.revision_publisher,
+            dnf_repo=dnf_repo,
+            merger=global_track_merger,
         )
         live_router_mod.set_context(
             global_track_repo=_pipeline.global_track_repo,
@@ -412,7 +553,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         set_trajectory_context(trajectory_repo=trajectory_repo)
 
     if gallery_repo is not None:
-        gallery_router_mod.set_context(gallery_repo=gallery_repo)
+        gallery_router_mod.set_context(gallery_repo=gallery_repo, reid_embedder=reid_embedder)
 
     if signal_repo is not None and trajectory_repo is not None and keyframe_repo is not None:
         dashboard_router_mod.set_repos(
@@ -420,6 +561,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             trajectory=trajectory_repo,
             keyframe=keyframe_repo,
         )
+
+    if bbox_repo is not None:
+        dashboard_router_mod.set_bbox_repo(bbox_repo)
 
     yield
 

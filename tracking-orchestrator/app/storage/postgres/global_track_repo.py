@@ -56,10 +56,21 @@ SELECT global_track_id, camera_ids, tracklet_ids, started_at,
        last_seen_at, current_identity_id, state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE state = 'active'
+  AND merged_into_id IS NULL
 ORDER BY last_seen_at DESC
 """
 
 _SQL_LIST_SINCE = """
+SELECT global_track_id, camera_ids, tracklet_ids, started_at,
+       last_seen_at, current_identity_id, state, last_posterior_jsonb
+FROM continuous_tracking.global_tracks
+WHERE last_seen_at >= $1
+  AND merged_into_id IS NULL
+ORDER BY last_seen_at DESC
+LIMIT $2
+"""
+
+_SQL_LIST_SINCE_INCLUDE_MERGED = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
        last_seen_at, current_identity_id, state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
@@ -73,6 +84,7 @@ SELECT global_track_id, camera_ids, tracklet_ids, started_at,
        last_seen_at, current_identity_id, state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE last_seen_at >= $1 AND state = 'active'
+  AND merged_into_id IS NULL
 ORDER BY last_seen_at DESC
 LIMIT $2
 """
@@ -82,6 +94,7 @@ SELECT global_track_id, camera_ids, tracklet_ids, started_at,
        last_seen_at, current_identity_id, state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE $1::uuid = ANY(tracklet_ids)
+  AND merged_into_id IS NULL
 ORDER BY state = 'active' DESC, last_seen_at DESC
 LIMIT 1
 """
@@ -107,6 +120,15 @@ _SQL_CLOSE_GLOBAL_TRACK = """
 UPDATE continuous_tracking.global_tracks
 SET state = 'closed', updated_at = now()
 WHERE global_track_id = $1 AND state = 'active'
+"""
+
+_SQL_REMOVE_TRACKLET = """
+UPDATE continuous_tracking.global_tracks
+SET tracklet_ids = array_remove(tracklet_ids, $2::uuid),
+    updated_at = now()
+WHERE global_track_id = $1
+RETURNING global_track_id, camera_ids, tracklet_ids, started_at,
+          last_seen_at, current_identity_id, state, last_posterior_jsonb
 """
 
 _SQL_BATCH_UPDATE_LAST_SEEN = """
@@ -163,8 +185,14 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
         since: datetime,
         open_only: bool = False,
         limit: int = 500,
+        include_merged: bool = False,
     ) -> list[GlobalTrack]:
-        sql = _SQL_LIST_SINCE_ACTIVE if open_only else _SQL_LIST_SINCE
+        if open_only:
+            sql = _SQL_LIST_SINCE_ACTIVE
+        elif include_merged:
+            sql = _SQL_LIST_SINCE_INCLUDE_MERGED
+        else:
+            sql = _SQL_LIST_SINCE
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(sql, since, limit)
         return [_row_to_global_track(row) for row in rows]
@@ -258,6 +286,27 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
     async def close_global_track(self, global_track_id: str) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(_SQL_CLOSE_GLOBAL_TRACK, global_track_id)
+
+    async def remove_tracklet(
+        self, global_track_id: str, tracklet_id: str
+    ) -> GlobalTrack | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_SQL_REMOVE_TRACKLET, global_track_id, tracklet_id)
+        if row is None:
+            return None
+        gt = _row_to_global_track(row)
+        if not gt.tracklet_ids:
+            await self.close_global_track(global_track_id)
+            gt = GlobalTrack(
+                global_track_id=gt.global_track_id,
+                camera_ids=gt.camera_ids,
+                tracklet_ids=[],
+                started_at=gt.started_at,
+                last_seen_at=gt.last_seen_at,
+                current_identity_id=gt.current_identity_id,
+                state="closed",
+            )
+        return gt
 
     async def batch_update_last_seen_at(
         self,
