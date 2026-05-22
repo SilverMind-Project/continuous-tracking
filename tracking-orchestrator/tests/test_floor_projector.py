@@ -155,13 +155,13 @@ class TestGeoScore:
         tb = _make_tracklet("t2", "cam_b", bbox=None)
         assert a._geo_score(ta, tb) == pytest.approx(1.0)
 
-    def test_uncalibrated_camera_falls_back_to_1(self) -> None:
-        """Camera without a homography yields uncalibrated FloorPoint → fallback."""
+    def test_uncalibrated_camera_returns_neutral(self) -> None:
+        """Camera without a homography yields uncalibrated FloorPoint → neutral 0.5."""
         a = _assoc(CalibrationState())  # no homographies
         bbox = BoundingBox(0, 0, 100, 100)
         ta = _make_tracklet("t1", "cam_a", bbox=bbox)
         tb = _make_tracklet("t2", "cam_b", bbox=bbox)
-        assert a._geo_score(ta, tb) == pytest.approx(1.0)
+        assert a._geo_score(ta, tb) == pytest.approx(0.5)
 
     def test_close_pair_high_geo_score(self) -> None:
         """Nearby floor points produce a geo_score close to 1."""
@@ -202,10 +202,10 @@ class TestGeoScore:
         assert score == pytest.approx(expected, rel=1e-4)
 
     def test_one_calibrated_one_not_falls_back(self) -> None:
-        """Only one calibrated floor point → fallback to 1.0."""
+        """Only one calibrated floor point → neutral 0.5."""
         state = _state_with("cam_a")  # cam_b has no homography
         a = _assoc(state)
         bbox = BoundingBox(100, 100, 200, 200)
         ta = _make_tracklet("t1", "cam_a", bbox=bbox)
         tb = _make_tracklet("t2", "cam_b", bbox=bbox)
-        assert a._geo_score(ta, tb) == pytest.approx(1.0)
+        assert a._geo_score(ta, tb) == pytest.approx(0.5)

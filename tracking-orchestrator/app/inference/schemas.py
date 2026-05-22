@@ -19,8 +19,8 @@ from triton_shared.inference.schemas import DetectionBox
 # SOLIDER-REID output
 # ---------------------------------------------------------------------------
 
-#: 768-dim L2-normalised appearance embedding from SOLIDER-REID.
-#: Shape: (768,), dtype float32.
+#: 768-dim L2-normalised appearance embedding from SOLIDER-REID Swin-Tiny
+#: (384x128 input, MSMT17 fine-tuned). Shape: (768,), dtype float32.
 Embedding = npt.NDArray[np.float32]
 
 EMBEDDING_DIM = 768

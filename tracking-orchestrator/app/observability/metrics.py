@@ -57,6 +57,13 @@ class Metrics:
     # ---- Identity resolution -----------------------------------------
     identity_commits_total: Counter
     identity_revisions_total: Counter
+    identity_demotions_total: Counter
+    face_propagations_total: Counter
+    face_id_cooldown_skips_total: Counter
+    gallery_backfills_skipped_total: Counter
+    height_evidence_frames_total: Counter
+    unknown_gts_merged_total: Counter
+    identity_decays_total: Counter
     posterior_entropy: Histogram
 
     # ---- Staleness / backlog -----------------------------------------
@@ -184,6 +191,36 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_identity_revisions_total",
             "Identity revisions emitted (post-commit changes).",
             ["reason"],
+        ),
+        identity_demotions_total=_counter(
+            "cts_identity_demotions_total",
+            "Identity demotions to UNKNOWN (all evidence in window said UNKNOWN).",
+        ),
+        face_propagations_total=_counter(
+            "cts_face_propagations_total",
+            "Face anchors propagated to adjacent GlobalTracks.",
+        ),
+        gallery_backfills_skipped_total=_counter(
+            "cts_gallery_backfills_skipped_total",
+            "Gallery backfills skipped because the committed identity"
+            " has not yet survived the confirmation delay.",
+        ),
+        face_id_cooldown_skips_total=_counter(
+            "cts_face_id_cooldown_skips_total",
+            "Tracklets skipped for face ID due to per-tracklet cooldown.",
+        ),
+        height_evidence_frames_total=_counter(
+            "cts_height_evidence_frames_total",
+            "Frames where height evidence was available for at least one tracklet.",
+        ),
+        unknown_gts_merged_total=_counter(
+            "cts_unknown_gts_merged_total",
+            "UNKNOWN GlobalTracks merged via temporal+spatial heuristic.",
+        ),
+        identity_decays_total=_counter(
+            "cts_identity_decays_total",
+            "Identities cleared because the maintenance window expired"
+            " without fresh confirming evidence.",
         ),
         posterior_entropy=_hist(
             "cts_posterior_entropy_bits",

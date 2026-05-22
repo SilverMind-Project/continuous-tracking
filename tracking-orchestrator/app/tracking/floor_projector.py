@@ -61,6 +61,58 @@ class FloorProjector:
             calibrated=True,
         )
 
+    def estimate_height_mm(self, camera_id: str, bbox: BoundingBox) -> float | None:
+        """Estimate person height from bbox geometry + homography.
+
+        Projects the head point (top-centre) and footpoint (bottom-centre)
+        through the camera homography and measures the Euclidean distance
+        between them in millimetres.
+
+        Returns:
+            Height in mm, or None when the camera lacks a calibrated
+            homography or the projection is degenerate (W ≈ 0).
+        """
+        homography = self._state.homographies.get(camera_id)
+        if not homography:
+            return None
+
+        # Footpoint: bottom-centre.
+        fx = (bbox.x_min + bbox.x_max) / 2.0
+        fy = float(bbox.y_max)
+
+        # Head point: top-centre.
+        hx = (bbox.x_min + bbox.x_max) / 2.0
+        hy = float(bbox.y_min)
+
+        h = homography
+
+        # Project footpoint.
+        fx_h = h[0][0] * fx + h[0][1] * fy + h[0][2]
+        fy_h = h[1][0] * fx + h[1][1] * fy + h[1][2]
+        fw_h = h[2][0] * fx + h[2][1] * fy + h[2][2]
+
+        if abs(fw_h) < 1e-9:
+            return None
+
+        foot_x_m = fx_h / fw_h
+        foot_y_m = fy_h / fw_h
+
+        # Project head point.
+        hx_h = h[0][0] * hx + h[0][1] * hy + h[0][2]
+        hy_h = h[1][0] * hx + h[1][1] * hy + h[1][2]
+        hw_h = h[2][0] * hx + h[2][1] * hy + h[2][2]
+
+        if abs(hw_h) < 1e-9:
+            return None
+
+        head_x_m = hx_h / hw_h
+        head_y_m = hy_h / hw_h
+
+        # Euclidean distance in mm.
+        dx_m = head_x_m - foot_x_m
+        dy_m = head_y_m - foot_y_m
+        return math.sqrt(dx_m * dx_m + dy_m * dy_m) * 1000.0
+
     @staticmethod
     def distance_m(a: FloorPoint, b: FloorPoint) -> float:
         """Euclidean distance between two floor points in metres."""

@@ -115,7 +115,7 @@ def test_reid_preprocess_shape() -> None:
 
     crop = _make_crop(300, 150)
     out = reid_preprocess(crop)
-    assert out.shape == (3, 256, 128)
+    assert out.shape == (3, 384, 128)
     assert out.dtype == np.float32
 
 
@@ -129,7 +129,7 @@ def test_reid_preprocess_samples_full_crop() -> None:
     crop[:, :, 0] = np.arange(300, dtype=np.uint8)[:, None]  # R: top-to-bottom gradient
     crop[:, :, 1] = np.arange(150, dtype=np.uint8)[None, :]  # G: left-to-right gradient
 
-    out = reid_preprocess(crop)  # (3, 256, 128)
+    out = reid_preprocess(crop)  # (3, 384, 128)
 
     # If the resize samples the full crop, the output must have non-zero
     # variance in every channel.  A collapsed resize (bug) would produce

@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from structlog import get_logger
+
 from ..domain import (
     CameraConfig,
     Detection,
@@ -27,6 +29,8 @@ from ..domain import (
 )
 from ..inference.schemas import Embedding
 from ..storage.base import GalleryRepository, TrackingRepository
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -114,6 +118,8 @@ class TrackletManager:
         self._active: dict[str, _TrackletState] = {}
         # Reverse map: local_track_id (from PerCameraTracker) → tracklet_id (UUID)
         self._local_to_tracklet: dict[str, str] = {}
+        # Reverse map: detection_id → tracklet_id (O(1) lookup)
+        self._detection_to_tracklet: dict[str, str] = {}
 
     async def step(
         self,
@@ -185,6 +191,13 @@ class TrackletManager:
                     state = new_state
                     self._active[tracklet_id] = state
                     updated_tracklets.append(state.tracklet)
+                    self._detection_to_tracklet[det.detection_id] = tracklet_id
+                    if len(self._detection_to_tracklet) > 8000:  # 80% of 10k soft cap
+                        logger.warning(
+                            "detection_map_approaching_capacity",
+                            size=len(self._detection_to_tracklet),
+                            active_tracklets=len(self._active),
+                        )
 
                     # Check gallery append
                     quality = self._compute_quality(det, camera)
@@ -208,7 +221,9 @@ class TrackletManager:
 
         # Remove closed tracklets and their reverse-map entries
         for tracklet_id in to_remove:
-            del self._active[tracklet_id]
+            state = self._active.pop(tracklet_id)
+            for det in state.detections:
+                self._detection_to_tracklet.pop(det.detection_id, None)
             for lid in [k for k, v in self._local_to_tracklet.items() if v == tracklet_id]:
                 del self._local_to_tracklet[lid]
 
@@ -234,6 +249,7 @@ class TrackletManager:
                 # Register in active set and reverse map before gallery append
                 self._active[tracklet.tracklet_id] = state
                 self._local_to_tracklet[local_track.local_track_id] = tracklet.tracklet_id
+                self._detection_to_tracklet[det.detection_id] = tracklet.tracklet_id
 
                 # Check gallery append for new tracklet
                 quality = self._compute_quality(det, camera)
@@ -489,7 +505,4 @@ class TrackletManager:
 
     def get_tracklet_id_for_detection(self, detection_id: str) -> str:
         """Return the tracklet ID that contains the given detection, or ``""``."""
-        for tracklet_id, state in self._active.items():
-            if any(d.detection_id == detection_id for d in state.detections):
-                return tracklet_id
-        return ""
+        return self._detection_to_tracklet.get(detection_id, "")

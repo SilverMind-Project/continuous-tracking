@@ -150,6 +150,7 @@ class GlobalTrack:
     started_at: datetime
     last_seen_at: datetime
     current_identity_id: IdentityId | None = None
+    current_identity_committed_at: datetime | None = None
     state: Literal["active", "closed"] = "active"
     last_posterior_jsonb: dict[str, Any] | None = None
 
@@ -299,6 +300,7 @@ class IdentityDecision:
     revises_previous: bool
     previous_identity_id: IdentityId | None = None
     reason: str = ""
+    evidence_backed: bool = False
 
 
 @dataclass(frozen=True)
@@ -308,6 +310,8 @@ class Identity:
     identity_id: IdentityId
     display_name: str
     enrolled_at: datetime
+    height_mm: float | None = None
+    height_sigma_mm: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
 

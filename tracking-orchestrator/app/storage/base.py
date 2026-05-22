@@ -149,6 +149,42 @@ class GalleryRepository(ABC):
         evidence.  Returns the number of rows updated.
         """
 
+    @abstractmethod
+    async def gallery_similarity(
+        self,
+        tracklet_ids_a: set[str],
+        tracklet_ids_b: set[str],
+        limit: int = 20,
+    ) -> float:
+        """Mean cosine similarity between two groups of gallery embeddings.
+
+        Computes the centroid embedding for each group and returns their
+        cosine similarity. Returns 0.0 when both groups have no gallery
+        entries, and 0.5 when only one group has entries (conservative
+        fallback that allows geometry to carry cross-camera pairs).
+        """
+
+    @staticmethod
+    def _cosine_between_centroids(
+        entries_a: list[GalleryEmbedding],
+        entries_b: list[GalleryEmbedding],
+    ) -> float:
+        """Cosine similarity between the mean embeddings of two entry lists.
+
+        Returns 0.0 when either list is empty or either centroid has zero norm.
+        """
+        import numpy as np
+
+        if not entries_a or not entries_b:
+            return 0.0
+        emb_a = np.mean([e.embedding for e in entries_a], axis=0)
+        emb_b = np.mean([e.embedding for e in entries_b], axis=0)
+        norm_a = float(np.linalg.norm(emb_a))
+        norm_b = float(np.linalg.norm(emb_b))
+        if norm_a < 1e-9 or norm_b < 1e-9:
+            return 0.0
+        return float(np.dot(emb_a, emb_b) / (norm_a * norm_b + 1e-9))
+
 
 class SettingsRepository(ABC):
     """Persist camera and stream configuration."""
@@ -301,9 +337,7 @@ class GlobalTrackRepository(ABC):
         """Find the global track that contains a given tracklet ID."""
 
     @abstractmethod
-    async def remove_tracklet(
-        self, global_track_id: str, tracklet_id: str
-    ) -> GlobalTrack | None:
+    async def remove_tracklet(self, global_track_id: str, tracklet_id: str) -> GlobalTrack | None:
         """Remove a tracklet from a global track.
 
         Returns the updated GlobalTrack, or None if the global track
@@ -320,6 +354,26 @@ class GlobalTrackRepository(ABC):
         active set.  Prevents stale 'active' rows from accumulating and
         bloating list_active() queries over time.
         """
+
+    @abstractmethod
+    async def set_identity_committed_at(
+        self,
+        global_track_id: str,
+        committed_at: datetime,
+    ) -> None:
+        """Record the time when the current identity was first committed.
+
+        Only called when the identity changes (new commit or reassignment),
+        not on every frame.  Cleared by ``clear_identity_committed_at`` on
+        demotion.
+        """
+
+    @abstractmethod
+    async def clear_identity_committed_at(
+        self,
+        global_track_id: str,
+    ) -> None:
+        """Clear the committed_at timestamp on demotion to UNKNOWN."""
 
     @abstractmethod
     async def update_last_posterior(
@@ -485,7 +539,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         if max_age_seconds is not None:
             cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
             entries = [e for e in entries if e.seen_at >= cutoff]
-        scored = [(entry, _cosine_sim(embedding, entry.embedding)) for entry in entries]
+        scored = [(entry, _entry_cosine_sim(embedding, entry.embedding)) for entry in entries]
         scored.sort(key=lambda item: item[1], reverse=True)
         return scored[:limit]
 
@@ -522,6 +576,20 @@ class InMemoryGalleryRepository(GalleryRepository):
                 )
                 updated += 1
         return updated
+
+    async def gallery_similarity(
+        self,
+        tracklet_ids_a: set[str],
+        tracklet_ids_b: set[str],
+        limit: int = 20,
+    ) -> float:
+        entries_a = await self.list_gallery_entries_for_tracklets(tracklet_ids_a, limit)
+        entries_b = await self.list_gallery_entries_for_tracklets(tracklet_ids_b, limit)
+        if not entries_a and not entries_b:
+            return 0.0
+        if not entries_a or not entries_b:
+            return 0.5
+        return self._cosine_between_centroids(entries_a, entries_b)
 
 
 class InMemorySettingsRepository(SettingsRepository):
@@ -647,6 +715,7 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
                 started_at=track.started_at,
                 last_seen_at=track.last_seen_at,
                 current_identity_id=track.current_identity_id,
+                current_identity_committed_at=track.current_identity_committed_at,
                 state=track.state,
             )
             self._tracks[track.global_track_id] = sorted_track
@@ -662,6 +731,9 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
             started_at=min(old.started_at, track.started_at),
             last_seen_at=max(old.last_seen_at, track.last_seen_at),
             current_identity_id=track.current_identity_id or old.current_identity_id,
+            current_identity_committed_at=(
+                track.current_identity_committed_at or old.current_identity_committed_at
+            ),
             state=track.state,
         )
         self._tracks[track.global_track_id] = merged
@@ -702,6 +774,7 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
                 started_at=existing.started_at,
                 last_seen_at=datetime.now(UTC),
                 current_identity_id=existing.current_identity_id,
+                current_identity_committed_at=existing.current_identity_committed_at,
                 state="active",
             )
             await self.save(merged)
@@ -732,6 +805,9 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
             started_at=min(into.started_at, from_track.started_at),
             last_seen_at=max(into.last_seen_at, from_track.last_seen_at),
             current_identity_id=into.current_identity_id or from_track.current_identity_id,
+            current_identity_committed_at=(
+                into.current_identity_committed_at or from_track.current_identity_committed_at
+            ),
             state="active",
         )
         closed_source = GlobalTrack(
@@ -764,6 +840,39 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
                 started_at=track.started_at,
                 last_seen_at=track.last_seen_at,
                 current_identity_id=identity_id,
+                current_identity_committed_at=track.current_identity_committed_at,
+                state=track.state,
+            )
+
+    async def set_identity_committed_at(
+        self,
+        global_track_id: str,
+        committed_at: datetime,
+    ) -> None:
+        track = self._tracks.get(global_track_id)
+        if track is not None:
+            self._tracks[global_track_id] = GlobalTrack(
+                global_track_id=track.global_track_id,
+                camera_ids=track.camera_ids,
+                tracklet_ids=track.tracklet_ids,
+                started_at=track.started_at,
+                last_seen_at=track.last_seen_at,
+                current_identity_id=track.current_identity_id,
+                current_identity_committed_at=committed_at,
+                state=track.state,
+            )
+
+    async def clear_identity_committed_at(self, global_track_id: str) -> None:
+        track = self._tracks.get(global_track_id)
+        if track is not None:
+            self._tracks[global_track_id] = GlobalTrack(
+                global_track_id=track.global_track_id,
+                camera_ids=track.camera_ids,
+                tracklet_ids=track.tracklet_ids,
+                started_at=track.started_at,
+                last_seen_at=track.last_seen_at,
+                current_identity_id=track.current_identity_id,
+                current_identity_committed_at=None,
                 state=track.state,
             )
 
@@ -773,9 +882,7 @@ class InMemoryGlobalTrackRepository(GlobalTrackRepository):
             return None
         return self._tracks.get(gt_id)
 
-    async def remove_tracklet(
-        self, global_track_id: str, tracklet_id: str
-    ) -> GlobalTrack | None:
+    async def remove_tracklet(self, global_track_id: str, tracklet_id: str) -> GlobalTrack | None:
         track = self._tracks.get(global_track_id)
         if track is None:
             return None
@@ -1060,36 +1167,29 @@ class InMemoryDoNotFuseRepository:
 class BboxAnnotationRepository(Protocol):
     """Persist YOLO bounding-box annotations per keyframe."""
 
-    async def save_bbox_annotations(
-        self, annotations: list[BboxAnnotation]
-    ) -> None: ...
+    async def save_bbox_annotations(self, annotations: list[BboxAnnotation]) -> None: ...
 
-    async def get_bbox_annotations_for_keyframe(
-        self, keyframe_id: str
-    ) -> list[BboxAnnotation]: ...
+    async def get_bbox_annotations_for_keyframe(self, keyframe_id: str) -> list[BboxAnnotation]: ...
 
-    async def get_bbox_annotations_for_tracklet(
-        self, tracklet_id: str
-    ) -> list[BboxAnnotation]: ...
+    async def get_bbox_annotations_for_tracklet(self, tracklet_id: str) -> list[BboxAnnotation]: ...
 
-    async def update_identity_id(
-        self, tracklet_id: str, identity_id: str
-    ) -> None:
+    async def update_identity_id(self, tracklet_id: str, identity_id: str) -> None:
         """Called by IdentityRewriter when an identity is revised."""
         ...
 
     async def save_override_bbox(
         self,
         annotation_id: str,
-        x1: float, y1: float, x2: float, y2: float,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
         override_by: str,
     ) -> None:
         """Persist a user-drawn bbox override (written by M4 frontend path)."""
         ...
 
-    async def get_annotation_by_id(
-        self, annotation_id: str
-    ) -> BboxAnnotation | None:
+    async def get_annotation_by_id(self, annotation_id: str) -> BboxAnnotation | None:
         """Return a single bbox annotation by its UUID, or None."""
         ...
 
@@ -1105,9 +1205,7 @@ class InMemoryBboxAnnotationRepository:
     async def save_bbox_annotations(self, annotations: list[BboxAnnotation]) -> None:
         for ann in annotations:
             ann_id = str(uuid.uuid4())
-            ann_with_id = BboxAnnotation(
-                **{**ann.__dict__, "id": ann_id}
-            )
+            ann_with_id = BboxAnnotation(**{**ann.__dict__, "id": ann_id})
             self._rows[ann_id] = ann_with_id
             self._by_keyframe.setdefault(ann.keyframe_id, []).append(ann_id)
             self._by_tracklet.setdefault(ann.tracklet_id, []).append(ann_id)
@@ -1124,23 +1222,29 @@ class InMemoryBboxAnnotationRepository:
     async def update_identity_id(self, tracklet_id: str, identity_id: str) -> None:
         for ann_id, ann in list(self._rows.items()):
             if ann.tracklet_id == tracklet_id:
-                self._rows[ann_id] = BboxAnnotation(
-                    **{**ann.__dict__, "identity_id": identity_id}
-                )
+                self._rows[ann_id] = BboxAnnotation(**{**ann.__dict__, "identity_id": identity_id})
 
     async def save_override_bbox(
-        self, annotation_id: str,
-        x1: float, y1: float, x2: float, y2: float,
+        self,
+        annotation_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
         override_by: str,
     ) -> None:
         if annotation_id in self._rows:
             ann = self._rows[annotation_id]
             self._rows[annotation_id] = BboxAnnotation(
-                **{**ann.__dict__,
-                   "override_x1": x1, "override_y1": y1,
-                   "override_x2": x2, "override_y2": y2,
-                   "override_by": override_by,
-                   "override_at": datetime.now(UTC)}
+                **{
+                    **ann.__dict__,
+                    "override_x1": x1,
+                    "override_y1": y1,
+                    "override_x2": x2,
+                    "override_y2": y2,
+                    "override_by": override_by,
+                    "override_at": datetime.now(UTC),
+                }
             )
 
 
@@ -1341,7 +1445,7 @@ class InMemoryDementiaSignalRepository(DementiaSignalRepository):
         return results[:limit]
 
 
-def _cosine_sim(a: list[float], b: list[float]) -> float:
+def _entry_cosine_sim(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         return 0.0
     dot = sum(x * y for x, y in zip(a, b, strict=True))

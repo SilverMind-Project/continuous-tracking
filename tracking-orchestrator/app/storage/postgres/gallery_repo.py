@@ -304,6 +304,20 @@ class PostgresGalleryRepository(GalleryRepository):
             )
         return updated
 
+    async def gallery_similarity(
+        self,
+        tracklet_ids_a: set[str],
+        tracklet_ids_b: set[str],
+        limit: int = 20,
+    ) -> float:
+        entries_a = await self.list_gallery_entries_for_tracklets(tracklet_ids_a, limit)
+        entries_b = await self.list_gallery_entries_for_tracklets(tracklet_ids_b, limit)
+        if not entries_a and not entries_b:
+            return 0.0
+        if not entries_a or not entries_b:
+            return 0.5
+        return self._cosine_between_centroids(entries_a, entries_b)
+
 
 def _embedding_to_pgvector(embedding: list[float]) -> str:
     """Convert a Python list of floats to a pgvector string literal.

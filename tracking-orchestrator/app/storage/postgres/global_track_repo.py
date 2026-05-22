@@ -15,9 +15,9 @@ from ..base import GlobalTrackRepository
 _SQL_SAVE = """
 INSERT INTO continuous_tracking.global_tracks (
     global_track_id, camera_ids, tracklet_ids, started_at,
-    last_seen_at, current_identity_id, state
+    last_seen_at, current_identity_id, current_identity_committed_at, state
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (global_track_id) DO UPDATE SET
     camera_ids = (
         SELECT array_agg(DISTINCT v)
@@ -40,20 +40,26 @@ ON CONFLICT (global_track_id) DO UPDATE SET
         EXCLUDED.current_identity_id,
         continuous_tracking.global_tracks.current_identity_id
     ),
+    current_identity_committed_at = COALESCE(
+        EXCLUDED.current_identity_committed_at,
+        continuous_tracking.global_tracks.current_identity_committed_at
+    ),
     state = EXCLUDED.state,
     updated_at = now()
 """
 
 _SQL_GET = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
-       last_seen_at, current_identity_id, state, last_posterior_jsonb
+       last_seen_at, current_identity_id, current_identity_committed_at,
+       state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE global_track_id = $1
 """
 
 _SQL_LIST_ACTIVE = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
-       last_seen_at, current_identity_id, state, last_posterior_jsonb
+       last_seen_at, current_identity_id, current_identity_committed_at,
+       state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE state = 'active'
   AND merged_into_id IS NULL
@@ -62,7 +68,8 @@ ORDER BY last_seen_at DESC
 
 _SQL_LIST_SINCE = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
-       last_seen_at, current_identity_id, state, last_posterior_jsonb
+       last_seen_at, current_identity_id, current_identity_committed_at,
+       state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE last_seen_at >= $1
   AND merged_into_id IS NULL
@@ -72,7 +79,8 @@ LIMIT $2
 
 _SQL_LIST_SINCE_INCLUDE_MERGED = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
-       last_seen_at, current_identity_id, state, last_posterior_jsonb
+       last_seen_at, current_identity_id, current_identity_committed_at,
+       state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE last_seen_at >= $1
 ORDER BY last_seen_at DESC
@@ -81,7 +89,8 @@ LIMIT $2
 
 _SQL_LIST_SINCE_ACTIVE = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
-       last_seen_at, current_identity_id, state, last_posterior_jsonb
+       last_seen_at, current_identity_id, current_identity_committed_at,
+       state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE last_seen_at >= $1 AND state = 'active'
   AND merged_into_id IS NULL
@@ -91,7 +100,8 @@ LIMIT $2
 
 _SQL_GET_BY_TRACKLET = """
 SELECT global_track_id, camera_ids, tracklet_ids, started_at,
-       last_seen_at, current_identity_id, state, last_posterior_jsonb
+       last_seen_at, current_identity_id, current_identity_committed_at,
+       state, last_posterior_jsonb
 FROM continuous_tracking.global_tracks
 WHERE $1::uuid = ANY(tracklet_ids)
   AND merged_into_id IS NULL
@@ -128,7 +138,8 @@ SET tracklet_ids = array_remove(tracklet_ids, $2::uuid),
     updated_at = now()
 WHERE global_track_id = $1
 RETURNING global_track_id, camera_ids, tracklet_ids, started_at,
-          last_seen_at, current_identity_id, state, last_posterior_jsonb
+          last_seen_at, current_identity_id, current_identity_committed_at,
+          state, last_posterior_jsonb
 """
 
 _SQL_BATCH_UPDATE_LAST_SEEN = """
@@ -167,6 +178,7 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
                 track.started_at,
                 track.last_seen_at,
                 identity_id,
+                track.current_identity_committed_at,
                 track.state,
             )
 
@@ -278,6 +290,29 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
             if identity_id:
                 await conn.execute(_SQL_BACKFILL_GALLERY_IDENTITY, global_track_id, identity_id)
 
+    async def set_identity_committed_at(
+        self,
+        global_track_id: str,
+        committed_at: datetime,
+    ) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE continuous_tracking.global_tracks"
+                " SET current_identity_committed_at = $2, updated_at = now()"
+                " WHERE global_track_id = $1",
+                global_track_id,
+                committed_at,
+            )
+
+    async def clear_identity_committed_at(self, global_track_id: str) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE continuous_tracking.global_tracks"
+                " SET current_identity_committed_at = NULL, updated_at = now()"
+                " WHERE global_track_id = $1",
+                global_track_id,
+            )
+
     async def get_by_tracklet_id(self, tracklet_id: str) -> GlobalTrack | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(_SQL_GET_BY_TRACKLET, tracklet_id)
@@ -287,9 +322,7 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
         async with self._pool.acquire() as conn:
             await conn.execute(_SQL_CLOSE_GLOBAL_TRACK, global_track_id)
 
-    async def remove_tracklet(
-        self, global_track_id: str, tracklet_id: str
-    ) -> GlobalTrack | None:
+    async def remove_tracklet(self, global_track_id: str, tracklet_id: str) -> GlobalTrack | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(_SQL_REMOVE_TRACKLET, global_track_id, tracklet_id)
         if row is None:
@@ -304,6 +337,7 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
                 started_at=gt.started_at,
                 last_seen_at=gt.last_seen_at,
                 current_identity_id=gt.current_identity_id,
+                current_identity_committed_at=gt.current_identity_committed_at,
                 state="closed",
             )
         return gt
@@ -358,6 +392,7 @@ def _row_to_global_track(row: Any) -> GlobalTrack:
         current_identity_id=(
             str(row["current_identity_id"]) if row["current_identity_id"] else None
         ),
+        current_identity_committed_at=row.get("current_identity_committed_at"),
         state=row["state"],
         last_posterior_jsonb=posterior,
     )

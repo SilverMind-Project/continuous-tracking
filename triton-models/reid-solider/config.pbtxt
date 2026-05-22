@@ -1,20 +1,20 @@
 # SOLIDER-REID 768-dim body re-identification model — ONNX Runtime backend (NVIDIA GPU).
 #
 # Source: https://github.com/tinyvision/SOLIDER-REID (CVPR 2023)
-# Backbone: Swin-Tiny with semantic controller; 768-dim L2-normalised output.
+# Backbone: Swin-Tiny with SOLIDER semantic controller; 768-dim L2-normalised output.
+# Input: 384×128 person crops, ImageNet-normalised.
 #
-# Export command (run from the SOLIDER-REID repo root):
-#   python export_onnx.py \
-#     --config_file configs/MSMT17/swin_tiny.yml \
-#     --pretrain_path /path/to/solider_swin_tiny.pth \
-#     --output_path triton-models/reid-solider/1/model.onnx
+# Export command (run from this repo root):
+#   uv run --with torch --with onnx --with yacs \
+#       python triton-models/scripts/export_reid.py
+#
+# Requires the SOLIDER-REID repository cloned alongside continuous-tracking
+# and the MSMT17-fine-tuned checkpoint at:
+#   triton-models/reid-solider/solider_swin_tiny_msmt17.pth
 #
 # Verify after export:
 #   python -c "import onnx; m=onnx.load('1/model.onnx'); \
 #     print([i.name for i in m.graph.input], [o.name for o in m.graph.output])"
-#
-# Input size 256×128: standard ReID crop (H×W). Crops should be normalised
-# with ImageNet mean/std before inference.
 #
 name: "reid-solider"
 platform: "onnxruntime_onnx"
@@ -29,7 +29,7 @@ input [
   {
     name: "input"
     data_type: TYPE_FP32
-    dims: [3, 256, 128]
+    dims: [3, 384, 128]
   }
 ]
 

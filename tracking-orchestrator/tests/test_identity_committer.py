@@ -28,7 +28,7 @@ class TestIdentityCommitter:
     def test_flush_after_window_expires(self) -> None:
         c = _committer(window_s=3.0)
         past = datetime.now(UTC) - timedelta(seconds=10)
-        c._buffer["gt-1"] = [(past, "alice", 0.9, "face")]
+        c._buffer["gt-1"] = [(past, "alice", 0.9, "face", None)]
         decisions = c.flush()
         assert len(decisions) == 1
         assert decisions[0].identity_id == "alice"
@@ -42,9 +42,9 @@ class TestIdentityCommitter:
         t1 = t0 + timedelta(seconds=1)
         t2 = t1 + timedelta(seconds=1)
         c._buffer["gt-1"] = [
-            (t0, "alice", 0.7, "reid"),
-            (t1, "alice", 0.8, "reid"),
-            (t2, "alice", 0.9, "face"),
+            (t0, "alice", 0.7, "reid", None),
+            (t1, "alice", 0.8, "reid", None),
+            (t2, "alice", 0.9, "face", None),
         ]
         decisions = c.flush()
         assert decisions[0].identity_id == "alice"
@@ -63,9 +63,9 @@ class TestIdentityCommitter:
         t1 = t0 + timedelta(seconds=1)
         t2 = t1 + timedelta(seconds=1)
         c._buffer["gt-1"] = [
-            (t0, None, 0.4, ""),  # before face fired
-            (t1, "alice", 0.92, "face_high_confidence"),
-            (t2, None, 0.57, ""),  # maintenance bug (pre-fix) produced None
+            (t0, None, 0.4, "", None),  # before face fired
+            (t1, "alice", 0.92, "face_high_confidence", None),
+            (t2, None, 0.57, "", None),  # maintenance bug (pre-fix) produced None
         ]
         decisions = c.flush()
         assert decisions[0].identity_id == "alice", (
@@ -79,11 +79,29 @@ class TestIdentityCommitter:
         t0 = datetime.now(UTC) - timedelta(seconds=5)
         t1 = t0 + timedelta(seconds=1)
         c._buffer["gt-1"] = [
-            (t0, None, 0.3, ""),
-            (t1, None, 0.4, ""),
+            (t0, None, 0.3, "", None),
+            (t1, None, 0.4, "", None),
         ]
         decisions = c.flush()
         assert decisions[0].identity_id is None
+
+    def test_flush_emits_demotion_when_all_none_with_prior_identity(self) -> None:
+        """When every entry is None and the GT had a committed identity,
+        an explicit demotion decision is emitted so the pipeline can
+        clear the GT and publish a revision."""
+        c = _committer(window_s=3.0)
+        t0 = datetime.now(UTC) - timedelta(seconds=5)
+        t1 = t0 + timedelta(seconds=1)
+        c._buffer["gt-1"] = [
+            (t0, None, 0.3, "", "alice"),  # GT was alice, now UNKNOWN
+            (t1, None, 0.4, "", "alice"),
+        ]
+        decisions = c.flush()
+        assert len(decisions) == 1
+        assert decisions[0].identity_id is None
+        assert decisions[0].previous_identity_id == "alice"
+        assert decisions[0].reason == "demoted_to_unknown"
+        assert decisions[0].buffered is True
 
     def test_high_confidence_face_fast_path(self) -> None:
         c = _committer()

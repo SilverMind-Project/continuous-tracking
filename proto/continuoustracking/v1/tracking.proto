@@ -168,6 +168,10 @@ message IdentityRevision {
   string previous_identity_id = 8;
 
   // Identity after the revision (empty when demoting to UNKNOWN).
+  // Consumers SHOULD soft-delete PersonLocationHistory rows for this
+  // global_track_id when new_identity_id is empty.  The orchestrator does
+  // NOT relabel trajectory or dwell rows on demotion — old identity labels
+  // are retained until a future non-empty revision provides a replacement.
   string new_identity_id = 9;
 
   // Human-readable reason: initial_assignment | identity_change |

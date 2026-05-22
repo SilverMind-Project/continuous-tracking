@@ -192,7 +192,7 @@ def _build_resolver_config(s: Any) -> ResolverConfig:
         face_commit_min_confidence=float(r.get("face_commit_min_confidence", 0.70)),
         face_lock_maintenance_max_age_s=float(r.get("face_lock_maintenance_max_age_s", 300)),
         cross_gt_face_propagation_threshold=float(
-            r.get("cross_gt_face_propagation_threshold", 0.65)
+            r.get("cross_gt_face_propagation_threshold", 0.78)
         ),
         cross_gt_face_propagation_max_gts=int(r.get("cross_gt_face_propagation_max_gts", 4)),
     )
@@ -325,10 +325,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         identity_high_confidence_face_threshold=float(
             settings.get("pipeline.identity.high_confidence_face_threshold", "0.85")
         ),
-        identity_committer_enabled=str(
-            settings.get("pipeline.identity.committer_enabled", "false")
-        ).lower()
-        in ("1", "true", "yes"),
     )
     _pipeline = FrameProcessingPipeline(config)
 

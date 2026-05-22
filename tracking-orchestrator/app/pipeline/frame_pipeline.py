@@ -37,12 +37,10 @@ from ..domain import (
     FaceAnchor,
     FloorPoint,
     FrameRef,
-    GlobalTrack,
     Identity,
     IdentityRevision,
     OverlapGroup,
     PostureType,
-    ResolveOutcome,
     TaggedKeyframe,
     TrackingEvent,
 )
@@ -52,6 +50,8 @@ from ..inference.pose import PoseEstimator
 from ..inference.schemas import DetectionBox, Embedding, PoseResult
 from ..observability import metrics as _metrics
 from ..pipeline.batcher import FrameBatcher
+from ..pipeline.frame_context import FrameContext
+from ..pipeline.gallery_cache import GalleryCache
 from ..pipeline.privacy import PrivacyZoneFilter
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..services.identity_rewriter import (
@@ -252,13 +252,17 @@ class PipelineConfig:
     # IdentityCommitter — buffered windowed commit (see IdentityCommitter).
     identity_commit_window_s: float = 3.0
     identity_high_confidence_face_threshold: float = 0.80
-    # Feature flag: off by default; enable after one week soak.
-    identity_committer_enabled: bool = False
-    # Retroactive cross-table rewrite on face-confirmed identity commits.
-    # Enabled by default: when any face anchor triggers a revision, the
-    # IdentityRewriter updates trajectory, dwell, and signal rows so that
-    # history reflects the now-known identity.  Set False only to disable
-    # rewrites without disabling the identity_committer_enabled path.
+    # Deprecated: the buffered IdentityCommitter is now always enabled.
+    # This field is accepted but ignored; remove after 2026-07-01.
+    identity_committer_enabled: bool = True
+    # Delay (seconds) after an identity is first committed before backfilling
+    # gallery entries with that identity.  Prevents a false identity commit from
+    # contaminating the gallery before it has a chance to be revised.  Set to 0
+    # to restore the previous immediate-backfill behaviour.
+    gallery_identity_backfill_delay_s: float = 30.0
+    # Retroactive cross-table rewrite on identity revisions.
+    # When True, the IdentityRewriter updates trajectory, dwell, and signal
+    # rows so that history reflects the newly committed identity.
     identity_rewrite_on_face_commit: bool = True
     # Frame batching — buffer frames for a configurable time window,
     # group by camera_id, then flush each camera's batch sequentially
@@ -308,6 +312,7 @@ class FrameProcessingPipeline:
         self._tracker: PerCameraTrackers | None = None
         self._repo: TrackingRepository | None = None
         self._gallery_repo: GalleryRepository | None = None
+        self._gallery_cache: GalleryCache | None = None
         self._global_track_repo: GlobalTrackRepository | None = None
         self._settings_repo: SettingsRepository | None = None
         # Cameras whose FK row we've already ensured this process lifetime.
@@ -340,7 +345,10 @@ class FrameProcessingPipeline:
         self._stop_event = asyncio.Event()
         # Face identification (via person-identification-service)
         self._face_id_client: FaceIdentificationClient | None = None
-        self._last_face_id_call: dict[str, datetime] = {}
+        # Per-tracklet face ID cooldown.  Each tracklet independently throttled
+        # so a newly-appeared person gets an immediate call even when another
+        # person in the same camera was recently identified.
+        self._last_face_id_by_tracklet: dict[str, datetime] = {}
         # Floor projection (homography-based, hot-reloaded from calibration state).
         self._floor_projector: FloorProjector | None = None
         # Pose estimation (RTMPose) + motion energy tracking.
@@ -432,6 +440,7 @@ class FrameProcessingPipeline:
         self._repo = tracking_repo or InMemoryTrackingRepository()
         gallery = gallery_repo or InMemoryGalleryRepository()
         self._gallery_repo = gallery
+        self._gallery_cache = GalleryCache(gallery)
         self._global_track_repo = global_track_repo or InMemoryGlobalTrackRepository()
         self._settings_repo = settings_repo or InMemorySettingsRepository()
         self._seen_cameras = set()
@@ -491,6 +500,7 @@ class FrameProcessingPipeline:
             config=self._config.cross_cam,
             floor_projector=self._floor_projector,
             dnf_repo=dnf_repo,
+            gallery_cache=self._gallery_cache,
         )
         self._dnf_repo = dnf_repo
         self._sync_adjacency()
@@ -501,6 +511,7 @@ class FrameProcessingPipeline:
             global_track_repo=self._global_track_repo,
             identities=self._config.known_identities,
             config=self._config.resolver,
+            gallery_cache=self._gallery_cache,
         )
 
         self._revision_publisher = RevisionPublisher(
@@ -836,6 +847,7 @@ class FrameProcessingPipeline:
                 config=self._config.cross_cam,
                 floor_projector=self._floor_projector,
                 dnf_repo=self._dnf_repo,
+                gallery_cache=self._gallery_cache,
             )
 
     def set_overlap_groups(self, groups: list[OverlapGroup]) -> None:
@@ -849,105 +861,110 @@ class FrameProcessingPipeline:
             self._adjacency.set_overlap_groups(groups)
 
     async def _process_frame(self, frame: FrameReady) -> None:
-        """Process a single FrameReady message through the full pipeline.
+        """Process a single FrameReady through the full pipeline."""
+        if self._gallery_cache is not None:
+            self._gallery_cache.invalidate()
 
-        Steps (M4):
-        1. (Skeleton mode) Skip MinIO fetch — in production, fetch JPEG.
-        2. Run person detection via Triton (if detector available).
-        3. Run per-camera tracking (BoT-SORT).
-        4. Run TrackletManager step.
-
-        Steps (M5):
-        5. Cross-camera association (GlobalTrack formation).
-        6. Identity resolution (Bayesian posterior + retroactive revision).
-
-        Steps (M6):
-        7. Trajectory writer (person_trajectories + room_dwells).
-        8. Keyframe sampler (tagged_keyframes + scene.samples).
-        9. Persist identity revisions.
-        10. Publish tracking event.
-        """
-        if frame.capture_time_unix_ns > 0:
-            age_s = datetime.now(UTC).timestamp() - frame.capture_time_unix_ns / 1e9
-            if age_s > _MAX_FRAME_AGE_S:
-                logger.warning(
-                    "Stale frame dropped",
-                    camera_id=frame.camera_id,
-                    frame_index=frame.frame_index,
-                    age_s=round(age_s, 1),
-                )
-                _metrics.metrics.frames_dropped_stale_total.labels(camera_id=frame.camera_id).inc()
-                return
-
+        if self._is_stale(frame):
+            return
         if self._detector is None or self._tracklet_manager is None or self._tracker is None:
-            # Skeleton mode: produce a zero-detection event
             await self._skeleton_frame(frame)
             return
 
         self._sync_adjacency()
 
-        event_time = datetime.now(UTC)
-        capture_time = datetime.fromtimestamp(frame.capture_time_unix_ns / 1e9, tz=UTC)
+        ctx = self._init_context(frame)
+        await self._stage_fetch(ctx)
+        await self._stage_detect(ctx)
+        await self._stage_privacy(ctx)
+        await self._stage_embed(ctx)
+        await self._stage_track(ctx)
+        await self._stage_face_id(ctx)
+        await self._stage_cross_camera_and_resolve(ctx)
+        await self._stage_close_terminated(ctx)
+        await self._stage_trajectory(ctx)
+        await self._stage_keyframe(ctx)
+        await self._stage_revisions(ctx)
+        await self._stage_detection_backfill(ctx)
+        await self._stage_posture_and_trails(ctx)
+        await self._stage_publish(ctx)
 
-        # Step 1: Fetch frame from object storage. Tests may omit the fetcher
-        # and use a detector mock; in that case a blank image keeps the real
-        # detector call path active without external services.
-        if self._frame_fetcher is not None:
-            image = await self._frame_fetcher.fetch_rgb(frame.minio_key)
-        else:
-            image = np.zeros((max(frame.height, 1), max(frame.width, 1), 3), dtype=np.uint8)
+    # ------------------------------------------------------------------
+    # Pipeline stage methods
+    # ------------------------------------------------------------------
 
-        # Step 2: Run detection
-        detections = await self._detector.detect(image)
-        # Guard against resolution mismatch between the MinIO-stored image
-        # and the FrameReady-reported dimensions.  If they diverge (e.g.
-        # due to EXIF rotation, resized upload, or thumbnail storage), the
-        # bbox→pixel and pose→pixel transforms would be offset, producing
-        # misaligned overlays in the live view.
-        img_h, img_w = image.shape[:2]
-        effective_width = frame.width
-        effective_height = frame.height
-        if img_w != frame.width or img_h != frame.height:
+    @staticmethod
+    def _is_stale(frame: FrameReady) -> bool:
+        if frame.capture_time_unix_ns <= 0:
+            return False
+        age_s = datetime.now(UTC).timestamp() - frame.capture_time_unix_ns / 1e9
+        if age_s > _MAX_FRAME_AGE_S:
             logger.warning(
-                "frame_dimension_mismatch",
+                "Stale frame dropped",
                 camera_id=frame.camera_id,
                 frame_index=frame.frame_index,
-                minio_shape=f"{img_h}x{img_w}",
-                reported_shape=f"{frame.height}x{frame.width}",
+                age_s=round(age_s, 1),
             )
-            effective_width = img_w
-            effective_height = img_h
+            _metrics.metrics.frames_dropped_stale_total.labels(camera_id=frame.camera_id).inc()
+            return True
+        return False
 
+    def _init_context(self, frame: FrameReady) -> FrameContext:
+        return FrameContext(
+            frame=frame,
+            event_time=datetime.now(UTC),
+            capture_time=datetime.fromtimestamp(frame.capture_time_unix_ns / 1e9, tz=UTC),
+        )
+
+    async def _stage_fetch(self, ctx: FrameContext) -> None:
+        if self._frame_fetcher is not None:
+            ctx.image = await self._frame_fetcher.fetch_rgb(ctx.frame.minio_key)
+        else:
+            ctx.image = np.zeros(
+                (max(ctx.frame.height, 1), max(ctx.frame.width, 1), 3), dtype=np.uint8
+            )
+        img_h, img_w = ctx.image.shape[:2]
+        ctx.effective_width = ctx.frame.width
+        ctx.effective_height = ctx.frame.height
+        if img_w != ctx.frame.width or img_h != ctx.frame.height:
+            logger.warning(
+                "frame_dimension_mismatch",
+                camera_id=ctx.frame.camera_id,
+                frame_index=ctx.frame.frame_index,
+                minio_shape=f"{img_h}x{img_w}",
+                reported_shape=f"{ctx.frame.height}x{ctx.frame.width}",
+            )
+            ctx.effective_width = img_w
+            ctx.effective_height = img_h
+
+    async def _stage_detect(self, ctx: FrameContext) -> None:
+        assert self._detector is not None
+        detections = await self._detector.detect(ctx.image)  # type: ignore[arg-type]
         logger.debug(
             "detections_raw",
-            camera_id=frame.camera_id,
-            frame_index=frame.frame_index,
+            camera_id=ctx.frame.camera_id,
+            frame_index=ctx.frame.frame_index,
             count=len(detections),
-            image_shape=f"{img_h}x{img_w}",
+            image_shape=f"{ctx.image.shape[0]}x{ctx.image.shape[1]}",  # type: ignore[union-attr]
         )
-
-        # Step 2a: Post-decode IoU dedup — suppresses any near-duplicate
-        # detections that survived the model's baked NMS. Keeps the highest-
-        # confidence box from each overlapping cluster.
         if detections and self._config.detection_iou_dedup_threshold < 1.0:
             detections = _iou_dedup_detections(
-                detections,
-                self._config.detection_iou_dedup_threshold,
+                detections, self._config.detection_iou_dedup_threshold
             )
+        ctx.raw_detections = detections
 
-        # Privacy enforcement: drop detections + apply blur/mask to frame.
+    async def _stage_privacy(self, ctx: FrameContext) -> None:
         privacy_filter = PrivacyZoneFilter.from_state(
             calibration_state,
-            frame.camera_id,
-            frame_width=effective_width,
-            frame_height=effective_height,
+            ctx.frame.camera_id,
+            frame_width=ctx.effective_width,
+            frame_height=ctx.effective_height,
         )
         if privacy_filter.is_active():
-            # Apply blur/mask policies to the frame in place (affects crops
-            # and the uploaded keyframe).
-            image = privacy_filter.apply_blur_mask(image)
+            assert ctx.image is not None
+            ctx.image = privacy_filter.apply_blur_mask(ctx.image)
 
-        # Filter detections in drop_detection zones.
+        detections = ctx.raw_detections
         if detections and privacy_filter.is_active():
             kept: list[DetectionBox] = []
             dropped_count = 0
@@ -957,125 +974,149 @@ class FrameProcessingPipeline:
                 if privacy_filter.should_drop((foot_x, foot_y)):
                     dropped_count += 1
                     _metrics.metrics.privacy_detections_dropped_total.labels(
-                        camera_id=frame.camera_id,
+                        camera_id=ctx.frame.camera_id,
                     ).inc()
                 else:
                     kept.append(det)
             if dropped_count > 0:
                 logger.debug(
                     "privacy_detections_filtered",
-                    camera_id=frame.camera_id,
+                    camera_id=ctx.frame.camera_id,
                     dropped=dropped_count,
                     kept=len(kept),
                 )
-            detections = kept
+            ctx.raw_detections = kept
 
-        domain_detections: list[Detection] = []
-        det_posture: dict[str, PostureType] = {}
-        det_pose_result: dict[str, PoseResult] = {}
-        embeddings: list[Embedding] = []
-        crops: list[npt.NDArray[np.uint8]] = []
+    async def _stage_embed(self, ctx: FrameContext) -> None:
+        detections = ctx.raw_detections
+        if not detections:
+            return
 
-        if detections:
-            crops = [_crop_detection(image, det) for det in detections]
+        assert ctx.image is not None
+        crops = [_crop_detection(ctx.image, det) for det in detections]
+        ctx.crops = crops
 
-            # ReID and pose both operate on the same crops — run in parallel.
-            async def _do_reid() -> list[Embedding]:
-                # Crop to YOLO bbox before embedding: ReID must see only the person's
-                # pixel region, not the full frame, or gallery distances collapse to noise.
-                if self._reid_embedder is not None:
-                    return await self._reid_embedder.embed_batch(crops)
-                return []
+        async def _do_reid() -> list[Embedding]:
+            if self._reid_embedder is not None:
+                return await self._reid_embedder.embed_batch(crops)
+            return []
 
-            async def _do_pose() -> list[PoseResult | None]:
-                if self._pose_estimator is not None and self._config.pose_enabled:
-                    return await self._run_pose(crops, detections)
-                return []
+        async def _do_pose() -> list[PoseResult | None]:
+            if self._pose_estimator is not None and self._config.pose_enabled:
+                return await self._run_pose(crops, detections)
+            return []
 
-            embeddings, pose_results = await asyncio.gather(
-                _do_reid(),
-                _do_pose(),
+        embeddings, pose_results = await asyncio.gather(_do_reid(), _do_pose())
+        ctx.embeddings = embeddings
+
+        ew = ctx.effective_width
+        eh = ctx.effective_height
+        for det_idx, det in enumerate(detections):
+            bbox = BoundingBox(
+                x_min=int(det.x1 * ew),
+                y_min=int(det.y1 * eh),
+                x_max=int(det.x2 * ew),
+                y_max=int(det.y2 * eh),
             )
+            emb = embeddings[det_idx] if det_idx < len(embeddings) else None
+            pose_result = pose_results[det_idx] if det_idx < len(pose_results) else None
 
-            for det_idx, det in enumerate(detections):
-                bbox = BoundingBox(
-                    x_min=int(det.x1 * effective_width),
-                    y_min=int(det.y1 * effective_height),
-                    x_max=int(det.x2 * effective_width),
-                    y_max=int(det.y2 * effective_height),
-                )
-                emb = embeddings[det_idx] if det_idx < len(embeddings) else None
+            domain_det = Detection(
+                detection_id=str(uuid.uuid4()),
+                camera_id=ctx.frame.camera_id,
+                bbox=bbox,
+                embedding=emb.tolist() if emb is not None else [],
+                capture_time=ctx.capture_time,
+                event_time=ctx.event_time,
+                confidence=det.confidence,
+            )
+            ctx.domain_detections.append(domain_det)
+            if pose_result is not None:
+                ctx.det_pose_result[domain_det.detection_id] = pose_result
 
-                pose_result = pose_results[det_idx] if det_idx < len(pose_results) else None
-
-                domain_det = Detection(
-                    detection_id=str(uuid.uuid4()),
-                    camera_id=frame.camera_id,
-                    bbox=bbox,
-                    embedding=emb.tolist() if emb is not None else [],
-                    capture_time=capture_time,
-                    event_time=event_time,
-                    confidence=det.confidence,
-                )
-                domain_detections.append(domain_det)
-                if pose_result is not None:
-                    det_pose_result[domain_det.detection_id] = pose_result
-
-        # Step 3: Per-camera tracking — run even with 0 detections so the
-        # BoT-SORT Kalman filter ages out lost tracklets instead of keeping
-        # them alive indefinitely when nobody is in frame.
-        # Always call update, even with zero detections: BoT-SORT ages lost
-        # tracklets toward close_grace_frames and must not be skipped.
+    async def _stage_track(self, ctx: FrameContext) -> None:
+        assert self._tracker is not None
+        assert self._tracklet_manager is not None
         local_tracks = self._tracker.update(
-            camera_id=frame.camera_id,
-            detections=domain_detections,
-            embeddings=embeddings or None,
-            frame_index=frame.frame_index,
+            camera_id=ctx.frame.camera_id,
+            detections=ctx.domain_detections,
+            embeddings=ctx.embeddings or None,
+            frame_index=ctx.frame.frame_index,
         )
-
-        # Emit tracker dedup metric
-        dedup_dropped = self._tracker.get_dedup_dropped(frame.camera_id)
+        dedup_dropped = self._tracker.get_dedup_dropped(ctx.frame.camera_id)
         if dedup_dropped > 0:
-            _metrics.metrics.tracklets_dedup_dropped_total.labels(camera_id=frame.camera_id).inc(
-                dedup_dropped
-            )
+            _metrics.metrics.tracklets_dedup_dropped_total.labels(
+                camera_id=ctx.frame.camera_id
+            ).inc(dedup_dropped)
 
-        # Step 4: Tracklet management — run even with 0 detections so
-        # tracklets that have no corresponding detection are marked lost.
-        camera_config = CameraConfig(camera_id=frame.camera_id)
+        camera_config = CameraConfig(camera_id=ctx.frame.camera_id)
         await self._tracklet_manager.step(
             camera=camera_config,
             local_tracks=local_tracks,
-            detections=domain_detections,
-            embeddings=embeddings,
-            event_time=event_time,
-            frame_index=frame.frame_index,
+            detections=ctx.domain_detections,
+            embeddings=ctx.embeddings,
+            event_time=ctx.event_time,
+            frame_index=ctx.frame.frame_index,
         )
 
-        # Step 4b: Face identification (rate-limited call to person-identification-service).
-        # Uses person crops (already extracted for ReID at Step 3) at native
-        # resolution to give the face detector the best chance at small faces.
-        face_anchors: list[FaceAnchor] = []
+    async def _stage_face_id(self, ctx: FrameContext) -> None:
+        if not ctx.domain_detections or not ctx.crops:
+            return
+        camera_id = ctx.frame.camera_id
         now = datetime.now(UTC)
-        if (
-            self._face_id_client is not None
-            and domain_detections
-            and crops
-            and self._should_call_face_id(frame.camera_id, now)
-        ):
-            face_anchors = await self._identify_faces_from_crops(
-                crops=crops,
-                crop_detections=domain_detections,
-                frame_width=effective_width,
-                frame_height=effective_height,
-                camera_id=frame.camera_id,
-            )
 
-        # Ensure face-anchor identities exist in the identities table so that
-        # downstream FK references (trajectory points, dwells, signals) resolve.
-        if face_anchors and self._gallery_repo is not None:
+        # Per-camera gate: face ID can be disabled for specific cameras.
+        cam_cfg = self._get_face_id_config(camera_id)
+        if not cam_cfg.enabled:
+            return
+        if self._face_id_client is None:
+            return
+        if self._tracklet_manager is None:
+            return
+
+        # Per-tracklet cooldown: each tracklet is independently throttled so
+        # a newly appeared person gets an immediate call even when another
+        # person in the same camera was recently identified.
+        eligible_indices: list[int] = []
+        eligible_crops: list[npt.NDArray[np.uint8]] = []
+        eligible_detections: list[Detection] = []
+        sent_tracklet_ids: set[str] = set()
+
+        for idx, det in enumerate(ctx.domain_detections):
+            tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(det.detection_id)
+            if not tracklet_id:
+                continue
+            last_call = self._last_face_id_by_tracklet.get(tracklet_id)
+            if last_call is not None:
+                elapsed = (now - last_call).total_seconds()
+                if elapsed < self._config.face_id_cooldown_s:
+                    _metrics.metrics.face_id_cooldown_skips_total.inc()
+                    logger.debug(
+                        "face_id_cooldown_skip",
+                        tracklet_id=tracklet_id,
+                        elapsed_s=round(elapsed, 1),
+                        cooldown_s=self._config.face_id_cooldown_s,
+                    )
+                    continue
+            eligible_indices.append(idx)
+            eligible_crops.append(ctx.crops[idx])
+            eligible_detections.append(det)
+            sent_tracklet_ids.add(tracklet_id)
+
+        if not eligible_crops:
+            return
+
+        ctx.face_anchors = await self._identify_faces_from_crops(
+            crops=eligible_crops,
+            crop_detections=eligible_detections,
+            frame_width=ctx.effective_width,
+            frame_height=ctx.effective_height,
+            camera_id=camera_id,
+            sent_tracklet_ids=sent_tracklet_ids,
+        )
+        if ctx.face_anchors and self._gallery_repo is not None:
             seen: set[str] = set()
-            for fa in face_anchors:
+            for fa in ctx.face_anchors:
                 if fa.person_id and fa.person_id != "unknown" and fa.person_id not in seen:
                     seen.add(fa.person_id)
                     await self._gallery_repo.upsert_identity(
@@ -1086,362 +1127,404 @@ class FrameProcessingPipeline:
                         )
                     )
 
-        # ---- M5: Cross-camera association ----
-        active_tracklets = (
+    async def _stage_cross_camera_and_resolve(self, ctx: FrameContext) -> None:
+        ctx.active_tracklets = (
             self._tracklet_manager.get_active_tracklets() if self._tracklet_manager else []
         )
-
-        # Stability gate metric: count tracklets held below the publish threshold.
         if self._tracklet_manager is not None:
             for cam_id, held_count in self._tracklet_manager.get_held_count_by_camera().items():
                 _metrics.metrics.tracklets_held_below_stability_gate.labels(camera_id=cam_id).set(
                     held_count
                 )
-        active_global_tracks: list[GlobalTrack] = []
-        new_revisions: list[IdentityRevision] = []
-        outcome: ResolveOutcome = ResolveOutcome()
 
-        if active_tracklets:
-            assert self._cross_camera is not None
-            assert self._identity_resolver is not None
+        # Prune face ID cooldown entries for closed tracklets.
+        active_tracklet_ids = {tl.tracklet_id for tl in ctx.active_tracklets}
+        stale_ids = [
+            tl_id for tl_id in self._last_face_id_by_tracklet if tl_id not in active_tracklet_ids
+        ]
+        for tl_id in stale_ids:
+            del self._last_face_id_by_tracklet[tl_id]
 
-            # Step 5: Cross-camera association
-            active_global_tracks = await self._cross_camera.associate(
-                active_tracklets,
-                captured_at=event_time,
-            )
+        if not ctx.active_tracklets:
+            return
 
-            # Step 6: Identity resolution
-            outcome = await self._identity_resolver.resolve(
-                global_tracks=active_global_tracks,
-                new_face_anchors=face_anchors,
-                captured_at=event_time,
-            )
+        assert self._cross_camera is not None
+        assert self._identity_resolver is not None
 
-            # Apply decisions: update GlobalTrack identity assignments.
-            if self._config.identity_committer_enabled and self._identity_committer is not None:
-                # Buffered path: ingest per-frame evidence, flush committed decisions.
-                for decision in outcome.decisions:
-                    _top_id, top_conf = decision.posterior.top_identity()
-                    self._identity_committer.ingest(
+        # Compute height estimates for active tracklets (if floor projector
+        # is available and the camera has a calibrated homography).
+        if self._floor_projector is not None:
+            for tl in ctx.active_tracklets:
+                if tl.last_bbox is not None:
+                    height_mm = self._floor_projector.estimate_height_mm(tl.camera_id, tl.last_bbox)
+                    if height_mm is not None:
+                        ctx.tracklet_heights[tl.tracklet_id] = height_mm
+            if ctx.tracklet_heights:
+                _metrics.metrics.height_evidence_frames_total.inc()
+
+        ctx.active_global_tracks = await self._cross_camera.associate(
+            ctx.active_tracklets, captured_at=ctx.event_time
+        )
+        outcome = await self._identity_resolver.resolve(
+            global_tracks=ctx.active_global_tracks,
+            new_face_anchors=ctx.face_anchors,
+            captured_at=ctx.event_time,
+            tracklet_heights=ctx.tracklet_heights,
+        )
+        ctx.outcome_decisions = outcome.decisions
+        ctx.new_revisions = list(outcome.revisions)
+
+        # Seed committed_ids from active GTs so the committer can detect
+        # demotions (all-None window on a previously-committed GT).
+        for gt in ctx.active_global_tracks:
+            ctx.committed_ids.setdefault(gt.global_track_id, gt.current_identity_id)
+
+        if self._identity_committer is not None:
+            self._stage_committer_ingest(ctx)
+            await self._stage_committer_face_fastpath(ctx)
+            await self._stage_committer_flush(ctx)
+        # Refresh committed_at on evidence-backed decisions so the
+        # maintenance window resets on every confirming evidence frame.
+        if self._global_track_repo is not None:
+            for decision in ctx.outcome_decisions:
+                if decision.evidence_backed and decision.identity_id is not None:
+                    await self._global_track_repo.set_identity_committed_at(
                         global_track_id=decision.global_track_id,
-                        identity_id=decision.identity_id,
-                        confidence=top_conf,
-                        reason=decision.reason,
+                        committed_at=ctx.event_time,
                     )
-                # High-confidence face fast-path: commit immediately and rewrite history.
-                for fa in face_anchors:
-                    gt = next(
+
+        # Refresh committed_ids for GTs that did not flush this frame
+        # (flush may have updated some entries via commit/demotion).
+        for gt in ctx.active_global_tracks:
+            if gt.global_track_id not in ctx.committed_ids:
+                ctx.committed_ids[gt.global_track_id] = gt.current_identity_id
+
+        # Backfill gallery identity for committed GTs whose identity has
+        # survived the confirmation delay without revision.
+        if self._gallery_repo is not None and self._config.gallery_identity_backfill_delay_s > 0:
+            for gt in ctx.active_global_tracks:
+                committed_id = gt.current_identity_id
+                committed_at = gt.current_identity_committed_at
+                if not committed_id or committed_at is None:
+                    continue
+                age_s = (ctx.event_time - committed_at).total_seconds()
+                if age_s < self._config.gallery_identity_backfill_delay_s:
+                    _metrics.metrics.gallery_backfills_skipped_total.inc()
+                    continue
+                tracklet_ids = set(gt.tracklet_ids)
+                if tracklet_ids:
+                    await self._gallery_repo.update_identity_for_tracklets(
+                        tracklet_ids=tracklet_ids,
+                        identity_id=committed_id,
+                    )
+        elif self._gallery_repo is not None:
+            # Backward-compatible: delay=0, backfill immediately.
+            for gt in ctx.active_global_tracks:
+                committed_id = gt.current_identity_id
+                if not committed_id:
+                    continue
+                tracklet_ids = set(gt.tracklet_ids)
+                if tracklet_ids:
+                    await self._gallery_repo.update_identity_for_tracklets(
+                        tracklet_ids=tracklet_ids,
+                        identity_id=committed_id,
+                    )
+
+    def _stage_committer_ingest(self, ctx: FrameContext) -> None:
+        assert self._identity_committer is not None
+        for decision in ctx.outcome_decisions:
+            _top_id, top_conf = decision.posterior.top_identity()
+            gt_id = decision.global_track_id
+            current_id = ctx.committed_ids.get(gt_id)
+            self._identity_committer.ingest(
+                global_track_id=gt_id,
+                identity_id=decision.identity_id,
+                confidence=top_conf,
+                reason=decision.reason,
+                current_identity_id=current_id,
+            )
+
+    async def _stage_committer_face_fastpath(self, ctx: FrameContext) -> None:
+        """Apply immediate face commits and synthesize revisions."""
+        assert self._identity_committer is not None
+        for fa in ctx.face_anchors:
+            gt = next(
+                (
+                    g
+                    for g in ctx.active_global_tracks
+                    if any(tid == fa.tracklet_id for tid in g.tracklet_ids)
+                ),
+                None,
+            )
+            if gt is None:
+                continue
+            immediate = self._identity_committer.check_high_confidence_face(
+                gt.global_track_id, fa.person_id, fa.confidence, first_seen_at=gt.started_at
+            )
+            if not immediate or self._global_track_repo is None:
+                continue
+            await self._global_track_repo.assign_identity(
+                global_track_id=immediate.global_track_id,
+                identity_id=immediate.identity_id,
+            )
+            if gt.current_identity_id != immediate.identity_id:
+                await self._global_track_repo.set_identity_committed_at(
+                    global_track_id=immediate.global_track_id,
+                    committed_at=ctx.event_time,
+                )
+            ctx.committed_ids[immediate.global_track_id] = immediate.identity_id
+            syn_rev = IdentityRevision(
+                revision_id=str(uuid.uuid4()),
+                global_track_id=immediate.global_track_id,
+                tracklet_ids=list(gt.tracklet_ids),
+                candidates=[],
+                map_identity_id=immediate.identity_id or "",
+                posterior_entropy=0.0,
+                previous_identity_id=gt.current_identity_id,
+                new_identity_id=immediate.identity_id,
+                reason="face_high_confidence_immediate",
+                evidence={"face_confidence": fa.confidence},
+                revision_time=datetime.now(UTC),
+            )
+            ctx.new_revisions.append(syn_rev)
+
+    async def _stage_committer_flush(self, ctx: FrameContext) -> None:
+        assert self._identity_committer is not None
+        flushed = self._identity_committer.flush()
+        if self._global_track_repo is None:
+            return
+        for commit in flushed:
+            if commit.identity_id is not None:
+                await self._global_track_repo.assign_identity(
+                    global_track_id=commit.global_track_id,
+                    identity_id=commit.identity_id,
+                )
+                if commit.previous_identity_id != commit.identity_id:
+                    await self._global_track_repo.set_identity_committed_at(
+                        global_track_id=commit.global_track_id,
+                        committed_at=ctx.event_time,
+                    )
+            elif commit.previous_identity_id is not None:
+                # Demotion: all evidence in the window said UNKNOWN on a GT
+                # that previously had a committed identity.  Clear it.
+                await self._global_track_repo.assign_identity(
+                    global_track_id=commit.global_track_id,
+                    identity_id=None,
+                )
+                await self._global_track_repo.clear_identity_committed_at(
+                    global_track_id=commit.global_track_id,
+                )
+                _metrics.metrics.identity_demotions_total.inc()
+            ctx.committed_ids[commit.global_track_id] = commit.identity_id
+
+    async def _stage_close_terminated(self, ctx: FrameContext) -> None:
+        current_gt_ids = {gt.global_track_id for gt in ctx.active_global_tracks}
+        terminated_gt_ids = self._prev_active_gt_ids - current_gt_ids
+        if not terminated_gt_ids:
+            self._prev_active_gt_ids = current_gt_ids
+            return
+
+        traj_close_time = datetime.now(UTC)
+        for gt_id in terminated_gt_ids:
+            logger.debug("Closing terminated global track", global_track_id=gt_id)
+            if self._global_track_repo is not None:
+                await self._global_track_repo.close_global_track(gt_id)
+            if self._trajectory_writer:
+                await self._trajectory_writer.close_track(gt_id, closed_at=traj_close_time)
+            if self._motion_energy_tracker is not None:
+                self._motion_energy_tracker.evict_track(gt_id)
+            if self._posture_tracker is not None:
+                self._posture_tracker.evict_track(gt_id)
+        self._prev_active_gt_ids = current_gt_ids
+
+    async def _stage_trajectory(self, ctx: FrameContext) -> None:
+        if not ctx.outcome_decisions or not self._trajectory_writer:
+            return
+
+        traj_time = datetime.now(UTC)
+        room_name = self._config.camera_room_map.get(ctx.frame.camera_id, "")
+
+        # Build global_track_id → best bbox lookup for the current camera.
+        gt_bbox: dict[str, BoundingBox] = {}
+        if ctx.active_tracklets and self._floor_projector:
+            for tracklet in ctx.active_tracklets:
+                if tracklet.camera_id != ctx.frame.camera_id:
+                    continue
+                last_bbox: BoundingBox | None = getattr(tracklet, "last_bbox", None)
+                if last_bbox is None:
+                    continue
+                for gt in ctx.active_global_tracks:
+                    if tracklet.tracklet_id in gt.tracklet_ids:
+                        gt_bbox[gt.global_track_id] = last_bbox
+                        break
+
+        for decision in ctx.outcome_decisions:
+            gt_bbox_entry = gt_bbox.get(decision.global_track_id)
+            if gt_bbox_entry is None:
+                continue
+
+            floor_point = (
+                self._floor_projector.project(ctx.frame.camera_id, gt_bbox_entry)
+                if self._floor_projector is not None
+                else FloorPoint(0, 0)
+            )
+            _top_id, top_prob = decision.posterior.top_identity()
+
+            # Resolve posture + motion energy via detection_id → tracklet → GT chain.
+            gt_posture: PostureType = "unknown"
+            gt_motion_energy: float | None = None
+            pose, matching_detection_id = self._find_pose_for_gt(ctx, decision.global_track_id)
+
+            if pose is not None:
+                if self._motion_energy_tracker is not None:
+                    bbox_diag = (gt_bbox_entry.width**2 + gt_bbox_entry.height**2) ** 0.5
+                    me = self._motion_energy_tracker.update(
+                        decision.global_track_id, pose, traj_time, bbox_diag_px=bbox_diag
+                    )
+                    gt_motion_energy = me.mean_keypoint_velocity_px_s
+                if self._posture_tracker is not None:
+                    gt_obj = next(
                         (
-                            g
-                            for g in active_global_tracks
-                            if any(tid == fa.tracklet_id for tid in g.tracklet_ids)
-                            if self._tracklet_manager is not None
+                            gt
+                            for gt in ctx.active_global_tracks
+                            if gt.global_track_id == decision.global_track_id
                         ),
                         None,
                     )
-                    if gt is not None:
-                        immediate = self._identity_committer.check_high_confidence_face(
-                            gt.global_track_id,
-                            fa.person_id,
-                            fa.confidence,
-                            first_seen_at=gt.started_at,
-                        )
-                        if immediate and self._global_track_repo:
-                            await self._global_track_repo.assign_identity(
-                                global_track_id=immediate.global_track_id,
-                                identity_id=immediate.identity_id,
-                            )
-                # Flush buffer: emit committed decisions.
-                flushed = self._identity_committer.flush()
-                if self._global_track_repo:
-                    for commit in flushed:
-                        if commit.identity_id is not None:
-                            await self._global_track_repo.assign_identity(
-                                global_track_id=commit.global_track_id,
-                                identity_id=commit.identity_id,
-                            )
-            elif self._global_track_repo:
-                # Direct per-frame path (legacy, committer_enabled=False).
-                # Only write when the identity actually changes; maintenance
-                # carry-forwards set revises_previous=False and must not call
-                # assign_identity(None) which would clear a valid assignment.
-                for decision in outcome.decisions:
-                    if decision.revises_previous and decision.identity_id is not None:
-                        await self._global_track_repo.assign_identity(
-                            global_track_id=decision.global_track_id,
-                            identity_id=decision.identity_id,
-                        )
-
-            # Collect revisions to emit.
-            new_revisions = list(outcome.revisions)
-
-            # Backfill gallery identity: once the identity resolver commits an
-            # identity for a GlobalTrack, stamp that identity onto all gallery
-            # entries for the tracklets in that GT.  This creates a virtuous
-            # cycle where future ReID gallery searches (for this person on
-            # other cameras) find identity-tagged entries and produce identity
-            # evidence — instead of mapping to "UNKNOWN".
-            if self._gallery_repo is not None and active_global_tracks:
-                for gt in active_global_tracks:
-                    # Only backfill when the GT has a committed identity on
-                    # this frame (either from the direct path or the committer).
-                    committed_id = gt.current_identity_id
-                    if not committed_id:
-                        continue
-                    tracklet_ids = set(gt.tracklet_ids)
-                    if tracklet_ids:
-                        await self._gallery_repo.update_identity_for_tracklets(
-                            tracklet_ids=tracklet_ids,
-                            identity_id=committed_id,
-                        )
-
-        # Step 5b: Close trajectory dwells for terminated global tracks.
-        # Runs regardless of whether active_tracklets is empty — when it is
-        # empty, every previously-active track is considered terminated.
-        current_gt_ids = {gt.global_track_id for gt in active_global_tracks}
-        terminated_gt_ids = self._prev_active_gt_ids - current_gt_ids
-        if terminated_gt_ids:
-            traj_close_time = datetime.now(UTC)
-            for gt_id in terminated_gt_ids:
-                logger.debug(
-                    "Closing terminated global track",
-                    global_track_id=gt_id,
-                )
-                if self._global_track_repo is not None:
-                    await self._global_track_repo.close_global_track(gt_id)
-                if self._trajectory_writer:
-                    await self._trajectory_writer.close_track(gt_id, closed_at=traj_close_time)
-                if self._motion_energy_tracker is not None:
-                    self._motion_energy_tracker.evict_track(gt_id)
-                if self._posture_tracker is not None:
-                    self._posture_tracker.evict_track(gt_id)
-        self._prev_active_gt_ids = current_gt_ids
-
-        # Step 7: Write trajectory points and manage room dwells.
-        if outcome.decisions and self._trajectory_writer:
-            traj_time = datetime.now(UTC)
-            room_name = self._config.camera_room_map.get(frame.camera_id, "")
-
-            # Build a lookup from global_track_id → best bbox for the
-            # current camera, using the tracklet's last_bbox (updated by
-            # the tracklet manager in step 4).
-            gt_bbox: dict[str, BoundingBox] = {}
-            if active_tracklets and self._floor_projector:
-                for tracklet in active_tracklets:
-                    if tracklet.camera_id != frame.camera_id:
-                        continue
-                    last_bbox: BoundingBox | None = getattr(tracklet, "last_bbox", None)
-                    if last_bbox is None:
-                        continue
-                    for gt in active_global_tracks:
-                        if tracklet.tracklet_id in gt.tracklet_ids:
-                            gt_bbox[gt.global_track_id] = last_bbox
-                            break
-
-            for decision in outcome.decisions:
-                # CR-12: Always write trajectory points, even when identity
-                # is UNKNOWN.  The trajectory is keyed on global_track_id;
-                # identity is a stamp, not a gate.  When identity later
-                # resolves, the rewriter retroactively labels the points.
-                # Project the tracklet's footpoint through the per-camera
-                # homography, falling back to uncalibrated (0,0) when no
-                # homography is configured for this camera.
-                gt_bbox_entry = gt_bbox.get(decision.global_track_id)
-                if gt_bbox_entry is None:
-                    # Skip writing trajectory points if this track is not visible
-                    # on the current camera in this frame.
-                    continue
-
-                floor_point = (
-                    self._floor_projector.project(frame.camera_id, gt_bbox_entry)
-                    if self._floor_projector is not None
-                    else FloorPoint(0, 0)
-                )
-                _top_id, top_prob = decision.posterior.top_identity()
-
-                # Resolve posture + motion energy for this global track
-                # via detection_id → tracklet → global_track chain.
-                gt_posture: PostureType = "unknown"
-                gt_motion_energy: float | None = None
-
-                # Find a detection_id belonging to this global_track_id.
-                pose = None
-                matching_detection_id = None
-                for domain_det in domain_detections:
-                    tid = (
-                        self._tracklet_manager.get_tracklet_id_for_detection(
-                            domain_det.detection_id
-                        )
-                        if self._tracklet_manager
-                        else ""
+                    active_camera_ids = gt_obj.camera_ids if gt_obj else [ctx.frame.camera_id]
+                    gt_posture = self._posture_tracker.update(
+                        global_track_id=decision.global_track_id,
+                        camera_id=ctx.frame.camera_id,
+                        pose=pose,
+                        bbox=gt_bbox_entry,
+                        active_camera_ids=active_camera_ids,
+                        motion_energy=gt_motion_energy,
                     )
-                    if not tid:
-                        continue
-                    # Check if this tracklet belongs to the current gt decision.
-                    gt_for_det = next(
-                        (
-                            gt.global_track_id
-                            for gt in active_global_tracks
-                            if tid in gt.tracklet_ids
-                        ),
-                        "",
-                    )
-                    if gt_for_det != decision.global_track_id:
-                        continue
-                    pose = det_pose_result.get(domain_det.detection_id)
-                    matching_detection_id = domain_det.detection_id
-                    break
-
-                if pose is not None:
-                    if self._motion_energy_tracker is not None:
-                        bbox_diag = (gt_bbox_entry.width**2 + gt_bbox_entry.height**2) ** 0.5
-                        me = self._motion_energy_tracker.update(
-                            decision.global_track_id,
-                            pose,
-                            traj_time,
-                            bbox_diag_px=bbox_diag,
-                        )
-                        gt_motion_energy = me.mean_keypoint_velocity_px_s
-
-                    if self._posture_tracker is not None:
-                        gt_obj = next(
-                            (
-                                gt
-                                for gt in active_global_tracks
-                                if gt.global_track_id == decision.global_track_id
-                            ),
-                            None,
-                        )
-                        active_camera_ids = gt_obj.camera_ids if gt_obj else [frame.camera_id]
-                        gt_posture = self._posture_tracker.update(
-                            global_track_id=decision.global_track_id,
-                            camera_id=frame.camera_id,
-                            pose=pose,
-                            bbox=gt_bbox_entry,
-                            active_camera_ids=active_camera_ids,
-                            motion_energy=gt_motion_energy,
-                        )
-                        if matching_detection_id is not None:
-                            det_posture[matching_detection_id] = gt_posture
-                else:
                     if matching_detection_id is not None:
-                        gt_posture = det_posture.get(matching_detection_id, "unknown")
+                        ctx.det_posture[matching_detection_id] = gt_posture
+            elif matching_detection_id is not None:
+                gt_posture = ctx.det_posture.get(matching_detection_id, "unknown")
 
-                await self._trajectory_writer.write(
-                    identity_id=decision.identity_id,
-                    global_track_id=decision.global_track_id,
-                    room_name=room_name,
-                    floor_point=floor_point,
-                    captured_at=traj_time,
-                    identity_confidence=top_prob,
-                    posture=gt_posture,
-                    motion_energy=gt_motion_energy,
-                )
+            gt_identity = ctx.committed_ids.get(decision.global_track_id)
+            await self._trajectory_writer.write(
+                identity_id=gt_identity,
+                global_track_id=decision.global_track_id,
+                room_name=room_name,
+                floor_point=floor_point,
+                captured_at=traj_time,
+                identity_confidence=top_prob,
+                posture=gt_posture,
+                motion_energy=gt_motion_energy,
+            )
 
-        # Step 8: Keyframe sampling (periodic per tracklet + triggered on identity change).
-        if self._keyframe_sampler and active_tracklets:
-            sample_time = datetime.now(UTC)
-            revised_gt_ids = {rev.global_track_id for rev in new_revisions}
-            for tracklet in active_tracklets:
-                gt_id = next(
-                    (
-                        gt.global_track_id
-                        for gt in active_global_tracks
-                        if tracklet.tracklet_id in gt.tracklet_ids
-                    ),
-                    tracklet.tracklet_id,
-                )
-                # Resolve the global track for this tracklet to pick up
-                # the committed identity (if any).  The identity resolver
-                # writes current_identity_id on the GlobalTrack before
-                # keyframe sampling runs, so it is available here.
-                gt_for_tracklet = next(
-                    (gt for gt in active_global_tracks if tracklet.tracklet_id in gt.tracklet_ids),
-                    None,
-                )
-                identity_id = (
-                    gt_for_tracklet.current_identity_id if gt_for_tracklet is not None else ""
-                )
-                annotations: dict[str, object] = {
-                    "tracklet_id": tracklet.tracklet_id,
-                    "camera_id": tracklet.camera_id,
-                    "identity_id": identity_id or "",
+    def _find_pose_for_gt(
+        self, ctx: FrameContext, global_track_id: str
+    ) -> tuple[PoseResult | None, str | None]:
+        """Find a pose result and detection_id for the given global_track_id."""
+        for domain_det in ctx.domain_detections:
+            tid = (
+                self._tracklet_manager.get_tracklet_id_for_detection(domain_det.detection_id)
+                if self._tracklet_manager
+                else ""
+            )
+            if not tid:
+                continue
+            gt_for_det = next(
+                (gt.global_track_id for gt in ctx.active_global_tracks if tid in gt.tracklet_ids),
+                "",
+            )
+            if gt_for_det != global_track_id:
+                continue
+            pose = ctx.det_pose_result.get(domain_det.detection_id)
+            return pose, domain_det.detection_id
+        return None, None
+
+    async def _stage_keyframe(self, ctx: FrameContext) -> None:
+        if not self._keyframe_sampler or not ctx.active_tracklets:
+            return
+
+        sample_time = datetime.now(UTC)
+        revised_gt_ids = {rev.global_track_id for rev in ctx.new_revisions}
+        for tracklet in ctx.active_tracklets:
+            gt_id = next(
+                (
+                    gt.global_track_id
+                    for gt in ctx.active_global_tracks
+                    if tracklet.tracklet_id in gt.tracklet_ids
+                ),
+                tracklet.tracklet_id,
+            )
+            identity_id = ctx.committed_ids.get(gt_id, "") or ""
+            annotations: dict[str, object] = {
+                "tracklet_id": tracklet.tracklet_id,
+                "camera_id": tracklet.camera_id,
+                "identity_id": identity_id or "",
+            }
+            if tracklet.last_bbox is not None:
+                annotations["bbox"] = {
+                    "x_min": tracklet.last_bbox.x_min,
+                    "y_min": tracklet.last_bbox.y_min,
+                    "x_max": tracklet.last_bbox.x_max,
+                    "y_max": tracklet.last_bbox.y_max,
                 }
-                if tracklet.last_bbox is not None:
-                    annotations["bbox"] = {
-                        "x_min": tracklet.last_bbox.x_min,
-                        "y_min": tracklet.last_bbox.y_min,
-                        "x_max": tracklet.last_bbox.x_max,
-                        "y_max": tracklet.last_bbox.y_max,
-                    }
 
-                # Build bbox data for annotation persistence.
-                bbox_data: tuple[float, float, float, float] | None = None
-                if tracklet.last_bbox is not None:
-                    bbox_data = (
-                        float(tracklet.last_bbox.x_min),
-                        float(tracklet.last_bbox.y_min),
-                        float(tracklet.last_bbox.x_max),
-                        float(tracklet.last_bbox.y_max),
-                    )
+            bbox_data: tuple[float, float, float, float] | None = None
+            if tracklet.last_bbox is not None:
+                bbox_data = (
+                    float(tracklet.last_bbox.x_min),
+                    float(tracklet.last_bbox.y_min),
+                    float(tracklet.last_bbox.x_max),
+                    float(tracklet.last_bbox.y_max),
+                )
 
-                sampled: TaggedKeyframe | None
-                # Trigger on identity revision.
-                if gt_id in revised_gt_ids:
-                    sampled = await self._keyframe_sampler.trigger_sample(
-                        tracklet_id=tracklet.tracklet_id,
-                        global_track_id=gt_id,
-                        camera_id=tracklet.camera_id,
-                        minio_key=frame.minio_key,
-                        captured_at=sample_time,
-                        annotations=annotations,
-                        tag_reason="identity_changed",
-                        detection_bbox=bbox_data,
-                        detection_confidence=1.0,
-                        detection_frame_width=effective_width,
-                        detection_frame_height=effective_height,
-                        detection_identity_id=identity_id or None,
-                    )
-                else:
-                    sampled = await self._keyframe_sampler.maybe_sample(
-                        tracklet_id=tracklet.tracklet_id,
-                        global_track_id=gt_id,
-                        camera_id=tracklet.camera_id,
-                        minio_key=frame.minio_key,
-                        captured_at=sample_time,
-                        annotations=annotations,
-                        detection_bbox=bbox_data,
-                        detection_confidence=1.0,
-                        detection_frame_width=effective_width,
-                        detection_frame_height=effective_height,
-                        detection_identity_id=identity_id or None,
-                    )
+            sampled: TaggedKeyframe | None
+            if gt_id in revised_gt_ids:
+                sampled = await self._keyframe_sampler.trigger_sample(
+                    tracklet_id=tracklet.tracklet_id,
+                    global_track_id=gt_id,
+                    camera_id=tracklet.camera_id,
+                    minio_key=ctx.frame.minio_key,
+                    captured_at=sample_time,
+                    annotations=annotations,
+                    tag_reason="identity_changed",
+                    detection_bbox=bbox_data,
+                    detection_confidence=1.0,
+                    detection_frame_width=ctx.effective_width,
+                    detection_frame_height=ctx.effective_height,
+                    detection_identity_id=identity_id or None,
+                )
+            else:
+                sampled = await self._keyframe_sampler.maybe_sample(
+                    tracklet_id=tracklet.tracklet_id,
+                    global_track_id=gt_id,
+                    camera_id=tracklet.camera_id,
+                    minio_key=ctx.frame.minio_key,
+                    captured_at=sample_time,
+                    annotations=annotations,
+                    detection_bbox=bbox_data,
+                    detection_confidence=1.0,
+                    detection_frame_width=ctx.effective_width,
+                    detection_frame_height=ctx.effective_height,
+                    detection_identity_id=identity_id or None,
+                )
+            if sampled is not None and self._scene_publisher:
+                await self._scene_publisher.publish(sampled)
 
-                if sampled is not None and self._scene_publisher:
-                    await self._scene_publisher.publish(sampled)
-
-        # Step 9: Persist identity revisions.
-        if new_revisions and self._revision_publisher:
-            await self._revision_publisher.publish_many(new_revisions)
+    async def _stage_revisions(self, ctx: FrameContext) -> None:
+        if ctx.new_revisions and self._revision_publisher:
+            await self._revision_publisher.publish_many(ctx.new_revisions)
             if self._repo:
-                for rev in new_revisions:
+                for rev in ctx.new_revisions:
                     await self._repo.save_identity_revision(revision=rev)
 
-        # Step 9a: Retroactive cross-table rewrite. Run when the committer is
-        # enabled OR face-commit rewrite is enabled and any revision changes
-        # identity (including face-anchor-driven revisions from the direct path).
         if (
-            (
-                self._config.identity_committer_enabled
-                or self._config.identity_rewrite_on_face_commit
-            )
-            and new_revisions
+            self._config.identity_rewrite_on_face_commit
+            and ctx.new_revisions
             and self._identity_rewriter is not None
         ):
             rewrite_time = datetime.now(UTC)
-            gt_start_by_id = {gt.global_track_id: gt.started_at for gt in active_global_tracks}
-            for rev in new_revisions:
+            gt_start_by_id = {gt.global_track_id: gt.started_at for gt in ctx.active_global_tracks}
+            for rev in ctx.new_revisions:
                 if rev.previous_identity_id is None or rev.new_identity_id is None:
                     continue
                 applies_from = gt_start_by_id.get(rev.global_track_id, rewrite_time)
@@ -1454,56 +1537,52 @@ class FrameProcessingPipeline:
                     applies_to=rewrite_time,
                 )
 
-        # Step 9a-2: Update bbox annotations for all tracklets in each revision.
-        if (
-            new_revisions
-            and self._bbox_repo is not None
-        ):
-            for rev in new_revisions:
+        if ctx.new_revisions and self._bbox_repo is not None:
+            for rev in ctx.new_revisions:
                 if rev.new_identity_id is None:
                     continue
                 for tid in rev.tracklet_ids:
                     await self._bbox_repo.update_identity_id(tid, rev.new_identity_id)
 
-        # Step 9b: Back-fill tracklet_id and global_track_id onto each
-        # Detection so the serialised proto carries identity context for the
-        # CC subscriber and the live-view overlay.
-        if domain_detections and self._tracklet_manager is not None and active_global_tracks:
-            tracklet_to_gt: dict[str, str] = {}
-            for gt in active_global_tracks:
-                for tid in gt.tracklet_ids:
-                    tracklet_to_gt[tid] = gt.global_track_id
+    async def _stage_detection_backfill(self, ctx: FrameContext) -> None:
+        if (
+            not ctx.domain_detections
+            or self._tracklet_manager is None
+            or not ctx.active_global_tracks
+        ):
+            return
 
-            updated: list[Detection] = []
-            for domain_det in domain_detections:
-                tid = self._tracklet_manager.get_tracklet_id_for_detection(domain_det.detection_id)
-                gt_id = tracklet_to_gt.get(tid, "")
-                updated.append(replace(domain_det, tracklet_id=tid, global_track_id=gt_id))
-            domain_detections = updated
+        tracklet_to_gt: dict[str, str] = {}
+        for gt in ctx.active_global_tracks:
+            for tid in gt.tracklet_ids:
+                tracklet_to_gt[tid] = gt.global_track_id
 
+        updated: list[Detection] = []
+        for domain_det in ctx.domain_detections:
+            tid = self._tracklet_manager.get_tracklet_id_for_detection(domain_det.detection_id)
+            gt_id = tracklet_to_gt.get(tid, "")
+            updated.append(replace(domain_det, tracklet_id=tid, global_track_id=gt_id))
+        ctx.domain_detections = updated
+
+    async def _stage_posture_and_trails(self, ctx: FrameContext) -> None:
         # Classify posture per detection through the pluggable strategy.
-        # Runs after tracklet assignment so the strategy has access to
-        # detection.tracklet_id for per-tracklet caching (depth slow-path).
-        # Only fills entries not already set by GlobalPostureTracker.
-        for domain_det in domain_detections:
-            if domain_det.detection_id in det_posture:
+        for domain_det in ctx.domain_detections:
+            if domain_det.detection_id in ctx.det_posture:
                 continue
-            pose_result = det_pose_result.get(domain_det.detection_id)
+            pose_result = ctx.det_pose_result.get(domain_det.detection_id)
             if self._posture_strategy is not None:
-                posture = await self._posture_strategy.infer(
-                    image, domain_det, pose_result,
-                )
+                assert ctx.image is not None
+                posture = await self._posture_strategy.infer(ctx.image, domain_det, pose_result)
             elif pose_result is not None:
                 posture = classify_posture(pose_result, domain_det.bbox)
             else:
                 posture = "unknown"
-            det_posture[domain_det.detection_id] = posture
+            ctx.det_posture[domain_det.detection_id] = posture
 
-        # Step 9c (Phase 7): Update per-tracklet trail deques with the current
-        # foot-point (bbox bottom-centre in normalised camera coords).
-        frame_w = float(effective_width) if effective_width else 1.0
-        frame_h = float(effective_height) if effective_height else 1.0
-        for domain_det in domain_detections:
+        # Update per-tracklet trail deques.
+        frame_w = float(ctx.effective_width) if ctx.effective_width else 1.0
+        frame_h = float(ctx.effective_height) if ctx.effective_height else 1.0
+        for domain_det in ctx.domain_detections:
             if not domain_det.tracklet_id:
                 continue
             foot_x = (domain_det.bbox.x_min + domain_det.bbox.x_max) / 2.0 / frame_w
@@ -1515,73 +1594,61 @@ class FrameProcessingPipeline:
             trail_dq.append((float(foot_x), float(foot_y)))
 
         # Expire trails for tracklets no longer active.
-        active_tids = {d.tracklet_id for d in domain_detections if d.tracklet_id}
+        active_tids = {d.tracklet_id for d in ctx.domain_detections if d.tracklet_id}
         stale_tids = set(self._trail_by_tracklet) - active_tids
         for tid in stale_tids:
             del self._trail_by_tracklet[tid]
 
-        trail_by_tracklet_snapshot: dict[str, list[tuple[float, float]]] = {
+        ctx.trail_by_tracklet_snapshot = {
             tid: list(dq) for tid, dq in self._trail_by_tracklet.items()
         }
 
-        # Step 10: Publish tracking event with identity + room context so the
-        # CC-side TrackingEventSubscriber can write PersonLocationState directly.
+    async def _stage_publish(self, ctx: FrameContext) -> None:
+        # Build per-frame best-guess identities for the live view.
         identities: dict[str, tuple[str, float]] = {}
         evidence_by_gt: dict[str, tuple[float, float, bool]] = {}
-        if active_tracklets and outcome.decisions:
-            for decision in outcome.decisions:
-                # Use the posterior's top identity even when the commit rule
-                # hasn't fired yet.  If we gate on decision.identity_id alone
-                # (which is None until a formal commit), the per-frame
-                # TrackingEvent carries no IdentityRevision sub-messages, the
-                # CC subscriber defaults identity_confidence to 0.0, the
-                # LocationWriter skips the detection, no PersonLocationState
-                # row is written, and the Current Presence tab falls through
-                # to UNKNOWN for every person.
+        if ctx.active_tracklets and ctx.outcome_decisions:
+            for decision in ctx.outcome_decisions:
                 top_id, top_prob = decision.posterior.top_identity()
                 if top_id == "UNKNOWN" or top_prob <= 0.0:
                     continue
                 identities[decision.global_track_id] = (top_id, top_prob)
-                # Compute top-2 probability for the evidence chip.
                 top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
                 top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
                 evidence_by_gt[decision.global_track_id] = (top_prob, top2_prob, False)
 
-        # Carry committed identities forward when the current-frame posterior
-        # is below the identification threshold (brief occlusion, bad frame,
-        # momentary YOLO miss).  A formal commit is a high-confidence,
-        # multi-frame assignment; one ambiguous frame must not let it flicker
-        # to UNKNOWN on the live view.  confidence=0.0 is an intentional
-        # sentinel meaning "maintained from commit, not freshly evidenced";
-        # LocationWriter accepts it and no downstream code gates on > 0.
-        for gt in active_global_tracks:
+        # Carry committed identities forward through brief occlusions.
+        for gt in ctx.active_global_tracks:
             if gt.global_track_id not in identities and gt.current_identity_id:
                 identities[gt.global_track_id] = (gt.current_identity_id, 0.0)
 
+        ctx.identities = identities
+        ctx.evidence_by_gt = evidence_by_gt
+
         assert self._transport is not None
         await self._transport.publish_event(
-            camera_id=frame.camera_id,
-            event_time=event_time,
-            frame_index=frame.frame_index,
-            detections=domain_detections if detections else None,
-            minio_key=frame.minio_key,
-            room_name=self._config.camera_room_map.get(frame.camera_id, ""),
+            camera_id=ctx.frame.camera_id,
+            event_time=ctx.event_time,
+            frame_index=ctx.frame.frame_index,
+            detections=ctx.domain_detections if ctx.raw_detections else None,
+            minio_key=ctx.frame.minio_key,
+            room_name=self._config.camera_room_map.get(ctx.frame.camera_id, ""),
             identities=identities or None,
-            frame_width=effective_width,
-            frame_height=effective_height,
-            capture_time_unix_ns=frame.capture_time_unix_ns,
-            pose_results=det_pose_result if det_pose_result else None,
-            trail_by_tracklet=trail_by_tracklet_snapshot or None,
+            frame_width=ctx.effective_width,
+            frame_height=ctx.effective_height,
+            capture_time_unix_ns=ctx.frame.capture_time_unix_ns,
+            pose_results=ctx.det_pose_result if ctx.det_pose_result else None,
+            trail_by_tracklet=ctx.trail_by_tracklet_snapshot or None,
             evidence_by_gt=evidence_by_gt or None,
-            det_posture=cast("dict[str, str] | None", det_posture) if det_posture else None,
+            det_posture=cast("dict[str, str] | None", ctx.det_posture) if ctx.det_posture else None,
         )
 
-        if new_revisions:
+        if ctx.new_revisions:
             logger.info(
                 "Identity revisions emitted",
-                camera_id=frame.camera_id,
-                frame_index=frame.frame_index,
-                revision_count=len(new_revisions),
+                camera_id=ctx.frame.camera_id,
+                frame_index=ctx.frame.frame_index,
+                revision_count=len(ctx.new_revisions),
             )
 
     async def _run_pose(
@@ -1684,20 +1751,6 @@ class FrameProcessingPipeline:
         """
         return self._config.face_id_camera_configs.get(camera_id, FaceIdCameraConfig())
 
-    def _should_call_face_id(self, camera_id: str, now: datetime) -> bool:
-        """Return True if enough time has passed since the last call for this camera.
-
-        Also returns False when face-id is disabled for this specific camera
-        (e.g. top-down surveillance views).
-        """
-        cam_cfg = self._get_face_id_config(camera_id)
-        if not cam_cfg.enabled:
-            return False
-        last = self._last_face_id_call.get(camera_id)
-        if last is None:
-            return True
-        return (now - last).total_seconds() >= self._config.face_id_cooldown_s
-
     async def _identify_faces_from_crops(
         self,
         crops: list[npt.NDArray[np.uint8]],
@@ -1705,6 +1758,7 @@ class FrameProcessingPipeline:
         frame_width: int,
         frame_height: int,
         camera_id: str,
+        sent_tracklet_ids: set[str] | None = None,
     ) -> list[FaceAnchor]:
         """Call person-id-service on person crops and build FaceAnchors.
 
@@ -1737,12 +1791,16 @@ class FrameProcessingPipeline:
                 )
             )
 
+        now = datetime.now(UTC)
         try:
             crop_face_results = await self._face_id_client.identify_crops(crops, crop_bboxes_norm)
         except Exception:
-            # Connection-level failure (service down, timeout, etc.).  Update the
-            # cooldown timestamp so we don't hammer a dead service every frame.
-            self._last_face_id_call[camera_id] = datetime.now(UTC)
+            # Connection-level failure (service down, timeout, etc.).  Update
+            # cooldown timestamps for sent tracklets so we don't hammer a dead
+            # service every frame.
+            if sent_tracklet_ids:
+                for tl_id in sent_tracklet_ids:
+                    self._last_face_id_by_tracklet[tl_id] = now
             logger.warning(
                 "face_id_service_error",
                 camera_id=camera_id,
@@ -1750,8 +1808,17 @@ class FrameProcessingPipeline:
             )
             return []
 
+        # Update cooldown for all tracklets whose crops were sent, regardless
+        # of whether faces were found.
+        if sent_tracklet_ids:
+            for tl_id in sent_tracklet_ids:
+                self._last_face_id_by_tracklet[tl_id] = now
+        elif crops:
+            # Backward-compat: caller didn't provide sent_tracklet_ids.
+            # Update cooldown per-camera to avoid hammering the service.
+            pass
+
         if not crop_face_results:
-            self._last_face_id_call[camera_id] = datetime.now(UTC)
             return []
 
         # Effective per-camera confidence threshold.
@@ -1792,11 +1859,10 @@ class FrameProcessingPipeline:
                         confidence=face.confidence,
                         tracklet_id=tracklet_id,
                         camera_id=camera_id,
-                        captured_at=datetime.now(UTC),
+                        captured_at=now,
                     )
                 )
 
-        self._last_face_id_call[camera_id] = datetime.now(UTC)
         if face_anchors:
             logger.debug(
                 "face_anchors_created",

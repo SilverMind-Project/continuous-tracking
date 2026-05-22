@@ -57,6 +57,7 @@ def assoc(
         config=CrossCamConfig(
             alpha=0.7,
             min_link_score=0.5,
+            unknown_merge_max_gap_s=0,  # disable UNKNOWN GT merge for existing tests
         ),
     )
 
@@ -848,6 +849,7 @@ async def test_blocked_pair_prevents_same_camera_reentry(
         adjacency=adjacency,
         global_track_repo=global_track_repo,
         dnf_repo=dnf,
+        config=CrossCamConfig(unknown_merge_max_gap_s=0),
     )
     emb = [0.1, 0.1, 0.1]
     now = datetime.now(UTC)

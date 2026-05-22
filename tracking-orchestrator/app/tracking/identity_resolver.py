@@ -42,6 +42,7 @@ from ..domain import (
     ResolveOutcome,
 )
 from ..observability import metrics
+from ..pipeline.gallery_cache import GalleryCache
 from ..storage.base import GalleryRepository, GlobalTrackRepository, TrackingRepository
 
 logger = get_logger(__name__)
@@ -102,6 +103,12 @@ class ResolverConfig:
     # similarities can confuse the ReID embedder.  A value of 3.0 means
     # face evidence carries 3x the weight of ReID evidence.
     face_weight_multiplier: float = 3.0
+
+    # Multiplier applied to height likelihood weights before combining.
+    # Height is a weak-but-useful demographic signal.  Default 1.5 means
+    # height evidence carries 1.5x the base weight, which is less than
+    # face (3.0) but more than neutral (1.0).
+    height_weight_multiplier: float = 1.5
 
     # Higher commit threshold used in dense scenes (≥ 2 candidate
     # identities with posterior > 0.3).  Prevents confident-but-wrong
@@ -176,7 +183,7 @@ class ResolverConfig:
     # Minimum gallery cosine similarity for propagating a face-confirmed identity
     # to an adjacent GlobalTrack that has no face anchor of its own.  Prevents
     # false propagation to a different person who happens to be nearby.
-    cross_gt_face_propagation_threshold: float = 0.65
+    cross_gt_face_propagation_threshold: float = 0.78
 
     # Maximum number of adjacent GlobalTracks to propagate face identity to per
     # resolve() call.  Caps the gallery query overhead for busy scenes.
@@ -217,11 +224,13 @@ class IdentityResolver:
         global_track_repo: GlobalTrackRepository,
         identities: list[Identity] | None = None,
         config: ResolverConfig | None = None,
+        gallery_cache: GalleryCache | None = None,
     ) -> None:
         self._tracking_repo = tracking_repo
         self._gallery_repo = gallery_repo
         self._global_track_repo = global_track_repo
         self._config = config or ResolverConfig()
+        self._gallery_cache = gallery_cache
         # Known identities for display names
         self._identities: dict[str, Identity] = {
             ident.identity_id: ident for ident in identities or []
@@ -236,6 +245,7 @@ class IdentityResolver:
         global_tracks: list[GlobalTrack],
         new_face_anchors: list[FaceAnchor],
         captured_at: datetime,
+        tracklet_heights: dict[str, float] | None = None,
     ) -> ResolveOutcome:
         """Resolve identities for a batch of GlobalTracks.
 
@@ -243,6 +253,7 @@ class IdentityResolver:
             global_tracks: active GlobalTracks to resolve.
             new_face_anchors: face anchors from this frame.
             captured_at: wall-clock time of the current frame.
+            tracklet_heights: optional tracklet_id → height_mm mapping.
 
         Returns:
             ResolveOutcome with decisions and any revisions to emit.
@@ -264,7 +275,8 @@ class IdentityResolver:
             prior = self._build_prior(gt, captured_at)
             face_likelihood, best_face_conf = self._from_face_anchors(gt, augmented_anchors)
             reid_likelihood = await self._from_gallery(gt)
-            posterior = self._combine(prior, face_likelihood, reid_likelihood)
+            height_likelihood = self._from_height(gt, tracklet_heights or {})
+            posterior = self._combine(prior, face_likelihood, reid_likelihood, height_likelihood)
 
             decision = self._commit(
                 gt, posterior, face_likelihood, reid_likelihood, captured_at, best_face_conf
@@ -538,6 +550,54 @@ class IdentityResolver:
         return 1.0 / (1.0 + math.exp(-k * (x - s)))
 
     # ------------------------------------------------------------------
+    # Height likelihood
+    # ------------------------------------------------------------------
+
+    def _from_height(
+        self,
+        gt: GlobalTrack,
+        tracklet_heights: dict[str, float],
+    ) -> PosteriorDist:
+        """Build likelihood from height estimates.
+
+        Compares the mean height of this GT's tracklets against enrolled
+        identity height profiles. Returns an empty distribution (uniform,
+        no effect) when:
+        - No height data is available for this GT.
+        - No enrolled identities have height profiles.
+        """
+        heights_mm: list[float] = []
+        for tid in gt.tracklet_ids:
+            h = tracklet_heights.get(tid)
+            if h is not None:
+                heights_mm.append(h)
+
+        if not heights_mm:
+            return PosteriorDist({})
+
+        # Collect identities that have height profiles.
+        has_profiles = any(ident.height_mm is not None for ident in self._identities.values())
+        if not has_profiles:
+            return PosteriorDist({})
+
+        mean_h = sum(heights_mm) / len(heights_mm)
+
+        likelihood: dict[str, float] = {}
+        for identity_id, ident in self._identities.items():
+            ref_mm = ident.height_mm
+            if ref_mm is None:
+                continue
+            sigma_mm = ident.height_sigma_mm or 150.0
+            z = (mean_h - ref_mm) / sigma_mm
+            p = math.exp(-0.5 * z * z)
+            likelihood[identity_id] = max(p, 0.01)
+
+        if not likelihood:
+            return PosteriorDist({})
+
+        return PosteriorDist(likelihood)
+
+    # ------------------------------------------------------------------
     # Posterior combination
     # ------------------------------------------------------------------
 
@@ -546,10 +606,11 @@ class IdentityResolver:
         prior: PosteriorDist,
         face: PosteriorDist,
         reid: PosteriorDist,
+        height: PosteriorDist | None = None,
     ) -> PosteriorDist:
-        """Combine prior, face likelihood, and ReID likelihood.
+        """Combine prior, face likelihood, ReID likelihood, and optional height.
 
-        Posterior = prior * face_likelihood * reid_likelihood
+        Posterior = prior * face_likelihood * reid_likelihood * height_likelihood
 
         If any source is empty (no evidence), it is treated as uniform
         (weight=1.0) so it does not dilute evidence from other sources.
@@ -561,6 +622,8 @@ class IdentityResolver:
         all_ids: set[str] = set(prior.distribution.keys())
         all_ids.update(face.distribution.keys())
         all_ids.update(reid.distribution.keys())
+        if height is not None and height.distribution:
+            all_ids.update(height.distribution.keys())
 
         if not all_ids:
             return PosteriorDist({"UNKNOWN": 1.0})
@@ -588,7 +651,13 @@ class IdentityResolver:
             # ReID for disambiguating enrolled identities in the same room.
             if ident in face.distribution:
                 fw = fw * self._config.face_weight_multiplier
-            combined[ident] = _weight(prior, ident) * fw * _weight(reid, ident)
+
+            hw = _weight(height, ident) if height is not None else 1.0
+            # Boost identities supported by height evidence.
+            if height is not None and height.distribution and ident in height.distribution:
+                hw = hw * self._config.height_weight_multiplier
+
+            combined[ident] = _weight(prior, ident) * fw * _weight(reid, ident) * hw
 
         if not combined:
             return PosteriorDist({"UNKNOWN": 1.0})
@@ -678,14 +747,29 @@ class IdentityResolver:
         identity_unchanged = top_id == prev_id and prev_id is not None
         within_maintenance_window = False
         if identity_unchanged:
-            # Use gt.last_seen_at, which the cross-camera associator updates to
-            # captured_at on every frame for active GTs (age_s ≈ 0).  This means
-            # an actively-tracked identity is maintained indefinitely — including
-            # when the person turns away and ReID evidence becomes weak.
-            # face_lock_maintenance_max_age_s is reserved for future GT reactivation
-            # scenarios (closed GT re-enters scene); it does NOT govern active tracks.
-            age_s = (captured_at - gt.last_seen_at).total_seconds()
-            within_maintenance_window = age_s <= self._config.prior_maintenance_max_age_s
+            face_lock = self._face_locks.get(gt.global_track_id)
+            if face_lock is not None and face_lock.identity_id == prev_id:
+                # Face lock provides extended maintenance window (300 s).
+                lock_age_s = (captured_at - face_lock.locked_at).total_seconds()
+                within_maintenance_window = (
+                    lock_age_s <= self._config.face_lock_maintenance_max_age_s
+                )
+            elif gt.current_identity_committed_at is not None:
+                # Standard maintenance window from committed_at — the
+                # identity naturally decays after prior_maintenance_max_age_s
+                # without fresh confirming evidence.
+                identity_age_s = (captured_at - gt.current_identity_committed_at).total_seconds()
+                within_maintenance_window = (
+                    identity_age_s <= self._config.prior_maintenance_max_age_s
+                )
+            else:
+                # Backward-compat: no committed_at timestamp (pre-migration GT).
+                # Use last_seen_at which is ~0 for active tracks, yielding the
+                # old indefinite-maintenance behaviour.  Remove after 2026-06-07.
+                identity_age_s = (captured_at - gt.last_seen_at).total_seconds()
+                within_maintenance_window = (
+                    identity_age_s <= self._config.prior_maintenance_max_age_s
+                )
 
         evidence_ok = has_evidence or within_maintenance_window
 
@@ -702,6 +786,7 @@ class IdentityResolver:
         )
 
         # Apply commit rule.
+        evidence_backed = False
         if within_maintenance_window:
             # Carry the existing identity forward without re-applying the
             # probability threshold.  The threshold governs initial commits
@@ -711,12 +796,31 @@ class IdentityResolver:
             # identities — applying the threshold here would clear a valid
             # face-confirmed identity on every quiet frame.
             new_id = prev_id
+            evidence_backed = has_evidence
         elif (
             evidence_ok and top_prob >= effective_commit_prob and margin >= effective_commit_margin
         ):
             new_id = top_id if top_id != "UNKNOWN" else None
+            evidence_backed = has_evidence
         else:
             new_id = None  # Committed as UNKNOWN.
+
+        # Track identity decays: maintenance window expired on an identified GT
+        # without fresh confirming evidence.
+        if prev_id is not None and not within_maintenance_window and not has_evidence:
+            metrics.metrics.identity_decays_total.inc()
+            logger.info(
+                "identity_maintenance_window_expired",
+                global_track_id=gt.global_track_id,
+                prev_identity_id=prev_id,
+                identity_age_s=round(
+                    (
+                        captured_at - (gt.current_identity_committed_at or gt.last_seen_at)
+                    ).total_seconds(),
+                    1,
+                ),
+                max_age_s=self._config.prior_maintenance_max_age_s,
+            )
 
         revises = new_id != prev_id
 
@@ -773,6 +877,7 @@ class IdentityResolver:
             revises_previous=revises,
             previous_identity_id=prev_id,
             reason=reason,
+            evidence_backed=evidence_backed,
         )
 
     # ------------------------------------------------------------------
@@ -933,21 +1038,36 @@ class IdentityResolver:
                 if not dst_gt.tracklet_ids:
                     continue
 
-                sim = await self._gt_gallery_similarity(src_gt.tracklet_ids, dst_gt.tracklet_ids)
+                sim = await self._gallery_similarity(
+                    set(src_gt.tracklet_ids), set(dst_gt.tracklet_ids)
+                )
                 if sim < threshold:
+                    logger.debug(
+                        "face_propagation_skipped_low_similarity",
+                        src_gt=src_gt_id,
+                        dst_gt=dst_gt.global_track_id,
+                        similarity=round(sim, 4),
+                        threshold=threshold,
+                    )
                     continue
 
                 # Synthetic anchor for dst_gt; confidence scaled by similarity.
+                # Only create if the result is strong enough to set a face lock;
+                # weak synthetic anchors add noise without commitment power.
+                syn_confidence = src_anchor.confidence * sim
+                if syn_confidence < self._config.face_commit_min_confidence:
+                    continue
                 syn = FaceAnchor(
                     person_id=src_anchor.person_id,
-                    confidence=src_anchor.confidence * sim,
-                    quality=src_anchor.quality,
+                    confidence=syn_confidence,
+                    quality=src_anchor.quality * 0.8,  # penalty for indirect evidence
                     tracklet_id=dst_gt.tracklet_ids[0],
                     camera_id=dst_gt.camera_ids[0] if dst_gt.camera_ids else "",
                     captured_at=src_anchor.captured_at,
                 )
                 synthetic.append(syn)
                 propagated_count += 1
+                metrics.metrics.face_propagations_total.inc()
 
                 logger.info(
                     "face_anchor_propagated",
@@ -963,37 +1083,11 @@ class IdentityResolver:
             return list(face_anchors) + synthetic
         return face_anchors
 
-    async def _gt_gallery_similarity(self, tids_a: list[str], tids_b: list[str]) -> float:
-        """Mean cosine similarity between two GlobalTracks via gallery centroids.
-
-        Returns 0.0 when either side has no gallery entries.
-        """
-        import numpy as np
-
-        try:
-            entries_a = await self._gallery_repo.list_gallery_entries_for_tracklets(
-                tracklet_ids=set(tids_a), limit=20
-            )
-        except Exception:
-            entries_a = []
-
-        try:
-            entries_b = await self._gallery_repo.list_gallery_entries_for_tracklets(
-                tracklet_ids=set(tids_b), limit=20
-            )
-        except Exception:
-            entries_b = []
-
-        if not entries_a or not entries_b:
-            return 0.0
-
-        emb_a = np.mean([e.embedding for e in entries_a], axis=0)
-        emb_b = np.mean([e.embedding for e in entries_b], axis=0)
-        norm_a = float(np.linalg.norm(emb_a))
-        norm_b = float(np.linalg.norm(emb_b))
-        if norm_a < 1e-9 or norm_b < 1e-9:
-            return 0.0
-        return float(np.dot(emb_a, emb_b) / (norm_a * norm_b + 1e-9))
+    async def _gallery_similarity(self, tids_a: set[str], tids_b: set[str]) -> float:
+        """Return gallery cosine similarity, routed through cache when available."""
+        if self._gallery_cache is not None:
+            return await self._gallery_cache.gallery_similarity(tids_a, tids_b)
+        return await self._gallery_repo.gallery_similarity(tids_a, tids_b)
 
     def get_face_locked_identity(self, global_track_id: str) -> str | None:
         """Return the face-locked identity for a GT, or None if not locked."""
