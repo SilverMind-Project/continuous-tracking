@@ -18,11 +18,18 @@ if TYPE_CHECKING:
     from ..domain import (
         Detection,
         FaceAnchor,
+        FloorPoint,
         GlobalTrack,
         IdentityDecision,
         IdentityRevision,
         PostureType,
         Tracklet,
+    )
+    from ..inference.evidence import (
+        AppearanceEvidence,
+        FaceEvidence,
+        PersonDetectionEvidence,
+        PoseEvidence,
     )
     from ..inference.schemas import DetectionBox, Embedding, PoseResult
     from ..transport.redis_streams import FrameReady
@@ -49,15 +56,26 @@ class FrameContext:
 
     # --- Stage: detect ---
     raw_detections: list[DetectionBox] = field(default_factory=list)
+    # Stable detection IDs assigned per kept box (idx → detection_id).
+    _detection_ids: dict[int, str] = field(default_factory=dict)
 
-    # --- Stage: embed (build domain detections + ReID + pose) ---
+    # --- Stage: spatial_projection (pre-computed floor points, keyed by
+    # index into raw_detections; consumed by inference stage) ---
+    _floor_points_by_index: dict[int, FloorPoint] = field(default_factory=dict)
+
+    # --- Stage: inference (build domain detections + ReID + pose) ---
     domain_detections: list[Detection] = field(default_factory=list)
     crops: list[npt.NDArray[np.uint8]] = field(default_factory=list)
     embeddings: list[Embedding] = field(default_factory=list)
     det_pose_result: dict[str, PoseResult] = field(default_factory=dict)
+    # Typed evidence produced by inference adapters.
+    _detection_evidence: dict[int, PersonDetectionEvidence] = field(default_factory=dict)
+    _appearance_evidence: list[AppearanceEvidence] = field(default_factory=list)
+    _pose_evidence: list[PoseEvidence] = field(default_factory=list)
 
     # --- Stage: face_id ---
     face_anchors: list[FaceAnchor] = field(default_factory=list)
+    _face_evidence: list[FaceEvidence] = field(default_factory=list)
 
     # --- Stage: tracklet_manage (populated by tracklet_manager) ---
     active_tracklets: list[Tracklet] = field(default_factory=list)
@@ -77,3 +95,16 @@ class FrameContext:
     identities: dict[str, tuple[str, float]] = field(default_factory=dict)
     evidence_by_gt: dict[str, tuple[float, float, bool]] = field(default_factory=dict)
     trail_by_tracklet_snapshot: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
+
+    # --- Diagnostics (CI / observability, not business logic) ---
+    stage_notes: dict[str, str] = field(default_factory=dict)
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+
+    def require_image(self) -> npt.NDArray[np.uint8]:
+        """Return ``image``, asserting it has been set by the fetch stage."""
+        if self.image is None:
+            raise RuntimeError("FrameContext.image is None — fetch stage must run first")
+        return self.image

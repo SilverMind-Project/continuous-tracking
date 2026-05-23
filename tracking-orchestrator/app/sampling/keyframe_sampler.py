@@ -116,22 +116,24 @@ class KeyframeSampler:
         self._last_sample[tracklet_id] = captured_at
 
         if self._bbox_repo is not None and detection_bbox is not None:
-            await self._bbox_repo.save_bbox_annotations([
-                BboxAnnotation(
-                    keyframe_id=keyframe_id,
-                    tracklet_id=tracklet_id,
-                    camera_id=camera_id,
-                    x1=detection_bbox[0],
-                    y1=detection_bbox[1],
-                    x2=detection_bbox[2],
-                    y2=detection_bbox[3],
-                    detection_confidence=detection_confidence,
-                    frame_width=detection_frame_width,
-                    frame_height=detection_frame_height,
-                    identity_id=detection_identity_id,
-                    created_at=datetime.now(UTC),
-                )
-            ])
+            await self._bbox_repo.save_bbox_annotations(
+                [
+                    BboxAnnotation(
+                        keyframe_id=keyframe_id,
+                        tracklet_id=tracklet_id,
+                        camera_id=camera_id,
+                        x1=detection_bbox[0],
+                        y1=detection_bbox[1],
+                        x2=detection_bbox[2],
+                        y2=detection_bbox[3],
+                        detection_confidence=detection_confidence,
+                        frame_width=detection_frame_width,
+                        frame_height=detection_frame_height,
+                        identity_id=detection_identity_id,
+                        created_at=datetime.now(UTC),
+                    )
+                ]
+            )
 
         return keyframe
 
@@ -174,22 +176,24 @@ class KeyframeSampler:
         await self._repo.save_keyframe(keyframe)
 
         if self._bbox_repo is not None and detection_bbox is not None:
-            await self._bbox_repo.save_bbox_annotations([
-                BboxAnnotation(
-                    keyframe_id=keyframe_id,
-                    tracklet_id=tracklet_id,
-                    camera_id=camera_id,
-                    x1=detection_bbox[0],
-                    y1=detection_bbox[1],
-                    x2=detection_bbox[2],
-                    y2=detection_bbox[3],
-                    detection_confidence=detection_confidence,
-                    frame_width=detection_frame_width,
-                    frame_height=detection_frame_height,
-                    identity_id=detection_identity_id,
-                    created_at=datetime.now(UTC),
-                )
-            ])
+            await self._bbox_repo.save_bbox_annotations(
+                [
+                    BboxAnnotation(
+                        keyframe_id=keyframe_id,
+                        tracklet_id=tracklet_id,
+                        camera_id=camera_id,
+                        x1=detection_bbox[0],
+                        y1=detection_bbox[1],
+                        x2=detection_bbox[2],
+                        y2=detection_bbox[3],
+                        detection_confidence=detection_confidence,
+                        frame_width=detection_frame_width,
+                        frame_height=detection_frame_height,
+                        identity_id=detection_identity_id,
+                        created_at=datetime.now(UTC),
+                    )
+                ]
+            )
 
         return keyframe
 

@@ -72,9 +72,7 @@ class FusedPostureStrategy:
         if should_run_slow:
             slow_result = await self._slow.infer(frame, detection, None)
             self._last_slow[cache_key] = now
-            self._cache[cache_key] = _SlowPathCache(
-                label=slow_result, computed_at=now
-            )
+            self._cache[cache_key] = _SlowPathCache(label=slow_result, computed_at=now)
 
         cached = self._cache.get(cache_key)
         if cached is None:

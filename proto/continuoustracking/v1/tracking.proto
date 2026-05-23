@@ -23,7 +23,9 @@ message TrackingEvent {
 
   // Identity resolution: for each global track that was matched to a known
   // person, the posterior probability distribution over candidates.
-  repeated IdentityRevision identity_revisions = 5;
+  // DEPRECATED: prefer identity_snapshots (field 8).  This field is kept
+  // for one compatibility release and will stop being populated afterward.
+  repeated IdentityRevision identity_revisions = 5 [deprecated = true];
 
   // Resolved room name for the camera at event time. Empty when the camera
   // has no room mapping configured. The CC LocationWriter uses this to
@@ -32,6 +34,11 @@ message TrackingEvent {
 
   // Unique event identifier for tracing / audit. UUID4.
   string event_id = 7;
+
+  // Identity snapshots: lightweight per-global-track identity state for
+  // live display.  Replaces the dual-purpose identity_revisions field (5)
+  // which conflated per-frame snapshots with standalone revision messages.
+  repeated IdentitySnapshot identity_snapshots = 8;
 }
 
 // FrameRef points to a frame stored in MinIO without duplicating pixel data.
@@ -68,12 +75,13 @@ message Detection {
   // Tracklet this detection belongs to (assigned by tracking logic).
   string tracklet_id = 5;
 
-  // Global track ID if already resolved to a known person.
-  // Empty until the first match is made.
+  // Global track ID (cross-camera tracking identifier, not an identity).
+  // Empty until a GlobalTrack is formed for this detection.
   string global_track_id = 6;
 
-  // Floor point (x, y) in millimeters relative to the camera's calibrated
-  // coordinate system. Origin is the camera's ground intersection point.
+  // Floor point in the shared floor-plan coordinate system (millimetres).
+  // {x_mm=0, y_mm=0, calibrated=false} when the source camera lacks a
+  // homography or the projection is degenerate.
   FloorPoint floor_point = 7;
 
   // RTMPose 17 COCO keypoints (normalised to [0,1] within the bbox crop).
@@ -87,7 +95,8 @@ message Detection {
   // Posterior evidence snapshot from the identity resolver.
   PosteriorEvidence evidence = 11;
 
-  // Floor position in metres via homography (0 when not calibrated).
+  // Floor position in the shared floor-plan frame, in metres.
+  // Both are 0.0 when the source camera is not calibrated.
   float floor_x = 12;
   float floor_y = 13;
 
@@ -123,13 +132,16 @@ message BoundingBox {
   int32 y_max = 4;
 }
 
-// FloorPoint is a 2D point on the ground plane, in millimeters.
+// FloorPoint is a 2D point in the shared floor-plan coordinate system, in
+// millimetres.  When calibrated=true the coordinates are consistent across
+// all cameras that share the same floor_plan_id.  When calibrated=false
+// both coordinates are zero and must not be used for metric comparisons.
 message FloorPoint {
-  // X coordinate in mm from camera origin.
+  // X coordinate in the shared floor-plan frame, in mm.
   int64 x_mm = 1;
-  // Y coordinate in mm from camera origin.
+  // Y coordinate in the shared floor-plan frame, in mm.
   int64 y_mm = 2;
-  // Whether the point was computed (true) or is a projection (false).
+  // Whether the homography was calibrated for the source camera.
   bool calibrated = 3;
 }
 
@@ -182,6 +194,33 @@ message IdentityRevision {
   // serialised as JSON. Keeping it as a string sidesteps a Struct
   // dependency without losing fidelity for a debug-only field.
   string evidence_json = 11;
+}
+
+// IdentitySnapshot is a lightweight per-global-track identity state for live
+// display.  Unlike IdentityRevision, it is not a standalone stream message —
+// it only appears as a sub-message of TrackingEvent.
+message IdentitySnapshot {
+  // The global track this snapshot refers to.
+  string global_track_id = 1;
+
+  // The committed identity for this global track (empty when UNKNOWN).
+  string identity_id = 2;
+
+  // Probability of the top identity from the posterior.
+  float top_probability = 3;
+
+  // Probability of the second-best identity from the posterior.
+  float second_probability = 4;
+
+  // Entropy of the full posterior (bits). Lower = more certain.
+  float posterior_entropy = 5;
+
+  // Whether direct face evidence (ArcFace) contributed to this decision.
+  bool direct_face_evidence = 6;
+
+  // Evidence source summary serialised as JSON:
+  // {"sources": {"direct_face": 1, "reid": 3}, "direct_face_confidence": 0.95, ...}
+  string evidence_json = 7;
 }
 
 // IdentityCandidate is one candidate identity with its posterior probability.

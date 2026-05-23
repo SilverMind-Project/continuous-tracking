@@ -12,8 +12,9 @@ from app.trajectory.fused_posture_strategy import FusedPostureStrategy
 class FakePostureStrategy:
     """Test double for PostureStrategy."""
 
-    def __init__(self, name: str = "fake", returns: str = "unknown",
-                 raises: Exception | None = None) -> None:
+    def __init__(
+        self, name: str = "fake", returns: str = "unknown", raises: Exception | None = None
+    ) -> None:
         self._name = name
         self._returns = returns
         self._raises = raises
@@ -88,7 +89,8 @@ async def test_cached_result_expires_after_max_age():
 
     det = _make_detection(tracklet_id="t1")
     result = await fused.infer(
-        np.zeros((480, 640, 3), dtype=np.uint8), det,
+        np.zeros((480, 640, 3), dtype=np.uint8),
+        det,
     )
     # Cache was cleared and interval not elapsed yet, so slow not re-run.
     assert result == "unknown"

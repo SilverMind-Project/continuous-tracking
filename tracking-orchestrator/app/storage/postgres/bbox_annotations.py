@@ -30,17 +30,25 @@ class PostgresBboxAnnotationRepository:
                 ON CONFLICT DO NOTHING
                 """,
                 [
-                    (ann.keyframe_id, ann.tracklet_id, ann.camera_id,
-                     ann.x1, ann.y1, ann.x2, ann.y2,
-                     ann.detection_confidence, ann.frame_width,
-                     ann.frame_height, ann.identity_id, ann.created_at)
+                    (
+                        ann.keyframe_id,
+                        ann.tracklet_id,
+                        ann.camera_id,
+                        ann.x1,
+                        ann.y1,
+                        ann.x2,
+                        ann.y2,
+                        ann.detection_confidence,
+                        ann.frame_width,
+                        ann.frame_height,
+                        ann.identity_id,
+                        ann.created_at,
+                    )
                     for ann in annotations
                 ],
             )
 
-    async def get_bbox_annotations_for_keyframe(
-        self, keyframe_id: str
-    ) -> list[BboxAnnotation]:
+    async def get_bbox_annotations_for_keyframe(self, keyframe_id: str) -> list[BboxAnnotation]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -57,9 +65,7 @@ class PostgresBboxAnnotationRepository:
             )
         return [_row_to_domain(r) for r in rows]
 
-    async def get_bbox_annotations_for_tracklet(
-        self, tracklet_id: str
-    ) -> list[BboxAnnotation]:
+    async def get_bbox_annotations_for_tracklet(self, tracklet_id: str) -> list[BboxAnnotation]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -84,12 +90,17 @@ class PostgresBboxAnnotationRepository:
                 SET identity_id = $1
                 WHERE tracklet_id = $2::uuid
                 """,
-                identity_id, tracklet_id,
+                identity_id,
+                tracklet_id,
             )
 
     async def save_override_bbox(
-        self, annotation_id: str,
-        x1: float, y1: float, x2: float, y2: float,
+        self,
+        annotation_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
         override_by: str,
     ) -> None:
         async with self._pool.acquire() as conn:
@@ -101,13 +112,16 @@ class PostgresBboxAnnotationRepository:
                     override_by = $5, override_at = $6
                 WHERE id = $7::uuid
                 """,
-                x1, y1, x2, y2, override_by, datetime.now(UTC), annotation_id,
+                x1,
+                y1,
+                x2,
+                y2,
+                override_by,
+                datetime.now(UTC),
+                annotation_id,
             )
 
-
-    async def get_annotation_by_id(
-        self, annotation_id: str
-    ) -> BboxAnnotation | None:
+    async def get_annotation_by_id(self, annotation_id: str) -> BboxAnnotation | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """

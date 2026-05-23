@@ -111,11 +111,11 @@ class FloorProjector:
         # Euclidean distance in mm.
         dx_m = head_x_m - foot_x_m
         dy_m = head_y_m - foot_y_m
-        return math.sqrt(dx_m * dx_m + dy_m * dy_m) * 1000.0
+        return math.hypot(dx_m, dy_m) * 1000.0
 
     @staticmethod
     def distance_m(a: FloorPoint, b: FloorPoint) -> float:
         """Euclidean distance between two floor points in metres."""
         dx = a.x_mm - b.x_mm
         dy = a.y_mm - b.y_mm
-        return math.sqrt(dx * dx + dy * dy) / 1000.0
+        return math.hypot(dx, dy) / 1000.0

@@ -230,6 +230,7 @@ class RedisStreamsTransport:
         trail_by_tracklet: dict[str, list[tuple[float, float]]] | None = None,
         evidence_by_gt: dict[str, tuple[float, float, bool]] | None = None,
         det_posture: dict[str, str] | None = None,
+        identity_snapshots: list[dict[str, object]] | None = None,
     ) -> str:
         """Publish a ``TrackingEvent`` proto to ``tracking.events``.
 
@@ -246,6 +247,7 @@ class RedisStreamsTransport:
             frame_width: source frame pixel width.
             frame_height: source frame pixel height.
             capture_time_unix_ns: source frame capture timestamp in unix ns.
+            identity_snapshots: list of identity snapshot dicts for field 8.
 
         Returns:
             The Redis message ID of the published event (decoded).
@@ -271,6 +273,7 @@ class RedisStreamsTransport:
             trail_by_tracklet=trail_by_tracklet,
             evidence_by_gt=evidence_by_gt,
             det_posture=det_posture,
+            identity_snapshots=identity_snapshots or [],
         )
 
         message_id_bytes = await self._redis.xadd(
@@ -365,6 +368,7 @@ def _build_tracking_event_pb(
     trail_by_tracklet: dict[str, list[tuple[float, float]]] | None = None,
     evidence_by_gt: dict[str, tuple[float, float, bool]] | None = None,
     det_posture: dict[str, str] | None = None,
+    identity_snapshots: list[dict[str, object]] | None = None,
 ) -> tracking_pb2.TrackingEvent:
     """Build a TrackingEvent proto from domain types.
 
@@ -378,6 +382,7 @@ def _build_tracking_event_pb(
         trail_by_tracklet: tracklet_id → list of (x, y) normalised foot-points.
         evidence_by_gt: global_track_id → (top_prob, top2_prob, face_anchor_used).
         det_posture: detection_id → posture string (standing|sitting|walking|lying|unknown).
+        identity_snapshots: list of dicts with identity snapshot fields.
     """
     event = tracking_pb2.TrackingEvent(
         camera_id=camera_id,
@@ -437,6 +442,7 @@ def _build_tracking_event_pb(
     # IdentityRevision repeated field. Stream-level revision fields
     # (revision_id, tracklet_ids, ...) are unset here -- those carry
     # meaning only on the standalone tracking.revisions stream.
+    # DEPRECATED: kept for one compatibility release.
     for global_track_id, (identity_id, confidence) in identities.items():
         if not global_track_id or not identity_id:
             continue
@@ -445,5 +451,17 @@ def _build_tracking_event_pb(
             map_identity_id=identity_id,
         )
         revision.candidates.add(identity_id=identity_id, probability=float(confidence))
+
+    # Identity snapshots (field 8) — canonical per-frame identity display.
+    if identity_snapshots:
+        for snap in identity_snapshots:
+            s = event.identity_snapshots.add()
+            s.global_track_id = str(snap.get("global_track_id", ""))
+            s.identity_id = str(snap.get("identity_id", "") or "")
+            s.top_probability = float(snap.get("top_probability", 0.0) or 0.0)  # type: ignore[arg-type]
+            s.second_probability = float(snap.get("second_probability", 0.0) or 0.0)  # type: ignore[arg-type]
+            s.posterior_entropy = float(snap.get("posterior_entropy", 0.0) or 0.0)  # type: ignore[arg-type]
+            s.direct_face_evidence = bool(snap.get("direct_face_evidence", False))
+            s.evidence_json = str(snap.get("evidence_json", ""))
 
     return event

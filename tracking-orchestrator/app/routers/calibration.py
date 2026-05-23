@@ -67,6 +67,13 @@ class HomographyRequest(BaseModel):
     )
     points: list[dict[str, Any]] = Field(default_factory=list)
     meta: dict[str, Any] = Field(default_factory=dict)
+    floor_plan_id: str = Field(default="", description="Shared floor-plan identifier")
+    image_width: int = Field(default=0, ge=0)
+    image_height: int = Field(default=0, ge=0)
+    max_residual_m: float = Field(default=0.0, ge=0.0)
+    mean_residual_m: float = Field(default=0.0, ge=0.0)
+    quality_status: str = Field(default="ok", pattern=r"^(ok|warning|error)$")
+    quality_point_count: int = Field(default=0, ge=0)
 
     @field_validator("matrix")
     @classmethod
@@ -262,11 +269,17 @@ async def post_homography_fit(
         )
 
     state = _get_state()
+    mean_residual = sum(residuals) / len(residuals) if residuals else 0.0
+    r_status = residual_status(max_residual)
     await state.set_homography(
         camera_id=body.camera_id,
         matrix=matrix,
         meta={"max_residual_m": max_residual, "method": "manual"},
         points=[[p.pixel[0], p.pixel[1]] for p in body.points],
+        max_residual_m=max_residual,
+        mean_residual_m=mean_residual,
+        quality_status=r_status,
+        quality_point_count=len(body.points),
     )
 
     logger.info(
@@ -456,6 +469,13 @@ async def post_homography(
         matrix=body.matrix,
         meta=body.meta or {},
         points=[[p.get("x", 0), p.get("y", 0)] for p in body.points] if body.points else None,
+        floor_plan_id=body.floor_plan_id,
+        image_width=body.image_width,
+        image_height=body.image_height,
+        max_residual_m=body.max_residual_m,
+        mean_residual_m=body.mean_residual_m,
+        quality_status=body.quality_status,
+        quality_point_count=body.quality_point_count,
     )
 
 
@@ -475,12 +495,25 @@ async def get_homography(camera_id: str) -> dict[str, Any]:
             },
         )
     meta = state.camera_meta.get(camera_id, {})
-    return {
+    cal = state.calibrations.get(camera_id)
+    result: dict[str, Any] = {
         "camera_id": camera_id,
         "matrix": matrix,
         "points": meta.get("points", []),
         "meta": {k: v for k, v in meta.items() if k != "points"},
     }
+    if cal is not None:
+        result["floor_plan_id"] = cal.floor_plan_id
+        result["image_width"] = cal.image_width
+        result["image_height"] = cal.image_height
+        result["quality"] = {
+            "status": cal.quality.status,
+            "max_residual_m": cal.quality.max_residual_m,
+            "mean_residual_m": cal.quality.mean_residual_m,
+            "point_count": cal.quality.point_count,
+        }
+        result["calibrated_at"] = cal.calibrated_at.isoformat()
+    return result
 
 
 @router.post(

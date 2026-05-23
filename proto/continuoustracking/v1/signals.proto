@@ -46,6 +46,18 @@ message DementiaSignal {
   // the semantics of value/baseline/z_score may have changed.  Consumers
   // should use this to filter stale-version signals out of "active" rollups.
   int32 algorithm_version = 14;
+
+  // Human-readable algorithm name for clinical documentation.
+  string algorithm_name = 15;
+
+  // Evidence grade for clinical signal interpretation:
+  // clinical_review | observational_study | caregiver_guidance |
+  // local_baseline_only | experimental
+  string evidence_grade = 16;
+
+  // JSON-serialized algorithm specification including thresholds,
+  // window sizes, and detector hyperparameters.
+  string algorithm_spec_json = 17;
 }
 
 enum DementiaSignalKind {

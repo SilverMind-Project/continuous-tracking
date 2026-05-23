@@ -5,23 +5,54 @@ description: This skill covers **how** to build - library choices, data abstract
 
 # Engineering Standards
 
+## Architecture and SOLID Principles
+
+### Single Responsibility
+
+Every module, class, and function has exactly one reason to change.
+
+- **Pipeline stages** do one thing: fetch, detect, redact, project, infer, track, resolve, write, sample, revise, or publish. A stage that does two unrelated things is a bug.
+- **Services** coordinate; they do not own algorithms. `DementiaSignalWorker` schedules and coordinates; individual detectors own the algorithms.
+- **Domain objects** are pure data — frozen dataclasses with no behavior beyond property accessors.
+
+### Dependency Inversion
+
+High-level policy never depends on low-level implementation details. Both depend on abstractions.
+
+- Services depend on `Protocol` interfaces, never on `Postgres*` or `Redis*` concrete classes.
+- Constructors accept abstractions (`TrackingRepository`, not `PostgresTrackingRepository`).
+- No service locator pattern. No `global` or module-level singletons used as implicit dependencies. The calibration state singleton is a known exception tracked as tech debt.
+- Every dependency is explicit in the constructor signature. A reader can see what a class needs without reading its implementation.
+
+### Open-Closed
+
+Modules are open for extension, closed for modification.
+
+- New signal detectors are added as new classes implementing a detector protocol — never by adding `elif` branches inside `_process_identity`.
+- New pipeline stages are added by creating a new `FrameStage` and inserting it into the stage list — never by adding a private method and a call site inside `_process_frame`.
+
+### Composition over inheritance
+
+Prefer small, composable objects injected via constructors over deep inheritance hierarchies.
+
+- `SpatialProjectionService` is injected into `CrossCameraAssociator`, not subclassed.
+- `CommitPolicyState` is a separate object passed to `evaluate_commit()`, not stored on a base class.
+
+---
 
 ## Data Abstraction Layer
 
-The goal is backend portability: swap Postgres for a different store by replacing one class, not
-touching services.
+The goal is backend portability: swap Postgres for a different store by replacing one class, not touching services.
 
 ### Python: Protocol + InMemory + Postgres triplet
 
 Every persistent resource gets three artifacts:
 
 1. A `Protocol` in `storage/base.py` — the contract services depend on.
-2. An `InMemory*` class in the same file — fast, zero-dependency, used in unit tests.
+2. An `InMemory*` class in the same file — fast, zero-dependency, used in all unit tests.
 3. A `Postgres*` class in `storage/postgres/` — the production implementation.
 
-Services import only the `Protocol`. Import-linter enforces the layering contract
-(`core → domain → storage → services → transport → routers`). Nothing above `storage` may
-import a concrete `Postgres*` class.
+Services import only the `Protocol`. Import-linter enforces the layering contract (`core → domain → storage → services → transport → routers`). Nothing above `storage` may import a concrete `Postgres*` class.
 
 ```python
 # storage/base.py
@@ -33,15 +64,14 @@ class TrackletRepository(Protocol):
 Rules:
 
 1. All repository methods are `async`.
-2. Return domain types, never raw DB rows.
+2. Return domain types, never raw DB rows or dicts.
 3. `Protocol` carries no state — it is a pure structural interface.
-4. `InMemory` implementations use plain `dict` / `list`; they never touch a DB.
-5. `Postgres*` classes receive only an `asyncpg.Pool`; they hold no other state.
+4. `InMemory` uses plain `dict` / `list`; never touches a database or network.
+5. `Postgres*` receives only an `asyncpg.Pool`; holds no other state.
 
 ### Go: interface contracts in `internal/`
 
-Each subsystem in `rtsp-ingress/internal/` exports an interface, not a concrete struct, as its
-public API. Tests inject a fake via the interface; production wires the real implementation.
+Each subsystem in `rtsp-ingress/internal/` exports an interface, not a concrete struct. Tests inject a fake; production wires the real implementation.
 
 ```go
 // streams/streams.go
@@ -51,133 +81,186 @@ type Manager interface {
 }
 ```
 
-Rules:
-
-1. Accept interfaces, return concrete types (Go convention).
+1. Accept interfaces, return concrete types.
 2. Never pass raw Redis clients across package boundaries — wrap them.
-3. Define interfaces in the **consumer** package, not the provider package.
+3. Define interfaces in the **consumer** package, not the provider.
 
 ---
 
-## Python Libraries
+## Dependency Injection
 
-All entries are pinned in `tracking-orchestrator/pyproject.toml`. Do not add alternatives.
+### Constructor injection only
 
-| Library | Role |
-| --- | --- |
-| `fastapi` | HTTP router and dependency injection for service entrypoints |
-| `pydantic v2` | Validation and parsing at all external boundaries (HTTP, config, Redis payloads) |
-| `asyncpg` | Async Postgres driver; use `$1..$N` positional params — never `%s` or `?` |
-| `redis[hiredis]` | Async Redis Streams client; use consumer groups and XACK |
-| `aiobotocore` | Async S3-compatible client for MinIO frame storage |
-| `structlog` | Structured, JSON-renderable logging — no `logging.getLogger` |
-| `numpy` | Frame data and embedding arithmetic |
-| `opencv-python-headless` | Image preprocessing — `cv2.resize(INTER_LINEAR)` for letterbox and crop resizing in all inference modules |
-| `scipy` | Hungarian assignment (`linear_sum_assignment`) for tracking; robust statistics (MAD, EWMA) for dementia signal baselines |
-| `shapely>=2.0` | Polygon containment for privacy zone enforcement; use `Point` and `Polygon` types, never hand-roll point-in-polygon |
-| `protobuf` | Message contracts for cross-service transport; generated bindings committed in `app/proto/` |
-| `prometheus-client` | Metrics exposition (`/metrics`) — use the global registry |
-| `pytest` + `pytest-asyncio` | Test runner; all repository tests are `async def` |
-| `mypy` (strict) | Type checking on `domain/`, `storage/`, `services/`, `transport/` |
-| `ruff` | Lint + format (replaces flake8, isort, black) |
-| `import-linter` | Enforces layering contract at CI time |
+Every dependency is a required constructor parameter. No optional service locators, no `if self._foo is not None` guards that silently skip work, no `getattr(self, "_foo", None)` fallbacks.
 
-Do not introduce `aiohttp`, `celery`, or `psycopg2` — the approved stack covers all current
-requirements without them.
+```python
+# RIGHT — explicit, testable
+class TrajectoryWriter:
+    def __init__(self, repo: TrajectoryRepository) -> None:
+        self._repo = repo
 
-`httpx` is permitted as a **test-only** dependency (included in `[project.optional-dependencies] dev`).
+# WRONG — hidden dependency
+class TrajectoryWriter:
+    def __init__(self) -> None:
+        self._repo = _create_default_repo()  # can't inject a mock
+```
 
----
+### Optional dependencies with sensible defaults
 
-## Go Libraries
+When a dependency is genuinely optional (e.g., `pose_estimator` may be None when pose is disabled), make it a keyword argument defaulting to `None`. The caller explicitly opts into omission. Never silently degrade without logging.
 
-All entries are declared in `rtsp-ingress/go.mod`.
+```python
+class InferenceStage(FrameStage):
+    def __init__(
+        self,
+        reid_embedder: ReidEmbedderProtocol | None = None,
+        pose_estimator: PoseEstimator | None = None,
+    ) -> None:
+        ...
+```
 
-| Library | Role |
-| --- | --- |
-| `minio/minio-go/v7` | S3-compatible object storage client |
-| `redis/go-redis/v9` | Redis Streams producer |
-| `prometheus/client_golang` | Metrics exposition (`/metrics`) |
-| `go.uber.org/zap` | Structured logging (use `zap.L()` for global logger) |
-| `google.golang.org/protobuf` | Protobuf runtime for cross-service messages |
-| `golang.org/x/image` | Image format decoding used in media processing |
-| `gopkg.in/yaml.v3` | Config file parsing |
+### No module-level singletons as hidden state
 
-**RTSP ingest uses go2rtc as a sidecar — not gortsplib.** rtsp-ingress registers/deregisters
-streams via go2rtc's HTTP API (`internal/go2rtc/client.go`) and polls `/api/frame.jpeg` for
-frames. Do not add `bluenviron/gortsplib` or `pion/rtp` to the Go module.
+Module-level mutable state makes tests order-dependent and prevents parallel execution. The `calibration_state` singleton is a known exception (mutated only via async-locked methods, read by the hot-reload path). All other state lives in constructor-injected objects.
 
 ---
 
-## Redis Stream Wire Format
+## Immutability and Pure Functions
 
-**All Redis Streams carry raw protobuf bytes — no JSON, no base64.**
+### Frozen dataclasses by default
 
-Use `transport/codec.py` (`encode` / `decode`) for all publish and consume operations. Each stream
-carries one named field whose value is `Message.SerializeToString()` output:
+Every domain object is `@dataclass(frozen=True)` unless it has a documented reason to be mutable. Immutability prevents accidental mutation, makes hash-based dedup safe, and enables `dataclasses.replace()` for explicit state transitions.
 
-| Stream | Field | Message type |
-| --- | --- | --- |
-| `frames.ready` | `"frame"` | `FrameReady` |
-| `tracking.events` | `"event"` | `TrackingEvent` |
-| `tracking.revisions` | `"revision"` | `IdentityRevision` |
-| `tracking.signals` | `"signal"` | `DementiaSignal` |
-| `scene.samples` | `"sample"` | `SceneSample` |
+```python
+@dataclass(frozen=True)
+class Detection:
+    detection_id: str
+    camera_id: str
+    bbox: BoundingBox
+    ...
 
-Rules:
+# State change: explicit, traceable.
+detection = replace(detection, tracklet_id="tl-1", global_track_id="gt-1")
+```
 
-1. Redis clients must set `decode_responses=False` so binary payloads round-trip unchanged.
-2. No codec discriminator field — consumers know the message type from the stream they subscribe to.
-3. Do not introduce a dual-codec shim; the protobuf-only path is the sole wire format.
+### Never mutate frozen instances
+
+`FrozenInstanceError` is a correctness guard. Use `dataclasses.replace()` to create new instances with updated fields. Never use `object.__setattr__` to bypass the freeze — if you need mutability, the type should not be frozen.
+
+### Class-level constants outside the dataclass
+
+`set`, `dict`, and `list` defaults on frozen dataclass fields raise `ValueError: mutable default` at class definition time. Move class-level constants to module scope.
+
+```python
+# WRONG
+@dataclass(frozen=True)
+class IdentityEvidence:
+    CAN_CREATE_IDENTITY: set[str] = {"direct_face", "reid"}  # ValueError
+
+# RIGHT
+CAN_CREATE_IDENTITY: set[str] = {"direct_face", "reid"}
+
+@dataclass(frozen=True)
+class IdentityEvidence:
+    ...
+```
+
+### Pure functions for business logic
+
+Algorithms live in pure functions that take inputs and return outputs. They never read global state, call I/O, or mutate arguments. This makes them trivially testable with table-driven tests.
+
+```python
+# RIGHT — pure, testable without any fixture
+def combine_evidence(
+    evidence_list: list[IdentityEvidence],
+    known_identities: set[str],
+) -> EvidencePosterior:
+    ...
+
+# WRONG — reads self._config, self._identities, calls self._gallery_repo
+def _from_gallery(self, gt: GlobalTrack) -> PosteriorDist:
+    ...
+```
 
 ---
 
-## Testing Strategy
+## Type Safety
 
-### Python
+### `from __future__ import annotations` in every file
 
-1. Unit tests mock at the `Protocol` boundary — inject `InMemoryTrackingRepository` directly.
-   Never mock `asyncpg.Pool` or Redis connections in unit tests.
-2. All test functions that touch a repository are `async def` and decorated with
-   `@pytest.mark.asyncio` (or `asyncio_mode = "auto"` in `pyproject.toml`).
-3. Integration tests (testcontainers scope) are isolated in `tests/integration/` and skipped in
-   the default `make check` target. They require a live Postgres + Redis container.
-4. Use `pytest.fixture` for shared domain objects (`CameraConfig`, `Detection`). Avoid
-   constructing the same frozen dataclass inline across many test functions.
-5. Tests verify behavior through the public API of the class under test. Never access private
-   `_attributes` directly to assert state.
-6. Triton calls are mocked via `TritonClientProtocol` — all inference tests run without a GPU.
+All annotations are strings at runtime (PEP 563). This enables forward references and reduces import-time overhead. Every Python file in this codebase starts with this import.
 
-### Go
+### Exhaustive type annotations
 
-1. Prefer table-driven tests (`t.Run`) for functions with multiple input/output cases.
-2. Inject interfaces in constructors so tests can replace the real implementation.
-3. Always run with `-race`: `go test -race ./...`. This is a hard CI gate.
-4. HTTP handler tests use `httptest.NewRecorder()` — no live server required.
-5. go2rtc calls are tested with an `httptest.Server` serving mock responses — do not test against
-   a live go2rtc instance in unit tests.
+All function signatures have parameter and return types. No bare `def foo(x):` — always `def foo(x: int) -> str:`. `mypy --strict` runs on `domain/`, `storage/`, `services/`, and `transport/`.
+
+### No escape hatches without justification
+
+- `# type: ignore` must use the specific mypy error code: `# type: ignore[arg-type]`.
+- Bare `# type: ignore` is deprecated and fails CI.
+- Remove `type: ignore` comments when the underlying issue is resolved — mypy flags unused suppressions with `[unused-ignore]`.
+- `Any` is prohibited in constructor signatures and return types. It is tolerated only in `**kwargs` passthrough to third-party libraries with `cast()` at the boundary.
+
+### NumPy type boundaries
+
+Comparisons on numpy scalars return `numpy.bool_`, not Python `bool`. Functions annotated `-> bool` that perform numpy comparisons must wrap the result:
+
+```python
+def is_degenerate(crop: npt.NDArray[np.uint8]) -> bool:
+    return bool(w < _MIN_CROP_WIDTH or h < _MIN_CROP_HEIGHT)
+```
+
+### `callable` is not a type
+
+The builtin `callable` is a function, not a valid type annotation. Use `Callable[[ArgType], ReturnType]` from `typing` when the signature matters, or `list[object]` for heterogeneous callable containers.
 
 ---
 
-## Security at Boundaries
+## Circular Import Prevention
 
-1. **Validate at entry points only.** Use Pydantic v2 models for HTTP request bodies, Redis
-   message payloads, and config files. Internal domain objects are frozen dataclasses — they
-   carry no validation overhead and must already be valid when constructed.
+The `tracking <-> pipeline` boundary is the most fragile import path in the codebase. When a tracking submodule imports from `..pipeline.*`, and the pipeline package init re-enters tracking, the module fails with `ImportError: cannot import name ... from partially initialized module`.
 
-2. **Parameterized SQL, always.** asyncpg requires `$1..$N`; never build SQL strings with
-   f-strings or `%` formatting. This is the only defense against injection at the storage layer.
+### Rules
 
-3. **No secrets in code.** Database DSNs, Redis URLs, MinIO credentials, and API keys are
-   environment variables resolved at startup. Config files (`settings.yaml`) hold defaults;
-   secrets override via env or `.env` files (never committed). The `.env` file is loaded from
-   the config directory before YAML parsing; `${VAR}` placeholders in YAML are expanded.
+1. **Use `TYPE_CHECKING` for cross-boundary type annotations.** When a tracking module needs a pipeline type only for annotations (constructor parameter types, return types, attribute types), put the import inside `if TYPE_CHECKING:`. With `from __future__ import annotations`, the annotation is a string at runtime so the import is never executed.
 
-4. **Protobuf for cross-service messages.** Bytes on the wire must parse against a typed schema.
-   Do not pass raw JSON blobs without a Pydantic model validating them.
+    ```python
+    from __future__ import annotations
+    from typing import TYPE_CHECKING
 
-5. **`go vet` + `staticcheck` + `golangci-lint` for Go.** These catch common security
-   anti-patterns (unchecked errors, unguarded goroutine leaks) before runtime.
+    if TYPE_CHECKING:
+        from ..pipeline.gallery_cache import GalleryCache
+    ```
+
+2. **Do not eagerly re-export types in `__init__.py` that create cycles.** Package init files should be minimal. Any re-export that triggers a chain back to the importing module is a cycle.
+
+3. **Shared types between packages live in a neutral module.** Types needed by both `frame_pipeline` and `stages/` (e.g., `FaceIdCameraConfig`, `FrameImageFetcher`, `ReidEmbedderProtocol`) live in `pipeline/types.py` — imported by both sides without creating a cycle.
+
+---
+
+## Async/Concurrency
+
+### Task management
+
+- Every background task is created with `asyncio.create_task()` and stored in a list. `stop()` cancels all tasks and awaits their completion.
+- Never fire-and-forget a coroutine with `asyncio.ensure_future()` without storing the handle.
+- Tasks that run indefinitely must catch `asyncio.CancelledError` and clean up.
+
+### Concurrency gates
+
+- `asyncio.Semaphore` limits concurrent frame processing. The default is 4 — tuned to GPU batch size and memory.
+- Per-camera `asyncio.Lock` preserves frame ordering within a single camera. Two frames from the same camera never process concurrently.
+
+### Cancellation and shutdown
+
+- `stop()` sets a `_stop_event` (via `asyncio.Event`) and cancels all tasks.
+- Loops check `self._stop_event.is_set()` or `self._running` at the top of each iteration.
+- Shutdown is bounded by `shutdown_timeout` (default 5s). Tasks that don't complete within the timeout are abandoned with a warning log.
+
+### No blocking calls in async context
+
+- CPU-bound work (numpy array ops, image decoding) is acceptable if it runs in under 1ms. Longer operations use `asyncio.to_thread()` or a process pool.
+- Never call `time.sleep()` in an async function. Use `asyncio.sleep()`.
 
 ---
 
@@ -185,24 +268,108 @@ Rules:
 
 ### Python
 
-1. Use the project's `ErrorCode` enum for all domain errors. Never return bare `Exception`.
-2. Do not serialize stack traces in API responses. Log the trace locally (`structlog.exception`);
-   return only the `ErrorCode` and a human-readable message to the caller.
-3. For async operations, let exceptions propagate up to the `_consume_loop` handler, which logs
-   and retries. Do not swallow exceptions silently inside `_process_frame`.
+1. Domain errors use the project's `ErrorCode` enum. Never return or raise bare `Exception` for domain failures.
+2. Stack traces never appear in API responses. Log the trace locally (`structlog.exception`); return only the error code and a human-readable message.
+3. Async frame processing lets exceptions propagate to the `_consume_loop` handler, which logs and retries. Individual frames are never silently dropped — failed frames produce a `FrameResponse` with `success=False` and an error code.
+4. Model failures degrade per model: detector failure fails the frame; ReID/pose/face-ID failure degrades to missing evidence without dropping the frame.
 
 ### Go
 
 1. Wrap errors with context: `fmt.Errorf("streams: register %q: %w", cfg.ID, err)`.
-2. Check every error — `go vet` will flag unchecked error returns.
-3. Use `context.Context` as the first parameter of every function that does I/O; respect
-   cancellation via `ctx.Err()`.
+2. Check every error return — `go vet` and `golangci-lint` flag unchecked returns as compile errors.
+3. `context.Context` is the first parameter of every I/O function. Respect cancellation via `ctx.Err()`.
+
+---
+
+## Configuration Management
+
+### Typed, frozen config
+
+All configuration is defined as frozen dataclasses with sensible defaults. No raw `dict` access for config values — every setting is a typed field.
+
+```python
+@dataclass(frozen=True)
+class PipelineConfig:
+    detector_confidence: float = 0.25
+    max_concurrent_frames: int = 4
+    signal_enabled: bool = True
+    ...
+```
+
+### Environment overrides
+
+Secrets (database DSNs, Redis URLs, MinIO credentials, API keys) come from environment variables. Config files hold defaults; env vars override. `.env` files are never committed. The startup path loads `.env` before YAML, then expands `${VAR}` placeholders.
+
+### Config is validated at startup
+
+Use Pydantic v2 models to validate configuration at application startup. Fail fast with a clear error message if required settings are missing or invalid. Never silently fall back to a default that produces incorrect behavior.
+
+---
+
+## API Design (FastAPI)
+
+### Request/response models
+
+- Every endpoint has explicit Pydantic request and response models. No `dict[str, Any]` in endpoint signatures.
+- Response models exclude internal fields — the API surface is deliberate and documented.
+- Use `response_model=` on `@router` decorators, not `response_model_by_alias` or manual dict construction.
+
+### Error responses
+
+- Use `HTTPException` with a structured `detail` dict: `{"code": "calibration.invalid_points", "message": "..."}`.
+- Error codes are `snake_case` strings, namespaced by domain: `calibration.*`, `homography.*`.
+- Never expose internal state, stack traces, or file paths in error responses.
+
+### Internal vs external endpoints
+
+- `/internal/calibration/*` endpoints are not publicly exposed. They are called by the Cognitive Companion BFF, authenticated via service JWT.
+- Public endpoints follow REST conventions: `GET /resource`, `POST /resource`, `GET /resource/{id}`.
+
+---
+
+## Testing Strategy
+
+### Python
+
+1. **Test at the Protocol boundary.** Inject `InMemory*` implementations directly. Never mock `asyncpg.Pool`, Redis connections, or HTTP clients in unit tests.
+2. **All repository tests are `async def`.** Configured via `asyncio_mode = "auto"` in `pyproject.toml`.
+3. **Integration tests in `tests/integration/`.** Skipped by default in `make check`. Require live Postgres + Redis containers.
+4. **Shared fixtures via `pytest.fixture`.** Build `CameraConfig`, `Detection`, `Tracklet` once and reuse. Avoid reconstructing the same frozen dataclass inline across tests.
+5. **Tests assert behavior through public APIs.** Never assert on private `_attributes`. Tests that reach into private state are brittle and test implementation details, not contracts.
+6. **Triton calls mocked via `TritonClientProtocol`.** All inference tests run without a GPU.
+7. **Falsifiable assertions.** For signal detectors: "7-day TV-watching fixture produces zero stillness_anomaly", not just "some signal was produced". Assert counts, severity levels, and non-emissions.
+8. **Hysteresis tests must be explicit.** One-run tests set `onset_consecutive_windows=1`. Full hysteresis tests use the default of 2 and verify onset debounce, cooldown, and escalation independently.
+
+### Go
+
+1. Table-driven tests (`t.Run`) for multi-case functions.
+2. Interfaces injected in constructors; tests replace with fakes.
+3. `-race` flag mandatory: `go test -race ./...`.
+4. HTTP handlers tested with `httptest.NewRecorder()`.
+5. go2rtc calls tested with `httptest.Server` serving mock responses.
+
+### What NOT to test
+
+- Do not test Python dataclass constructors (the language tests field assignment).
+- Do not test third-party library behavior (Redis xadd, protobuf serialization).
+- Do not test trivial property accessors or getters.
+- Do not write tests that exist only to hit a coverage percentage — every test must document a real failure mode.
+
+---
+
+## Security at Boundaries
+
+1. **Validate at entry points only.** Pydantic v2 for HTTP bodies, Redis payloads, and config files. Internal domain objects must already be valid when constructed.
+2. **Parameterized SQL, always.** asyncpg `$1..$N` — never f-strings or `%` formatting.
+3. **No secrets in code.** Environment variables only. `.env` never committed.
+4. **Protobuf for cross-service messages.** Bytes on the wire parse against a typed schema. No raw JSON blobs without Pydantic validation.
+5. **`go vet` + `staticcheck` + `golangci-lint` for Go.** Hard CI gates.
 
 ---
 
 ## Datetime and Timezones
 
-All timestamps are timezone-aware. In Python:
+All timestamps are timezone-aware:
 
 ```python
 from datetime import UTC, datetime
@@ -211,13 +378,18 @@ now = datetime.now(UTC)          # correct
 now = datetime.now()             # WRONG — naive, breaks TimescaleDB timestamptz
 ```
 
+Pipeline stages must use the correct time for the domain concept:
+- `ctx.capture_time` — physical observation timestamp (from the camera).
+- `ctx.event_time` — pipeline processing timestamp (set once at context init).
+- `datetime.now(UTC)` — only for true wall-clock side effects (e.g., `emitted_at` on a signal).
+
 In Go, use `time.Now().UTC()` for all timestamps written to Redis or Postgres.
 
 ---
 
 ## Structured Logging
 
-Python — use `structlog`, never `print` or `logging.getLogger`:
+Python — `structlog`, never `print` or `logging.getLogger`:
 
 ```python
 from structlog import get_logger
@@ -227,74 +399,200 @@ logger.info("tracklet created", tracklet_id=tid, camera_id=cam)
 logger.exception("frame processing failed", camera_id=frame.camera_id)
 ```
 
-Go — use `zap.L()` (global) or inject `*zap.Logger` via constructor:
+Go — `zap.L()` or inject `*zap.Logger`:
 
 ```go
 zap.L().Info("stream registered", zap.String("stream_id", cfg.ID))
 ```
 
-Key fields (`camera_id`, `tracklet_id`, `global_track_id`, `event_id`) must appear in every
-log line where they are known. This enables log-based correlation across services.
+Key fields (`camera_id`, `tracklet_id`, `global_track_id`, `event_id`) appear in every log line where they are known.
+
+### Log levels
+
+- `debug`: per-frame/per-detection detail, model outputs, rejection reasons. Verbose, sampled in production.
+- `info`: lifecycle events (startup, shutdown, config), signal emissions, identity commits, revision publications.
+- `warning`: degraded operation (model timeout, service unavailable, stale frame), recoverable errors.
+- `exception`: unrecoverable per-frame failures with full traceback. Always includes `camera_id` and `frame_index`.
+
+### What NOT to log
+
+- Never log embedding vectors, face crops, or full image data.
+- Never log secrets, tokens, or full connection strings.
+- Never log PII (person names, face images) without a documented anonymization policy.
 
 ---
 
 ## Observability
 
-- **Python**: use `prometheus-client` against the global registry. Register counters, histograms,
-  and gauges in `app/observability/metrics.py`. Expose at `GET /metrics` via the FastAPI app.
-- **Go**: use `prometheus/client_golang`. Register metrics in `internal/metrics/metrics.go`.
-  Expose at `GET /metrics` on the health-check server.
-- Key metrics to instrument: frames consumed, events/revisions/signals published, posterior
-  entropy histogram, identity commits, inference latency histograms, gallery size gauge,
-  active tracklet gauge.
-- OpenTelemetry tracing across Redis Streams boundaries is deferred until a collector target
-  exists — do not add OTel spans prematurely.
+- **Python**: `prometheus-client` against the global registry. Register counters, histograms, and gauges in `app/observability/metrics.py`. Expose at `GET /metrics`.
+- **Go**: `prometheus/client_golang`. Register in `internal/metrics/metrics.go`.
+
+Key metrics: frames consumed, events/revisions/signals published, posterior entropy histogram, identity commits by source, demotions by reason, stage latency histogram (per stage, per camera), inference latency (per model), gallery size, active tracklet gauge, signal worker run duration.
+
+OpenTelemetry tracing across Redis Streams is deferred until a collector target exists.
 
 ---
 
 ## Image Preprocessing
 
-Use `opencv-python-headless` (`cv2`) for **all** letterbox and crop resizing in inference
-modules. Do not re-implement bilinear resize in NumPy.
+Use `opencv-python-headless` for all letterbox and crop resizing:
 
 ```python
 import cv2
-import numpy as np
 
-def letterbox(img: np.ndarray, target: tuple[int, int]) -> np.ndarray:
-    return cv2.resize(img, target, interpolation=cv2.INTER_LINEAR)
+resized = cv2.resize(img, target, interpolation=cv2.INTER_LINEAR)
 ```
 
-The `opencv-python-headless` package (no GUI dependencies) is the canonical choice. Never
-import `opencv-python` (includes GUI libs that conflict with headless containers).
+Never import `opencv-python` (GUI dependencies conflict with headless containers). Never hand-roll bilinear resize in NumPy — it's slower and less correct.
 
 ---
 
-## Design Principles
+## Quality Gate
 
-### Signal processing
+```bash
+make check   # Python: ruff check + ruff format --check + mypy + import-linter + pytest
+make all-check   # Python + Go (golangci-lint + go test -race + go build) + buf lint
+```
 
-- **Baselines must be independent of emitted signals.** Derive baselines from raw trajectory and dwell history via `BehaviorBaselineRepository`. Never use `signal_repo.list_signals()` for baseline computation; it creates circular feedback where previously emitted, already-above-threshold signals inflate the noise floor.
-- **Use robust statistics for clinical baselines.** Median + MAD (via `scipy.stats`) resists single-outlier contamination that mean/std cannot. The `robust_z()` function in `app/trajectory/stats.py` is the canonical implementation.
-- **Algorithm version every signal.** Every emitted `DementiaSignal` carries `algorithm_version`. Bump the module constant when detector logic changes so downstream consumers can filter stale-version signals out of active rollups.
+### ruff rules (non-negotiable)
 
-### Privacy enforcement
+- `I001`: imports sorted within groups (stdlib → third-party → first-party).
+- `E501`: 100-character line limit. Break long calls, wrap signatures, extract intermediate variables for long f-strings.
+- `N806`: `SCREAMING_CASE` at module level; `lowercase` in function scope.
+- `F401`, `F841`: no unused imports or variables. Unused unpacked names → prefix with `_`.
+- `B007`: unused loop variables → `_i`, `_k`, `_v`.
+- `SIM102`: combine nested `if` with `and` when the body is a single statement.
+- `SIM108`: ternary for simple conditional assignments.
+- `B017`: no `pytest.raises(Exception)` — use the specific exception type.
+- `C401`: use set/dict comprehensions, not generator-wrapped constructors.
 
-- **Fail closed on privacy controls.** When a camera has `drop_detection` zones but no homography is calibrated, drop all detections. Never fail open on a privacy boundary.
-- **Canonical policy vocabulary.** Use `drop_detection` / `blur_region` / `mask_region` across domain, proto, router, and CC schema. Reconcile all layers in a single PR; policy drift between layers is a correctness defect.
-- **Enforce before persistence.** Drop detections in privacy zones before they reach tracking, trajectory writer, or event publishers. Apply blur/mask to the frame before ReID crop extraction and keyframe upload.
+### What `make check` does NOT cover
 
-### Hysteresis and debounce
+- Integration tests (opt-in, require containers).
+- Performance regression (no benchmark suite yet).
+- Behavioral correctness of ML model outputs (requires labeled test data).
+- End-to-end cross-service contract compliance (requires CC in the loop).
 
-- **Stable signal_id is not enough for consumer dedup.** Idempotent DB upsert prevents row duplication but does not prevent re-alerting. Add onset debounce (emit only after N consecutive trigger holds), cooldown (no re-emit within a window unless severity escalates), and monotonic severity within episodes.
-- **Document the wire contract.** CC consumers must treat severity escalation as a new actionable event and a re-upsert at equal severity as a no-op. The contract lives in `signals.proto` comments.
+---
 
-### Testing with synthetic data
+## Code Review Checklist
 
-- **Build synthetic multi-day fixtures with quantitative assertions.** For dementia signals, assert *counts* (e.g., "7-day TV-watching fixture produces zero stillness_anomaly") not just presence. A falsifiable noise budget catches regression.
-- **Test hysteresis explicitly.** One-run tests must set `onset_consecutive_windows=1`. Dedicated hysteresis tests use the default of 2 and verify onset debounce, cooldown, and escalation paths.
+For every PR affecting `tracking-orchestrator/`:
 
-### Incremental processing
+1. **Does it add a dependency?** Must be in the approved list or have explicit justification.
+2. **Does it introduce a circular import?** Check `tracking <-> pipeline` boundaries. New imports from `pipeline` into `tracking` must use `TYPE_CHECKING`.
+3. **Does it mutate a frozen dataclass?** All state changes must use `replace()`.
+4. **Are all new dataclasses frozen by default?** If mutable, why?
+5. **Do stages have a single responsibility?** No multi-purpose stages.
+6. **Are constructor dependencies explicit?** No `self._pipeline` passthrough.
+7. **Are errors handled per model?** Detector failure ≠ ReID failure ≠ face-ID failure.
+8. **Do timestamps use the correct domain time?** `capture_time` for observation, `event_time` for processing, `datetime.now(UTC)` only for wall-clock side effects.
+9. **Are new metrics registered?** Stage latency, signal emissions, identity commits.
+10. **Do tests assert falsifiable outcomes?** Counts, severity levels, non-emissions, not just truthiness.
+11. **Is `ruff format` clean?** Run it before committing.
+12. **Does the proto change have a CC counterpart?** Proto changes are two-repo changes.
 
-- **Cache raw baseline samples, not computed z-scores.** The baseline distribution changes slowly (30-day window), but the current `value` being compared against it changes every run. Cache the samples; recompute the z-score with the fresh value.
-- **Rolling state with delta fetches.** Track `last_run_at` per identity. On each run, fetch only new trajectory/dwell rows since the last run (with 5-minute safety overlap). Merge with rolling in-memory state pruned to the observation window.
+---
+
+## Python Libraries
+
+| Library | Role |
+| --- | --- |
+| `fastapi` | HTTP router and dependency injection |
+| `pydantic v2` | Validation at all external boundaries |
+| `asyncpg` | Async Postgres driver — `$1..$N` positional params |
+| `redis[hiredis]` | Async Redis Streams — consumer groups + XACK |
+| `aiobotocore` | Async S3-compatible client for MinIO |
+| `structlog` | Structured JSON logging — no `logging.getLogger` |
+| `numpy` | Frame data and embedding arithmetic |
+| `opencv-python-headless` | Image preprocessing — `cv2.resize(INTER_LINEAR)` |
+| `scipy` | Hungarian assignment, robust statistics (MAD, EWMA) |
+| `shapely>=2.0` | Polygon containment for privacy zones |
+| `protobuf` | Message contracts — generated bindings committed in `app/proto/` |
+| `prometheus-client` | Metrics exposition at `/metrics` |
+| `pytest` + `pytest-asyncio` | Test runner — all repo tests are `async def` |
+| `mypy` (strict) | Type checking on `domain/`, `storage/`, `services/`, `transport/` |
+| `ruff` | Lint + format |
+| `import-linter` | Layering enforcement at CI time |
+
+Do not add `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a **test-only** dependency.
+
+---
+
+## Go Libraries
+
+| Library | Role |
+| --- | --- |
+| `minio/minio-go/v7` | S3-compatible object storage |
+| `redis/go-redis/v9` | Redis Streams producer |
+| `prometheus/client_golang` | Metrics exposition |
+| `go.uber.org/zap` | Structured logging |
+| `google.golang.org/protobuf` | Protobuf runtime |
+| `golang.org/x/image` | Image format decoding |
+| `gopkg.in/yaml.v3` | Config file parsing |
+
+RTSP ingest uses go2rtc as a sidecar — do not add `gortsplib` or `pion/rtp`.
+
+---
+
+## Redis Stream Wire Format
+
+**All Redis Streams carry raw protobuf bytes — no JSON, no base64.**
+
+| Stream | Field | Message type |
+| --- | --- | --- |
+| `frames.ready` | `"frame"` | `FrameReady` |
+| `tracking.events` | `"event"` | `TrackingEvent` |
+| `tracking.revisions` | `"revision"` | `IdentityRevision` |
+| `tracking.signals` | `"signal"` | `DementiaSignal` |
+| `scene.samples` | `"sample"` | `SceneSample` |
+
+1. Redis clients use `decode_responses=False`.
+2. No codec discriminator field — consumers know the message type from the stream.
+3. No dual-codec shim; protobuf-only is the sole wire format.
+
+---
+
+## Domain-Specific Design Principles
+
+### Frame pipeline stages
+
+- **One stage, one responsibility.**
+- **Typed stage contracts.** `FrameStage.run(ctx)`. Constructor dependencies are explicit protocols, never a whole pipeline instance.
+- **Context ownership is documented.** Every `FrameContext` field has one producing stage and documented consuming stages. No untyped scratch fields.
+- **Use frame time deliberately.** `capture_time` = physical observation. `event_time` = processing time. No `datetime.now(UTC)` when one of these is correct.
+- **Model failures degrade by model per frame.** Detector failure = frame fails. ReID/pose/face-ID failure = missing evidence.
+- **No private cross-stage reachback.** Shared logic becomes a small service injected into both stages.
+
+### Spatial calibration and homography
+
+- **Coordinate system is explicit.** Calibrated `FloorPoint` = shared floor-plan coordinates in mm.
+- **Homographies map raw pixels to floor-plan metres.** Store floor_plan_id, image dimensions, residuals, and quality with every matrix.
+- **Never compare points from different floor plans.** Hard reject with metrics.
+- **Unknown geometry is not perfect geometry.** No geometry score of 1.0 for uncalibrated cameras. Use neutral scoring or reject.
+- **Attach projection once.** Project before tracking. Carry the same point into tracklets, trajectories, and proto events.
+- **Ground-plane homography is not person height.** Do not claim physical height from bbox projection without a documented geometry model.
+
+### Identity evidence and gallery governance
+
+- **Evidence provenance is mandatory.** Source, confidence, quality, model version, timestamp, and tracklet identifier on every record.
+- **Direct face evidence is distinct.** Direct ArcFace, propagated hints, operator corrections, and ReID matches are separate evidence source types with different weights.
+- **Temporal prior cannot create identity.** It maintains an existing identity within a bounded window; new assignment requires sensory or operator evidence.
+- **Gallery labels are governed.** Tentative commits → quarantine → promotion after stable evidence, not immediate trust.
+- **Revisions are idempotent.** Stable IDs and evidence summaries so CC can apply once and explain in the UI.
+
+### Clinical and dementia signals
+
+- **Signals are not diagnoses.** Vision-derived patterns are behavioral alerts and caregiver context, not a diagnosis of any medical condition. Every signal carries a non-diagnostic disclaimer.
+- **Every detector has an algorithm spec.** Name, version, evidence grade, required inputs, data quality minimums, thresholds, and cited rationale.
+- **Gate on data quality.** Identity confidence, observation coverage, baseline sample count, and calibration availability before emitting or escalating.
+- **Cold starts are conservative.** Without a resident baseline, cap severity. Absolute safety thresholds require caregiver opt-in.
+- **Use elapsed time, not frame count.** Stillness and dwell computations accumulate seconds from timestamps, capping large inter-observation gaps.
+- **Prefer room taxonomy over name matching.** Configured room types from CC. Name-substring fallback must be marked in context with reduced confidence.
+
+### Cross-service contracts
+
+- **Proto changes are two-repo changes.** Update bindings, subscribers, publishers, tests, and docs in both repos in the same milestone.
+- **Do not reuse proto field numbers.** Deprecated fields are reserved. New fields get new numbers. Keep compatibility readers during migration.
+- **Redis Streams stay protobuf-only.** No JSON, no base64, no dual-codec.
+- **Shadow before authority.** New tracking, identity, or signal algorithms run in shadow mode with mismatch metrics before becoming authoritative.

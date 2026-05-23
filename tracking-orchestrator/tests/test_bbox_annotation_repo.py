@@ -77,10 +77,12 @@ async def test_update_identity_id_propagates(repo: InMemoryBboxAnnotationReposit
 async def test_update_identity_id_only_matches_target_tracklet(
     repo: InMemoryBboxAnnotationRepository,
 ) -> None:
-    await repo.save_bbox_annotations([
-        _bbox(keyframe_id="kf1", tracklet_id="tr1"),
-        _bbox(keyframe_id="kf2", tracklet_id="tr2"),
-    ])
+    await repo.save_bbox_annotations(
+        [
+            _bbox(keyframe_id="kf1", tracklet_id="tr1"),
+            _bbox(keyframe_id="kf2", tracklet_id="tr2"),
+        ]
+    )
     await repo.update_identity_id("tr1", "alice")
     kf1_results = await repo.get_bbox_annotations_for_keyframe("kf1")
     kf2_results = await repo.get_bbox_annotations_for_keyframe("kf2")
@@ -101,7 +103,10 @@ async def test_override_bbox_persists(repo: InMemoryBboxAnnotationRepository) ->
 
     await repo.save_override_bbox(
         annotation_id,
-        x1=50.0, y1=60.0, x2=150.0, y2=250.0,
+        x1=50.0,
+        y1=60.0,
+        x2=150.0,
+        y2=250.0,
         override_by="caregiver1",
     )
 
@@ -122,9 +127,11 @@ async def test_save_empty_list_no_op(repo: InMemoryBboxAnnotationRepository) -> 
 
 
 async def test_multiple_annotations_same_keyframe(repo: InMemoryBboxAnnotationRepository) -> None:
-    await repo.save_bbox_annotations([
-        _bbox(keyframe_id="kf1", tracklet_id="tr1"),
-        _bbox(keyframe_id="kf1", tracklet_id="tr2"),
-    ])
+    await repo.save_bbox_annotations(
+        [
+            _bbox(keyframe_id="kf1", tracklet_id="tr1"),
+            _bbox(keyframe_id="kf1", tracklet_id="tr2"),
+        ]
+    )
     results = await repo.get_bbox_annotations_for_keyframe("kf1")
     assert len(results) == 2

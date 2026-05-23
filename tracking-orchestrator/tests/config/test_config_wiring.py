@@ -1,5 +1,7 @@
 """Test that _build_*_config() helpers produce correct config objects from settings."""
 
+from dataclasses import asdict
+
 import pytest
 
 from app.config import Settings
@@ -21,7 +23,7 @@ from app.tracking.tracklet_manager import TrackletConfig
 
 def test_resolver_config_defaults_match_dataclass():
     rc = ResolverConfig()
-    s = Settings.from_dict({"resolver": {}})
+    s = Settings.from_dict({"resolver": asdict(rc)})
     cfg = _build_resolver_config(s)
     assert cfg.commit_prob == pytest.approx(rc.commit_prob)
     assert cfg.commit_margin == pytest.approx(rc.commit_margin)
@@ -49,24 +51,23 @@ def test_resolver_config_defaults_match_dataclass():
 
 
 def test_resolver_config_built_from_settings():
-    s = Settings.from_dict(
+    values = asdict(ResolverConfig())
+    values.update(
         {
-            "resolver": {
-                "commit_prob": "0.80",
-                "commit_margin": "0.10",
-                "prior_weight": "0.70",
-                "face_weight_multiplier": "5.0",
-                "face_commit_min_confidence": "0.85",
-            }
+            "commit_prob": "0.80",
+            "commit_margin": "0.10",
+            "prior_weight": "0.70",
+            "face_weight_multiplier": "5.0",
+            "face_commit_min_confidence": "0.85",
         }
     )
+    s = Settings.from_dict({"resolver": values})
     cfg = _build_resolver_config(s)
     assert cfg.commit_prob == pytest.approx(0.80)
     assert cfg.commit_margin == pytest.approx(0.10)
     assert cfg.prior_weight == pytest.approx(0.70)
     assert cfg.face_weight_multiplier == pytest.approx(5.0)
     assert cfg.face_commit_min_confidence == pytest.approx(0.85)
-    # Fields not provided fall back to defaults
     assert cfg.reid_decision_sim == pytest.approx(0.70)
     assert cfg.revision_horizon_s == pytest.approx(600.0)
 
@@ -78,7 +79,12 @@ def test_resolver_config_built_from_settings():
 
 def test_tracklet_config_defaults_match_dataclass():
     tc = TrackletConfig()
-    s = Settings.from_dict({"tracklet": {}, "pipeline": {"tracker": {"min_frames_to_publish": 3}}})
+    s = Settings.from_dict(
+        {
+            "tracklet": asdict(tc),
+            "pipeline": {"tracker": {"min_frames_to_publish": tc.min_frames_to_publish}},
+        }
+    )
     cfg = _build_tracklet_config(s)
     assert cfg.min_hit_ratio == pytest.approx(tc.min_hit_ratio)
     assert cfg.close_grace_frames == tc.close_grace_frames
@@ -90,16 +96,20 @@ def test_tracklet_config_defaults_match_dataclass():
 
 
 def test_tracklet_config_built_from_settings():
+    values = asdict(TrackletConfig())
+    values.update(
+        {
+            "min_hit_ratio": "0.7",
+            "close_grace_frames": "30",
+            "gallery_min_quality": "0.6",
+            "gallery_max_per_tracklet": "30",
+            "min_detection_confidence": "0.4",
+            "enabled": "false",
+        }
+    )
     s = Settings.from_dict(
         {
-            "tracklet": {
-                "min_hit_ratio": "0.7",
-                "close_grace_frames": "30",
-                "gallery_min_quality": "0.6",
-                "gallery_max_per_tracklet": "30",
-                "min_detection_confidence": "0.4",
-                "enabled": "false",
-            },
+            "tracklet": values,
             "pipeline": {"tracker": {"min_frames_to_publish": 5}},
         }
     )
@@ -120,7 +130,7 @@ def test_tracklet_config_built_from_settings():
 
 def test_cross_cam_config_defaults_match_dataclass():
     cc = CrossCamConfig()
-    s = Settings.from_dict({"cross_camera": {}})
+    s = Settings.from_dict({"cross_camera": asdict(cc)})
     cfg = _build_cross_cam_config(s)
     assert cfg.alpha == pytest.approx(cc.alpha)
     assert cfg.floor_sigma_m == pytest.approx(cc.floor_sigma_m)
@@ -140,22 +150,21 @@ def test_cross_cam_config_defaults_match_dataclass():
 
 
 def test_cross_cam_config_built_from_settings():
-    s = Settings.from_dict(
+    values = asdict(CrossCamConfig())
+    values.update(
         {
-            "cross_camera": {
-                "alpha": "0.80",
-                "floor_sigma_m": "3.0",
-                "min_link_score": "0.60",
-                "unknown_merge_appearance_threshold": "0.95",
-            }
+            "alpha": "0.80",
+            "floor_sigma_m": "3.0",
+            "min_link_score": "0.60",
+            "unknown_merge_appearance_threshold": "0.95",
         }
     )
+    s = Settings.from_dict({"cross_camera": values})
     cfg = _build_cross_cam_config(s)
     assert cfg.alpha == pytest.approx(0.80)
     assert cfg.floor_sigma_m == pytest.approx(3.0)
     assert cfg.min_link_score == pytest.approx(0.60)
     assert cfg.unknown_merge_appearance_threshold == pytest.approx(0.95)
-    # Fields not provided fall back to defaults
     assert cfg.max_floor_distance_m == pytest.approx(8.0)
     assert cfg.within_group_min_score == pytest.approx(0.35)
 
@@ -167,7 +176,7 @@ def test_cross_cam_config_built_from_settings():
 
 def test_sampler_config_defaults_match_dataclass():
     sc = SamplerConfig()
-    s = Settings.from_dict({"sampler": {}})
+    s = Settings.from_dict({"sampler": asdict(sc)})
     cfg = _build_sampler_config(s)
     assert cfg.keyframe_min_interval_s == pytest.approx(sc.keyframe_min_interval_s)
     assert cfg.periodic_expires_hours == sc.periodic_expires_hours
@@ -188,3 +197,40 @@ def test_sampler_config_built_from_settings():
     assert cfg.keyframe_min_interval_s == pytest.approx(15.0)
     assert cfg.periodic_expires_hours == 48
     assert cfg.trigger_expires_days == 14
+
+
+def test_incomplete_config_raises_instead_of_using_hidden_defaults():
+    with pytest.raises(KeyError):
+        _build_resolver_config(Settings.from_dict({"resolver": {}}))
+
+    with pytest.raises(KeyError):
+        _build_cross_cam_config(Settings.from_dict({"cross_camera": {}}))
+
+
+# ---------------------------------------------------------------------------
+# Settings typed accessors
+# ---------------------------------------------------------------------------
+
+
+def test_settings_typed_accessors_require_and_convert_values():
+    s = Settings.from_dict(
+        {
+            "redis": {"ack_ttl_seconds": "300"},
+            "pipeline": {"allow_skeleton": "true"},
+            "resolver": {"commit_prob": "0.75"},
+        }
+    )
+
+    assert s.as_int("redis.ack_ttl_seconds") == 300
+    assert s.as_bool("pipeline.allow_skeleton") is True
+    assert s.section("resolver").as_float("commit_prob") == pytest.approx(0.75)
+
+
+def test_settings_typed_accessors_raise_on_missing_or_invalid_values():
+    s = Settings.from_dict({"redis": {"ack_ttl_seconds": "not-an-int"}})
+
+    with pytest.raises(KeyError):
+        s.as_int("redis.missing")
+
+    with pytest.raises(ValueError, match=r"redis\.ack_ttl_seconds"):
+        s.as_int("redis.ack_ttl_seconds")

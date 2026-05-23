@@ -18,6 +18,9 @@ from ..storage.base import TrajectoryRepository
 
 # When motion_energy is below this threshold the frame is considered "still".
 _STILL_ENERGY_FLOOR = 0.005
+# Maximum seconds to accumulate per observation gap when still.  Prevents
+# adding hours of stillness after a long gap between frames.
+_MAX_STILL_ACCUMULATION_PER_GAP_S: float = 60.0
 
 
 class TrajectoryWriter:
@@ -52,7 +55,9 @@ class TrajectoryWriter:
         # Per-dwell posture counts for modal calculation.
         self._dwell_posture_counts: dict[str, dict[str, int]] = {}
         # Contiguous still-second accumulator per dwell.
-        self._dwell_still_acc: dict[str, int] = {}
+        self._dwell_still_acc: dict[str, float] = {}
+        # Last observation time per global_track_id (for elapsed-time stillness).
+        self._last_obs_time: dict[str, datetime] = {}
 
     async def write(
         self,
@@ -113,7 +118,8 @@ class TrajectoryWriter:
             duration = int((closed_at - dwell.entered_at).total_seconds())
             posture_counts = self._dwell_posture_counts.pop(global_track_id, {})
             modal_posture = _modal_posture(posture_counts)
-            still_seconds = self._dwell_still_acc.pop(global_track_id, 0)
+            still_seconds = self._dwell_still_acc.pop(global_track_id, 0.0)
+            self._last_obs_time.pop(global_track_id, None)
             closed = RoomDwell(
                 dwell_id=dwell.dwell_id,
                 identity_id=dwell.identity_id,
@@ -125,7 +131,7 @@ class TrajectoryWriter:
                 entry_confidence=dwell.entry_confidence,
                 primary_posture=modal_posture,
                 min_motion_energy=dwell.min_motion_energy,
-                still_seconds=dwell.still_seconds + still_seconds,
+                still_seconds=dwell.still_seconds + int(still_seconds),
                 activity_summary={},
             )
             await self._repo.update_room_dwell(closed)
@@ -169,11 +175,18 @@ class TrajectoryWriter:
                         else motion_energy
                     )
                     object.__setattr__(open_dwell, "min_motion_energy", new_min)
-                # Accumulate still seconds.
+                # Accumulate still seconds using elapsed time since last observation.
                 if motion_energy is not None and motion_energy < _STILL_ENERGY_FLOOR:
+                    last_time = self._last_obs_time.get(global_track_id)
+                    if last_time is not None:
+                        elapsed = (captured_at - last_time).total_seconds()
+                        elapsed = min(elapsed, _MAX_STILL_ACCUMULATION_PER_GAP_S)
+                    else:
+                        elapsed = 0.0
                     self._dwell_still_acc[global_track_id] = (
-                        self._dwell_still_acc.get(global_track_id, 0) + 1
+                        self._dwell_still_acc.get(global_track_id, 0.0) + elapsed
                     )
+                self._last_obs_time[global_track_id] = captured_at
             return
 
         # Room changed (or first observation for this track).
@@ -182,7 +195,8 @@ class TrajectoryWriter:
             duration = int((captured_at - existing.entered_at).total_seconds())
             posture_counts = self._dwell_posture_counts.pop(global_track_id, {})
             modal_posture = _modal_posture(posture_counts)
-            still_seconds = self._dwell_still_acc.pop(global_track_id, 0)
+            still_seconds = self._dwell_still_acc.pop(global_track_id, 0.0)
+            self._last_obs_time.pop(global_track_id, None)
             closed = RoomDwell(
                 dwell_id=existing.dwell_id,
                 identity_id=existing.identity_id,
@@ -194,7 +208,7 @@ class TrajectoryWriter:
                 entry_confidence=existing.entry_confidence,
                 primary_posture=modal_posture,
                 min_motion_energy=existing.min_motion_energy,
-                still_seconds=existing.still_seconds + still_seconds,
+                still_seconds=existing.still_seconds + int(still_seconds),
                 activity_summary={},
             )
             await self._repo.update_room_dwell(closed)
@@ -207,10 +221,10 @@ class TrajectoryWriter:
             entered_at=captured_at,
             entry_confidence=identity_confidence,
             min_motion_energy=motion_energy,
-            still_seconds=(
-                1 if (motion_energy is not None and motion_energy < _STILL_ENERGY_FLOOR) else 0
-            ),
+            still_seconds=0,  # accumulated per observation in _handle_dwell
         )
+        # Track first observation time for elapsed-time stillness.
+        self._last_obs_time[global_track_id] = captured_at
         await self._repo.save_room_dwell(new_dwell)
         self._open_dwell[global_track_id] = new_dwell
         self._current_room[global_track_id] = room_name

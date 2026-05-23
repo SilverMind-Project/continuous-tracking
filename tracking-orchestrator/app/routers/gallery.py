@@ -17,10 +17,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import cv2
 import numpy as np
+import numpy.typing as npt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from structlog import get_logger
@@ -215,7 +216,7 @@ async def add_crop_to_gallery(
         )
 
     try:
-        embeddings = await ctx.reid_embedder.embed_batch([crop])
+        embeddings = await ctx.reid_embedder.embed_batch([cast(npt.NDArray[np.uint8], crop)])
     except Exception as err:
         logger.exception("gallery_add_crop_embed_error", identity_id=identity_id)
         raise HTTPException(
@@ -226,7 +227,7 @@ async def add_crop_to_gallery(
             },
         ) from err
 
-    embedding = embeddings[0]
+    embedding = embeddings[0].tolist()
     now = datetime.now(UTC)
     gallery_entry = GalleryEmbedding(
         gallery_entry_id=str(uuid.uuid4()),

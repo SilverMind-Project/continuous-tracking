@@ -28,8 +28,12 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from structlog import get_logger
+
+if TYPE_CHECKING:
+    from ..pipeline.gallery_cache import GalleryCache
 
 from ..domain import (
     FaceAnchor,
@@ -41,9 +45,11 @@ from ..domain import (
     PosteriorDist,
     ResolveOutcome,
 )
+from ..inference.evidence import FaceEvidence
 from ..observability import metrics
-from ..pipeline.gallery_cache import GalleryCache
 from ..storage.base import GalleryRepository, GlobalTrackRepository, TrackingRepository
+from .identity.evidence import IdentityEvidence
+from .identity.posterior import EvidencePosterior
 
 logger = get_logger(__name__)
 
@@ -103,6 +109,12 @@ class ResolverConfig:
     # similarities can confuse the ReID embedder.  A value of 3.0 means
     # face evidence carries 3x the weight of ReID evidence.
     face_weight_multiplier: float = 3.0
+
+    # Multiplier applied to *propagated* face evidence.  Synthetic face
+    # anchors created by cross-GT propagation are not direct ArcFace matches
+    # and must carry less weight.  Default 0.5 means propagated evidence
+    # has half the weight of direct face evidence.
+    propagated_face_weight_multiplier: float = 0.5
 
     # Multiplier applied to height likelihood weights before combining.
     # Height is a weak-but-useful demographic signal.  Default 1.5 means
@@ -246,6 +258,7 @@ class IdentityResolver:
         new_face_anchors: list[FaceAnchor],
         captured_at: datetime,
         tracklet_heights: dict[str, float] | None = None,
+        face_evidence: list[FaceEvidence] | None = None,
     ) -> ResolveOutcome:
         """Resolve identities for a batch of GlobalTracks.
 
@@ -254,6 +267,9 @@ class IdentityResolver:
             new_face_anchors: face anchors from this frame.
             captured_at: wall-clock time of the current frame.
             tracklet_heights: optional tracklet_id → height_mm mapping.
+            face_evidence: optional typed FaceEvidence records with source
+                metadata. When provided, direct evidence receives normal
+                weight and propagated evidence receives reduced weight.
 
         Returns:
             ResolveOutcome with decisions and any revisions to emit.
@@ -268,19 +284,63 @@ class IdentityResolver:
         # that share the same physical space but weren't merged by the cross-camera
         # associator (appearance below merge threshold, or different overlap groups).
         augmented_anchors = await self._propagate_face_anchors(global_tracks, new_face_anchors)
+        augmented_evidence = self._augment_face_evidence(
+            global_tracks, face_evidence or [], augmented_anchors
+        )
 
         outcome = ResolveOutcome()
 
         for gt in global_tracks:
             prior = self._build_prior(gt, captured_at)
-            face_likelihood, best_face_conf = self._from_face_anchors(gt, augmented_anchors)
+            face_likelihood, best_face_conf = self._from_face_anchors(
+                gt, augmented_anchors, augmented_evidence
+            )
             reid_likelihood = await self._from_gallery(gt)
             height_likelihood = self._from_height(gt, tracklet_heights or {})
             posterior = self._combine(prior, face_likelihood, reid_likelihood, height_likelihood)
 
+            # Build identity evidence ledger for this GT.
+            evidence_items = self._build_evidence_ledger(
+                gt,
+                face_likelihood,
+                reid_likelihood,
+                augmented_evidence,
+                best_face_conf,
+                captured_at,
+            )
+
             decision = self._commit(
                 gt, posterior, face_likelihood, reid_likelihood, captured_at, best_face_conf
             )
+            # Attach evidence summary.
+            ep = EvidencePosterior(
+                distribution=posterior.distribution,
+                entropy=posterior.entropy(),
+                top_identity=decision.identity_id or "UNKNOWN",
+                top_probability=posterior.top_identity()[1],
+                margin=posterior.top_with_margin()[1],
+                face_evidence_present=any(ev.source == "direct_face" for ev in evidence_items),
+                reid_evidence_present=any(ev.source == "reid" for ev in evidence_items),
+                evidence_summary={
+                    s: sum(1 for ev in evidence_items if ev.source == s)
+                    for s in {ev.source for ev in evidence_items}
+                },
+            )
+            decision = IdentityDecision(
+                global_track_id=decision.global_track_id,
+                identity_id=decision.identity_id,
+                posterior=decision.posterior,
+                revises_previous=decision.revises_previous,
+                previous_identity_id=decision.previous_identity_id,
+                reason=decision.reason,
+                evidence_backed=decision.evidence_backed,
+                evidence={
+                    "sources": ep.evidence_summary,
+                    "direct_face_confidence": best_face_conf or 0.0,
+                    "posterior_entropy": ep.entropy,
+                },
+            )
+
             if decision.revises_previous:
                 revision = self._build_revision(gt, decision, captured_at)
                 if revision is not None:
@@ -329,12 +389,19 @@ class IdentityResolver:
     # ------------------------------------------------------------------
 
     def _from_face_anchors(
-        self, gt: GlobalTrack, face_anchors: list[FaceAnchor]
+        self,
+        gt: GlobalTrack,
+        face_anchors: list[FaceAnchor],
+        face_evidence: list[FaceEvidence] | None = None,
     ) -> tuple[PosteriorDist, float | None]:
         """Build likelihood from face anchors associated with this GlobalTrack.
 
         Face anchors are the strongest evidence. A face anchor is associated
         with a GlobalTrack if its tracklet_id is in the tracklet's list.
+
+        When ``face_evidence`` is provided, propagated evidence receives
+        reduced weight (propagated_face_weight_multiplier) compared to
+        direct ArcFace evidence.
 
         Returns (PosteriorDist, best_confidence) where best_confidence is the
         strongest face anchor's confidence, or None when no anchor matched.
@@ -345,7 +412,6 @@ class IdentityResolver:
         relevant_anchors = [fa for fa in face_anchors if fa.tracklet_id in gt_tracklet_ids]
 
         if not relevant_anchors:
-            # No face evidence: return uniform (identity-neutral).
             logger.debug(
                 "face_no_match_for_gt",
                 global_track_id=gt.global_track_id,
@@ -354,20 +420,34 @@ class IdentityResolver:
             )
             return PosteriorDist({}), None
 
+        # Build tracklet_id → source lookup from typed evidence records.
+        evidence_source: dict[str, str] = {}
+        if face_evidence:
+            for fe in face_evidence:
+                if fe.tracklet_id:
+                    evidence_source[fe.tracklet_id] = fe.source
+
         # Take the strongest face anchor (highest confidence * quality).
         best = max(relevant_anchors, key=lambda fa: fa.confidence * fa.quality)
+
+        # Determine evidence source and apply appropriate weight.
+        source = evidence_source.get(best.tracklet_id, "direct")
+        weight_mult = (
+            self._config.propagated_face_weight_multiplier if source == "propagated" else 1.0
+        )
 
         logger.debug(
             "face_anchor_matched",
             global_track_id=gt.global_track_id,
             person_id=best.person_id,
             confidence=round(best.confidence, 3),
+            source=source,
+            weight_multiplier=weight_mult,
             anchor_count=len(relevant_anchors),
         )
 
         # p_face: probability that this anchor is correct.
-        # Monotone function of confidence and quality.
-        p_face = self._p_face(best.confidence, best.quality)
+        p_face = self._p_face(best.confidence, best.quality) * weight_mult
 
         likelihood: dict[str, float] = {}
         if best.person_id:
@@ -968,6 +1048,112 @@ class IdentityResolver:
 
         self._revision_log[gt.global_track_id].append(now)
         return revision
+
+    # ------------------------------------------------------------------
+    # Evidence ledger
+    # ------------------------------------------------------------------
+
+    def _build_evidence_ledger(
+        self,
+        gt: GlobalTrack,
+        face_likelihood: PosteriorDist,
+        reid_likelihood: PosteriorDist,
+        face_evidence: list[FaceEvidence],
+        best_face_conf: float | None,
+        captured_at: datetime,
+    ) -> list[IdentityEvidence]:
+        """Build the evidence ledger for one global track in one frame."""
+        items: list[IdentityEvidence] = []
+
+        # Face evidence.
+        for fe in face_evidence:
+            if fe.tracklet_id and fe.tracklet_id in set(gt.tracklet_ids):
+                if fe.source == "direct":
+                    items.append(
+                        IdentityEvidence.direct_face(
+                            identity_id=fe.person_id,
+                            confidence=fe.confidence,
+                            tracklet_id=fe.tracklet_id,
+                            captured_at=fe.captured_at,
+                            quality=fe.quality,
+                        )
+                    )
+                else:
+                    items.append(
+                        IdentityEvidence.association_hint(
+                            identity_id=fe.person_id,
+                            confidence=fe.confidence,
+                            tracklet_id=fe.tracklet_id,
+                            captured_at=fe.captured_at,
+                        )
+                    )
+
+        # ReID evidence (top match from gallery).
+        if reid_likelihood.distribution:
+            top_reid, top_score = max(reid_likelihood.distribution.items(), key=lambda x: x[1])
+            if top_reid != "UNKNOWN" and top_score > 0.3:
+                items.append(
+                    IdentityEvidence.reid(
+                        identity_id=top_reid,
+                        confidence=top_score,
+                    )
+                )
+
+        # Temporal prior.
+        if gt.current_identity_id:
+            items.append(
+                IdentityEvidence.temporal_prior(
+                    identity_id=gt.current_identity_id,
+                    confidence=0.6,
+                )
+            )
+
+        return items
+
+    # ------------------------------------------------------------------
+    # Face evidence augmentation
+    # ------------------------------------------------------------------
+
+    def _augment_face_evidence(
+        self,
+        global_tracks: list[GlobalTrack],
+        face_evidence: list[FaceEvidence],
+        augmented_anchors: list[FaceAnchor],
+    ) -> list[FaceEvidence]:
+        """Build FaceEvidence records for all face anchors.
+
+        Direct evidence is matched from ``face_evidence``.  Anchors without
+        a pre-existing record are propagated (synthetic) and receive reduced
+        weight in the Bayesian combiner.
+
+        When ``face_evidence`` is empty (backward-compat), returns empty
+        so all anchors are treated as direct.
+        """
+        if not face_evidence:
+            return []
+
+        ev_by_tracklet: dict[str, FaceEvidence] = {
+            fe.tracklet_id: fe for fe in face_evidence if fe.tracklet_id
+        }
+
+        result: list[FaceEvidence] = []
+        for fa in augmented_anchors:
+            if fa.tracklet_id in ev_by_tracklet:
+                result.append(ev_by_tracklet[fa.tracklet_id])
+            else:
+                result.append(
+                    FaceEvidence(
+                        person_id=fa.person_id,
+                        confidence=fa.confidence,
+                        tracklet_id=fa.tracklet_id,
+                        camera_id=fa.camera_id,
+                        frame_index=0,  # propagated anchors have no frame index
+                        source="propagated",
+                        quality=fa.quality,
+                        captured_at=fa.captured_at,
+                    )
+                )
+        return result
 
     # ------------------------------------------------------------------
     # Cross-GT face propagation

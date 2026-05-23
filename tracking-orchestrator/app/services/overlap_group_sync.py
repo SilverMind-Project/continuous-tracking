@@ -30,6 +30,9 @@ async def fetch_overlap_groups(client: CognitiveCompanionClient) -> list[Overlap
         logger.warning("Failed to fetch overlap groups from CC", exc_info=True)
         return []
 
+    if not isinstance(raw, list):
+        raise TypeError("CC overlap_groups response must be a list")
+
     groups: list[OverlapGroup] = []
     skipped = 0
     for r in raw:
@@ -71,6 +74,8 @@ async def fetch_adjacency_edges(client: CognitiveCompanionClient) -> list[dict[s
         logger.warning("Failed to fetch adjacency edges from CC", exc_info=True)
         return []
 
-    edges: list[dict[str, Any]] = data.get("edges", [])
+    edges = data["edges"]
+    if not isinstance(edges, list):
+        raise TypeError("CC adjacency response field edges must be a list")
     logger.info("Fetched camera adjacency edges from CC", edge_count=len(edges))
     return edges

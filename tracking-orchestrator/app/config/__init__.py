@@ -1,14 +1,16 @@
 """Configuration loader for the tracking orchestrator.
 
 Reads a single YAML file with ``${ENV_VAR}`` and ``${ENV_VAR:-default}``
-interpolation, exposed as a dot-notation dict.
+interpolation, exposed as a dot-notation dict. Runtime configuration should
+use :meth:`Settings.require` so defaults live in ``settings.yaml`` rather than
+being duplicated at call sites.
 
 Usage::
 
     from app.config import settings
 
-    redis_url = settings.get("redis.url")
-    face_id = settings.get("face_id.url", "")
+    redis_url = settings.as_str("redis.url")
+    timeout = settings.as_int("redis.ack_ttl_seconds")
 
 The config file is resolved from ``ORCHESTRATOR_CONFIG_PATH``, or defaults
 to ``config/settings.yaml`` relative to the project root.
@@ -23,10 +25,11 @@ from typing import Any
 
 import yaml
 
-__all__ = ["SettingNotFoundError", "Settings", "settings"]
+__all__ = ["SettingNotFoundError", "Settings", "SettingsSection", "settings"]
 
 _DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "settings.yaml"
 _CONFIG_PATH = os.environ.get("ORCHESTRATOR_CONFIG_PATH", str(_DEFAULT_CONFIG))
+_MISSING = object()
 
 
 class SettingNotFoundError(KeyError):
@@ -35,6 +38,59 @@ class SettingNotFoundError(KeyError):
     def __init__(self, dotted_key: str) -> None:
         super().__init__(f"Required setting not found: {dotted_key}")
         self.dotted_key = dotted_key
+
+
+def _as_int(value: object, key: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Setting {key} must be an integer, got {value!r}") from exc
+
+
+def _as_float(value: object, key: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Setting {key} must be a float, got {value!r}") from exc
+
+
+def _as_bool(value: object, key: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Setting {key} must be a boolean, got {value!r}")
+
+
+class SettingsSection:
+    """Typed access to a required mapping-valued config section."""
+
+    def __init__(self, prefix: str, data: Mapping[str, Any]) -> None:
+        self._prefix = prefix
+        self._data = data
+
+    def require(self, key: str) -> Any:
+        if key not in self._data:
+            raise SettingNotFoundError(self._qualify(key))
+        return self._data[key]
+
+    def as_str(self, key: str) -> str:
+        return str(self.require(key))
+
+    def as_int(self, key: str) -> int:
+        return _as_int(self.require(key), self._qualify(key))
+
+    def as_float(self, key: str) -> float:
+        return _as_float(self.require(key), self._qualify(key))
+
+    def as_bool(self, key: str) -> bool:
+        return _as_bool(self.require(key), self._qualify(key))
+
+    def _qualify(self, key: str) -> str:
+        return f"{self._prefix}.{key}"
 
 
 def _resolve_string(value: str, env: Mapping[str, str]) -> str:
@@ -92,7 +148,7 @@ class Settings:
     Tests can bypass the filesystem with :meth:`from_dict`::
 
         s = Settings.from_dict({"redis": {"url": "redis://localhost:6379/0"}})
-        assert s.get("redis.url") == "redis://localhost:6379/0"
+        assert s.as_str("redis.url") == "redis://localhost:6379/0"
     """
 
     def __init__(self, path: Path | str | None = None) -> None:
@@ -127,6 +183,40 @@ class Settings:
         Returns *default* if any segment is missing or traverses through
         a non-dict value.
         """
+        return self._lookup(dotted_key, default)
+
+    def require(self, dotted_key: str) -> Any:
+        """Retrieve a required nested value using dot notation.
+
+        Missing keys raise :class:`SettingNotFoundError`. Empty strings are
+        valid values because several optional integrations are represented in
+        ``settings.yaml`` as ``${ENV_VAR:-}``.
+        """
+        value = self._lookup(dotted_key, _MISSING)
+        if value is _MISSING:
+            raise SettingNotFoundError(dotted_key)
+        return value
+
+    def as_str(self, dotted_key: str) -> str:
+        return str(self.require(dotted_key))
+
+    def as_int(self, dotted_key: str) -> int:
+        return _as_int(self.require(dotted_key), dotted_key)
+
+    def as_float(self, dotted_key: str) -> float:
+        return _as_float(self.require(dotted_key), dotted_key)
+
+    def as_bool(self, dotted_key: str) -> bool:
+        return _as_bool(self.require(dotted_key), dotted_key)
+
+    def section(self, dotted_key: str) -> SettingsSection:
+        """Retrieve a required mapping-valued config section."""
+        value = self.require(dotted_key)
+        if not isinstance(value, dict):
+            raise TypeError(f"Setting section must be a mapping: {dotted_key}")
+        return SettingsSection(dotted_key, value)
+
+    def _lookup(self, dotted_key: str, default: Any) -> Any:
         self._ensure_loaded()
         node: Any = self._data
         for part in dotted_key.split("."):
@@ -142,12 +232,7 @@ class Settings:
 
     def _ensure_loaded(self) -> None:
         if not self._loaded:
-            try:
-                self.reload()
-            except FileNotFoundError:
-                # Config file is optional; fall back to empty + env vars.
-                self._data = {}
-                self._loaded = True
+            self.reload()
 
 
 #: Module-level settings singleton.

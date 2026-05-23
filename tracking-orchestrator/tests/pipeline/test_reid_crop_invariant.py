@@ -62,9 +62,7 @@ class TestReidCropInvariant:
             return [np.zeros(768, dtype=np.float32) for _ in crops]
 
         class FakeReid:
-            async def embed_batch(
-                self, crops: list[np.ndarray]
-            ) -> list[np.ndarray]:
+            async def embed_batch(self, crops: list[np.ndarray]) -> list[np.ndarray]:
                 return await fake_embed(crops)
 
         pipeline = FrameProcessingPipeline(

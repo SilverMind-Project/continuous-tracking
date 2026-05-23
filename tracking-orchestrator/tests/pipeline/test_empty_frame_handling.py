@@ -39,9 +39,7 @@ class FakeFetcher:
 
 
 class FakeReid:
-    async def embed_batch(
-        self, crops: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    async def embed_batch(self, crops: list[np.ndarray]) -> list[np.ndarray]:
         return [np.zeros(768, dtype=np.float32) for _ in crops]
 
 
@@ -87,9 +85,7 @@ class TestEmptyFrameHandling:
             )
             await pipeline._process_frame(frame)
 
-            assert len(calls) == 1, (
-                f"tracker.update should be called once, got {len(calls)}"
-            )
+            assert len(calls) == 1, f"tracker.update should be called once, got {len(calls)}"
             assert calls[0] == [], (
                 f"tracker.update should be called with empty detections list, got {calls[0]}"
             )
@@ -110,7 +106,11 @@ class TestEmptyFrameHandling:
                 if detection_count <= 5:
                     return [
                         DetectionBox(
-                            x1=0.3, y1=0.2, x2=0.5, y2=0.6, confidence=0.95,
+                            x1=0.3,
+                            y1=0.2,
+                            x2=0.5,
+                            y2=0.6,
+                            confidence=0.95,
                         )
                     ]
                 return []

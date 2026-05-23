@@ -27,6 +27,7 @@ from ..pipeline.gallery_cache import GalleryCache
 from ..storage.base import DoNotFuseRepository, GalleryRepository, GlobalTrackRepository
 from .camera_adjacency import CameraAdjacency
 from .floor_projector import FloorProjector
+from .spatial_projection import SpatialProjectionService
 
 logger = get_logger(__name__)
 
@@ -137,6 +138,7 @@ class CrossCameraAssociator:
         floor_projector: FloorProjector | None = None,
         dnf_repo: DoNotFuseRepository | None = None,
         gallery_cache: GalleryCache | None = None,
+        spatial_projection: SpatialProjectionService | None = None,
     ) -> None:
         self._gallery = gallery
         self._adjacency = adjacency
@@ -145,6 +147,7 @@ class CrossCameraAssociator:
         self._floor_projector = floor_projector
         self._dnf_repo = dnf_repo
         self._gallery_cache = gallery_cache
+        self._spatial = spatial_projection
 
     async def _gallery_similarity(self, tids_a: set[str], tids_b: set[str]) -> float:
         """Return gallery cosine similarity, routed through cache when available."""
@@ -635,7 +638,14 @@ class CrossCameraAssociator:
                 fp_a = self._last_floor_point(gt_a, tracklet_by_id)
                 fp_b = self._last_floor_point(gt_b, tracklet_by_id)
                 if fp_a is not None and fp_b is not None:
-                    dist_m = FloorProjector.distance_m(fp_a, fp_b)
+                    dist_m = SpatialProjectionService.distance_m(fp_a, fp_b)
+                    if dist_m is None:
+                        logger.debug(
+                            "unknown_merge_skipped_distance_uncalibrated",
+                            gt_a=gt_a.global_track_id,
+                            gt_b=gt_b.global_track_id,
+                        )
+                        continue
                     if dist_m > max_dist:
                         logger.debug(
                             "unknown_merge_skipped_distance",
@@ -832,7 +842,19 @@ class CrossCameraAssociator:
             )
             return 0.5
 
-        dist_m = FloorProjector.distance_m(fp_a, fp_b)
+        if self._spatial is not None and not self._spatial.can_compare(ta.camera_id, tb.camera_id):
+            logger.debug(
+                "geo_score_floor_plan_mismatch",
+                camera_a=ta.camera_id,
+                camera_b=tb.camera_id,
+                floor_plan_a=self._spatial.floor_plan_id_for(ta.camera_id),
+                floor_plan_b=self._spatial.floor_plan_id_for(tb.camera_id),
+            )
+            return None
+
+        dist_m = SpatialProjectionService.distance_m(fp_a, fp_b)
+        if dist_m is None:
+            return 0.5
         if dist_m > self._config.max_floor_distance_m:
             return None
 

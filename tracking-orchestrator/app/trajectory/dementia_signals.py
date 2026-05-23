@@ -34,10 +34,30 @@ from ..storage.base import (
     DementiaSignalRepository,
     TrajectoryRepository,
 )
+from .signal_specs import (
+    BATHROOM_DWELL_SPEC,
+    EVENING_ACTIVITY_SPEC,
+    NIGHTTIME_MOVEMENT_SPEC,
+    NON_DIAGNOSTIC_DISCLAIMER,
+    PACING_SPEC,
+    STILLNESS_SPEC,
+    UNOBSERVED_GAP_SPEC,
+    AlgorithmSpec,
+)
 from .stats import robust_z
 
 _SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 _ALGORITHM_VERSION = 3  # Phase 3: robust baselines + hysteresis + detector rewrites
+
+# Map signal kind to AlgorithmSpec for metadata attachment.
+_SIGNAL_SPEC: dict[str, AlgorithmSpec] = {
+    "pacing": PACING_SPEC,
+    "sundowning_index": EVENING_ACTIVITY_SPEC,
+    "nighttime_movement": NIGHTTIME_MOVEMENT_SPEC,
+    "stillness_anomaly": STILLNESS_SPEC,
+    "absence": UNOBSERVED_GAP_SPEC,
+    "bathroom_dwell_anomaly": BATHROOM_DWELL_SPEC,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +271,12 @@ class DementiaSignalWorker:
         last = self._last_run_at.get(identity_id)
         self._last_run_at[identity_id] = now
 
+        # Suppress signals for low-confidence identities.
+        # A low-confidence identity (e.g., UNKNOWN track with uncertain
+        # resolution) should not produce high-severity clinical alerts.
+        if identity_id in ("", "UNKNOWN", None):
+            return []
+
         # Fetch only delta since last run, merging with rolling state.
         if last is not None and self._cfg.incremental_enabled:
             delta_since = last - timedelta(minutes=5)  # slight overlap for safety
@@ -326,7 +352,82 @@ class DementiaSignalWorker:
         signals.extend(await self._compute_nighttime_movement(identity_id, window, now))
         signals.extend(await self._compute_stillness_anomaly(identity_id, dwells, now))
         signals.extend(await self._compute_absence(identity_id, window, now))
-        return signals
+
+        # Apply algorithm metadata and data quality gating.
+        quality_ok, mean_conf, coverage = self._check_data_quality(identity_id, window)
+        from dataclasses import replace
+
+        result: list[DementiaSignal] = []
+        for sig in signals:
+            sig = self._apply_algorithm_metadata(sig, sig.signal_kind)
+            new_context = dict(sig.context)
+            new_context["identity_confidence_mean"] = round(mean_conf, 3)
+            new_context["observation_coverage_ratio"] = round(coverage, 3)
+            new_context["disclaimer"] = NON_DIAGNOSTIC_DISCLAIMER
+            severity = sig.severity
+            if not quality_ok and severity in ("warning", "emergency"):
+                severity = "info"
+                new_context["severity_demoted_for_quality"] = True
+            result.append(replace(sig, context=new_context, severity=severity))
+
+        return result
+
+    def _apply_algorithm_metadata(self, signal: DementiaSignal, signal_kind: str) -> DementiaSignal:
+        """Return a new signal with algorithm metadata attached."""
+        from dataclasses import replace
+
+        spec = _SIGNAL_SPEC.get(signal_kind)
+        if spec is not None:
+            return replace(
+                signal,
+                algorithm_name=spec.name,
+                evidence_grade=spec.evidence_grade,
+                algorithm_spec_json=(
+                    f'{{"name": "{spec.name}", "version": {spec.version}, '
+                    f'"evidence_grade": "{spec.evidence_grade}", '
+                    f'"clinical_label": "{spec.clinical_label}", '
+                    f'"disclaimer": "{spec.disclaimer}", '
+                    f'"min_baseline_samples": {spec.min_baseline_samples}}}'
+                ),
+            )
+        return replace(
+            signal,
+            algorithm_name="unknown",
+            evidence_grade="experimental",
+            algorithm_spec_json="{}",
+        )
+
+    def _check_data_quality(
+        self,
+        identity_id: str,
+        window: list[PersonTrajectoryPoint],
+    ) -> tuple[bool, float, float]:
+        """Check data quality for signal gating.
+
+        Returns (sufficient, identity_confidence_mean, coverage_ratio).
+        """
+        if not window:
+            return False, 0.0, 0.0
+
+        # Mean identity confidence from trajectory points.
+        confs = [p.identity_confidence for p in window if p.identity_confidence is not None]
+        mean_conf = sum(confs) / len(confs) if confs else 0.0
+
+        # Coverage: rough estimate based on point count vs window duration.
+        # Trajectory points are written once per processed frame for each
+        # active tracklet (1 point every ~5 s in normal operation).  We use
+        # a conservative 20 s per expected point so that sparse point
+        # histories are not miscategorised as full coverage.
+        if len(window) >= 2:
+            duration_s = (window[-1].observed_at - window[0].observed_at).total_seconds()
+            expected = max(duration_s / 20.0, 1.0)
+            coverage = min(len(window) / expected, 1.0)
+        else:
+            coverage = 0.0
+
+        # Require minimum identity confidence and coverage for severe signals.
+        sufficient = mean_conf >= 0.3 and coverage >= 0.1
+        return sufficient, mean_conf, coverage
 
     def _clear_inactive(
         self,
@@ -418,6 +519,7 @@ class DementiaSignalWorker:
             value=rate,
             signal_kind="pacing",
             identity_id=identity_id,
+            now=now,
         )
 
         if rate > 0.3:
@@ -603,6 +705,7 @@ class DementiaSignalWorker:
                 value=float(current_dur),
                 signal_kind="bathroom_dwell_anomaly",
                 identity_id=identity_id,
+                now=now,
             )
             if z_result.z_score is None:
                 # Cold start: use absolute threshold, cap severity.
@@ -713,6 +816,7 @@ class DementiaSignalWorker:
             value=float(night_transitions),
             signal_kind="nighttime_movement",
             identity_id=identity_id,
+            now=now,
         )
 
         if z_score_result.z_score is not None:
@@ -801,6 +905,7 @@ class DementiaSignalWorker:
                     value=float(dwell.still_seconds),
                     signal_kind="stillness_anomaly",
                     identity_id=identity_id,
+                    now=now,
                 )
                 if z_result.z_score is None and self._baseline_repo is not None:
                     # Cold start: cap severity at warning.
@@ -823,6 +928,7 @@ class DementiaSignalWorker:
                     value=float(dwell.still_seconds),
                     signal_kind="stillness_anomaly",
                     identity_id=identity_id,
+                    now=now,
                 )
                 cold_start = z_result.z_score is None and self._baseline_repo is not None
                 if cold_start and severity == "emergency":
@@ -959,6 +1065,7 @@ class DementiaSignalWorker:
         value: float,
         signal_kind: str,
         identity_id: str,
+        now: datetime,
     ) -> ZScoreResult:
         """Compute a robust z-score using ``baseline_repo`` when available.
 
@@ -987,7 +1094,7 @@ class DementiaSignalWorker:
 
             # Fetch if no cache hit.
             if samples is None:
-                samples = await self._fetch_baseline_samples(signal_kind, identity_id)
+                samples = await self._fetch_baseline_samples(signal_kind, identity_id, now)
                 if samples is not None:
                     self._baseline_samples_cache[cache_key] = (now_ts, samples)
 
@@ -1025,10 +1132,10 @@ class DementiaSignalWorker:
         self,
         signal_kind: str,
         identity_id: str,
+        now: datetime,
     ) -> list[float] | None:
         """Return raw baseline samples for *signal_kind*, or None."""
         assert self._baseline_repo is not None
-        now = datetime.now(UTC)
 
         if signal_kind == "bathroom_dwell_anomaly":
             durations = await self._baseline_repo.dwell_durations(

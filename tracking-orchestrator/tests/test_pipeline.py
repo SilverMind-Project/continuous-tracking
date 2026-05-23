@@ -194,6 +194,16 @@ class TestPipelineSkeleton:
             )
             pipeline._cross_camera.associate = mock_associate  # type: ignore[method-assign,union-attr]
 
+            # Refresh the GlobalTrackingStage in the stage runner so it picks
+            # up the mocked cross_camera.associate (stages capture deps at
+            # construction time).
+            from app.pipeline.stages.global_tracking import GlobalTrackingStage
+
+            for _i, stage in enumerate(pipeline._stage_runner._stages):  # type: ignore[union-attr]
+                if isinstance(stage, GlobalTrackingStage):
+                    stage._cross_camera = pipeline._cross_camera  # type: ignore[union-attr]
+                    break
+
             # Mock identity resolver so it returns decisions with an identity.
             from app.domain import (
                 IdentityDecision,
@@ -214,9 +224,22 @@ class TestPipelineSkeleton:
             mock_resolver.resolve = AsyncMock(return_value=outcome)
             pipeline._identity_resolver = mock_resolver
 
+            # Refresh identity_resolver in GlobalTrackingStage.
+            for stage in pipeline._stage_runner._stages:  # type: ignore[union-attr]
+                if isinstance(stage, GlobalTrackingStage):
+                    stage._identity_resolver = mock_resolver  # type: ignore[union-attr]
+                    break
+
             # Replace the real trajectory writer with a mock so we can verify
             # close_track is called for terminated global tracks.
             pipeline._trajectory_writer = AsyncMock()
+
+            # Refresh trajectory writer refs in stages that captured the old one.
+            from app.pipeline.stages.trajectory import CloseTerminatedStage, TrajectoryStage
+
+            for stage in pipeline._stage_runner._stages:  # type: ignore[union-attr]
+                if isinstance(stage, (CloseTerminatedStage, TrajectoryStage)):
+                    stage._trajectory_writer = pipeline._trajectory_writer  # type: ignore[union-attr]
 
             frame = FrameReady(
                 camera_id="cam-1",

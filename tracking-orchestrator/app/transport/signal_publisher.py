@@ -129,4 +129,8 @@ def _to_proto(signal: DementiaSignal) -> signals_pb2.DementiaSignal:
     pb.window_end_unix_ns = int(signal.window_end.timestamp() * 1e9)
     pb.emitted_at_unix_ns = int(signal.emitted_at.timestamp() * 1e9)
     pb.context_json = json.dumps(signal.context, default=str)
+    pb.algorithm_version = signal.algorithm_version
+    pb.algorithm_name = signal.algorithm_name or ""
+    pb.evidence_grade = signal.evidence_grade or ""
+    pb.algorithm_spec_json = signal.algorithm_spec_json or ""
     return pb

@@ -7,6 +7,50 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 # ---------------------------------------------------------------------------
+# Spatial calibration
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FloorPoint:
+    """2D point in the shared floor-plan coordinate system, in millimetres.
+
+    When ``calibrated=True`` the coordinates are in the shared floor-plan
+    frame (a consistent coordinate system across all cameras that share
+    the same ``floor_plan_id``).  When ``calibrated=False`` both ``x_mm``
+    and ``y_mm`` are zero and the point must not be used for metric
+    cross-camera comparisons.
+    """
+
+    x_mm: int
+    y_mm: int
+    calibrated: bool = False
+
+
+@dataclass(frozen=True)
+class CalibrationQuality:
+    """Quality assessment for a stored camera homography."""
+
+    max_residual_m: float
+    mean_residual_m: float
+    status: Literal["ok", "warning", "error"]
+    point_count: int
+
+
+@dataclass(frozen=True)
+class CameraCalibration:
+    """Per-camera spatial calibration with metadata."""
+
+    camera_id: str
+    floor_plan_id: str
+    matrix: list[list[float]]
+    image_width: int
+    image_height: int
+    quality: CalibrationQuality
+    calibrated_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # Primitives
 # ---------------------------------------------------------------------------
 
@@ -53,15 +97,6 @@ class BoundingBox:
     @property
     def center_y(self) -> float:
         return (self.y_min + self.y_max) / 2.0
-
-
-@dataclass(frozen=True)
-class FloorPoint:
-    """2D ground-plane point in millimeters."""
-
-    x_mm: int
-    y_mm: int
-    calibrated: bool = False
 
 
 @dataclass(frozen=True)
@@ -301,6 +336,7 @@ class IdentityDecision:
     previous_identity_id: IdentityId | None = None
     reason: str = ""
     evidence_backed: bool = False
+    evidence: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -573,3 +609,10 @@ class DementiaSignal:
     context: dict[str, Any] = field(default_factory=dict)
     emitted_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     algorithm_version: int = 1  # incremented when detector logic changes
+    algorithm_name: str = ""  # human-readable name for clinical documentation
+    evidence_grade: str = (
+        # clinical_review | observational_study | caregiver_guidance
+        # | local_baseline_only | experimental
+        ""
+    )
+    algorithm_spec_json: str = ""  # JSON-serialized algorithm specification

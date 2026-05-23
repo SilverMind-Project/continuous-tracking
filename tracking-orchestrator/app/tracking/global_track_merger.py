@@ -54,50 +54,49 @@ class GlobalTrackMerger:
             raise ValueError("Cannot merge a global track with itself")
 
         async with self._pool.acquire() as conn, conn.transaction():
-                # Validate both tracks exist and source is not already merged
-                source = await conn.fetchrow(
-                    "SELECT id, merged_into_id FROM continuous_tracking.global_tracks "
-                    "WHERE global_track_id = $1::uuid",
+            # Validate both tracks exist and source is not already merged
+            source = await conn.fetchrow(
+                "SELECT id, merged_into_id FROM continuous_tracking.global_tracks "
+                "WHERE global_track_id = $1::uuid",
+                source_id,
+            )
+            if source is None:
+                raise ValueError(f"Source global track {source_id} not found")
+            if source["merged_into_id"] is not None:
+                raise ValueError(
+                    f"Source global track {source_id} is already merged "
+                    f"into {source['merged_into_id']}"
+                )
+
+            target = await conn.fetchrow(
+                "SELECT id FROM continuous_tracking.global_tracks WHERE global_track_id = $1::uuid",
+                target_id,
+            )
+            if target is None:
+                raise ValueError(f"Target global track {target_id} not found")
+
+            now = datetime.now(UTC)
+
+            # Rewrite global_track_id in all referencing tables.
+            for table, col in _TABLES_WITH_GLOBAL_TRACK_ID:
+                await conn.execute(
+                    f"UPDATE {table} SET {col} = $1::uuid WHERE {col} = $2::uuid",
+                    target_id,
                     source_id,
                 )
-                if source is None:
-                    raise ValueError(f"Source global track {source_id} not found")
-                if source["merged_into_id"] is not None:
-                    raise ValueError(
-                        f"Source global track {source_id} is already merged "
-                        f"into {source['merged_into_id']}"
-                    )
 
-                target = await conn.fetchrow(
-                    "SELECT id FROM continuous_tracking.global_tracks "
-                    "WHERE global_track_id = $1::uuid",
-                    target_id,
-                )
-                if target is None:
-                    raise ValueError(f"Target global track {target_id} not found")
-
-                now = datetime.now(UTC)
-
-                # Rewrite global_track_id in all referencing tables.
-                for table, col in _TABLES_WITH_GLOBAL_TRACK_ID:
-                    await conn.execute(
-                        f"UPDATE {table} SET {col} = $1::uuid WHERE {col} = $2::uuid",
-                        target_id,
-                        source_id,
-                    )
-
-                # Tombstone the source track
-                await conn.execute(
-                    """
+            # Tombstone the source track
+            await conn.execute(
+                """
                     UPDATE continuous_tracking.global_tracks
                     SET merged_into_id = $1::uuid, merged_at = $2, merged_by = $3
                     WHERE global_track_id = $4::uuid
                     """,
-                    target_id,
-                    now,
-                    merged_by,
-                    source_id,
-                )
+                target_id,
+                now,
+                merged_by,
+                source_id,
+            )
 
         log.info(
             "global_track_merged",

@@ -305,6 +305,9 @@ class TrackletManager:
             ended_at=state.tracklet.ended_at,
             state=state.tracklet.state,
             last_bbox=detection.bbox,
+            last_floor_point=detection.floor_point
+            if detection.floor_point.calibrated
+            else state.tracklet.last_floor_point,
         )
 
         state.detections.append(detection)
@@ -347,6 +350,7 @@ class TrackletManager:
             ended_at=None,
             state="active",
             last_bbox=detection.bbox,
+            last_floor_point=detection.floor_point if detection.floor_point.calibrated else None,
         )
 
     def _close_tracklet(self, tracklet: Tracklet, event_time: datetime) -> Tracklet:

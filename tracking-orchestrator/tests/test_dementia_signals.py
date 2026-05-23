@@ -386,8 +386,10 @@ class TestAbsenceDetector:
                 onset_consecutive_windows=1,
             )
         )
-        # Last seen 130 minutes ago.
-        await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=130))
+        # Seed enough points to pass data-quality coverage gate.
+        # 5 points from 134 min ago to 130 min ago (1/min), last seen 130 min ago.
+        for i in range(5):
+            await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=130 + i))
 
         signals = await worker.run_once(now=_NOW)
         absence = [s for s in signals if s.signal_kind == "absence"]
@@ -402,8 +404,9 @@ class TestAbsenceDetector:
                 onset_consecutive_windows=1,
             )
         )
-        # Last seen 5 minutes ago.
-        await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=5))
+        # Seed enough points for coverage; last seen 5 minutes ago.
+        for i in range(5):
+            await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=5 + i))
 
         signals = await worker.run_once(now=_NOW)
         assert not any(s.signal_kind == "absence" for s in signals)

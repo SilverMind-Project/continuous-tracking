@@ -40,7 +40,12 @@ async def test_maybe_sample_saves_bbox_annotation(
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     kf = await sampler.maybe_sample(
-        "tl-001", "gt-001", "cam-a", "frame.jpg", _T0, _ANNS,
+        "tl-001",
+        "gt-001",
+        "cam-a",
+        "frame.jpg",
+        _T0,
+        _ANNS,
         detection_bbox=(10.0, 20.0, 100.0, 200.0),
         detection_confidence=0.95,
         detection_frame_width=1920,
@@ -69,7 +74,12 @@ async def test_trigger_sample_saves_bbox_annotation(
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     kf = await sampler.trigger_sample(
-        "tl-001", "gt-001", "cam-a", "frame.jpg", _T0, _ANNS,
+        "tl-001",
+        "gt-001",
+        "cam-a",
+        "frame.jpg",
+        _T0,
+        _ANNS,
         tag_reason="identity_changed",
         detection_bbox=(50.0, 60.0, 150.0, 250.0),
         detection_confidence=0.88,
@@ -93,7 +103,12 @@ async def test_maybe_sample_no_bbox_when_within_interval(
 ) -> None:
     # First sample
     await sampler.maybe_sample(
-        "tl-001", "gt-001", "cam-a", "f1.jpg", _T0, _ANNS,
+        "tl-001",
+        "gt-001",
+        "cam-a",
+        "f1.jpg",
+        _T0,
+        _ANNS,
         detection_bbox=(10.0, 20.0, 100.0, 200.0),
         detection_frame_width=1920,
         detection_frame_height=1080,
@@ -101,7 +116,12 @@ async def test_maybe_sample_no_bbox_when_within_interval(
     # Second sample within interval — should return None and NOT save bbox.
     t2 = _T0 + timedelta(seconds=15)
     kf = await sampler.maybe_sample(
-        "tl-001", "gt-001", "cam-a", "f2.jpg", t2, _ANNS,
+        "tl-001",
+        "gt-001",
+        "cam-a",
+        "f2.jpg",
+        t2,
+        _ANNS,
         detection_bbox=(10.0, 20.0, 100.0, 200.0),
         detection_frame_width=1920,
         detection_frame_height=1080,
@@ -118,7 +138,12 @@ async def test_no_bbox_saved_when_detection_bbox_is_none(
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     kf = await sampler.maybe_sample(
-        "tl-001", "gt-001", "cam-a", "frame.jpg", _T0, _ANNS,
+        "tl-001",
+        "gt-001",
+        "cam-a",
+        "frame.jpg",
+        _T0,
+        _ANNS,
         detection_bbox=None,
     )
     assert kf is not None
@@ -133,7 +158,12 @@ async def test_no_bbox_saved_when_bbox_repo_not_configured() -> None:
         bbox_repo=None,
     )
     kf = await sampler_no_bbox.maybe_sample(
-        "tl-001", "gt-001", "cam-a", "frame.jpg", _T0, _ANNS,
+        "tl-001",
+        "gt-001",
+        "cam-a",
+        "frame.jpg",
+        _T0,
+        _ANNS,
         detection_bbox=(10.0, 20.0, 100.0, 200.0),
         detection_frame_width=1920,
         detection_frame_height=1080,

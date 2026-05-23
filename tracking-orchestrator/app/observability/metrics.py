@@ -92,6 +92,9 @@ class Metrics:
     cts_posture_slow_path_runs_total: Counter
     cts_posture_slow_path_latency_seconds: Histogram
 
+    # ---- Stage latency -----------------------------------------------
+    stage_latency_ms: Histogram
+
     # ---- Batching ----------------------------------------------------
     batch_size_metric: Histogram
 
@@ -297,6 +300,12 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_posture_slow_path_latency_seconds",
             "Latency of depth-based posture inference.",
             (0.05, 0.1, 0.2, 0.5, 1.0, 2.0),
+        ),
+        stage_latency_ms=_hist(
+            "cts_stage_latency_ms",
+            "Per-stage wall-clock latency within the frame pipeline.",
+            LATENCY_BUCKETS_MS,
+            ["stage", "camera_id"],
         ),
         batch_size_metric=_hist(
             "cts_batch_size",

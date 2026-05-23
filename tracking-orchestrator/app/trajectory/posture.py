@@ -103,8 +103,8 @@ def _knee_angle_deg(pose: PoseResult, side: str) -> float | None:
     tx, ty = knee.x - hip.x, knee.y - hip.y
     sx, sy = ankle.x - knee.x, ankle.y - knee.y
     dot = tx * sx + ty * sy
-    norm_t = math.sqrt(tx * tx + ty * ty)
-    norm_s = math.sqrt(sx * sx + sy * sy)
+    norm_t = math.hypot(tx, ty)
+    norm_s = math.hypot(sx, sy)
     if norm_t == 0 or norm_s == 0:
         return None
     return math.degrees(math.acos(max(-1.0, min(1.0, dot / (norm_t * norm_s)))))
@@ -144,7 +144,7 @@ def _head_torso_deviation(pose: PoseResult) -> float | None:
         return None
     sx, sy = _midpoint(ls, rs)
     hx, hy = _midpoint(lh, rh)
-    torso_len = math.sqrt((hx - sx) ** 2 + (hy - sy) ** 2)
+    torso_len = math.hypot(hx - sx, hy - sy)
     if torso_len == 0:
         return None
     mid_y = (sy + hy) / 2.0
@@ -207,7 +207,7 @@ def _extract_features(pose: PoseResult) -> PostureFeatures:
     if _visible(ls, rs, lh, rh):
         sx, sy = _midpoint(ls, rs)
         hx, hy = _midpoint(lh, rh)
-        torso_len = math.sqrt((hx - sx) ** 2 + (hy - sy) ** 2)
+        torso_len = math.hypot(hx - sx, hy - sy)
         if torso_len > 0:
             lk, rk = pose.get("left_knee"), pose.get("right_knee")
             if _visible(lk, rk):
@@ -406,9 +406,7 @@ def _score_standing_or_walking(feats: PostureFeatures) -> float:
         feats.min_knee_angle_deg is not None
         and 55.0 <= feats.min_knee_angle_deg <= _KNEE_BENT_GUARD_MAX_DEG
     )
-    knees_near_hips = (
-        feats.norm_knee_dy is not None and feats.norm_knee_dy < 0.55
-    )
+    knees_near_hips = feats.norm_knee_dy is not None and feats.norm_knee_dy < 0.55
     if knees_bent or knees_near_hips:
         return 0.0
 
@@ -591,4 +589,3 @@ class GlobalPostureTracker:
         for track_id, hyst in list(self._hysteresis.items()):
             hyst.evict(track_id)
         self._hysteresis.clear()
-

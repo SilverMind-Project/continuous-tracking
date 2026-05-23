@@ -20,18 +20,19 @@ from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from structlog import get_logger
 
-from .config import settings
+from .config import Settings, settings
 from .observability.logging_config import configure_logging
 
 # Configure structlog before any logger is first used.
-configure_logging(settings.get("logging.level", "INFO") or "INFO")
+configure_logging(settings.as_str("logging.level"))
 from .inference.depth import DepthEstimator
 from .inference.detector import PersonDetector
 from .inference.pose import PoseEstimator
 from .inference.reid_embedder import ReidEmbedder
 from .inference.triton_client import TritonGrpcClient
 from .pipeline import FrameProcessingPipeline
-from .pipeline.frame_pipeline import FaceIdCameraConfig, PipelineConfig
+from .pipeline.frame_pipeline import PipelineConfig
+from .pipeline.types import FaceIdCameraConfig
 from .routers import corrections as corrections_router_mod
 from .routers import dashboard as dashboard_router_mod
 from .routers import gallery as gallery_router_mod
@@ -101,13 +102,14 @@ async def _fetch_cc_camera_configs(
 
     cfgs: dict[str, FaceIdCameraConfig] = {}
     for cam in cameras:
-        cam_id = cam.get("id", "")
-        if not cam_id:
+        cam_id = cam.get("id")
+        enabled = cam.get("face_id_enabled")
+        if not cam_id or not isinstance(enabled, bool):
+            logger.warning("Skipped malformed CC camera config", camera=cam)
             continue
-        enabled = cam.get("face_id_enabled", True)
         min_conf = cam.get("face_id_min_confidence")
-        cfgs[cam_id] = FaceIdCameraConfig(
-            enabled=enabled if isinstance(enabled, bool) else True,
+        cfgs[str(cam_id)] = FaceIdCameraConfig(
+            enabled=enabled,
             min_confidence=float(min_conf) if min_conf is not None else None,
         )
 
@@ -159,86 +161,93 @@ def _apply_confidence_fallback(cfgs: dict[str, FaceIdCameraConfig]) -> None:
             )
 
 
-def _str_to_bool(v: object) -> bool:
-    """Convert a string or bool to a Python bool."""
-    if isinstance(v, bool):
-        return v
-    return str(v).lower() in ("1", "true", "yes")
+def _build_transport_config(s: Settings) -> TransportConfig:
+    """Build TransportConfig from required settings.yaml keys."""
+    return TransportConfig(
+        redis_url=s.as_str("redis.url"),
+        consumer_group=s.as_str("redis.consumer_group"),
+        consumer_name=s.as_str("redis.consumer_name"),
+        frames_stream=s.as_str("redis.frames_stream"),
+        events_stream=s.as_str("redis.events_stream"),
+        responses_stream=s.as_str("redis.responses_stream"),
+        batch_max_wait_ms=s.as_int("redis.batch_max_wait_ms"),
+        batch_max_size=s.as_int("redis.batch_max_size"),
+        xack_timeout_ms=s.as_int("redis.xack_timeout_ms"),
+        ack_ttl_seconds=s.as_int("redis.ack_ttl_seconds"),
+    )
 
 
-def _build_resolver_config(s: Any) -> ResolverConfig:
-    """Build ResolverConfig from parsed settings (dot-notation access)."""
-    r = s.get("resolver", {})
+def _build_resolver_config(s: Settings) -> ResolverConfig:
+    """Build ResolverConfig from required settings.yaml keys."""
+    r = s.section("resolver")
     return ResolverConfig(
-        commit_prob=float(r.get("commit_prob", 0.65)),
-        commit_margin=float(r.get("commit_margin", 0.15)),
-        reid_decision_sim=float(r.get("reid_decision_sim", 0.70)),
-        revision_horizon_s=float(r.get("revision_horizon_s", 600.0)),
-        max_revisions_per_gt_per_minute=int(r.get("max_revisions_per_gt_per_minute", 3)),
-        unknown_mass=float(r.get("unknown_mass", 0.05)),
-        prior_weight=float(r.get("prior_weight", 0.6)),
-        face_weight_multiplier=float(r.get("face_weight_multiplier", 3.0)),
-        commit_prob_dense=float(r.get("commit_prob_dense", 0.80)),
-        commit_margin_dense=float(r.get("commit_margin_dense", 0.20)),
-        prior_maintenance_max_age_s=float(r.get("prior_maintenance_max_age_s", 120.0)),
-        identified_entry_boost_min_sim=float(r.get("identified_entry_boost_min_sim", 0.65)),
-        identified_entry_min_likelihood=float(r.get("identified_entry_min_likelihood", 0.80)),
-        enable_embedding_coherence_boost=_str_to_bool(
-            r.get("enable_embedding_coherence_boost", False)
-        ),
-        embedding_coherence_window=int(r.get("embedding_coherence_window", 5)),
-        embedding_coherence_min_sim=float(r.get("embedding_coherence_min_sim", 0.70)),
-        embedding_coherence_boost=float(r.get("embedding_coherence_boost", 2.0)),
-        face_commit_min_confidence=float(r.get("face_commit_min_confidence", 0.70)),
-        face_lock_maintenance_max_age_s=float(r.get("face_lock_maintenance_max_age_s", 300)),
-        cross_gt_face_propagation_threshold=float(
-            r.get("cross_gt_face_propagation_threshold", 0.78)
-        ),
-        cross_gt_face_propagation_max_gts=int(r.get("cross_gt_face_propagation_max_gts", 4)),
+        commit_prob=r.as_float("commit_prob"),
+        commit_margin=r.as_float("commit_margin"),
+        reid_decision_sim=r.as_float("reid_decision_sim"),
+        revision_horizon_s=r.as_float("revision_horizon_s"),
+        max_revisions_per_gt_per_minute=r.as_int("max_revisions_per_gt_per_minute"),
+        unknown_mass=r.as_float("unknown_mass"),
+        prior_weight=r.as_float("prior_weight"),
+        face_weight_multiplier=r.as_float("face_weight_multiplier"),
+        propagated_face_weight_multiplier=r.as_float("propagated_face_weight_multiplier"),
+        height_weight_multiplier=r.as_float("height_weight_multiplier"),
+        commit_prob_dense=r.as_float("commit_prob_dense"),
+        commit_margin_dense=r.as_float("commit_margin_dense"),
+        prior_maintenance_max_age_s=r.as_float("prior_maintenance_max_age_s"),
+        identified_entry_boost_min_sim=r.as_float("identified_entry_boost_min_sim"),
+        identified_entry_min_likelihood=r.as_float("identified_entry_min_likelihood"),
+        enable_embedding_coherence_boost=r.as_bool("enable_embedding_coherence_boost"),
+        embedding_coherence_window=r.as_int("embedding_coherence_window"),
+        embedding_coherence_min_sim=r.as_float("embedding_coherence_min_sim"),
+        embedding_coherence_boost=r.as_float("embedding_coherence_boost"),
+        face_commit_min_confidence=r.as_float("face_commit_min_confidence"),
+        face_lock_maintenance_max_age_s=r.as_float("face_lock_maintenance_max_age_s"),
+        cross_gt_face_propagation_threshold=r.as_float("cross_gt_face_propagation_threshold"),
+        cross_gt_face_propagation_max_gts=r.as_int("cross_gt_face_propagation_max_gts"),
     )
 
 
-def _build_tracklet_config(s: Any) -> TrackletConfig:
-    """Build TrackletConfig from parsed settings."""
-    t = s.get("tracklet", {})
+def _build_tracklet_config(s: Settings) -> TrackletConfig:
+    """Build TrackletConfig from required settings.yaml keys."""
+    t = s.section("tracklet")
     return TrackletConfig(
-        min_hit_ratio=float(t.get("min_hit_ratio", 0.5)),
-        close_grace_frames=int(t.get("close_grace_frames", 15)),
-        gallery_min_quality=float(t.get("gallery_min_quality", 0.5)),
-        gallery_max_per_tracklet=int(t.get("gallery_max_per_tracklet", 20)),
-        min_detection_confidence=float(t.get("min_detection_confidence", 0.3)),
-        enabled=_str_to_bool(t.get("enabled", True)),
-        min_frames_to_publish=int(s.get("pipeline.tracker.min_frames_to_publish", 3)),
+        min_hit_ratio=t.as_float("min_hit_ratio"),
+        close_grace_frames=t.as_int("close_grace_frames"),
+        gallery_min_quality=t.as_float("gallery_min_quality"),
+        gallery_max_per_tracklet=t.as_int("gallery_max_per_tracklet"),
+        min_detection_confidence=t.as_float("min_detection_confidence"),
+        enabled=t.as_bool("enabled"),
+        min_frames_to_publish=s.as_int("pipeline.tracker.min_frames_to_publish"),
     )
 
 
-def _build_cross_cam_config(s: Any) -> CrossCamConfig:
-    """Build CrossCamConfig from parsed settings."""
-    cc = s.get("cross_camera", {})
+def _build_cross_cam_config(s: Settings) -> CrossCamConfig:
+    """Build CrossCamConfig from required settings.yaml keys."""
+    cc = s.section("cross_camera")
     return CrossCamConfig(
-        alpha=float(cc.get("alpha", 0.7)),
-        floor_sigma_m=float(cc.get("floor_sigma_m", 1.5)),
-        max_floor_distance_m=float(cc.get("max_floor_distance_m", 8.0)),
-        min_link_score=float(cc.get("min_link_score", 0.55)),
-        unknown_merge_appearance_threshold=float(
-            cc.get("unknown_merge_appearance_threshold", 0.92)
+        alpha=cc.as_float("alpha"),
+        floor_sigma_m=cc.as_float("floor_sigma_m"),
+        max_floor_distance_m=cc.as_float("max_floor_distance_m"),
+        min_link_score=cc.as_float("min_link_score"),
+        unknown_merge_appearance_threshold=cc.as_float("unknown_merge_appearance_threshold"),
+        within_group_min_score=cc.as_float("within_group_min_score"),
+        inter_gt_consolidation_appearance_threshold=cc.as_float(
+            "inter_gt_consolidation_appearance_threshold"
         ),
-        within_group_min_score=float(cc.get("within_group_min_score", 0.35)),
-        inter_gt_consolidation_appearance_threshold=float(
-            cc.get("inter_gt_consolidation_appearance_threshold", 0.88)
-        ),
-        known_identity_reentry_threshold=float(cc.get("known_identity_reentry_threshold", 0.72)),
-        same_camera_reentry_max_gap_s=float(cc.get("same_camera_reentry_max_gap_s", 30.0)),
+        known_identity_reentry_threshold=cc.as_float("known_identity_reentry_threshold"),
+        same_camera_reentry_max_gap_s=cc.as_float("same_camera_reentry_max_gap_s"),
+        unknown_merge_max_gap_s=cc.as_float("unknown_merge_max_gap_s"),
+        unknown_merge_max_distance_m=cc.as_float("unknown_merge_max_distance_m"),
     )
 
 
-def _build_sampler_config(s: Any) -> SamplerConfig:
-    """Build SamplerConfig from parsed settings."""
-    sp = s.get("sampler", {})
+def _build_sampler_config(s: Settings) -> SamplerConfig:
+    """Build SamplerConfig from required settings.yaml keys."""
+    sp = s.section("sampler")
     return SamplerConfig(
-        keyframe_min_interval_s=float(sp.get("keyframe_min_interval_s", 30.0)),
-        periodic_expires_hours=int(sp.get("periodic_expires_hours", 72)),
-        trigger_expires_days=int(sp.get("trigger_expires_days", 30)),
+        keyframe_min_interval_s=sp.as_float("keyframe_min_interval_s"),
+        periodic_expires_hours=sp.as_int("periodic_expires_hours"),
+        trigger_expires_days=sp.as_int("trigger_expires_days"),
     )
 
 
@@ -261,12 +270,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Startup: build config, connect services, start pipeline
     # -------------------------------------------------------------------
 
-    redis_url = settings.get("redis.url", "redis://localhost:6379/0")
-    face_id_url = settings.get("face_id.url", "")
+    transport_config = _build_transport_config(settings)
+    face_id_url = settings.as_str("face_id.url")
 
     # Per-camera face-id config: CC is the primary source.
-    cc_url = settings.get("cognitive_companion.url", "")
-    cc_api_key = settings.get("cognitive_companion.api_key", "")
+    cc_url = settings.as_str("cognitive_companion.url")
+    cc_api_key = settings.as_str("cognitive_companion.api_key")
     cc_client = CognitiveCompanionClient(cc_url, cc_api_key)
     face_id_camera_configs = await _fetch_cc_camera_configs(cc_client)
     overlap_groups = await fetch_overlap_groups(cc_client)
@@ -279,60 +288,61 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sampler_config = _build_sampler_config(settings)
 
     config = PipelineConfig(
-        transport=TransportConfig(redis_url=redis_url),
+        transport=transport_config,
         resolver=resolver_config,
         tracklet=tracklet_config,
         cross_cam=cross_cam_config,
         sampler=sampler_config,
+        max_concurrent_frames=settings.as_int("pipeline.max_concurrent_frames"),
+        shutdown_timeout=settings.as_float("pipeline.shutdown_timeout_s"),
+        signal_interval_s=settings.as_int("signal.interval_s"),
+        signal_enabled=settings.as_bool("signal.enabled"),
         face_id_url=face_id_url,
-        face_id_cooldown_s=float(settings.get("face_id.cooldown_s", "5.0")),
-        face_id_timeout_s=float(settings.get("face_id.timeout_s", "2.0")),
-        face_id_min_confidence=float(settings.get("face_id.min_confidence", "0.4")),
+        face_id_cooldown_s=settings.as_float("face_id.cooldown_s"),
+        face_id_timeout_s=settings.as_float("face_id.timeout_s"),
+        face_id_min_confidence=settings.as_float("face_id.min_confidence"),
         face_id_enabled=bool(face_id_url),
         face_id_camera_configs=face_id_camera_configs,
-        timezone=settings.get("app.timezone", "UTC"),
-        signal_stillness_threshold_minutes=int(
-            settings.get("signal.stillness_threshold_minutes", "60")
+        pose_enabled=settings.as_bool("triton.pose_enabled"),
+        timezone=settings.as_str("app.timezone"),
+        signal_stillness_threshold_minutes=settings.as_int("signal.stillness_threshold_minutes"),
+        signal_stillness_emergency_minutes=settings.as_int("signal.stillness_emergency_minutes"),
+        signal_stillness_motion_floor=settings.as_float("signal.stillness_motion_floor"),
+        signal_pacing_room_threshold=settings.as_int("signal.pacing_room_threshold"),
+        signal_pacing_window_minutes=settings.as_int("signal.pacing_window_minutes"),
+        signal_nighttime_transition_threshold=settings.as_int(
+            "signal.nighttime_transition_threshold"
         ),
-        signal_stillness_emergency_minutes=int(
-            settings.get("signal.stillness_emergency_minutes", "120")
+        signal_absence_threshold_minutes=settings.as_int("signal.absence_threshold_minutes"),
+        signal_bathroom_absolute_threshold_seconds=settings.as_int(
+            "signal.bathroom_absolute_threshold_seconds"
         ),
-        signal_stillness_motion_floor=float(settings.get("signal.stillness_motion_floor", "0.02")),
-        signal_pacing_room_threshold=int(settings.get("signal.pacing_room_threshold", "8")),
-        signal_pacing_window_minutes=int(settings.get("signal.pacing_window_minutes", "30")),
-        signal_nighttime_transition_threshold=int(
-            settings.get("signal.nighttime_transition_threshold", "3")
-        ),
-        signal_absence_threshold_minutes=int(
-            settings.get("signal.absence_threshold_minutes", "60")
-        ),
-        signal_bathroom_absolute_threshold_seconds=int(
-            settings.get("signal.bathroom_absolute_threshold_seconds", "2700")
-        ),
-        allow_skeleton=str(settings.get("pipeline.allow_skeleton", "false")).lower()
-        in ("1", "true", "yes"),
+        allow_skeleton=settings.as_bool("pipeline.allow_skeleton"),
         # Phase 1: noise reduction
-        detection_iou_dedup_threshold=float(
-            settings.get("pipeline.detection.iou_dedup_threshold", "0.55")
+        detection_iou_dedup_threshold=settings.as_float("pipeline.detection.iou_dedup_threshold"),
+        tracker_dedup_iou_threshold=settings.as_float("pipeline.tracker.dedup_iou_threshold"),
+        tracker_min_frames_to_publish=settings.as_int("pipeline.tracker.min_frames_to_publish"),
+        identity_commit_window_s=settings.as_float("pipeline.identity.commit_window_s"),
+        identity_high_confidence_face_threshold=settings.as_float(
+            "pipeline.identity.high_confidence_face_threshold"
         ),
-        tracker_dedup_iou_threshold=float(
-            settings.get("pipeline.tracker.dedup_iou_threshold", "0.7")
+        identity_committer_enabled=settings.as_bool("pipeline.identity.committer_enabled"),
+        gallery_identity_backfill_delay_s=settings.as_float(
+            "pipeline.identity.gallery_backfill_delay_s"
         ),
-        tracker_min_frames_to_publish=int(
-            settings.get("pipeline.tracker.min_frames_to_publish", "3")
+        identity_rewrite_on_face_commit=settings.as_bool(
+            "pipeline.identity.rewrite_on_face_commit"
         ),
-        identity_commit_window_s=float(settings.get("pipeline.identity.commit_window_s", "3.0")),
-        identity_high_confidence_face_threshold=float(
-            settings.get("pipeline.identity.high_confidence_face_threshold", "0.85")
-        ),
+        batch_window_s=settings.as_float("pipeline.batch_window_s"),
+        max_batch_size=settings.as_int("pipeline.max_batch_size"),
     )
     _pipeline = FrameProcessingPipeline(config)
 
     # -- Database --
-    database_url = settings.get("database.url", "")
+    database_url = settings.as_str("database.url")
 
     if not database_url:
-        env = settings.get("env", "production")
+        env = settings.as_str("env")
         if env in ("dev", "development", "test"):
             logger.info("No database.url; using in-memory storage for this environment.")
         else:
@@ -373,34 +383,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bbox_repo = None
 
     # -- Triton --
-    triton_url = settings.get("triton.url", "")
+    triton_url = settings.as_str("triton.url")
     detector = None
     reid_embedder = None
     pose_estimator = None
-    env = settings.get("env", "production")
+    env = settings.as_str("env")
+    triton_timeout_ms = settings.as_int("triton.timeout_ms")
+    detector_model_name = settings.as_str("triton.person_detector_model")
+    detector_confidence = settings.as_float("pipeline.detector_confidence")
+    reid_model_name = settings.as_str("triton.reid_model")
+    pose_enabled = settings.as_bool("triton.pose_enabled")
+    pose_model_name = settings.as_str("triton.pose_model")
+    depth_enabled = settings.as_bool("triton.depth_enabled")
+    depth_model_name = settings.as_str("triton.depth_model")
     depth_estimator: DepthEstimator | None = None
     if triton_url:
         try:
-            triton_timeout_ms = int(settings.get("triton.timeout_ms", "5000") or "5000")
             _triton_client = TritonGrpcClient(triton_url, timeout_ms=triton_timeout_ms)
             await _triton_client.__aenter__()
             detector = PersonDetector(
                 _triton_client,
-                conf_threshold=float(settings.get("pipeline.detector_confidence", "0.35")),
+                model_name=detector_model_name,
+                conf_threshold=detector_confidence,
             )
             reid_embedder = ReidEmbedder(
                 _triton_client,
-                model_name=settings.get("triton.reid_model", "reid-solider"),
+                model_name=reid_model_name,
             )
-            pose_enabled_str = settings.get("triton.pose_enabled", "true")
-            if str(pose_enabled_str).lower() not in ("0", "false", "no"):
+            if pose_enabled:
                 pose_estimator = PoseEstimator(
                     _triton_client,
-                    model_name=settings.get("triton.pose_model", "pose-rtmpose"),
+                    model_name=pose_model_name,
                 )
-            depth_enabled_str = settings.get("triton.depth_enabled", "true")
-            if str(depth_enabled_str).lower() not in ("0", "false", "no"):
-                depth_model_name = settings.get("triton.depth_model", "depth-anything-v2")
+            if depth_enabled:
                 if await _triton_client.is_model_ready(depth_model_name):
                     depth_estimator = DepthEstimator(
                         _triton_client,
@@ -422,20 +437,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             _triton_client = None
 
     # -- MinIO --
-    minio_endpoint = settings.get("minio.endpoint", "")
-    minio_bucket = settings.get("minio.bucket", "")
-    minio_access_key = settings.get("minio.access_key", "")
-    minio_secret_key = settings.get("minio.secret_key", "")
+    minio_endpoint = settings.as_str("minio.endpoint")
+    minio_bucket = settings.as_str("minio.bucket")
+    minio_access_key = settings.as_str("minio.access_key")
+    minio_secret_key = settings.as_str("minio.secret_key")
     if minio_endpoint and minio_bucket and minio_access_key and minio_secret_key:
-        secure_str = settings.get("minio.secure", "false")
-        secure = str(secure_str).lower() in {"1", "true", "yes"}
+        secure = settings.as_bool("minio.secure")
         _frame_fetcher = MinioFrameFetcher(
             MinioFrameConfig(
                 endpoint_url=minio_endpoint,
                 bucket=minio_bucket,
                 access_key_id=minio_access_key,
                 secret_access_key=minio_secret_key,
-                region_name=settings.get("minio.region", "us-east-1"),
+                region_name=settings.as_str("minio.region"),
                 secure=secure,
             )
         )
@@ -459,26 +473,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # -- Wire posture strategy --
     fast_strategy = RTMPosePostureStrategy()
 
-    depth_slow_path_enabled = str(
-        settings.get("pipeline.posture.depth_slow_path_enabled", "false")
-    ).lower() in ("1", "true", "yes")
+    depth_slow_path_enabled = settings.as_bool("pipeline.posture.depth_slow_path_enabled")
 
     if depth_estimator is not None and depth_slow_path_enabled:
         slow_strategy = DepthPostureStrategy(depth_estimator)
         posture_strategy: RTMPosePostureStrategy | FusedPostureStrategy = FusedPostureStrategy(
             fast=fast_strategy,
             slow=slow_strategy,
-            slow_path_min_interval_s=float(
-                settings.get("pipeline.posture.depth_slow_path_min_interval_s", "15.0")
+            slow_path_min_interval_s=settings.as_float(
+                "pipeline.posture.depth_slow_path_min_interval_s"
             ),
-            slow_path_max_age_s=float(
-                settings.get("pipeline.posture.depth_slow_path_max_age_s", "60.0")
-            ),
+            slow_path_max_age_s=settings.as_float("pipeline.posture.depth_slow_path_max_age_s"),
         )
         logger.info(
             "Posture strategy: fused (RTMPose + Depth slow-path)",
-            slow_path_interval_s=settings.get(
-                "pipeline.posture.depth_slow_path_min_interval_s", "15.0"
+            slow_path_interval_s=settings.as_float(
+                "pipeline.posture.depth_slow_path_min_interval_s"
             ),
         )
     else:
@@ -513,17 +523,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from .calibration.state import AdjacencyEdge as _AdjacencyEdge
         from .calibration.state import calibration_state
 
-        edges = [
-            _AdjacencyEdge(
-                from_camera=e.get("from", ""),
-                to_camera=e.get("to", ""),
-                min_transit_s=float(e.get("min_transit_s", 0.5)),
-                max_transit_s=float(e.get("max_transit_s", 30.0)),
-                overlap=bool(e.get("overlap", False)),
-            )
-            for e in adjacency_edges_raw
-            if e.get("from") and e.get("to")
-        ]
+        edges: list[_AdjacencyEdge] = []
+        for e in adjacency_edges_raw:
+            try:
+                overlap_raw = e["overlap"]
+                if isinstance(overlap_raw, bool):
+                    overlap = overlap_raw
+                else:
+                    normalized_overlap = str(overlap_raw).strip().lower()
+                    if normalized_overlap in {"1", "true", "yes", "on"}:
+                        overlap = True
+                    elif normalized_overlap in {"0", "false", "no", "off"}:
+                        overlap = False
+                    else:
+                        raise ValueError(f"Invalid adjacency overlap value: {overlap_raw!r}")
+                edges.append(
+                    _AdjacencyEdge(
+                        from_camera=str(e["from"]),
+                        to_camera=str(e["to"]),
+                        min_transit_s=float(e["min_transit_s"]),
+                        max_transit_s=float(e["max_transit_s"]),
+                        overlap=overlap,
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("Skipped malformed CC adjacency edge", edge=e, error=str(exc))
         await calibration_state.set_adjacency(edges)
         logger.info("Restored adjacency edges from CC", edge_count=len(edges))
 

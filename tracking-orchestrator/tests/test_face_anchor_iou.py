@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.pipeline.frame_pipeline import _bbox_iou
+from app.pipeline.stages.detect import _bbox_iou
 
 
 class TestBboxIoU:

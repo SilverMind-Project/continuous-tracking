@@ -39,7 +39,7 @@ def _normalize_dsn(dsn: str) -> str:
 
 
 async def _run(args: argparse.Namespace) -> int:
-    dsn = settings.get("database.url", "")
+    dsn = str(settings.require("database.url"))
     if not dsn:
         print("database.url must be configured in config/settings.yaml", file=sys.stderr)
         return 1

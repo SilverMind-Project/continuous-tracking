@@ -10,11 +10,19 @@ app:
 # Redis Streams transport
 redis:
   url: "${REDIS_URL:-redis://localhost:6379/0}"
+  consumer_group: "${CTS_CONSUMER_GROUP:-cts-orchestrator}"
+  consumer_name: "${CTS_CONSUMER_NAME:-orchestrator-1}"
+  frames_stream: "${CTS_FRAMES_STREAM:-frames.ready}"
   events_stream: "${CTS_EVENTS_STREAM:-tracking.events}"
+  responses_stream: "${CTS_RESPONSES_STREAM:-tracking.responses}"
   revisions_stream: "${CTS_REVISIONS_STREAM:-tracking.revisions}"
   signals_stream: "${CTS_SIGNALS_STREAM:-tracking.signals}"
   scene_samples_stream: "${CTS_SCENE_SAMPLES_STREAM:-scene.samples}"
   stream_maxlen: "${CTS_STREAM_MAXLEN:-100000}"
+  batch_max_wait_ms: "${CTS_BATCH_MAX_WAIT_MS:-100}"
+  batch_max_size: "${CTS_BATCH_MAX_SIZE:-8}"
+  xack_timeout_ms: "${CTS_XACK_TIMEOUT_MS:-5000}"
+  ack_ttl_seconds: "${CTS_ACK_TTL_SECONDS:-300}"
 
 # PostgreSQL database
 database:
@@ -81,6 +89,7 @@ face_id:
 #   dementia medications) and slow mobility routinely extend bathroom time beyond 30 min.
 signal:
   interval_s: "${SIGNAL_INTERVAL_S:-60}"
+  enabled: "${SIGNAL_ENABLED:-true}"
   stillness_threshold_minutes: "${SIGNAL_STILLNESS_THRESHOLD_MINUTES:-60}"
   stillness_emergency_minutes: "${SIGNAL_STILLNESS_EMERGENCY_MINUTES:-120}"
   stillness_motion_floor: "${SIGNAL_STILLNESS_MOTION_FLOOR:-0.02}"
@@ -92,6 +101,8 @@ signal:
 
 # Pipeline tuning
 pipeline:
+  max_concurrent_frames: "${MAX_CONCURRENT_FRAMES:-4}"
+  shutdown_timeout_s: "${PIPELINE_SHUTDOWN_TIMEOUT_S:-5.0}"
   # Posture detection strategy
   posture:
     # Whether to run the depth slow-path for occluded persons.
@@ -102,8 +113,9 @@ pipeline:
     # Maximum age of a cached slow-path result before it is discarded.
     depth_slow_path_max_age_s: "${POSTURE_DEPTH_SLOW_PATH_MAX_AGE_S:-60.0}"
   detector_confidence: "${DETECTOR_CONFIDENCE:-0.35}"
-  max_concurrent_frames: "${MAX_CONCURRENT_FRAMES:-4}"
   allow_skeleton: "${PIPELINE_ALLOW_SKELETON:-false}"
+  batch_window_s: "${PIPELINE_BATCH_WINDOW_S:-0.0}"
+  max_batch_size: "${PIPELINE_MAX_BATCH_SIZE:-4}"
   detection:
     # Post-decode IoU suppression — drops near-duplicate detections after
     # the model's baked NMS when two boxes overlap more than this threshold.
@@ -121,9 +133,10 @@ pipeline:
     # Face anchors with confidence above this threshold bypass the window
     # and commit immediately with applies_from = track.first_seen_at.
     high_confidence_face_threshold: "${PIPELINE_IDENTITY_HC_FACE_THRESHOLD:-0.85}"
-    # Feature flag: activate the IdentityCommitter. Default false; enable
-    # after one week of soak on the buffered-but-not-committed path.
+    # Deprecated: accepted for compatibility; the IdentityCommitter is always enabled.
     committer_enabled: "${PIPELINE_IDENTITY_COMMITTER_ENABLED:-true}"
+    gallery_backfill_delay_s: "${PIPELINE_GALLERY_BACKFILL_DELAY_S:-30.0}"
+    rewrite_on_face_commit: "${PIPELINE_IDENTITY_REWRITE_ON_FACE_COMMIT:-true}"
 
 # Cognitive Companion — camera config source and API gateway
 cognitive_companion:
@@ -140,6 +153,8 @@ resolver:
   unknown_mass: "${RESOLVER_UNKNOWN_MASS:-0.05}"
   prior_weight: "${RESOLVER_PRIOR_WEIGHT:-0.6}"
   face_weight_multiplier: "${RESOLVER_FACE_WEIGHT_MULTIPLIER:-3.0}"
+  propagated_face_weight_multiplier: "${RESOLVER_PROPAGATED_FACE_WEIGHT_MULTIPLIER:-0.5}"
+  height_weight_multiplier: "${RESOLVER_HEIGHT_WEIGHT_MULTIPLIER:-1.5}"
   commit_prob_dense: "${RESOLVER_COMMIT_PROB_DENSE:-0.80}"
   commit_margin_dense: "${RESOLVER_COMMIT_MARGIN_DENSE:-0.20}"
   prior_maintenance_max_age_s: "${RESOLVER_PRIOR_MAINTENANCE_MAX_AGE_S:-120.0}"
@@ -175,6 +190,8 @@ cross_camera:
   inter_gt_consolidation_appearance_threshold: "${CC_INTER_GT_CONSOLIDATION_APPEARANCE_THRESHOLD:-0.88}"
   known_identity_reentry_threshold: "${CC_KNOWN_IDENTITY_REENTRY_THRESHOLD:-0.72}"
   same_camera_reentry_max_gap_s: "${CC_SAME_CAMERA_REENTRY_MAX_GAP_S:-30.0}"
+  unknown_merge_max_gap_s: "${CC_UNKNOWN_MERGE_MAX_GAP_S:-300.0}"
+  unknown_merge_max_distance_m: "${CC_UNKNOWN_MERGE_MAX_DISTANCE_M:-2.0}"
 
 # Keyframe sampler
 sampler:
