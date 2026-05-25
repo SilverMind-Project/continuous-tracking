@@ -115,7 +115,10 @@
       "Bash(.venv/bin/python -m pytest tests/test_posture.py -v)",
       "Bash(make proto-py *)",
       "Bash(.venv/bin/python *)",
-      "Bash(python -m ruff check services/cts/tracking_event_subscriber.py)"
+      "Bash(python -m ruff check services/cts/tracking_event_subscriber.py)",
+      "Bash(python -m pytest tests/test_posture_scores.py tests/test_posture_stage.py tests/test_posture.py tests/test_fused_posture_strategy.py tests/test_depth_posture_strategy.py tests/test_rtmpose_strategy.py -x -v)",
+      "Bash(grep -E \"Stale frame dropped|error|Error|ERROR|exception|Exception|WARNING|warning|latency_us.*[0-9]{7,}\")",
+      "Bash(awk 'BEGIN{sum=0; count=0} {sum+=$1; count++; arr[NR]=$1} END{print \"count:\", count, \"avg_ms:\", sum/count/1000, \"max_ms:\", arr[count]/1000; if\\(count>=2\\) {mid=int\\(count/2\\); if\\(count%2==0\\) print \"p50_ms:\", \\(arr[mid]+arr[mid+1]\\)/2/1000, \"p95_ms:\", arr[int\\(count*0.95\\)]/1000; else print \"p50_ms:\", arr[mid]/1000, \"p95_ms:\", arr[int\\(count*0.95\\)]/1000}}')"
     ]
   }
 }

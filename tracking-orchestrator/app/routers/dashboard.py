@@ -364,6 +364,60 @@ async def override_bbox(
 
 
 # ---------------------------------------------------------------------------
+# PUT /internal/bboxes/{annotation_id}/tag
+# ---------------------------------------------------------------------------
+
+
+class BboxTagBody(BaseModel):
+    identity_id: str | None
+    tagged_by: str = "caregiver"
+
+
+@router.put("/internal/bboxes/{annotation_id}/tag")
+async def tag_bbox(
+    annotation_id: str,
+    body: BboxTagBody,
+    repo: BboxAnnotationRepository = Depends(get_bbox_repo),
+) -> dict[str, Any]:
+    """Set or clear the identity_id on a single bbox annotation."""
+    existing = await repo.get_annotation_by_id(annotation_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "bbox_annotation.not_found",
+                "message": f"Bbox annotation {annotation_id} not found.",
+            },
+        )
+    await repo.tag_annotation(annotation_id, body.identity_id)
+    updated = await repo.get_annotation_by_id(annotation_id)
+    return _bbox_to_dict(updated)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# DELETE /internal/bboxes/{annotation_id}
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/internal/bboxes/{annotation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_bbox(
+    annotation_id: str,
+    repo: BboxAnnotationRepository = Depends(get_bbox_repo),
+) -> None:
+    """Delete a single bbox annotation by ID."""
+    existing = await repo.get_annotation_by_id(annotation_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "bbox_annotation.not_found",
+                "message": f"Bbox annotation {annotation_id} not found.",
+            },
+        )
+    await repo.delete_annotation(annotation_id)
+
+
+# ---------------------------------------------------------------------------
 # Serialisation helpers
 # ---------------------------------------------------------------------------
 

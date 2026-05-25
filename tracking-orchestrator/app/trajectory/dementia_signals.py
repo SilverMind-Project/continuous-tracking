@@ -22,6 +22,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from structlog import get_logger
+
 from ..domain import (
     DementiaSignal,
     DementiaSignalKind,
@@ -48,6 +50,8 @@ from .stats import robust_z
 
 _SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 _ALGORITHM_VERSION = 3  # Phase 3: robust baselines + hysteresis + detector rewrites
+
+logger = get_logger(__name__)
 
 # Map signal kind to AlgorithmSpec for metadata attachment.
 _SIGNAL_SPEC: dict[str, AlgorithmSpec] = {
@@ -178,6 +182,27 @@ def _stable_signal_id(
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _deduplicate_rooms(rooms: list[str]) -> list[str]:
+    """Collapse consecutive identical rooms while preserving order.
+
+    Applied before counting pacing room transitions to prevent a single
+    cross-camera flicker (A→B→A→B) from adding 2 transitions for one
+    physical boundary crossing.
+    """
+    if not rooms:
+        return []
+    result = [rooms[0]]
+    for r in rooms[1:]:
+        if r != result[-1]:
+            result.append(r)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
 
@@ -274,7 +299,8 @@ class DementiaSignalWorker:
         # Suppress signals for low-confidence identities.
         # A low-confidence identity (e.g., UNKNOWN track with uncertain
         # resolution) should not produce high-severity clinical alerts.
-        if identity_id in ("", "UNKNOWN", None):
+        if not identity_id or identity_id.upper() in ("", "UNKNOWN", "NONE"):
+            logger.debug("signal_skipped_unknown_identity", identity_id=identity_id)
             return []
 
         # Fetch only delta since last run, merging with rolling state.
@@ -489,15 +515,15 @@ class DementiaSignalWorker:
         if obs_density < self._cfg.pacing_min_obs_density:
             return []
 
-        # Room transitions and unique rooms.
-        room_changes = 0
-        unique_rooms: set[str] = {sorted_window[0].room_name}
-        visited_rooms: list[str] = [sorted_window[0].room_name]
-        for i in range(1, len(sorted_window)):
-            if sorted_window[i].room_name != sorted_window[i - 1].room_name:
-                room_changes += 1
-                unique_rooms.add(sorted_window[i].room_name)
-                visited_rooms.append(sorted_window[i].room_name)
+        # Extract room sequence and collapse consecutive identical rooms.
+        # This prevents a single cross-camera flicker (A→B→A→B) from
+        # adding 2 transitions for one physical boundary crossing.
+        raw_rooms = [p.room_name for p in sorted_window]
+        deduped_rooms = _deduplicate_rooms(raw_rooms)
+
+        room_changes = len(deduped_rooms) - 1
+        unique_rooms: set[str] = set(deduped_rooms)
+        visited_rooms = deduped_rooms
 
         if room_changes < self._cfg.pacing_room_threshold:
             return []

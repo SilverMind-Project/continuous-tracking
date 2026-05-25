@@ -25,72 +25,12 @@ from ..domain import CameraId, FloorPoint, GlobalTrack, Tracklet, TrackletId
 from ..observability import metrics as _metrics
 from ..pipeline.gallery_cache import GalleryCache
 from ..storage.base import DoNotFuseRepository, GalleryRepository, GlobalTrackRepository
+from .association_solver import AssociationConfig
 from .camera_adjacency import CameraAdjacency
 from .floor_projector import FloorProjector
 from .spatial_projection import SpatialProjectionService
 
 logger = get_logger(__name__)
-
-
-@dataclass(frozen=True)
-class CrossCamConfig:
-    """Configuration for cross-camera association."""
-
-    # Appearance weight in the association score (0..1).
-    # Higher = appearance dominates, lower = geometry dominates.
-    alpha: float = 0.7
-
-    # Floor-plan sigma for exponential distance decay.
-    # Larger sigma = more permissive about distance.
-    floor_sigma_m: float = 1.5
-
-    # Maximum floor-plane distance (meters) for a candidate pair.
-    max_floor_distance_m: float = 8.0
-
-    # Minimum combined score to link two tracklets.
-    min_link_score: float = 0.55
-
-    # When two UNKNOWN tracklets have appearance similarity above this
-    # threshold they are merged into the same GlobalTrack even when on
-    # the same camera.  Prevents proliferation of duplicate UNKNOWN
-    # GlobalTracks for the same person across tracklet lifecycles.
-    unknown_merge_appearance_threshold: float = 0.92
-
-    # Minimum combined score to link two tracklets from cameras in the
-    # same overlap group (cameras sharing a physical field of view).
-    # Lower than min_link_score because within-group pairs are always
-    # geometrically co-located; appearance similarity alone is sufficient.
-    within_group_min_score: float = 0.35
-
-    # Minimum **pure cosine similarity** between two GlobalTracks' mean gallery
-    # embeddings before the inter-GT consolidation pass merges them.
-    # This is appearance-only (no geo component), so must be higher than the
-    # combined within_group_min_score.  Conservative to avoid false merges —
-    # the consolidation closes the source GT which is hard to undo.
-    inter_gt_consolidation_appearance_threshold: float = 0.88
-
-    # Lower re-entry threshold applied when the existing GlobalTrack already has
-    # a committed identity AND the gap since last seen is short.  A person who
-    # turns away produces back-facing SOLIDER-ReID embeddings with ~0.7-0.85
-    # cosine similarity vs their front-facing embeddings — below the stricter
-    # unknown_merge_appearance_threshold=0.92.  Without this lower threshold,
-    # every turn-away creates a new GT, producing hundreds of duplicate tracks.
-    known_identity_reentry_threshold: float = 0.72
-
-    # Maximum gap (seconds) since a GT was last seen for
-    # known_identity_reentry_threshold to apply.  Beyond this window a new
-    # person entering the same camera cannot be assumed to be the same physical
-    # person who previously held that identity.
-    same_camera_reentry_max_gap_s: float = 30.0
-
-    # Maximum gap (seconds) between two non-overlapping UNKNOWN GTs on the
-    # same camera for them to be merged via temporal+spatial heuristic.
-    # Set to 0 to disable UNKNOWN merging.
-    unknown_merge_max_gap_s: float = 300.0
-
-    # Maximum floor-plane distance (metres) between two UNKNOWN GTs' last
-    # known positions for them to be merged.
-    unknown_merge_max_distance_m: float = 2.0
 
 
 @dataclass
@@ -114,7 +54,7 @@ class CrossCameraAssociator:
         assoc = CrossCameraAssociator(
             gallery=gallery_repo,
             adjacency=adjacency_graph,
-            config=CrossCamConfig(),
+            config=AssociationConfig(),
             global_track_repo=global_track_repo,
         )
 
@@ -134,7 +74,7 @@ class CrossCameraAssociator:
         gallery: GalleryRepository,
         adjacency: CameraAdjacency,
         global_track_repo: GlobalTrackRepository,
-        config: CrossCamConfig | None = None,
+        config: AssociationConfig | None = None,
         floor_projector: FloorProjector | None = None,
         dnf_repo: DoNotFuseRepository | None = None,
         gallery_cache: GalleryCache | None = None,
@@ -143,7 +83,7 @@ class CrossCameraAssociator:
         self._gallery = gallery
         self._adjacency = adjacency
         self._repo = global_track_repo
-        self._config = config or CrossCamConfig()
+        self._config = config or AssociationConfig()
         self._floor_projector = floor_projector
         self._dnf_repo = dnf_repo
         self._gallery_cache = gallery_cache
@@ -246,7 +186,11 @@ class CrossCameraAssociator:
                     # capped by the age of the older tracklet.
                     older_started = min(ta.started_at, tb.started_at)
                     budget = max(max_transition, (captured_at - older_started).total_seconds())
-                    if not self._adjacency.reachable(ta.camera_id, tb.camera_id, within_s=budget):
+                    if not self._adjacency.reachable(
+                        ta.camera_id, tb.camera_id, within_s=budget
+                    ) and not self._adjacency.reachable(
+                        tb.camera_id, ta.camera_id, within_s=budget
+                    ):
                         continue
 
                 # When adjacency is not configured, fall through: score based on
@@ -462,6 +406,8 @@ class CrossCameraAssociator:
                             )
                             if not self._adjacency.reachable(
                                 existing_cam, t.camera_id, within_s=budget
+                            ) and not self._adjacency.reachable(
+                                t.camera_id, existing_cam, within_s=budget
                             ):
                                 continue
                         # No adjacency configured: fall through to appearance scoring.
@@ -781,8 +727,8 @@ class CrossCameraAssociator:
         When adjacency is not configured, falls back to appearance-only scoring
         (geo_score=1.0) so deployments without explicit calibration still benefit
         from ReID-based cross-camera linking.
-        Uses bidirectional adjacency check since cross-camera association
-        works regardless of transition direction.
+        Adjacency is checked bidirectionally at the call site (either A→B or B→A
+        must be reachable) before this method is called.
         """
         # Geometry score: exponential decay of floor-plane distance when both
         # tracklets carry a calibrated last_floor_point.  Falls back to 1.0

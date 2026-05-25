@@ -31,7 +31,12 @@ from .inference.pose import PoseEstimator
 from .inference.reid_embedder import ReidEmbedder
 from .inference.triton_client import TritonGrpcClient
 from .pipeline import FrameProcessingPipeline
-from .pipeline.frame_pipeline import PipelineConfig
+from .pipeline.frame_pipeline import (
+    FaceIdConfig,
+    PipelineConfig,
+    PipelineDependencies,
+    SignalConfig,
+)
 from .pipeline.types import FaceIdCameraConfig
 from .routers import corrections as corrections_router_mod
 from .routers import dashboard as dashboard_router_mod
@@ -59,7 +64,7 @@ from .storage.postgres.settings_repo import PostgresSettingsRepository
 from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.tracking_repo import PostgresTrackingRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
-from .tracking.cross_camera import CrossCamConfig
+from .tracking.association_solver import AssociationConfig
 from .tracking.global_track_merger import GlobalTrackMerger
 from .tracking.identity_resolver import ResolverConfig
 from .tracking.tracklet_manager import TrackletConfig
@@ -221,10 +226,10 @@ def _build_tracklet_config(s: Settings) -> TrackletConfig:
     )
 
 
-def _build_cross_cam_config(s: Settings) -> CrossCamConfig:
-    """Build CrossCamConfig from required settings.yaml keys."""
+def _build_cross_cam_config(s: Settings) -> AssociationConfig:
+    """Build AssociationConfig from required settings.yaml keys."""
     cc = s.section("cross_camera")
-    return CrossCamConfig(
+    return AssociationConfig(
         alpha=cc.as_float("alpha"),
         floor_sigma_m=cc.as_float("floor_sigma_m"),
         max_floor_distance_m=cc.as_float("max_floor_distance_m"),
@@ -251,6 +256,38 @@ def _build_sampler_config(s: Settings) -> SamplerConfig:
     )
 
 
+def _build_signal_config(s: Settings) -> SignalConfig:
+    sig = s.section("signal")
+    return SignalConfig(
+        interval_s=sig.as_int("interval_s"),
+        enabled=sig.as_bool("enabled"),
+        timezone=s.as_str("app.timezone"),
+        stillness_threshold_minutes=sig.as_int("stillness_threshold_minutes"),
+        stillness_emergency_minutes=sig.as_int("stillness_emergency_minutes"),
+        stillness_motion_floor=sig.as_float("stillness_motion_floor"),
+        pacing_room_threshold=sig.as_int("pacing_room_threshold"),
+        pacing_window_minutes=sig.as_int("pacing_window_minutes"),
+        nighttime_transition_threshold=sig.as_int("nighttime_transition_threshold"),
+        absence_threshold_minutes=sig.as_int("absence_threshold_minutes"),
+        bathroom_absolute_threshold_seconds=sig.as_int("bathroom_absolute_threshold_seconds"),
+    )
+
+
+def _build_face_id_config(
+    s: Settings, camera_configs: dict[str, FaceIdCameraConfig]
+) -> FaceIdConfig:
+    fi = s.section("face_id")
+    url = s.as_str("face_id.url")
+    return FaceIdConfig(
+        url=url,
+        cooldown_s=fi.as_float("cooldown_s"),
+        timeout_s=fi.as_float("timeout_s"),
+        min_confidence=fi.as_float("min_confidence"),
+        enabled=bool(url),
+        camera_configs=camera_configs,
+    )
+
+
 # Module-level asyncpg pool so shutdown can close it.
 _pool: Any = None  # asyncpg.Pool | None
 _triton_client: TritonGrpcClient | None = None
@@ -271,7 +308,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # -------------------------------------------------------------------
 
     transport_config = _build_transport_config(settings)
-    face_id_url = settings.as_str("face_id.url")
 
     # Per-camera face-id config: CC is the primary source.
     cc_url = settings.as_str("cognitive_companion.url")
@@ -293,30 +329,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         tracklet=tracklet_config,
         cross_cam=cross_cam_config,
         sampler=sampler_config,
+        signals=_build_signal_config(settings),
+        face_id=_build_face_id_config(settings, face_id_camera_configs),
         max_concurrent_frames=settings.as_int("pipeline.max_concurrent_frames"),
         shutdown_timeout=settings.as_float("pipeline.shutdown_timeout_s"),
-        signal_interval_s=settings.as_int("signal.interval_s"),
-        signal_enabled=settings.as_bool("signal.enabled"),
-        face_id_url=face_id_url,
-        face_id_cooldown_s=settings.as_float("face_id.cooldown_s"),
-        face_id_timeout_s=settings.as_float("face_id.timeout_s"),
-        face_id_min_confidence=settings.as_float("face_id.min_confidence"),
-        face_id_enabled=bool(face_id_url),
-        face_id_camera_configs=face_id_camera_configs,
         pose_enabled=settings.as_bool("triton.pose_enabled"),
-        timezone=settings.as_str("app.timezone"),
-        signal_stillness_threshold_minutes=settings.as_int("signal.stillness_threshold_minutes"),
-        signal_stillness_emergency_minutes=settings.as_int("signal.stillness_emergency_minutes"),
-        signal_stillness_motion_floor=settings.as_float("signal.stillness_motion_floor"),
-        signal_pacing_room_threshold=settings.as_int("signal.pacing_room_threshold"),
-        signal_pacing_window_minutes=settings.as_int("signal.pacing_window_minutes"),
-        signal_nighttime_transition_threshold=settings.as_int(
-            "signal.nighttime_transition_threshold"
-        ),
-        signal_absence_threshold_minutes=settings.as_int("signal.absence_threshold_minutes"),
-        signal_bathroom_absolute_threshold_seconds=settings.as_int(
-            "signal.bathroom_absolute_threshold_seconds"
-        ),
         allow_skeleton=settings.as_bool("pipeline.allow_skeleton"),
         # Phase 1: noise reduction
         detection_iou_dedup_threshold=settings.as_float("pipeline.detection.iou_dedup_threshold"),
@@ -326,7 +343,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         identity_high_confidence_face_threshold=settings.as_float(
             "pipeline.identity.high_confidence_face_threshold"
         ),
-        identity_committer_enabled=settings.as_bool("pipeline.identity.committer_enabled"),
         gallery_identity_backfill_delay_s=settings.as_float(
             "pipeline.identity.gallery_backfill_delay_s"
         ),
@@ -499,7 +515,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     identity_rewriter = (
         PostgresIdentityRewriter(_pool) if _pool is not None else InMemoryIdentityRewriter()
     )
-    await _pipeline.initialize(
+    deps = PipelineDependencies(
         detector=detector,
         tracking_repo=tracking_repo,
         gallery_repo=gallery_repo,
@@ -516,6 +532,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bbox_repo=bbox_repo,
         dnf_repo=dnf_repo,
     )
+    await _pipeline.initialize(deps)
     _pipeline.set_overlap_groups(overlap_groups)
 
     # Restore persisted adjacency edges from CC DB into in-memory calibration state.

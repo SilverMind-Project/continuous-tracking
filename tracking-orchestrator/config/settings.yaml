@@ -56,7 +56,7 @@ face_id:
   url: "${PERSON_ID_SERVICE_URL:-}"
   cooldown_s: "${FACE_ID_COOLDOWN_S:-5.0}"
   timeout_s: "${FACE_ID_TIMEOUT_S:-2.0}"
-  min_confidence: "${FACE_ID_MIN_CONFIDENCE:-0.4}"
+  min_confidence: "${FACE_ID_MIN_CONFIDENCE:-0.6}"
 
 # Dementia signal computation
 #
@@ -96,46 +96,67 @@ signal:
   pacing_room_threshold: "${SIGNAL_PACING_ROOM_THRESHOLD:-8}"
   pacing_window_minutes: "${SIGNAL_PACING_WINDOW_MINUTES:-30}"
   nighttime_transition_threshold: "${SIGNAL_NIGHTTIME_TRANSITION_THRESHOLD:-3}"
-  absence_threshold_minutes: "${SIGNAL_ABSENCE_THRESHOLD_MINUTES:-60}"
+  absence_threshold_minutes: "${SIGNAL_ABSENCE_THRESHOLD_MINUTES:-90}"
   bathroom_absolute_threshold_seconds: "${SIGNAL_BATHROOM_COLD_START_S:-2700}"
 
 # Pipeline tuning
 pipeline:
+  # Read by: main.py → FrameProcessingPipeline(max_concurrent_frames=)
   max_concurrent_frames: "${MAX_CONCURRENT_FRAMES:-4}"
+  # Read by: main.py → PipelineConfig(shutdown_timeout=)
   shutdown_timeout_s: "${PIPELINE_SHUTDOWN_TIMEOUT_S:-5.0}"
-  # Posture detection strategy
+
   posture:
-    # Whether to run the depth slow-path for occluded persons.
-    # Requires triton.depth_enabled = true.
+    # Read by: main.py → DepthPostureStrategy / FusedPostureStrategy
     depth_slow_path_enabled: "${POSTURE_DEPTH_SLOW_PATH_ENABLED:-false}"
-    # Minimum seconds between depth inference runs per tracklet.
     depth_slow_path_min_interval_s: "${POSTURE_DEPTH_SLOW_PATH_MIN_INTERVAL_S:-15.0}"
-    # Maximum age of a cached slow-path result before it is discarded.
     depth_slow_path_max_age_s: "${POSTURE_DEPTH_SLOW_PATH_MAX_AGE_S:-60.0}"
-  detector_confidence: "${DETECTOR_CONFIDENCE:-0.6d}"
+
+  # Read by: main.py → PersonDetector(conf_threshold=)
+  # 0.6 means YOLO must be ≥60% confident to emit a detection box.
+  # Below 0.5 causes excessive false positives; above 0.8 misses partial occlusions.
+  detector_confidence: "${DETECTOR_CONFIDENCE:-0.7}"
+
+  # Read by: main.py → PipelineConfig(allow_skeleton=)
+  # True only in unit tests that run without a detector.
   allow_skeleton: "${PIPELINE_ALLOW_SKELETON:-false}"
+
+  # Read by: main.py → PipelineConfig(batch_window_s=, max_batch_size=)
+  # batch_window_s=0 disables frame batching (process each frame immediately).
   batch_window_s: "${PIPELINE_BATCH_WINDOW_S:-0.5}"
   max_batch_size: "${PIPELINE_MAX_BATCH_SIZE:-5}"
+
   detection:
-    # Post-decode IoU suppression — drops near-duplicate detections after
-    # the model's baked NMS when two boxes overlap more than this threshold.
+    # Read by: main.py → PipelineConfig(detection_iou_dedup_threshold=)
+    # Drops near-duplicate YOLO boxes that survived the model's baked NMS.
     iou_dedup_threshold: "${PIPELINE_DETECTION_IOU_DEDUP:-0.50}"
+
   tracker:
-    # Newly-spawned tracklets that overlap an established track (age >= 5
-    # frames) by more than this IoU are dropped immediately.
+    # Read by: main.py → PipelineConfig(tracker_dedup_iou_threshold=)
+    # Newly-spawned tracklets overlapping an established track (age ≥5 frames)
+    # by more than this IoU are immediately dropped.
     dedup_iou_threshold: "${PIPELINE_TRACKER_DEDUP_IOU:-0.7}"
-    # Tracklets must survive this many frames before being exposed to
-    # cross-camera association, identity resolution, and publish.
+
+    # Read by: main.py → PipelineConfig(tracker_min_frames_to_publish=)
+    # Tracklets must survive this many detection frames before being exposed
+    # to cross-camera association, identity resolution, and publication.
+    # Higher values reduce ghost tracks; lower values reduce detection lag.
     min_frames_to_publish: "${PIPELINE_TRACKER_MIN_FRAMES:-5}"
+
   identity:
-    # Commit window: at most one identity commit per global track per N seconds.
+    # Read by: main.py → PipelineConfig(identity_commit_window_s=)
+    # At most one identity commit per global track per N seconds.
     commit_window_s: "${PIPELINE_IDENTITY_COMMIT_WINDOW_S:-3.0}"
-    # Face anchors with confidence above this threshold bypass the window
-    # and commit immediately with applies_from = track.first_seen_at.
+
+    # Read by: main.py → PipelineConfig(identity_high_confidence_face_threshold=)
+    # Face anchors above this confidence bypass the commit window and commit
+    # immediately with applies_from = track.first_seen_at.
     high_confidence_face_threshold: "${PIPELINE_IDENTITY_HC_FACE_THRESHOLD:-0.85}"
-    # Deprecated: accepted for compatibility; the IdentityCommitter is always enabled.
-    committer_enabled: "${PIPELINE_IDENTITY_COMMITTER_ENABLED:-true}"
-    gallery_backfill_delay_s: "${PIPELINE_GALLERY_BACKFILL_DELAY_S:-30.0}"
+
+    # Read by: main.py → PipelineConfig(gallery_identity_backfill_delay_s=)
+    gallery_backfill_delay_s: "${PIPELINE_GALLERY_BACKFILL_DELAY_S:-10.0}"
+
+    # Read by: main.py → PipelineConfig(identity_rewrite_on_face_commit=)
     rewrite_on_face_commit: "${PIPELINE_IDENTITY_REWRITE_ON_FACE_COMMIT:-true}"
 
 # Cognitive Companion — camera config source and API gateway
@@ -172,9 +193,12 @@ resolver:
 # Tracklet lifecycle
 tracklet:
   min_hit_ratio: "${TRACKLET_MIN_HIT_RATIO:-0.5}"
-  close_grace_frames: "${TRACKLET_CLOSE_GRACE_FRAMES:-15}"
-  gallery_min_quality: "${TRACKLET_GALLERY_MIN_QUALITY:-0.5}"
+  close_grace_frames: "${TRACKLET_CLOSE_GRACE_FRAMES:-30}"
+  gallery_min_quality: "${TRACKLET_GALLERY_MIN_QUALITY:-0.4}"
   gallery_max_per_tracklet: "${TRACKLET_GALLERY_MAX_PER_TRACKLET:-20}"
+  # Second-line detection gate inside the tracker. Must be < pipeline.detector_confidence
+  # (currently 0.6). Effectively a no-op in normal operation; protects against
+  # future changes to the detector that lower its internal threshold.
   min_detection_confidence: "${TRACKLET_MIN_DETECTION_CONFIDENCE:-0.3}"
   enabled: "${TRACKLET_ENABLED:-true}"
   # min_frames_to_publish is controlled by pipeline.tracker.min_frames_to_publish
@@ -184,13 +208,13 @@ cross_camera:
   alpha: "${CC_ALPHA:-0.7}"
   floor_sigma_m: "${CC_FLOOR_SIGMA_M:-1.5}"
   max_floor_distance_m: "${CC_MAX_FLOOR_DISTANCE_M:-8.0}"
-  min_link_score: "${CC_MIN_LINK_SCORE:-0.55}"
-  unknown_merge_appearance_threshold: "${CC_UNKNOWN_MERGE_APPEARANCE_THRESHOLD:-0.92}"
+  min_link_score: "${CC_MIN_LINK_SCORE:-0.50}"
+  unknown_merge_appearance_threshold: "${CC_UNKNOWN_MERGE_APPEARANCE_THRESHOLD:-0.90}"
   within_group_min_score: "${CC_WITHIN_GROUP_MIN_SCORE:-0.35}"
-  inter_gt_consolidation_appearance_threshold: "${CC_INTER_GT_CONSOLIDATION_APPEARANCE_THRESHOLD:-0.88}"
-  known_identity_reentry_threshold: "${CC_KNOWN_IDENTITY_REENTRY_THRESHOLD:-0.72}"
+  inter_gt_consolidation_appearance_threshold: "${CC_INTER_GT_CONSOLIDATION_APPEARANCE_THRESHOLD:-0.82}"
+  known_identity_reentry_threshold: "${CC_KNOWN_IDENTITY_REENTRY_THRESHOLD:-0.70}"
   same_camera_reentry_max_gap_s: "${CC_SAME_CAMERA_REENTRY_MAX_GAP_S:-30.0}"
-  unknown_merge_max_gap_s: "${CC_UNKNOWN_MERGE_MAX_GAP_S:-300.0}"
+  unknown_merge_max_gap_s: "${CC_UNKNOWN_MERGE_MAX_GAP_S:-120.0}"
   unknown_merge_max_distance_m: "${CC_UNKNOWN_MERGE_MAX_DISTANCE_M:-2.0}"
 
 # Keyframe sampler

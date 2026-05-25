@@ -104,7 +104,7 @@ class FloorPlaneFitter:
     def __init__(
         self,
         fov_deg: float = 70.0,
-        floor_region_fraction: float = 0.75,
+        floor_region_fraction: float = 0.60,
         min_depth_m: float = 0.3,
         max_depth_m: float = 15.0,
         ransac_iterations: int = 256,
@@ -369,7 +369,7 @@ def floor_plane_to_homography(
         idx = rng.choice(len(src), 256, replace=False)
         src, dst = src[idx], dst[idx]
 
-    h_raw, _ = cv2.findHomography(src, dst, cv2.RANSAC, ransacReprojThreshold=0.05)
+    h_raw, _ = cv2.findHomography(src, dst, cv2.RANSAC, ransacReprojThreshold=3.0)
     if h_raw is None:
         return None
 

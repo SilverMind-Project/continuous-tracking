@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.pipeline.frame_pipeline import FrameProcessingPipeline, PipelineConfig
+from app.pipeline.frame_pipeline import (
+    FrameProcessingPipeline,
+    PipelineConfig,
+    PipelineDependencies,
+    SignalConfig,
+)
 from app.storage.base import (
     InMemoryBboxAnnotationRepository,
     InMemoryTrajectoryRepository,
@@ -61,13 +66,13 @@ class TestKeyframeBboxRepoReuse:
         """When a bbox_repo is injected into initialize(), the keyframe sampler
         must use that same instance rather than creating a new fallback."""
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signal_enabled=False)
+            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
         )
 
         injected_bbox_repo = InMemoryBboxAnnotationRepository()
 
         with _mock_redis_deps():
-            await pipeline.initialize(bbox_repo=injected_bbox_repo)
+            await pipeline.initialize(PipelineDependencies(bbox_repo=injected_bbox_repo))
 
             sampler_repo = pipeline._keyframe_sampler._bbox_repo  # type: ignore[union-attr]
 
@@ -85,7 +90,7 @@ class TestKeyframeBboxRepoReuse:
         """When no bbox_repo is injected, the keyframe sampler must still use
         the same instance as the pipeline's internally created fallback."""
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signal_enabled=False)
+            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
         )
 
         with _mock_redis_deps():

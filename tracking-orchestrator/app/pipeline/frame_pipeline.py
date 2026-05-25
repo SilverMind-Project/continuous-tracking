@@ -83,7 +83,6 @@ from ..storage.base import (
 from ..tracking.association_solver import AssociationConfig
 from ..tracking.camera_adjacency import AdjacencyEdge as GraphAdjacencyEdge
 from ..tracking.camera_adjacency import CameraAdjacency
-from ..tracking.cross_camera import CrossCamConfig
 from ..tracking.floor_projector import FloorProjector
 from ..tracking.global_track_service import GlobalTrackService
 from ..tracking.identity_committer import IdentityCommitter
@@ -91,7 +90,8 @@ from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
 from ..tracking.tracker import PerCameraTrackers, TrackerConfig
 from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
-from ..trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
+from ..trajectory.dementia_signals import DementiaSignalWorker
+from ..trajectory.dementia_signals import SignalConfig as DementiaSignalConfig
 from ..trajectory.motion_energy import MotionEnergyTracker
 from ..trajectory.posture import GlobalPostureTracker
 from ..trajectory.posture_strategy import PostureStrategy
@@ -119,88 +119,116 @@ logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
+class SignalConfig:
+    """Dementia signal thresholds and scheduling."""
+
+    interval_s: int = 60
+    enabled: bool = True
+    timezone: str = "UTC"
+    stillness_threshold_minutes: int = 60
+    stillness_emergency_minutes: int = 120
+    stillness_motion_floor: float = 0.02
+    pacing_room_threshold: int = 8
+    pacing_window_minutes: int = 30
+    nighttime_transition_threshold: int = 3
+    absence_threshold_minutes: int = 60
+    bathroom_absolute_threshold_seconds: int = 2700
+
+
+@dataclass(frozen=True)
+class FaceIdConfig:
+    """Face identification client configuration."""
+
+    url: str = ""
+    cooldown_s: float = 5.0
+    timeout_s: float = 2.0
+    min_confidence: float = 0.5
+    enabled: bool = True
+    camera_configs: dict[str, FaceIdCameraConfig] = field(default_factory=dict)
+
+
+@dataclass
+class PipelineDependencies:
+    """All external dependencies for FrameProcessingPipeline.
+
+    Every field is Optional. None means "use the InMemory default".
+    In production, main.py passes Postgres implementations.
+    In unit tests, fields are left None (InMemory) or replaced with controlled fakes.
+    """
+
+    detector: PersonDetector | None = None
+    tracking_repo: TrackingRepository | None = None
+    gallery_repo: GalleryRepository | None = None
+    global_track_repo: GlobalTrackRepository | None = None
+    trajectory_repo: TrajectoryRepository | None = None
+    keyframe_repo: KeyframeRepository | None = None
+    signal_repo: DementiaSignalRepository | None = None
+    settings_repo: SettingsRepository | None = None
+    frame_fetcher: FrameImageFetcher | None = None
+    reid_embedder: ReidEmbedderProtocol | None = None
+    pose_estimator: PoseEstimator | None = None
+    posture_strategy: PostureStrategy | None = None
+    identity_rewriter: IdentityRewriter | None = None
+    bbox_repo: BboxAnnotationRepository | None = None
+    dnf_repo: DoNotFuseRepository | None = None
+
+
+# NOTE: Every field in PipelineConfig has a default value. These defaults are
+# ONLY used in unit tests. In production, main.py explicitly sets every field
+# from settings.yaml. The YAML file is the single source of truth for
+# production values; dataclass defaults are a testing convenience.
+@dataclass(frozen=True)
 class PipelineConfig:
     """Configuration for the frame processing pipeline."""
 
+    # --- Infrastructure ---
     transport: TransportConfig = field(default_factory=TransportConfig)
-    tracklet: TrackletConfig = field(default_factory=TrackletConfig)
-    detector_confidence: float = 0.25
     max_concurrent_frames: int = 4
     shutdown_timeout: float = 5.0
-    # Cross-camera association
-    cross_cam: CrossCamConfig = field(default_factory=CrossCamConfig)
-    # Identity resolution
-    resolver: ResolverConfig = field(default_factory=ResolverConfig)
-    # Known identities (from the persons table)
-    known_identities: list[Identity] = field(default_factory=list)
-    # Keyframe sampling
-    sampler: SamplerConfig = field(default_factory=SamplerConfig)
-    # Camera-to-room mapping (camera_id -> room_name); resolved from stream assignments.
-    camera_room_map: dict[str, str] = field(default_factory=dict)
-    # Dementia signal computation interval (seconds).
-    signal_interval_s: int = 60
-    signal_enabled: bool = True
-    # IANA timezone name used for time-of-day signal computations.
-    timezone: str = "UTC"
-    # Dementia signal thresholds (see SignalConfig for rationale).
-    signal_stillness_threshold_minutes: int = 60
-    signal_stillness_emergency_minutes: int = 120
-    signal_stillness_motion_floor: float = 0.02
-    signal_pacing_room_threshold: int = 8
-    signal_pacing_window_minutes: int = 30
-    signal_nighttime_transition_threshold: int = 3
-    signal_absence_threshold_minutes: int = 60
-    signal_bathroom_absolute_threshold_seconds: int = 2700
-    # Face identification via person-identification-service (ArcFace).
-    face_id_url: str = ""
-    face_id_cooldown_s: float = 5.0
-    face_id_timeout_s: float = 2.0
-    # Allow running without a detector (skeleton mode). Off by default; enable only in tests.
+    batch_window_s: float = 0.0
+    max_batch_size: int = 4
     allow_skeleton: bool = False
-    face_id_min_confidence: float = 0.5
-    face_id_enabled: bool = True
-    # Per-camera overrides: camera_id -> enabled flag and optional higher threshold.
-    # Top-down cameras should set enabled=false; face-level cameras with
-    # difficult angles can raise min_confidence above the global default.
-    face_id_camera_configs: dict[str, FaceIdCameraConfig] = field(default_factory=dict)
-    # Pose estimation (RTMPose) — enabled by default; set False to disable.
     pose_enabled: bool = True
 
-    # --- Phase 1: noise reduction ---
+    # --- Tracking ---
+    tracklet: TrackletConfig = field(default_factory=TrackletConfig)
+    cross_cam: AssociationConfig = field(default_factory=AssociationConfig)
 
-    # Post-decode IoU suppression threshold. Detections whose bboxes overlap
-    # an already-kept detection by more than this IoU are dropped before
-    # the tracker sees them. Belt-and-braces since the ONNX model bakes NMS.
-    detection_iou_dedup_threshold: float = 0.55
-
-    # Per-camera tracker dedup IoU threshold (see TrackerConfig.dedup_iou_threshold).
-    tracker_dedup_iou_threshold: float = 0.6
-
-    # Stability gate: tracklets must survive this many frames before being
-    # exposed to downstream pipeline stages and publication.
-    tracker_min_frames_to_publish: int = 3
-
-    # IdentityCommitter — buffered windowed commit (see IdentityCommitter).
+    # --- Identity resolution ---
+    resolver: ResolverConfig = field(default_factory=ResolverConfig)
+    known_identities: list[Identity] = field(default_factory=list)
     identity_commit_window_s: float = 3.0
     identity_high_confidence_face_threshold: float = 0.80
-    # Deprecated: the buffered IdentityCommitter is now always enabled.
-    # This field is accepted but ignored; remove after 2026-07-01.
-    identity_committer_enabled: bool = True
     # Delay (seconds) after an identity is first committed before backfilling
     # gallery entries with that identity.  Prevents a false identity commit from
     # contaminating the gallery before it has a chance to be revised.  Set to 0
     # to restore the previous immediate-backfill behaviour.
-    gallery_identity_backfill_delay_s: float = 30.0
+    gallery_identity_backfill_delay_s: float = 10.0
     # Retroactive cross-table rewrite on identity revisions.
     # When True, the IdentityRewriter updates trajectory, dwell, and signal
     # rows so that history reflects the newly committed identity.
     identity_rewrite_on_face_commit: bool = True
-    # Frame batching — buffer frames for a configurable time window,
-    # group by camera_id, then flush each camera's batch sequentially
-    # while running *different* cameras concurrently.
-    # Set batch_window_s=0 to disable batching (default behaviour).
-    batch_window_s: float = 0.0
-    max_batch_size: int = 4
+
+    # --- Detection ---
+    # Post-decode IoU suppression threshold. Detections whose bboxes overlap
+    # an already-kept detection by more than this IoU are dropped before
+    # the tracker sees them. Belt-and-braces since the ONNX model bakes NMS.
+    detection_iou_dedup_threshold: float = 0.55
+    # Per-camera tracker dedup IoU threshold (see TrackerConfig.dedup_iou_threshold).
+    tracker_dedup_iou_threshold: float = 0.6
+    # Stability gate: tracklets must survive this many frames before being
+    # exposed to downstream pipeline stages and publication.
+    tracker_min_frames_to_publish: int = 3
+
+    # --- Face ID ---
+    face_id: FaceIdConfig = field(default_factory=FaceIdConfig)
+
+    # --- Keyframe sampling ---
+    sampler: SamplerConfig = field(default_factory=SamplerConfig)
+    camera_room_map: dict[str, str] = field(default_factory=dict)
+
+    # --- Signals ---
+    signals: SignalConfig = field(default_factory=SignalConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -305,81 +333,46 @@ class FrameProcessingPipeline:
         """Public accessor for the revision publisher."""
         return self._revision_publisher
 
-    async def initialize(
-        self,
-        detector: PersonDetector | None = None,
-        # Tracking repository (required for tracklet manager)
-        tracking_repo: TrackingRepository | None = None,
-        # Gallery repository (required for tracklet manager + identity resolver)
-        gallery_repo: GalleryRepository | None = None,
-        # Global track repository (required for cross-camera associator)
-        global_track_repo: GlobalTrackRepository | None = None,
-        # Trajectory repository (required for trajectory writer)
-        trajectory_repo: TrajectoryRepository | None = None,
-        # Keyframe repository (required for keyframe sampler)
-        keyframe_repo: KeyframeRepository | None = None,
-        # Signal repository (required for dementia signal worker)
-        signal_repo: DementiaSignalRepository | None = None,
-        # Settings repository (used to upsert FK-anchoring camera rows).
-        settings_repo: SettingsRepository | None = None,
-        # Frame image source + ReID embedder for the real inference path.
-        frame_fetcher: FrameImageFetcher | None = None,
-        reid_embedder: ReidEmbedderProtocol | None = None,
-        # Pose estimator (RTMPose) — optional; if None, posture defaults to "unknown".
-        pose_estimator: PoseEstimator | None = None,
-        # Posture strategy — pluggable; defaults to RTMPose-only when None.
-        posture_strategy: PostureStrategy | None = None,
-        # Identity rewriter — rewrites trajectory/dwell/signal rows on revision.
-        # Defaults to InMemory no-op; inject PostgresIdentityRewriter in production.
-        identity_rewriter: IdentityRewriter | None = None,
-        # Bbox annotation repository — persists per-keyframe YOLO bboxes.
-        bbox_repo: BboxAnnotationRepository | None = None,
-        # Do-not-fuse hints repository — blocks re-fusion of unmerged tracklets.
-        dnf_repo: DoNotFuseRepository | None = None,
-    ) -> None:
+    async def initialize(self, deps: PipelineDependencies | None = None) -> None:
         """Initialize all pipeline components.
 
         Args:
-            detector: Triton-backed person detector. If None, skeleton mode.
-            tracking_repo: Tracking repository. Defaults to InMemoryTrackingRepository.
-            gallery_repo: Gallery repository. Defaults to InMemoryGalleryRepository.
-            global_track_repo: Global track repository. Defaults to InMemoryGlobalTrackRepository.
-            trajectory_repo: Trajectory repository. Defaults to InMemoryTrajectoryRepository.
-            keyframe_repo: Keyframe repository. Defaults to InMemoryKeyframeRepository.
-            frame_fetcher: Object-storage backed RGB frame loader.
-            reid_embedder: Triton-backed ReID embedder.
-            pose_estimator: Triton-backed RTMPose estimator. If None, posture defaults to "unknown".
+            deps: External dependencies. None means use all InMemory defaults.
         """
+        deps = deps or PipelineDependencies()
+
         # Transport
         self._transport = RedisStreamsTransport(self._config.transport)
         await self._transport.connect()
 
         # Repositories — use in-memory defaults for skeleton/test mode.
         # In production, concrete Postgres implementations are injected.
-        self._repo = tracking_repo or InMemoryTrackingRepository()
-        gallery = gallery_repo or InMemoryGalleryRepository()
+        self._repo = deps.tracking_repo or InMemoryTrackingRepository()
+        gallery = deps.gallery_repo or InMemoryGalleryRepository()
         self._gallery_repo = gallery
         self._gallery_cache = GalleryCache(gallery)
-        self._global_track_repo = global_track_repo or InMemoryGlobalTrackRepository()
-        self._settings_repo = settings_repo or InMemorySettingsRepository()
+        self._global_track_repo = deps.global_track_repo or InMemoryGlobalTrackRepository()
+        self._settings_repo = deps.settings_repo or InMemorySettingsRepository()
         self._seen_cameras = set()
 
         # Detector
-        self._detector = detector
-        self._frame_fetcher = frame_fetcher
-        self._reid_embedder = reid_embedder
+        self._detector = deps.detector
+        self._frame_fetcher = deps.frame_fetcher
+        self._reid_embedder = deps.reid_embedder
 
         # Pose estimation
-        self._pose_estimator = pose_estimator
-        self._posture_strategy = posture_strategy
-        self._motion_energy_tracker = MotionEnergyTracker() if pose_estimator is not None else None
+        self._pose_estimator = deps.pose_estimator
+        self._posture_strategy = deps.posture_strategy
+        self._motion_energy_tracker = (
+            MotionEnergyTracker() if deps.pose_estimator is not None else None
+        )
         self._posture_tracker = GlobalPostureTracker(required_consecutive=2)
 
         # Identity rewriter (orchestrator side)
-        self._identity_rewriter = identity_rewriter or InMemoryIdentityRewriter()
+        self._identity_rewriter = deps.identity_rewriter or InMemoryIdentityRewriter()
 
         # Bbox annotation repository
-        self._bbox_repo = bbox_repo or InMemoryBboxAnnotationRepository()
+        self._bbox_repo = deps.bbox_repo or InMemoryBboxAnnotationRepository()
 
         # Tracklet manager
         tracker = PerCameraTrackers(
@@ -417,24 +410,12 @@ class FrameProcessingPipeline:
             gallery=gallery,
             adjacency=self._adjacency,
             global_track_repo=self._global_track_repo,
-            config=AssociationConfig(
-                alpha=self._config.cross_cam.alpha,
-                floor_sigma_m=self._config.cross_cam.floor_sigma_m,
-                max_floor_distance_m=self._config.cross_cam.max_floor_distance_m,
-                min_link_score=self._config.cross_cam.min_link_score,
-                within_group_min_score=self._config.cross_cam.within_group_min_score,
-                unknown_merge_appearance_threshold=self._config.cross_cam.unknown_merge_appearance_threshold,
-                known_identity_reentry_threshold=self._config.cross_cam.known_identity_reentry_threshold,
-                same_camera_reentry_max_gap_s=self._config.cross_cam.same_camera_reentry_max_gap_s,
-                unknown_merge_max_gap_s=self._config.cross_cam.unknown_merge_max_gap_s,
-                unknown_merge_max_distance_m=self._config.cross_cam.unknown_merge_max_distance_m,
-                inter_gt_consolidation_appearance_threshold=self._config.cross_cam.inter_gt_consolidation_appearance_threshold,
-            ),
+            config=self._config.cross_cam,
             spatial_projection=self._spatial_projection,
-            dnf_repo=dnf_repo,
+            dnf_repo=deps.dnf_repo,
             gallery_cache=self._gallery_cache,
         )
-        self._dnf_repo = dnf_repo
+        self._dnf_repo = deps.dnf_repo
         self._sync_adjacency()
 
         self._identity_resolver = IdentityResolver(
@@ -454,7 +435,7 @@ class FrameProcessingPipeline:
         # ---- Trajectory writer + keyframe sampler ----
         # Use a single in-memory fallback so the signal worker can read
         # trajectories written by the writer.
-        _traj_repo = trajectory_repo or InMemoryTrajectoryRepository()
+        _traj_repo = deps.trajectory_repo or InMemoryTrajectoryRepository()
         self._trajectory_writer = TrajectoryWriter(repo=_traj_repo)
 
         # Phase 5: IdentityCommitter buffers per-frame posterior evidence
@@ -465,7 +446,7 @@ class FrameProcessingPipeline:
         )
 
         self._keyframe_sampler = KeyframeSampler(
-            repo=keyframe_repo or InMemoryKeyframeRepository(),
+            repo=deps.keyframe_repo or InMemoryKeyframeRepository(),
             config=self._config.sampler,
             bbox_repo=self._bbox_repo,
         )
@@ -476,8 +457,8 @@ class FrameProcessingPipeline:
         await self._scene_publisher.connect()
 
         # Signal worker — computes dementia signals from trajectory/dwell data.
-        self._signal_repo = signal_repo or InMemoryDementiaSignalRepository()
-        if self._config.signal_enabled:
+        self._signal_repo = deps.signal_repo or InMemoryDementiaSignalRepository()
+        if self._config.signals.enabled:
             self._signal_publisher = SignalPublisher(
                 redis_url=self._config.transport.redis_url,
             )
@@ -487,16 +468,16 @@ class FrameProcessingPipeline:
             self._signal_worker = DementiaSignalWorker(
                 trajectory_repo=_traj_repo,
                 signal_repo=self._signal_repo,
-                cfg=SignalConfig(
-                    tz_name=self._config.timezone,
-                    stillness_threshold_minutes=self._config.signal_stillness_threshold_minutes,
-                    stillness_emergency_minutes=self._config.signal_stillness_emergency_minutes,
-                    stillness_motion_floor=self._config.signal_stillness_motion_floor,
-                    pacing_room_threshold=self._config.signal_pacing_room_threshold,
-                    pacing_window_minutes=self._config.signal_pacing_window_minutes,
-                    nighttime_transition_threshold=self._config.signal_nighttime_transition_threshold,
-                    absence_threshold_minutes=self._config.signal_absence_threshold_minutes,
-                    bathroom_absolute_threshold_seconds=self._config.signal_bathroom_absolute_threshold_seconds,
+                cfg=DementiaSignalConfig(
+                    tz_name=self._config.signals.timezone,
+                    stillness_threshold_minutes=self._config.signals.stillness_threshold_minutes,
+                    stillness_emergency_minutes=self._config.signals.stillness_emergency_minutes,
+                    stillness_motion_floor=self._config.signals.stillness_motion_floor,
+                    pacing_room_threshold=self._config.signals.pacing_room_threshold,
+                    pacing_window_minutes=self._config.signals.pacing_window_minutes,
+                    nighttime_transition_threshold=self._config.signals.nighttime_transition_threshold,
+                    absence_threshold_minutes=self._config.signals.absence_threshold_minutes,
+                    bathroom_absolute_threshold_seconds=self._config.signals.bathroom_absolute_threshold_seconds,
                 ),
                 baseline_repo=baseline_repo,
             )
@@ -515,11 +496,11 @@ class FrameProcessingPipeline:
             )
 
         # Face identification client — calls person-identification-service.
-        if self._config.face_id_enabled and self._config.face_id_url:
+        if self._config.face_id.enabled and self._config.face_id.url:
             self._face_id_client = FaceIdentificationClient(
-                base_url=self._config.face_id_url,
-                timeout_s=self._config.face_id_timeout_s,
-                min_confidence=self._config.face_id_min_confidence,
+                base_url=self._config.face_id.url,
+                timeout_s=self._config.face_id.timeout_s,
+                min_confidence=self._config.face_id.min_confidence,
             )
             await self._face_id_client.connect()
 
@@ -546,9 +527,9 @@ class FrameProcessingPipeline:
                     face_id_client=self._face_id_client,
                     tracklet_manager=self._tracklet_manager,
                     gallery_repo=self._gallery_repo,
-                    face_id_cooldown_s=self._config.face_id_cooldown_s,
-                    face_id_min_confidence=self._config.face_id_min_confidence,
-                    face_id_camera_configs=self._config.face_id_camera_configs,
+                    face_id_cooldown_s=self._config.face_id.cooldown_s,
+                    face_id_min_confidence=self._config.face_id.min_confidence,
+                    face_id_camera_configs=self._config.face_id.camera_configs,
                     last_face_id_by_tracklet=self._last_face_id_by_tracklet,
                 ),
                 GlobalTrackingStage(
@@ -606,7 +587,7 @@ class FrameProcessingPipeline:
 
         logger.info(
             "Pipeline initialized",
-            detector=bool(detector),
+            detector=bool(deps.detector),
             signal_worker=bool(self._signal_worker),
             face_id=bool(self._face_id_client),
             pose=bool(self._pose_estimator),
@@ -711,14 +692,14 @@ class FrameProcessingPipeline:
 
         logger.info(
             "Signal loop started",
-            interval_s=self._config.signal_interval_s,
+            interval_s=self._config.signals.interval_s,
         )
 
         first_run = True
         while not self._stop_event.is_set():
             try:
                 if not first_run:
-                    await asyncio.sleep(self._config.signal_interval_s)
+                    await asyncio.sleep(self._config.signals.interval_s)
                 else:
                     first_run = False
                 if self._stop_event.is_set():

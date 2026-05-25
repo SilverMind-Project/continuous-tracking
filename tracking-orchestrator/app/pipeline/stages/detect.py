@@ -14,6 +14,18 @@ from .base import FrameStage
 
 logger = get_logger(__name__)
 
+# Minimum bbox area as a fraction of the frame area. Very small bboxes
+# (< 0.5% of frame) are almost always YOLO false positives — no real person
+# in a home environment occupies less than 0.5% of a typical 1920x1080 frame.
+_MIN_BBOX_AREA_FRACTION = 0.005
+
+
+def _filter_small_bboxes(
+    boxes: list[DetectionBox],
+) -> list[DetectionBox]:
+    """Drop detections whose normalised area is below the minimum threshold."""
+    return [b for b in boxes if b.area >= _MIN_BBOX_AREA_FRACTION]
+
 
 def _bbox_iou(a: list[float], b: list[float]) -> float:
     x_left = max(a[0], b[0])
@@ -71,6 +83,8 @@ class DetectStage(FrameStage):
             count=len(detections),
             image_shape=f"{image.shape[0]}x{image.shape[1]}",
         )
+        if detections:
+            detections = _filter_small_bboxes(detections)
         if detections and self._iou_dedup_threshold < 1.0:
             detections = _iou_dedup_detections(detections, self._iou_dedup_threshold)
         ctx.raw_detections = detections

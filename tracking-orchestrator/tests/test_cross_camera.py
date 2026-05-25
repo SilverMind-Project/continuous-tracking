@@ -18,8 +18,9 @@ from app.storage.base import (
     InMemoryGalleryRepository,
     InMemoryGlobalTrackRepository,
 )
+from app.tracking.association_solver import AssociationConfig
 from app.tracking.camera_adjacency import AdjacencyEdge, CameraAdjacency
-from app.tracking.cross_camera import CrossCamConfig, CrossCameraAssociator, TrackletPairScore
+from app.tracking.cross_camera import CrossCameraAssociator, TrackletPairScore
 
 
 @pytest.fixture()
@@ -54,7 +55,7 @@ def assoc(
         gallery=gallery,
         adjacency=adjacency,
         global_track_repo=global_track_repo,
-        config=CrossCamConfig(
+        config=AssociationConfig(
             alpha=0.7,
             min_link_score=0.5,
             unknown_merge_max_gap_s=0,  # disable UNKNOWN GT merge for existing tests
@@ -244,7 +245,7 @@ class TestCrossCameraAssociator:
         # The default config uses min_link_score=0.5 and the approximate
         # gallery similarity returns 0.8, geo_score is also moderate.
         # To test the threshold, raise min_link_score above the combined score.
-        assoc._config = CrossCamConfig(min_link_score=0.99)
+        assoc._config = AssociationConfig(min_link_score=0.99)
         t_a = _make_tracklet("t1", "cam_a")
         t_b = _make_tracklet("t2", "cam_b")
         result = await assoc.associate([t_a, t_b], captured_at=datetime.now(UTC))
@@ -300,7 +301,7 @@ class TestCrossCameraAssociator:
             gallery=InMemoryGalleryRepository(),
             adjacency=adj,
             global_track_repo=global_track_repo,
-            config=CrossCamConfig(min_link_score=0.5),
+            config=AssociationConfig(min_link_score=0.5),
         )
 
         scores = {
@@ -416,7 +417,7 @@ class TestCrossCameraAssociator:
             gallery=gallery,
             adjacency=adj,
             global_track_repo=global_track_repo,
-            config=CrossCamConfig(min_link_score=0.5),
+            config=AssociationConfig(min_link_score=0.5),
         )
 
         now = datetime.now(UTC)
@@ -455,7 +456,7 @@ class TestCrossCameraAssociator:
             gallery=InMemoryGalleryRepository(),
             adjacency=adj,
             global_track_repo=global_track_repo,
-            config=CrossCamConfig(min_link_score=0.5),
+            config=AssociationConfig(min_link_score=0.5),
         )
 
         t_a = _make_tracklet("t1", "cam_a")
@@ -849,7 +850,7 @@ async def test_blocked_pair_prevents_same_camera_reentry(
         adjacency=adjacency,
         global_track_repo=global_track_repo,
         dnf_repo=dnf,
-        config=CrossCamConfig(unknown_merge_max_gap_s=0),
+        config=AssociationConfig(unknown_merge_max_gap_s=0),
     )
     emb = [0.1, 0.1, 0.1]
     now = datetime.now(UTC)

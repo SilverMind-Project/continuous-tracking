@@ -11,7 +11,12 @@ import numpy as np
 import pytest
 
 from app.inference.schemas import DetectionBox
-from app.pipeline.frame_pipeline import FrameProcessingPipeline, PipelineConfig
+from app.pipeline.frame_pipeline import (
+    FrameProcessingPipeline,
+    PipelineConfig,
+    PipelineDependencies,
+    SignalConfig,
+)
 from app.transport.redis_streams import FrameReady
 
 _NOW_NS = int(time.time() * 1e9)
@@ -53,14 +58,16 @@ class TestEmptyFrameHandling:
                 return []
 
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signal_enabled=False)
+            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
         )
 
         with _mock_redis_deps():
             await pipeline.initialize(
-                detector=EmptyDetector(),  # type: ignore[arg-type]
-                frame_fetcher=FakeFetcher(),
-                reid_embedder=FakeReid(),
+                PipelineDependencies(
+                    detector=EmptyDetector(),  # type: ignore[arg-type]
+                    frame_fetcher=FakeFetcher(),
+                    reid_embedder=FakeReid(),
+                )
             )
 
             # Spy on tracker.update to record calls.
@@ -116,14 +123,16 @@ class TestEmptyFrameHandling:
                 return []
 
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signal_enabled=False)
+            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
         )
 
         with _mock_redis_deps():
             await pipeline.initialize(
-                detector=DetectorWithCutoff(),  # type: ignore[arg-type]
-                frame_fetcher=FakeFetcher(),
-                reid_embedder=FakeReid(),
+                PipelineDependencies(
+                    detector=DetectorWithCutoff(),  # type: ignore[arg-type]
+                    frame_fetcher=FakeFetcher(),
+                    reid_embedder=FakeReid(),
+                )
             )
 
             # After 5 frames with a detection, a confirmed tracklet exists.

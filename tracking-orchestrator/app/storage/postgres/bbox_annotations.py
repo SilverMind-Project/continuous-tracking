@@ -137,6 +137,28 @@ class PostgresBboxAnnotationRepository:
             )
         return _row_to_domain(row) if row is not None else None
 
+    async def tag_annotation(self, annotation_id: str, identity_id: str | None) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.keyframe_bbox_annotations
+                SET identity_id = $1
+                WHERE id = $2::uuid
+                """,
+                identity_id,
+                annotation_id,
+            )
+
+    async def delete_annotation(self, annotation_id: str) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                DELETE FROM continuous_tracking.keyframe_bbox_annotations
+                WHERE id = $1::uuid
+                """,
+                annotation_id,
+            )
+
 
 def _row_to_domain(row: asyncpg.Record) -> BboxAnnotation:
     return BboxAnnotation(

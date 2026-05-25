@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.pipeline.frame_pipeline import FrameProcessingPipeline, PipelineConfig
+from app.pipeline.frame_pipeline import (
+    FrameProcessingPipeline,
+    PipelineConfig,
+    PipelineDependencies,
+)
 
 
 @contextmanager
@@ -57,7 +61,7 @@ async def test_initialize_without_detector_and_allow_skeleton_false_raises() -> 
     """Default config (allow_skeleton=False) must raise when detector is None."""
     pipeline = FrameProcessingPipeline(_config())
     with _mock_redis_deps(), pytest.raises(RuntimeError, match="allow_skeleton"):
-        await pipeline.initialize(detector=None)
+        await pipeline.initialize(PipelineDependencies(detector=None))
 
 
 @pytest.mark.asyncio
@@ -65,5 +69,5 @@ async def test_initialize_without_detector_and_allow_skeleton_true_succeeds() ->
     """allow_skeleton=True must allow initialization without a detector."""
     pipeline = FrameProcessingPipeline(_config(allow_skeleton=True))
     with _mock_redis_deps():
-        await pipeline.initialize(detector=None)
+        await pipeline.initialize(PipelineDependencies(detector=None))
     await pipeline.stop()

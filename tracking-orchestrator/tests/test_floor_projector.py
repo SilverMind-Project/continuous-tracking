@@ -10,8 +10,9 @@ import pytest
 from app.calibration.state import CalibrationState
 from app.domain import BoundingBox, FloorPoint, Tracklet
 from app.storage.base import InMemoryGalleryRepository, InMemoryGlobalTrackRepository
+from app.tracking.association_solver import AssociationConfig
 from app.tracking.camera_adjacency import AdjacencyEdge, CameraAdjacency
-from app.tracking.cross_camera import CrossCamConfig, CrossCameraAssociator
+from app.tracking.cross_camera import CrossCameraAssociator
 from app.tracking.floor_projector import FloorProjector
 
 # ---------------------------------------------------------------------------
@@ -63,12 +64,14 @@ def _make_tracklet(
     )
 
 
-def _assoc(state: CalibrationState, config: CrossCamConfig | None = None) -> CrossCameraAssociator:
+def _assoc(
+    state: CalibrationState, config: AssociationConfig | None = None
+) -> CrossCameraAssociator:
     return CrossCameraAssociator(
         gallery=InMemoryGalleryRepository(),
         adjacency=_make_adjacency(),
         global_track_repo=InMemoryGlobalTrackRepository(),
-        config=config or CrossCamConfig(floor_sigma_m=1.5, max_floor_distance_m=8.0),
+        config=config or AssociationConfig(floor_sigma_m=1.5, max_floor_distance_m=8.0),
         floor_projector=FloorProjector(state),
     )
 

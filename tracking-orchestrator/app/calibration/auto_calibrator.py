@@ -74,7 +74,7 @@ class AutoCalibrator:
         self,
         depth_estimator: DepthEstimator,
         fov_deg: float = 70.0,
-        floor_region_fraction: float = 0.75,
+        floor_region_fraction: float = 0.60,
     ) -> None:
         self._depth_estimator = depth_estimator
         self._fov_deg = fov_deg

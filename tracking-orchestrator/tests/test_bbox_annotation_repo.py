@@ -5,6 +5,7 @@ Tests cover:
 - retrieve by tracklet
 - update_identity_id propagates
 - save_override_bbox persists
+- tag_annotation sets/clears identity_id
 """
 
 from __future__ import annotations
@@ -135,3 +136,56 @@ async def test_multiple_annotations_same_keyframe(repo: InMemoryBboxAnnotationRe
     )
     results = await repo.get_bbox_annotations_for_keyframe("kf1")
     assert len(results) == 2
+
+
+# -- tag_annotation -----------------------------------------------------------
+
+
+async def test_tag_annotation_sets_identity(repo: InMemoryBboxAnnotationRepository) -> None:
+    ann = _bbox(identity_id=None)
+    await repo.save_bbox_annotations([ann])
+    annotation_id = next(iter(repo._rows.keys()))
+
+    await repo.tag_annotation(annotation_id, "person-abc")
+
+    updated = await repo.get_annotation_by_id(annotation_id)
+    assert updated is not None
+    assert updated.identity_id == "person-abc"
+
+
+async def test_tag_annotation_clears_identity(repo: InMemoryBboxAnnotationRepository) -> None:
+    ann = _bbox(identity_id=None)
+    await repo.save_bbox_annotations([ann])
+    annotation_id = next(iter(repo._rows.keys()))
+
+    await repo.tag_annotation(annotation_id, "person-abc")
+    await repo.tag_annotation(annotation_id, None)
+
+    updated = await repo.get_annotation_by_id(annotation_id)
+    assert updated is not None
+    assert updated.identity_id is None
+
+
+async def test_tag_annotation_noop_on_missing_id(repo: InMemoryBboxAnnotationRepository) -> None:
+    # Must not raise
+    await repo.tag_annotation("nonexistent-uuid", "person-abc")
+
+
+# -- delete_annotation --------------------------------------------------------
+
+
+async def test_delete_annotation_removes_row(repo: InMemoryBboxAnnotationRepository) -> None:
+    ann = _bbox()
+    await repo.save_bbox_annotations([ann])
+    annotation_id = next(iter(repo._rows.keys()))
+
+    await repo.delete_annotation(annotation_id)
+
+    assert await repo.get_annotation_by_id(annotation_id) is None
+    results = await repo.get_bbox_annotations_for_keyframe("kf1")
+    assert len(results) == 0
+
+
+async def test_delete_annotation_noop_on_missing_id(repo: InMemoryBboxAnnotationRepository) -> None:
+    # Must not raise
+    await repo.delete_annotation("nonexistent-uuid")

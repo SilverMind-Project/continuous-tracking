@@ -12,7 +12,7 @@ from app.main import (
     _build_tracklet_config,
 )
 from app.sampling.keyframe_sampler import SamplerConfig
-from app.tracking.cross_camera import CrossCamConfig
+from app.tracking.association_solver import AssociationConfig
 from app.tracking.identity_resolver import ResolverConfig
 from app.tracking.tracklet_manager import TrackletConfig
 
@@ -124,12 +124,12 @@ def test_tracklet_config_built_from_settings():
 
 
 # ---------------------------------------------------------------------------
-# CrossCamConfig
+# AssociationConfig
 # ---------------------------------------------------------------------------
 
 
 def test_cross_cam_config_defaults_match_dataclass():
-    cc = CrossCamConfig()
+    cc = AssociationConfig()
     s = Settings.from_dict({"cross_camera": asdict(cc)})
     cfg = _build_cross_cam_config(s)
     assert cfg.alpha == pytest.approx(cc.alpha)
@@ -150,7 +150,7 @@ def test_cross_cam_config_defaults_match_dataclass():
 
 
 def test_cross_cam_config_built_from_settings():
-    values = asdict(CrossCamConfig())
+    values = asdict(AssociationConfig())
     values.update(
         {
             "alpha": "0.80",

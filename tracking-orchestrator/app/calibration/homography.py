@@ -61,7 +61,7 @@ def compute_homography(
     src: npt.NDArray[np.float64] = np.array(pixel_points, dtype=np.float64)
     dst: npt.NDArray[np.float64] = np.array(floor_points, dtype=np.float64)
 
-    h_raw, _ = cv2.findHomography(src, dst, cv2.RANSAC, ransacReprojThreshold=0.05)
+    h_raw, _ = cv2.findHomography(src, dst, cv2.RANSAC, ransacReprojThreshold=3.0)
     if h_raw is None:
         raise ValueError(
             "findHomography did not converge: check that the points are not collinear "
