@@ -9,7 +9,8 @@ from .global_tracking import GlobalTrackingStage
 from .inference import InferenceStage
 from .keyframes import KeyframeStage
 from .local_tracking import LocalTrackingStage
-from .posture_trails import PostureAndTrailsStage
+from .posture_stage import PostureStage
+from .posture_trails import PostureAndTrailsStage, TrailsStage
 from .privacy import PrivacyStage
 from .publish import PublishStage
 from .revisions import RevisionsStage
@@ -28,10 +29,12 @@ __all__ = [
     "KeyframeStage",
     "LocalTrackingStage",
     "PostureAndTrailsStage",
+    "PostureStage",
     "PrivacyStage",
     "PublishStage",
     "RevisionsStage",
     "SpatialProjectionStage",
     "StageRunner",
+    "TrailsStage",
     "TrajectoryStage",
 ]

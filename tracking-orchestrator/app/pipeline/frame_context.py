@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         PoseEvidence,
     )
     from ..inference.schemas import DetectionBox, Embedding, PoseResult
+    from ..trajectory.posture import PostureScores
     from ..transport.redis_streams import FrameReady
 
 
@@ -87,6 +88,9 @@ class FrameContext:
     outcome_decisions: list[IdentityDecision] = field(default_factory=list)
     new_revisions: list[IdentityRevision] = field(default_factory=list)
     committed_ids: dict[str, str | None] = field(default_factory=dict)
+
+    # --- Stage: posture ---
+    det_posture_scores: dict[str, PostureScores] = field(default_factory=dict)
 
     # --- Stage: trajectory ---
     det_posture: dict[str, PostureType] = field(default_factory=dict)

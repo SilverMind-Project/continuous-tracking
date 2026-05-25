@@ -14,7 +14,7 @@ import numpy.typing as npt
 
 from ..domain import Detection, PostureType
 from ..inference.schemas import PoseResult
-from .posture import classify_posture
+from .posture import PostureScores, classify_posture, score_posture
 
 
 @runtime_checkable
@@ -30,6 +30,18 @@ class PostureStrategy(Protocol):
         """Return a PostureLabel for this detection.
 
         Must never raise — return "unknown" on any inference failure.
+        """
+        ...
+
+    async def score(
+        self,
+        frame: npt.NDArray[np.uint8],
+        detection: Detection,
+        pose_result: PoseResult | None = None,
+    ) -> PostureScores:
+        """Return soft evidence scores for this detection.
+
+        Must never raise — return PostureScores(0.0, 0.0, 0.0) on any failure.
         """
         ...
 
@@ -68,6 +80,19 @@ class RTMPosePostureStrategy:
             return classify_posture(pose_result, detection.bbox)
         except Exception:
             return "unknown"
+
+    async def score(
+        self,
+        frame: npt.NDArray[np.uint8],
+        detection: Detection,
+        pose_result: PoseResult | None = None,
+    ) -> PostureScores:
+        try:
+            if pose_result is None:
+                return PostureScores(lying=0.0, sitting=0.0, standing_walking=0.0)
+            return score_posture(pose_result)
+        except Exception:
+            return PostureScores(lying=0.0, sitting=0.0, standing_walking=0.0)
 
     def evict_tracklet(self, tracklet_id: str) -> None:
         """No-op — RTMPose has no per-tracklet cache."""

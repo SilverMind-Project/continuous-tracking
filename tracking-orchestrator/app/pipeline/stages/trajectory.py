@@ -114,14 +114,16 @@ class TrajectoryStage(FrameStage):
             gt_motion_energy: float | None = None
             pose, matching_detection_id = self._find_pose_for_gt(ctx, decision.global_track_id)
 
-            if pose is not None:
+            if pose is not None and matching_detection_id is not None:
                 if self._motion_energy_tracker is not None:
                     bbox_diag = (gt_bbox_entry.width**2 + gt_bbox_entry.height**2) ** 0.5
                     me = self._motion_energy_tracker.update(
                         decision.global_track_id, pose, traj_time, bbox_diag_px=bbox_diag
                     )
                     gt_motion_energy = me.mean_keypoint_velocity_px_s
-                if self._posture_tracker is not None:
+
+                posture_scores = ctx.det_posture_scores.get(matching_detection_id)
+                if posture_scores is not None and self._posture_tracker is not None:
                     gt_obj = next(
                         (
                             gt
@@ -131,16 +133,23 @@ class TrajectoryStage(FrameStage):
                         None,
                     )
                     active_camera_ids = gt_obj.camera_ids if gt_obj else [ctx.frame.camera_id]
+                    prev_posture = self._posture_tracker.committed_posture(decision.global_track_id)
                     gt_posture = self._posture_tracker.update(
                         global_track_id=decision.global_track_id,
                         camera_id=ctx.frame.camera_id,
-                        pose=pose,
-                        bbox=gt_bbox_entry,
+                        scores=posture_scores,
                         active_camera_ids=active_camera_ids,
                         motion_energy=gt_motion_energy,
                     )
-                    if matching_detection_id is not None:
-                        ctx.det_posture[matching_detection_id] = gt_posture
+                    if prev_posture is not None and prev_posture != gt_posture:
+                        logger.info(
+                            "Posture changed",
+                            global_track_id=decision.global_track_id,
+                            camera_id=ctx.frame.camera_id,
+                            previous=prev_posture,
+                            current=gt_posture,
+                        )
+                    ctx.det_posture[matching_detection_id] = gt_posture
             elif matching_detection_id is not None:
                 gt_posture = ctx.det_posture.get(matching_detection_id, "unknown")
 

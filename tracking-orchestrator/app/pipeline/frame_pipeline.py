@@ -44,12 +44,13 @@ from ..pipeline.stages import (
     InferenceStage,
     KeyframeStage,
     LocalTrackingStage,
-    PostureAndTrailsStage,
+    PostureStage,
     PrivacyStage,
     PublishStage,
     RevisionsStage,
     SpatialProjectionStage,
     StageRunner,
+    TrailsStage,
     TrajectoryStage,
 )
 from ..pipeline.types import FaceIdCameraConfig, FrameImageFetcher, ReidEmbedderProtocol
@@ -568,6 +569,10 @@ class FrameProcessingPipeline:
                     posture_tracker=self._posture_tracker,
                     prev_active_gt_ids=self._prev_active_gt_ids,
                 ),
+                PostureStage(
+                    posture_strategy=self._posture_strategy,
+                    camera_room_map=self._config.camera_room_map,
+                ),
                 TrajectoryStage(
                     trajectory_writer=self._trajectory_writer,
                     floor_projector=self._floor_projector,
@@ -588,8 +593,7 @@ class FrameProcessingPipeline:
                     identity_rewrite_on_face_commit=self._config.identity_rewrite_on_face_commit,
                 ),
                 DetectionBackfillStage(tracklet_manager=self._tracklet_manager),
-                PostureAndTrailsStage(
-                    posture_strategy=self._posture_strategy,
+                TrailsStage(
                     trail_by_tracklet=self._trail_by_tracklet,
                     trail_maxlen=self._TRAIL_MAXLEN,
                 ),

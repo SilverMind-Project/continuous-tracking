@@ -112,14 +112,14 @@ pipeline:
     depth_slow_path_min_interval_s: "${POSTURE_DEPTH_SLOW_PATH_MIN_INTERVAL_S:-15.0}"
     # Maximum age of a cached slow-path result before it is discarded.
     depth_slow_path_max_age_s: "${POSTURE_DEPTH_SLOW_PATH_MAX_AGE_S:-60.0}"
-  detector_confidence: "${DETECTOR_CONFIDENCE:-0.35}"
+  detector_confidence: "${DETECTOR_CONFIDENCE:-0.6d}"
   allow_skeleton: "${PIPELINE_ALLOW_SKELETON:-false}"
-  batch_window_s: "${PIPELINE_BATCH_WINDOW_S:-0.0}"
-  max_batch_size: "${PIPELINE_MAX_BATCH_SIZE:-4}"
+  batch_window_s: "${PIPELINE_BATCH_WINDOW_S:-0.5}"
+  max_batch_size: "${PIPELINE_MAX_BATCH_SIZE:-5}"
   detection:
     # Post-decode IoU suppression — drops near-duplicate detections after
     # the model's baked NMS when two boxes overlap more than this threshold.
-    iou_dedup_threshold: "${PIPELINE_DETECTION_IOU_DEDUP:-0.55}"
+    iou_dedup_threshold: "${PIPELINE_DETECTION_IOU_DEDUP:-0.50}"
   tracker:
     # Newly-spawned tracklets that overlap an established track (age >= 5
     # frames) by more than this IoU are dropped immediately.

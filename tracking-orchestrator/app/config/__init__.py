@@ -42,14 +42,14 @@ class SettingNotFoundError(KeyError):
 
 def _as_int(value: object, key: str) -> int:
     try:
-        return int(value)
+        return int(value)  # type: ignore[call-overload,no-any-return]
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Setting {key} must be an integer, got {value!r}") from exc
 
 
 def _as_float(value: object, key: str) -> float:
     try:
-        return float(value)
+        return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Setting {key} must be a float, got {value!r}") from exc
 

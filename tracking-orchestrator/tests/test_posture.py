@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from app.domain import BoundingBox
 from app.inference.schemas import Keypoint, PoseResult
-from app.trajectory.posture import GlobalPostureTracker, PostureHysteresis, classify_posture
+from app.trajectory.posture import (
+    GlobalPostureTracker,
+    PostureHysteresis,
+    classify_posture,
+    score_posture,
+)
 
 # Helper: build a PoseResult with all 17 COCO keypoints at given positions.
 # Unspecified keypoints default to (0.5, 0.5, score=0.9).
@@ -304,7 +309,10 @@ class TestGlobalPostureTracker:
         )
         tracker = GlobalPostureTracker(required_consecutive=2)
         # First frame commits immediately
-        assert tracker.update("gt-1", "cam-1", pose, _BBOX_PORTRAIT, ["cam-1"]) == "sitting"
+        assert (
+            tracker.update("gt-1", "cam-1", scores=score_posture(pose), active_camera_ids=["cam-1"])
+            == "sitting"
+        )
 
     def test_walking_from_motion_energy(self) -> None:
         pose = _pose(
@@ -319,7 +327,13 @@ class TestGlobalPostureTracker:
         )
         tracker = GlobalPostureTracker(required_consecutive=2)
         assert (
-            tracker.update("gt-1", "cam-1", pose, _BBOX_PORTRAIT, ["cam-1"], motion_energy=0.012)
+            tracker.update(
+                "gt-1",
+                "cam-1",
+                scores=score_posture(pose),
+                active_camera_ids=["cam-1"],
+                motion_energy=0.012,
+            )
             == "walking"
         )
 
@@ -349,19 +363,39 @@ class TestGlobalPostureTracker:
         tracker = GlobalPostureTracker(required_consecutive=2)
 
         # Initialize track with Camera 2's partial view (starts as unknown)
-        res1 = tracker.update("gt-1", "cam-2", pose_partial, _BBOX_PORTRAIT, ["cam-1", "cam-2"])
+        res1 = tracker.update(
+            "gt-1",
+            "cam-2",
+            scores=score_posture(pose_partial),
+            active_camera_ids=["cam-1", "cam-2"],
+        )
         assert res1 == "unknown"
 
         # Update with Camera 1's full sitting view (first flip frame -> remains unknown)
-        res2 = tracker.update("gt-1", "cam-1", pose_sitting, _BBOX_PORTRAIT, ["cam-1", "cam-2"])
+        res2 = tracker.update(
+            "gt-1",
+            "cam-1",
+            scores=score_posture(pose_sitting),
+            active_camera_ids=["cam-1", "cam-2"],
+        )
         assert res2 == "unknown"
 
         # Second frame of "sitting" on cam-1 commits it
-        res3 = tracker.update("gt-1", "cam-1", pose_sitting, _BBOX_PORTRAIT, ["cam-1", "cam-2"])
+        res3 = tracker.update(
+            "gt-1",
+            "cam-1",
+            scores=score_posture(pose_sitting),
+            active_camera_ids=["cam-1", "cam-2"],
+        )
         assert res3 == "sitting"
 
         # Update from cam-2's partial view (fused with cam-1's stored scores -> remains sitting)
-        res4 = tracker.update("gt-1", "cam-2", pose_partial, _BBOX_PORTRAIT, ["cam-1", "cam-2"])
+        res4 = tracker.update(
+            "gt-1",
+            "cam-2",
+            scores=score_posture(pose_partial),
+            active_camera_ids=["cam-1", "cam-2"],
+        )
         assert res4 == "sitting"
 
     def test_eviction_removes_state(self) -> None:
@@ -376,7 +410,10 @@ class TestGlobalPostureTracker:
             right_ankle=_keypoint(0.6, 0.85),
         )
         tracker = GlobalPostureTracker(required_consecutive=2)
-        assert tracker.update("gt-1", "cam-1", pose, _BBOX_PORTRAIT, ["cam-1"]) == "standing"
+        assert (
+            tracker.update("gt-1", "cam-1", scores=score_posture(pose), active_camera_ids=["cam-1"])
+            == "standing"
+        )
         tracker.evict_track("gt-1")
 
         # New pose is sitting
@@ -391,7 +428,15 @@ class TestGlobalPostureTracker:
             right_ankle=_keypoint(0.75, 0.85),
         )
         # Evicted gt-1: first observation again, so sitting commits immediately
-        assert tracker.update("gt-1", "cam-1", pose_sitting, _BBOX_PORTRAIT, ["cam-1"]) == "sitting"
+        assert (
+            tracker.update(
+                "gt-1",
+                "cam-1",
+                scores=score_posture(pose_sitting),
+                active_camera_ids=["cam-1"],
+            )
+            == "sitting"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -48,6 +48,7 @@ class CameraCalibration:
     image_height: int
     quality: CalibrationQuality
     calibrated_at: datetime
+    fov_deg: float | None = None
 
 
 # ---------------------------------------------------------------------------

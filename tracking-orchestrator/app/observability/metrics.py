@@ -92,6 +92,12 @@ class Metrics:
     cts_posture_slow_path_runs_total: Counter
     cts_posture_slow_path_latency_seconds: Histogram
 
+    # ---- Posture fusion / hysteresis ----------------------------------
+    cts_posture_hysteresis_flips_total: Counter
+    cts_posture_camera_contributions_total: Counter
+    cts_posture_cameras_fused: Histogram
+    cts_posture_fused_class_total: Counter
+
     # ---- Stage latency -----------------------------------------------
     stage_latency_ms: Histogram
 
@@ -300,6 +306,26 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_posture_slow_path_latency_seconds",
             "Latency of depth-based posture inference.",
             (0.05, 0.1, 0.2, 0.5, 1.0, 2.0),
+        ),
+        cts_posture_hysteresis_flips_total=_counter(
+            "cts_posture_hysteresis_flips_total",
+            "Total number of posture hysteresis state flips (committed posture changed).",
+            ["camera_id"],
+        ),
+        cts_posture_camera_contributions_total=_counter(
+            "cts_posture_camera_contributions_total",
+            "Total number of per-camera posture score updates submitted to GlobalPostureTracker.",
+            ["camera_id"],
+        ),
+        cts_posture_cameras_fused=_hist(
+            "cts_posture_cameras_fused",
+            "Number of cameras contributing to each fusion cycle (non-stale).",
+            (1.0, 2.0, 3.0, 4.0, 5.0),
+        ),
+        cts_posture_fused_class_total=_counter(
+            "cts_posture_fused_class_total",
+            "Posture class assigned after fusion, before hysteresis.",
+            ["posture"],
         ),
         stage_latency_ms=_hist(
             "cts_stage_latency_ms",

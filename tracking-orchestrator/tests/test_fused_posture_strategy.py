@@ -7,6 +7,17 @@ import pytest
 
 from app.domain import BoundingBox, Detection
 from app.trajectory.fused_posture_strategy import FusedPostureStrategy
+from app.trajectory.posture import PostureScores
+
+
+def _label_to_scores(label: str) -> PostureScores:
+    if label == "lying":
+        return PostureScores(lying=1.0, sitting=0.0, standing_walking=0.0)
+    if label == "sitting":
+        return PostureScores(lying=0.0, sitting=1.0, standing_walking=0.0)
+    if label in ("standing", "walking"):
+        return PostureScores(lying=0.0, sitting=0.0, standing_walking=1.0)
+    return PostureScores(lying=0.0, sitting=0.0, standing_walking=0.0)
 
 
 class FakePostureStrategy:
@@ -19,6 +30,7 @@ class FakePostureStrategy:
         self._returns = returns
         self._raises = raises
         self.call_count = 0
+        self.score_call_count = 0
 
     @property
     def name(self) -> str:
@@ -29,6 +41,12 @@ class FakePostureStrategy:
         if self._raises is not None:
             raise self._raises
         return self._returns
+
+    async def score(self, frame, detection, pose_result=None):
+        self.score_call_count += 1
+        if self._raises is not None:
+            raise self._raises
+        return _label_to_scores(self._returns)
 
     def evict_tracklet(self, tracklet_id: str) -> None:
         pass
@@ -129,3 +147,62 @@ async def test_different_tracklets_have_independent_cache():
     result = await fused.infer(np.zeros((480, 640, 3), dtype=np.uint8), det2)
     assert slow.call_count == 2
     assert result == "lying"
+
+
+class TestCacheKeyEmptyStringBug:
+    """Regression tests for the empty-string tracklet_id cache key bug."""
+
+    @pytest.mark.asyncio
+    async def test_infer_untracked_detection_caches_on_detection_id(self) -> None:
+        """An untracked detection (tracklet_id='') must use detection_id as cache key."""
+        fast = FakePostureStrategy(name="fast", returns="unknown")
+        slow = FakePostureStrategy(name="slow", returns="lying")
+        fused = FusedPostureStrategy(fast, slow, slow_path_min_interval_s=60.0)
+
+        det = Detection(
+            detection_id="fixed-det-id",
+            camera_id="cam-1",
+            bbox=BoundingBox(x_min=10, y_min=10, x_max=100, y_max=200),
+            embedding=[],
+            capture_time=None,  # type: ignore[arg-type]
+            event_time=None,  # type: ignore[arg-type]
+            confidence=0.9,
+            tracklet_id="",
+        )
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        # First call: slow path runs, caches with key "fixed-det-id"
+        await fused.infer(frame, det)
+        assert slow.call_count == 1
+
+        # Second call: same detection_id → cache should hit, slow NOT called again
+        await fused.infer(frame, det)
+        assert slow.call_count == 1, (
+            f"Slow path ran twice ({slow.call_count}) for same detection_id — cache key bug"
+        )
+
+    @pytest.mark.asyncio
+    async def test_score_untracked_detection_caches_on_detection_id(self) -> None:
+        """score() must also use detection_id correctly for untracked detections."""
+        fast = FakePostureStrategy(name="fast", returns="unknown")
+        slow = FakePostureStrategy(name="slow", returns="lying")
+        fused = FusedPostureStrategy(fast, slow, slow_path_min_interval_s=60.0)
+
+        det = Detection(
+            detection_id="fixed-det-id",
+            camera_id="cam-1",
+            bbox=BoundingBox(x_min=10, y_min=10, x_max=100, y_max=200),
+            embedding=[],
+            capture_time=None,  # type: ignore[arg-type]
+            event_time=None,  # type: ignore[arg-type]
+            confidence=0.9,
+            tracklet_id="",
+        )
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        await fused.score(frame, det)
+        assert slow.score_call_count == 1
+        await fused.score(frame, det)
+        assert slow.score_call_count == 1, (
+            f"score() cache key bug — slow path ran {slow.score_call_count} times"
+        )

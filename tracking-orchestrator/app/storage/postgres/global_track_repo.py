@@ -258,7 +258,10 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
                 tracklet_ids=list(dict.fromkeys(into.tracklet_ids + from_track.tracklet_ids)),
                 started_at=min(into.started_at, from_track.started_at),
                 last_seen_at=max(into.last_seen_at, from_track.last_seen_at),
-                current_identity_id=into.current_identity_id or from_track.current_identity_id,
+                current_identity_id=(into.current_identity_id or from_track.current_identity_id),
+                current_identity_committed_at=(
+                    into.current_identity_committed_at or from_track.current_identity_committed_at
+                ),
                 state="active",
             )
             await conn.execute(
@@ -269,6 +272,7 @@ class PostgresGlobalTrackRepository(GlobalTrackRepository):
                 merged.started_at,
                 merged.last_seen_at,
                 merged.current_identity_id,
+                merged.current_identity_committed_at,
                 merged.state,
             )
             await conn.execute(

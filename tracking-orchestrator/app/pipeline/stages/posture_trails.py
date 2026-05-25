@@ -1,45 +1,37 @@
-"""Posture and trails stage: classifies posture and maintains per-tracklet trails."""
+"""Trail maintenance stage.
+
+PostureAndTrailsStage has been split:
+  - PostureStage  (posture_stage.py)  — soft scoring, runs before TrajectoryStage
+  - TrailsStage   (this file)         — trail maintenance, runs after TrajectoryStage
+
+PostureAndTrailsStage is preserved as a loud shim so callers that weren't updated
+get an immediate error instead of silent wrong behavior.
+"""
 
 from __future__ import annotations
 
 from collections import deque
 
-from ...trajectory.posture import classify_posture
-from ...trajectory.posture_strategy import PostureStrategy
 from ..frame_context import FrameContext
 from .base import FrameStage
 
 
-class PostureAndTrailsStage(FrameStage):
-    name = "posture_and_trails"
+class TrailsStage(FrameStage):
+    """Maintains per-tracklet foot-position trails and snapshots them into ctx."""
+
+    name = "trails"
 
     def __init__(
         self,
-        posture_strategy: PostureStrategy | None = None,
         trail_by_tracklet: dict[str, deque[tuple[float, float]]] | None = None,
         trail_maxlen: int = 12,
     ) -> None:
-        self._posture_strategy = posture_strategy
-        # Shared mutable state (owned by pipeline).
         self._trail_by_tracklet: dict[str, deque[tuple[float, float]]] = (
             trail_by_tracklet if trail_by_tracklet is not None else {}
         )
         self._TRAIL_MAXLEN = trail_maxlen
 
     async def run(self, ctx: FrameContext) -> None:
-        for domain_det in ctx.domain_detections:
-            if domain_det.detection_id in ctx.det_posture:
-                continue
-            pose_result = ctx.det_pose_result.get(domain_det.detection_id)
-            if self._posture_strategy is not None:
-                image = ctx.require_image()
-                posture = await self._posture_strategy.infer(image, domain_det, pose_result)
-            elif pose_result is not None:
-                posture = classify_posture(pose_result, domain_det.bbox)
-            else:
-                posture = "unknown"
-            ctx.det_posture[domain_det.detection_id] = posture
-
         frame_w = float(ctx.effective_width) if ctx.effective_width else 1.0
         frame_h = float(ctx.effective_height) if ctx.effective_height else 1.0
         for domain_det in ctx.domain_detections:
@@ -61,3 +53,18 @@ class PostureAndTrailsStage(FrameStage):
         ctx.trail_by_tracklet_snapshot = {
             tid: list(dq) for tid, dq in self._trail_by_tracklet.items()
         }
+
+
+class PostureAndTrailsStage(FrameStage):
+    """Removed. Use PostureStage + TrailsStage instead."""
+
+    name = "posture_and_trails"
+
+    def __init__(self, **_kwargs: object) -> None:
+        raise NotImplementedError(
+            "PostureAndTrailsStage has been split into PostureStage and TrailsStage. "
+            "Update frame_pipeline.py to use both new stages."
+        )
+
+    async def run(self, ctx: FrameContext) -> None:  # pragma: no cover
+        raise NotImplementedError

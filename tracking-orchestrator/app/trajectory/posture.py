@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from ..domain import BoundingBox, PostureType
 from ..inference.schemas import Keypoint, PoseResult
+from ..observability import metrics as _metrics
 
 # ── Keypoint confidence floor ─────────────────────────────────────────────────
 _SCORE_FLOOR = 0.3
@@ -54,6 +56,22 @@ _MIN_EVIDENCE = 0.5  # minimum scorer output to commit a posture class
 
 # ── Motion threshold ──────────────────────────────────────────────────────────
 _WALKING_VELOCITY_THRESHOLD = 0.008  # mean keypoint velocity (normalised px/frame)
+
+# ── Multi-camera fusion ───────────────────────────────────────────────────────
+_CAMERA_STALE_AFTER_S: float = 10.0
+"""Seconds after which a camera's last-seen posture score is dropped from fusion.
+
+When a person walks out of a camera's field of view, their last score from that
+camera expires after this many seconds so it does not continue influencing the
+fused result indefinitely.
+"""
+
+_DEPTH_WEIGHT: float = 0.15
+"""Floor weight given to depth-only cameras (keypoint_confidence == 0.0).
+
+Prevents depth estimates from being completely ignored when keypoint cameras are
+present, while still giving keypoint cameras proportionally higher weight.
+"""
 
 
 # ── Primitive helpers ─────────────────────────────────────────────────────────
@@ -194,6 +212,95 @@ class PostureFeatures:
     """True when knee_y > hip_y (and ankle_y > knee_y when ankles are visible)."""
 
 
+# COCO-17 keypoint names used for mean confidence calculation.
+_ALL_KP_NAMES = (
+    "nose",
+    "left_eye",
+    "right_eye",
+    "left_ear",
+    "right_ear",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
+)
+
+
+def _mean_visible_confidence(pose: PoseResult) -> float:
+    """Mean score of keypoints that clear the confidence floor.
+
+    Returns 0.0 when no keypoint is visible above _SCORE_FLOOR.
+    """
+    scores = [
+        kp.score
+        for name in _ALL_KP_NAMES
+        if (kp := pose.get(name)) is not None and kp.score >= _SCORE_FLOOR
+    ]
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+def _score_upper_torso_lying(pose: PoseResult) -> float:
+    """Lying evidence from upper body only, for use when hips/legs are occluded.
+
+    Detects the 'visible shoulders, occluded hips' pattern which occurs when a
+    person lies under bed sheets. Returns a conservative score in [0, 0.6] so
+    it does not override a standing or sitting signal from cameras with full
+    body visibility.
+
+    Signals used:
+    1. Both shoulders visible, both hips invisible — the sheet-occlusion hallmark.
+    2. Shoulder line is horizontal: abs(left_shoulder.y - right_shoulder.y) is small
+       relative to the inter-shoulder distance. A standing/sitting person has a
+       roughly horizontal shoulder line too, but their hips are also visible.
+    3. Head (nose/eyes) is roughly level with the shoulders in image y-coordinates.
+       A standing person's head is clearly above the shoulders.
+
+    Returns 0.0 when hips are visible (the full-body scorer handles this case)
+    or when shoulder keypoints are unavailable.
+    """
+    ls = pose.get("left_shoulder")
+    rs = pose.get("right_shoulder")
+    lh = pose.get("left_hip")
+    rh = pose.get("right_hip")
+
+    # Hips visible → use full-body scorer, not this one.
+    if _visible(lh, rh):
+        return 0.0
+
+    # Shoulders must both be visible.
+    if not _visible(ls, rs):
+        return 0.0
+
+    score = 0.0
+
+    # Signal 1: shoulder line is horizontal.
+    inter_shoulder_dist = math.hypot(rs.x - ls.x, rs.y - ls.y)
+    if inter_shoulder_dist > 0:
+        vertical_lean = abs(ls.y - rs.y) / inter_shoulder_dist
+        # vertical_lean near 0 → nearly horizontal shoulder line → lying signal.
+        score += 0.3 * max(0.0, 1.0 - vertical_lean / 0.3)
+
+    # Signal 2: head (nose) is at approximately the same image height as shoulders.
+    nose = pose.get("nose")
+    if nose is not None and nose.score >= _SCORE_FLOOR and inter_shoulder_dist > 0:
+        shoulder_y = (ls.y + rs.y) / 2.0
+        head_above_shoulders = (shoulder_y - nose.y) / inter_shoulder_dist
+        # head_above_shoulders near 0 → head is not above shoulders → lying signal.
+        # For a standing person, the head is clearly above the shoulders (> 0.4 units).
+        head_signal = max(0.0, 1.0 - head_above_shoulders / 0.4)
+        score += 0.3 * head_signal
+
+    return min(0.6, score)
+
+
 def _extract_features(pose: PoseResult) -> PostureFeatures:
     """Derive ``PostureFeatures`` from raw COCO-17 keypoints."""
     torso_angle = _torso_angle_deg(pose)
@@ -279,6 +386,41 @@ def _extract_features(pose: PoseResult) -> PostureFeatures:
         head_spine_deviation=head_dev,
         kinematic_ordering=kinematic_ordering,
     )
+
+
+@dataclass(frozen=True)
+class PostureScores:
+    """Soft evidence for each posture class, normalised to [0, 1].
+
+    Produced by a PostureStrategy and consumed by GlobalPostureTracker for
+    multi-camera fusion. Preserves continuous evidence so fusion can
+    accumulate across cameras rather than picking a single winner early.
+    """
+
+    lying: float
+    """Evidence that the person is lying. 0.0 = no evidence, 1.0 = certain."""
+
+    sitting: float
+    """Evidence that the person is sitting."""
+
+    standing_walking: float
+    """Combined evidence for standing or walking (motion_energy separates them
+    later during fusion)."""
+
+    keypoint_confidence: float = 0.0
+    """Mean confidence of visible COCO-17 keypoints. 0.0 when no keypoints are
+    available (e.g., depth-only estimate). Used by M2 quality-weighted fusion."""
+
+
+@dataclass(frozen=True)
+class _CameraSnapshot:
+    """A single camera's posture score contribution at a point in time."""
+
+    lying: float
+    sitting: float
+    standing_walking: float
+    keypoint_confidence: float
+    captured_at: datetime
 
 
 # ── Soft evidence scorers ─────────────────────────────────────────────────────
@@ -421,6 +563,42 @@ def _score_standing_or_walking(feats: PostureFeatures) -> float:
 # ── Public classifier ─────────────────────────────────────────────────────────
 
 
+def score_posture(
+    pose: PoseResult,
+    bedroom_prior: float = 0.0,
+) -> PostureScores:
+    """Compute soft evidence scores from COCO-17 keypoints.
+
+    Args:
+        pose:           COCO-17 keypoints with (x, y, score) per point.
+        bedroom_prior:  Additional prior weight added to the lying score. Use
+                        to implement a context-sensitive bedroom lying prior
+                        in GlobalPostureTracker when the room is a bedroom and
+                        the body is heavily occluded. Default 0.0 (no prior).
+    """
+    feats = _extract_features(pose)
+    lying = _score_lying(feats)
+    sitting = _score_sitting(feats)
+    standing_walking = _score_standing_or_walking(feats)
+
+    # Upper-torso-only path: when full-body lying cannot be scored because hips are
+    # occluded, use the shoulder-only signal. Cap it at 0.6 so it never overrides a
+    # full-body signal from another camera.
+    if lying == 0.0 and standing_walking == 0.0:
+        partial_lying = _score_upper_torso_lying(pose)
+        lying = min(1.0, lying + partial_lying + bedroom_prior)
+    else:
+        # Full body is visible — the bedroom prior still adds small context evidence.
+        lying = min(1.0, lying + bedroom_prior * 0.3)
+
+    return PostureScores(
+        lying=lying,
+        sitting=sitting,
+        standing_walking=standing_walking,
+        keypoint_confidence=_mean_visible_confidence(pose),
+    )
+
+
 def classify_posture(
     pose: PoseResult,
     bbox: BoundingBox,
@@ -428,30 +606,16 @@ def classify_posture(
 ) -> PostureType:
     """Classify posture from COCO-17 keypoints and optional motion energy.
 
-    Extracts scale-normalised geometric features, computes a soft evidence
-    score for each posture class, then returns the highest-scoring class.
-    Falls back to ``"unknown"`` when no class clears ``_MIN_EVIDENCE``.
-
-    - **lying**: horizontal torso with head in line with torso midline.
-    - **sitting**: tilted torso, or bent knee with sufficient keypoint confidence.
-    - **walking**: standing geometry with motion energy above the velocity threshold.
-    - **standing**: standing geometry without sufficient motion energy.
-    - **unknown**: insufficient visible keypoints or ambiguous pose.
+    Delegates to score_posture() and resolves to a PostureType label.
+    Public API preserved for callers that need a label directly.
     """
-    feats = _extract_features(pose)
-
-    lying = _score_lying(feats)
-    sitting = _score_sitting(feats)
-    standing_walking = _score_standing_or_walking(feats)
-
-    best = max(lying, sitting, standing_walking)
+    scores = score_posture(pose)
+    best = max(scores.lying, scores.sitting, scores.standing_walking)
     if best < _MIN_EVIDENCE:
         return "unknown"
-
-    # Resolve the winner.  Ties broken by clinical priority: lying > sitting > standing.
-    if lying >= sitting and lying >= standing_walking:
+    if scores.lying >= scores.sitting and scores.lying >= scores.standing_walking:
         return "lying"
-    if sitting >= standing_walking:
+    if scores.sitting >= scores.standing_walking:
         return "sitting"
     if motion_energy is not None and motion_energy > _WALKING_VELOCITY_THRESHOLD:
         return "walking"
@@ -506,86 +670,176 @@ class GlobalPostureTracker:
     """Stateful posture tracker that aggregates evidence across cameras and smooths transitions.
 
     Maintains:
-    1. Per-camera soft posture scores for each active global track, preventing
-       partial views on one camera from degrading high-confidence views from another.
-    2. A temporal smoother (PostureHysteresis) at the global track level.
+    1. Per-camera posture score snapshots with timestamps, so stale cameras are
+       automatically excluded from fusion.
+    2. Quality-weighted fusion: cameras with higher keypoint confidence contribute
+       proportionally more to the fused score.
+    3. Hysteresis state stored directly (no per-GT PostureHysteresis objects) to
+       avoid the dict-of-objects-with-one-entry indirection.
     """
 
-    def __init__(self, required_consecutive: int = 2) -> None:
-        # global_track_id -> camera_id -> dict of soft scores
-        self._camera_scores: dict[str, dict[str, dict[str, float]]] = {}
-        # global_track_id -> PostureHysteresis
-        self._hysteresis: dict[str, PostureHysteresis] = {}
+    def __init__(
+        self,
+        required_consecutive: int = 2,
+        camera_stale_after_s: float = _CAMERA_STALE_AFTER_S,
+        depth_weight: float = _DEPTH_WEIGHT,
+    ) -> None:
+        # global_track_id → camera_id → _CameraSnapshot
+        self._snapshots: dict[str, dict[str, _CameraSnapshot]] = {}
+        # global_track_id → (committed, candidate, consecutive_count)
+        self._hysteresis_state: dict[str, tuple[PostureType, PostureType, int]] = {}
         self._required_consecutive = required_consecutive
+        self._camera_stale_after_s = camera_stale_after_s
+        self._depth_weight = depth_weight
 
     def update(
         self,
         global_track_id: str,
         camera_id: str,
-        pose: PoseResult,
-        bbox: BoundingBox,
+        scores: PostureScores,
         active_camera_ids: list[str] | tuple[str, ...] | set[str],
         motion_energy: float | None = None,
     ) -> PostureType:
-        """Update posture scores for a track on a camera, and return the smoothed global posture."""
-        # 1. Compute soft scores for this frame
-        feats = _extract_features(pose)
-        scores = {
-            "lying": _score_lying(feats),
-            "sitting": _score_sitting(feats),
-            "standing_walking": _score_standing_or_walking(feats),
-        }
+        """Update posture scores for a track on one camera; return smoothed global posture.
 
-        # 2. Store the soft scores
-        if global_track_id not in self._camera_scores:
-            self._camera_scores[global_track_id] = {}
-        self._camera_scores[global_track_id][camera_id] = scores
+        Args:
+            global_track_id:   The global track being updated.
+            camera_id:         The camera this frame came from.
+            scores:            Soft posture evidence from PostureStrategy.score().
+            active_camera_ids: All cameras currently associated with this track.
+            motion_energy:     Normalised keypoint velocity. Used to distinguish
+                               walking from standing at resolve time.
+        """
+        now = datetime.now(UTC)
 
-        # 3. Fuse scores across all active cameras currently associated with the track
-        fused = {
-            "lying": 0.0,
-            "sitting": 0.0,
-            "standing_walking": 0.0,
-        }
-        for c in ["lying", "sitting", "standing_walking"]:
-            max_val = 0.0
-            for cam in active_camera_ids:
-                cam_scores = self._camera_scores[global_track_id].get(cam)
-                if cam_scores is not None:
-                    max_val = max(max_val, cam_scores[c])
-            fused[c] = max_val
+        # 1. Store this camera's latest snapshot.
+        if global_track_id not in self._snapshots:
+            self._snapshots[global_track_id] = {}
+        self._snapshots[global_track_id][camera_id] = _CameraSnapshot(
+            lying=scores.lying,
+            sitting=scores.sitting,
+            standing_walking=scores.standing_walking,
+            keypoint_confidence=scores.keypoint_confidence,
+            captured_at=now,
+        )
+        _metrics.metrics.cts_posture_camera_contributions_total.labels(
+            camera_id=camera_id,
+        ).inc()
 
-        # 4. Resolve the winner using clinical priority rules
+        # 2. Quality-weighted fusion across active cameras.
+        fused = self._fuse(global_track_id, active_camera_ids, now)
+
+        # 3. Resolve the winner using clinical priority rules.
+        raw_posture = self._resolve(fused, motion_energy)
+
+        # 4. Apply hysteresis (state stored directly — no PostureHysteresis indirection).
+        return self._apply_hysteresis(global_track_id, raw_posture)
+
+    def _fuse(
+        self,
+        global_track_id: str,
+        active_camera_ids: list[str] | tuple[str, ...] | set[str],
+        now: datetime,
+    ) -> dict[str, float]:
+        """Compute quality-weighted average posture scores across active cameras.
+
+        Only cameras whose snapshot is fresh (within camera_stale_after_s) and are
+        in active_camera_ids contribute. Cameras with keypoint_confidence == 0.0
+        (e.g., depth-only) receive a floor weight of _depth_weight.
+        """
+        total_weight = 0.0
+        acc = {"lying": 0.0, "sitting": 0.0, "standing_walking": 0.0}
+        gt_snapshots = self._snapshots.get(global_track_id, {})
+
+        for cam in active_camera_ids:
+            snap = gt_snapshots.get(cam)
+            if snap is None:
+                continue
+            age_s = (now - snap.captured_at).total_seconds()
+            if age_s > self._camera_stale_after_s:
+                continue
+            # Floor so depth cameras (keypoint_confidence == 0) still contribute.
+            weight = max(snap.keypoint_confidence, self._depth_weight)
+            acc["lying"] += weight * snap.lying
+            acc["sitting"] += weight * snap.sitting
+            acc["standing_walking"] += weight * snap.standing_walking
+            total_weight += weight
+
+        active_count = sum(
+            1
+            for cam in active_camera_ids
+            if gt_snapshots.get(cam) is not None
+            and (now - gt_snapshots[cam].captured_at).total_seconds() <= self._camera_stale_after_s
+        )
+        _metrics.metrics.cts_posture_cameras_fused.observe(active_count)
+
+        if total_weight == 0.0:
+            return {"lying": 0.0, "sitting": 0.0, "standing_walking": 0.0}
+
+        return {c: acc[c] / total_weight for c in acc}
+
+    def _resolve(
+        self,
+        fused: dict[str, float],
+        motion_energy: float | None,
+    ) -> PostureType:
+        """Map fused soft scores to a PostureType label using clinical priority."""
         best = max(fused["lying"], fused["sitting"], fused["standing_walking"])
         if best < _MIN_EVIDENCE:
-            raw_posture: PostureType = "unknown"
+            raw: PostureType = "unknown"
+        elif fused["lying"] >= fused["sitting"] and fused["lying"] >= fused["standing_walking"]:
+            raw = "lying"
+        elif fused["sitting"] >= fused["standing_walking"]:
+            raw = "sitting"
+        elif motion_energy is not None and motion_energy > _WALKING_VELOCITY_THRESHOLD:
+            raw = "walking"
         else:
-            if fused["lying"] >= fused["sitting"] and fused["lying"] >= fused["standing_walking"]:
-                raw_posture = "lying"
-            elif fused["sitting"] >= fused["standing_walking"]:
-                raw_posture = "sitting"
-            else:
-                if motion_energy is not None and motion_energy > _WALKING_VELOCITY_THRESHOLD:
-                    raw_posture = "walking"
-                else:
-                    raw_posture = "standing"
+            raw = "standing"
+        _metrics.metrics.cts_posture_fused_class_total.labels(posture=raw).inc()
+        return raw
 
-        # 5. Smooth via hysteresis
-        if global_track_id not in self._hysteresis:
-            self._hysteresis[global_track_id] = PostureHysteresis(self._required_consecutive)
+    def _apply_hysteresis(
+        self,
+        global_track_id: str,
+        raw: PostureType,
+    ) -> PostureType:
+        """Apply N-consecutive-frame smoothing.
 
-        return self._hysteresis[global_track_id].update(global_track_id, raw_posture)
+        State stored directly as (committed, candidate, count) tuple — no per-GT
+        PostureHysteresis object needed.
+        """
+        entry = self._hysteresis_state.get(global_track_id)
+        if entry is None:
+            self._hysteresis_state[global_track_id] = (raw, raw, 1)
+            return raw
+
+        committed, candidate, count = entry
+        if raw == candidate:
+            count += 1
+            if count >= self._required_consecutive:
+                self._hysteresis_state[global_track_id] = (raw, raw, count)
+                if committed != raw:
+                    _metrics.metrics.cts_posture_hysteresis_flips_total.labels(
+                        camera_id="global",
+                    ).inc()
+                return raw
+            self._hysteresis_state[global_track_id] = (committed, candidate, count)
+            return committed
+
+        self._hysteresis_state[global_track_id] = (committed, raw, 1)
+        return committed
+
+    def committed_posture(self, global_track_id: str) -> PostureType | None:
+        """Return the currently committed posture for a global track, or None if unknown."""
+        entry = self._hysteresis_state.get(global_track_id)
+        return entry[0] if entry is not None else None
 
     def evict_track(self, global_track_id: str) -> None:
-        """Evict history for a closed track."""
-        self._camera_scores.pop(global_track_id, None)
-        if global_track_id in self._hysteresis:
-            self._hysteresis[global_track_id].evict(global_track_id)
-            self._hysteresis.pop(global_track_id, None)
+        """Evict all state for a closed track. No-op if the track is unknown."""
+        self._snapshots.pop(global_track_id, None)
+        self._hysteresis_state.pop(global_track_id, None)
 
     def clear(self) -> None:
-        """Clear all tracking state."""
-        self._camera_scores.clear()
-        for track_id, hyst in list(self._hysteresis.items()):
-            hyst.evict(track_id)
-        self._hysteresis.clear()
+        """Clear all tracking state (used in tests and on pipeline restart)."""
+        self._snapshots.clear()
+        self._hysteresis_state.clear()
