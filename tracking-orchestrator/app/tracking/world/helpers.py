@@ -7,6 +7,7 @@ passed in. Easy to unit test.
 from __future__ import annotations
 
 import numpy as np
+from shapely.geometry import Point, Polygon  # type: ignore[import-untyped]
 
 
 def update_gallery_mean(
@@ -62,7 +63,6 @@ def is_in_any_room_polygon(
     """
     if not room_polygons:
         return False
-    from shapely.geometry import Point, Polygon
 
     point = Point(floor_x_m, floor_y_m)
     for _room_id, vertices in room_polygons.items():
@@ -85,8 +85,6 @@ def resolve_room(
 
     Falls back to the camera→room map when no polygon contains the point.
     """
-    from shapely.geometry import Point, Polygon
-
     point = Point(floor_x_m, floor_y_m)
     for room_id, vertices in room_polygons.items():
         if len(vertices) < 3:

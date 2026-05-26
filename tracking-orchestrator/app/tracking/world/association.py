@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.optimize import linear_sum_assignment
+from scipy.optimize import linear_sum_assignment  # type: ignore[import-untyped]
 
 from .config import WorldTrackerConfig
 from .cost_matrix import GATE_INF, pair_cost

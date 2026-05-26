@@ -43,18 +43,21 @@ class WorldTrackingStage(FrameStage):
         if not self._enabled:
             return
 
-        from ...domain import WorldObservation
+        from ...domain import FaceAnchor, WorldObservation
 
         # Build WorldObservation list from this frame's calibrated detections.
+        # Match face anchors by camera_id (per-camera tracklet_id is deprecated
+        # in M1 since the per-camera tracker no longer runs).
+        face_by_camera: dict[str, FaceAnchor] = {}
+        for fa in ctx.face_anchors:
+            key = fa.camera_id if fa.camera_id else fa.tracklet_id
+            if key:
+                face_by_camera[key] = fa
         observations: list[WorldObservation] = []
         for det in ctx.domain_detections:
             if not det.floor_point.calibrated:
                 continue
-            face_anchor = None
-            for fa in ctx.face_anchors:
-                if fa.tracklet_id == det.tracklet_id and fa.tracklet_id:
-                    face_anchor = fa
-                    break
+            face_anchor = face_by_camera.get(det.camera_id)
             observations.append(
                 WorldObservation(
                     camera_id=det.camera_id,

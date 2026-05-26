@@ -391,7 +391,7 @@ async def tag_bbox(
         )
     await repo.tag_annotation(annotation_id, body.identity_id)
     updated = await repo.get_annotation_by_id(annotation_id)
-    return _bbox_to_dict(updated)  # type: ignore[arg-type]
+    return _bbox_to_dict(updated)
 
 
 # ---------------------------------------------------------------------------

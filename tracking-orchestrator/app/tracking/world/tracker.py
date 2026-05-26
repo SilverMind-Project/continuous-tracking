@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 import numpy as np
 from structlog import get_logger
 
 from ...domain import (
+    BoundingBox,
     FaceAnchor,
     PersonHypothesis,
     PHContinuationCandidate,
@@ -145,6 +146,10 @@ class WorldTracker:
         )
 
         updated_phs: list[PersonHypothesis] = []
+        # Track per-PH observation metadata for snapshot building.
+        ph_obs_meta: dict[str, tuple[int, BoundingBox | None, float]] = (
+            {}
+        )  # ph_id -> (frame_index, bbox, detection_confidence)
 
         # 4. Update matched PHs.
         for ph_idx, obs_idx in assignment.matched:
@@ -191,6 +196,11 @@ class WorldTracker:
                 ),
             )
             updated_phs.append(updated)
+            ph_obs_meta[ph.ph_id] = (
+                obs.frame_index,
+                obs.bbox,
+                obs.detection_confidence,
+            )
 
             # Persist the observation.
             await self._obs_repo.save(obs, ph_id=ph.ph_id)
@@ -231,13 +241,16 @@ class WorldTracker:
                 last_floor_speed_m_s=0.0,
             )
             updated_phs.append(new_ph)
+            ph_obs_meta[new_ph.ph_id] = (
+                obs.frame_index,
+                obs.bbox,
+                obs.detection_confidence,
+            )
             await self._obs_repo.save(obs, ph_id=new_ph.ph_id)
 
             # 6. Check for PH continuations from recently closed PHs.
             if self._continuation_publisher is not None:
-                lookback = obs.captured_at.replace(
-                    second=max(0, obs.captured_at.second - int(cfg.inferred_handoff_max_s))
-                )
+                lookback = obs.captured_at - timedelta(seconds=cfg.inferred_handoff_max_s)
                 recent_closed = await self._ph_repo.list_closed_since(lookback, limit=100)
                 for closed in recent_closed:
                     if closed.ph_id == new_ph.ph_id:
@@ -334,12 +347,15 @@ class WorldTracker:
                 room_polygons,
                 camera_room_map,
             )
-            # Find the bbox from the most recent observation for this PH.
+            obs_meta = ph_obs_meta.get(
+                ph.ph_id, (0, None, 0.0)
+            )
+            obs_frame_index, obs_bbox, obs_det_conf = obs_meta
             snapshots.append(
                 WorldFrameSnapshot(
                     ph_id=ph.ph_id,
                     camera_id=ph.last_seen_camera,
-                    frame_index=0,  # filled by stage
+                    frame_index=obs_frame_index,
                     captured_at=ph.last_seen_at,
                     floor_x_m=ph.state_mean[0],
                     floor_y_m=ph.state_mean[1],
@@ -350,8 +366,8 @@ class WorldTracker:
                     identity_confidence=0.0,
                     posterior_entropy=0.0,
                     direct_face_evidence=False,
-                    bbox=None,
-                    detection_confidence=0.0,
+                    bbox=obs_bbox,
+                    detection_confidence=obs_det_conf,
                     height_m=ph.height_estimate_m,
                     room_id=room_id,
                     room_name=room_name,
