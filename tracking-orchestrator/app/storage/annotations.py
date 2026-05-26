@@ -80,9 +80,7 @@ class BboxAnnotationRepository(Protocol):
         """Apply a batch of create/update/delete operations atomically."""
         ...
 
-    async def delete_annotations_below_confidence(
-        self, threshold: float, since: datetime
-    ) -> int:
+    async def delete_annotations_below_confidence(self, threshold: float, since: datetime) -> int:
         """Drop annotations with detection_confidence below *threshold*. Returns count."""
         ...
 
@@ -196,12 +194,14 @@ class InMemoryBboxAnnotationRepository:
                     )
                     results.append({"op": "update", "annotation_id": op.annotation_id, "ok": True})
                 else:
-                    results.append({
-                        "op": "update",
-                        "annotation_id": op.annotation_id,
-                        "ok": False,
-                        "error": "not_found",
-                    })
+                    results.append(
+                        {
+                            "op": "update",
+                            "annotation_id": op.annotation_id,
+                            "ok": False,
+                            "error": "not_found",
+                        }
+                    )
             elif op.op == "create" and op.data:
                 new_id = str(uuid.uuid4())
                 ann = BboxAnnotation(
@@ -224,15 +224,10 @@ class InMemoryBboxAnnotationRepository:
                 results.append({"op": "create", "annotation_id": new_id, "ok": True})
         return results
 
-    async def delete_annotations_below_confidence(
-        self, threshold: float, since: datetime
-    ) -> int:
+    async def delete_annotations_below_confidence(self, threshold: float, since: datetime) -> int:
         count = 0
         for ann_id, ann in list(self._rows.items()):
-            if (
-                ann.detection_confidence < threshold
-                and ann.created_at >= since
-            ):
+            if ann.detection_confidence < threshold and ann.created_at >= since:
                 await self.delete_annotation(ann_id)
                 count += 1
         return count

@@ -65,6 +65,7 @@ class Metrics:
     unknown_gts_merged_total: Counter
     identity_decays_total: Counter
     posterior_entropy: Histogram
+    homography_rejected_total: Counter
 
     # ---- Staleness / backlog -----------------------------------------
     frames_dropped_stale_total: Counter
@@ -225,6 +226,10 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_gallery_backfills_skipped_total",
             "Gallery backfills skipped because the committed identity"
             " has not yet survived the confirmation delay.",
+        ),
+        homography_rejected_total=_counter(
+            "cts_homography_rejected_total",
+            "Homography matrices rejected by the server-side validator during CC sync.",
         ),
         face_id_cooldown_skips_total=_counter(
             "cts_face_id_cooldown_skips_total",

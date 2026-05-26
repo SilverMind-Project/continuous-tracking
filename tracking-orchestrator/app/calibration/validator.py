@@ -87,9 +87,7 @@ def validate_homography(
             (0, image_height),
         ]
         projected = [_project_point(m, px, py, floor_plan_mpp) for px, py in corners_px]
-        any_inside = any(
-            room_poly.contains(ShapelyPoint(px, py)) for px, py in projected
-        )
+        any_inside = any(room_poly.contains(ShapelyPoint(px, py)) for px, py in projected)
         if not any_inside:
             issues.append(
                 "projected frame corners fall outside claimed room polygon; "
@@ -97,9 +95,7 @@ def validate_homography(
             )
 
     # 4. Severity classification.
-    is_error = any(
-        "exceeds 0.5" in i or "degenerate" in i for i in issues
-    )
+    is_error = any("exceeds 0.5" in i or "degenerate" in i for i in issues)
     severity = "error" if is_error else ("warning" if issues else "ok")
 
     return HomographyValidation(

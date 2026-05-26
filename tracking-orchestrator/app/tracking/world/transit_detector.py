@@ -79,9 +79,7 @@ class TransitDetector:
 
             if inside_now and not was_inside:
                 # Entered the zone.
-                direction = self._resolve_direction(
-                    floor_x_m, floor_y_m, prev, zone.direction_vec
-                )
+                direction = self._resolve_direction(floor_x_m, floor_y_m, prev, zone.direction_vec)
                 state.inside_zone_ids.add(zone.zone_id)
                 events.append(
                     RoomTransitionEvent(
@@ -136,9 +134,7 @@ class TransitDetector:
         return "enter" if dot >= 0 else "exit"
 
     @staticmethod
-    def _point_in_polygon(
-        x: float, y: float, polygon: list[tuple[float, float]]
-    ) -> bool:
+    def _point_in_polygon(x: float, y: float, polygon: list[tuple[float, float]]) -> bool:
         """Ray-casting point-in-polygon test."""
         n = len(polygon)
         if n < 3:
@@ -148,9 +144,7 @@ class TransitDetector:
         for i in range(n):
             xi, yi = polygon[i]
             xj, yj = polygon[j]
-            if ((yi > y) != (yj > y)) and (
-                x < (xj - xi) * (y - yi) / (yj - yi) + xi
-            ):
+            if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
                 inside = not inside
             j = i
         return inside

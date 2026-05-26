@@ -42,9 +42,7 @@ class KeyframeRevalidator:
             except Exception:
                 logger.exception("keyframe_revalidate_failed")
             with suppress(TimeoutError):
-                await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=_REVALIDATE_INTERVAL_S
-                )
+                await asyncio.wait_for(self._stop_event.wait(), timeout=_REVALIDATE_INTERVAL_S)
 
     async def stop(self) -> None:
         self._stop_event.set()

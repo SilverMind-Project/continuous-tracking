@@ -47,9 +47,7 @@ class CCConfigSyncService:
             except Exception:
                 logger.exception("cc_config_sync_poll_failed")
             with suppress(TimeoutError):
-                await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=self._poll_interval_s
-                )
+                await asyncio.wait_for(self._stop_event.wait(), timeout=self._poll_interval_s)
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -90,10 +88,34 @@ class CCConfigSyncService:
                     )
                 )
 
-            # Homography matrix.
+            # Homography matrix — validate before applying.
             matrix = cam.get("homography_matrix")
             if matrix and isinstance(matrix, list) and len(matrix) == 3:
                 residual_m = cam.get("homography_residual_m")
+                residuals = [float(residual_m)] if residual_m is not None else None
+
+                # Validate: reject matrices that fail the server-side sanity
+                # checks (degenerate determinant, residual > 0.5 m, etc.).
+                from ..calibration.validator import validate_homography
+
+                validation = validate_homography(
+                    matrix=matrix,
+                    residuals=residuals,
+                    image_width=cam.get("frame_natural_width", 0) or 0,
+                    image_height=cam.get("frame_natural_height", 0) or 0,
+                )
+                if not validation.ok:
+                    logger.warning(
+                        "cc_config_sync_homography_rejected",
+                        camera_id=camera_id,
+                        severity=validation.severity,
+                        issues=validation.issues,
+                    )
+                    from ..observability import metrics as _m
+
+                    _m.metrics.homography_rejected_total.inc()
+                    continue  # skip this camera's homography
+
                 try:
                     await self._calibration_state.set_homography(
                         camera_id=camera_id,

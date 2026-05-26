@@ -617,14 +617,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         _revalidator = KeyframeRevalidator(
             bbox_repo=bbox_repo,
-            threshold=settings.as_float(
-                "pipeline.min_keyframe_detection_confidence"
-            ),
+            threshold=settings.as_float("pipeline.min_keyframe_detection_confidence"),
         )
         app.state.keyframe_revalidator = _revalidator
-        app.state.keyframe_revalidator_task = asyncio.create_task(
-            _revalidator.run()
-        )
+        app.state.keyframe_revalidator_task = asyncio.create_task(_revalidator.run())
 
     # Wire router modules to share the pipeline's repositories.
     if _pipeline.tracking_repo is not None and _pipeline.global_track_repo is not None:

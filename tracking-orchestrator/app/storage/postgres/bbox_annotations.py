@@ -172,12 +172,12 @@ class PostgresBboxAnnotationRepository:
     async def delete_annotation_if_exists(self, annotation_id: str) -> bool:
         async with self._pool.acquire() as conn:
             result = await conn.execute(
-                "DELETE FROM continuous_tracking.keyframe_bbox_annotations "
-                "WHERE id = $1::uuid",
+                "DELETE FROM continuous_tracking.keyframe_bbox_annotations WHERE id = $1::uuid",
                 annotation_id,
             )
         # asyncpg returns "DELETE N" — parse the count.
         from contextlib import suppress
+
         deleted = 0
         with suppress(ValueError, IndexError):
             deleted = int(result.split()[-1])
@@ -221,6 +221,7 @@ class PostgresBboxAnnotationRepository:
                     results.append({"op": "update", "annotation_id": op.annotation_id, "ok": True})
                 elif op.op == "create" and op.data:
                     import uuid as _uuid
+
                     new_id = str(_uuid.uuid4())
                     d = op.data
                     await conn.execute(
@@ -246,9 +247,7 @@ class PostgresBboxAnnotationRepository:
                     results.append({"op": "create", "annotation_id": new_id, "ok": True})
         return results
 
-    async def delete_annotations_below_confidence(
-        self, threshold: float, since: datetime
-    ) -> int:
+    async def delete_annotations_below_confidence(self, threshold: float, since: datetime) -> int:
         async with self._pool.acquire() as conn:
             result = await conn.execute(
                 "DELETE FROM continuous_tracking.keyframe_bbox_annotations "
