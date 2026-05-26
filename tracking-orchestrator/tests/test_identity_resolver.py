@@ -147,7 +147,7 @@ class TestIdentityResolver:
     async def test_resolve_no_global_tracks(self) -> None:
         resolver = _make_resolver()
         outcome = await resolver.resolve(
-            global_tracks=[],
+            hypotheses=[],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -166,7 +166,7 @@ class TestIdentityResolver:
         anchor = _make_face_anchor("grandma", confidence=0.95, tracklet_id="t1")
 
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[anchor],
             captured_at=datetime.now(UTC),
         )
@@ -187,7 +187,7 @@ class TestIdentityResolver:
         gt = _make_gt(current_identity_id=None)
         # No face anchors, no gallery hits -> uniform posterior -> UNKNOWN
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -214,7 +214,7 @@ class TestIdentityResolver:
         anchor = _make_face_anchor("grandma", confidence=0.95, tracklet_id="t1")
 
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[anchor],
             captured_at=datetime.now(UTC),
         )
@@ -236,7 +236,7 @@ class TestIdentityResolver:
         # With no distinguishing evidence, posterior is spread thin.
         gt = _make_gt(current_identity_id=None)
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -261,7 +261,7 @@ class TestIdentityResolver:
         anchor = _make_face_anchor("grandma", confidence=0.95, tracklet_id="t1")
 
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[anchor],
             captured_at=datetime.now(UTC),
         )
@@ -285,7 +285,7 @@ class TestIdentityResolver:
         # No face anchor, no ReID -> prior alone should maintain grandma
         # when within the prior_maintenance_max_age_s window.
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -304,7 +304,7 @@ class TestIdentityResolver:
         gt = _make_gt(current_identity_id=None)
 
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -323,7 +323,7 @@ class TestIdentityResolver:
         gt = _make_gt(current_identity_id=None)
 
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -343,7 +343,7 @@ class TestIdentityResolver:
         gt2 = _make_gt(global_track_id="gt-2", current_identity_id=None)
 
         outcome = await resolver.resolve(
-            global_tracks=[gt1, gt2],
+            hypotheses=[gt1, gt2],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -376,7 +376,7 @@ class TestIdentityResolver:
         gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
 
         outcome1 = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[face_anchor],
             captured_at=datetime.now(UTC),
         )
@@ -396,7 +396,7 @@ class TestIdentityResolver:
         )
 
         outcome2 = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[face_anchor2],
             captured_at=datetime.now(UTC),
         )
@@ -435,7 +435,7 @@ class TestIdentityResolver:
         gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
 
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -471,7 +471,7 @@ class TestIdentityResolver:
 
         gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -503,7 +503,7 @@ class TestIdentityResolver:
 
         t1 = datetime.now(UTC)
         outcome1 = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[face_anchor],
             captured_at=t1,
         )
@@ -512,7 +512,7 @@ class TestIdentityResolver:
         # Second commit within the same minute should be rate-limited
         t2 = t1
         outcome2 = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[face_anchor],
             captured_at=t2,
         )
@@ -537,7 +537,7 @@ class TestIdentityResolver:
 
         gt = _make_gt(current_identity_id="person_0")
         outcome = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -576,7 +576,7 @@ class TestIdentityResolver:
         )
 
         outcome = await resolver.resolve(
-            global_tracks=[stale_gt],
+            hypotheses=[stale_gt],
             new_face_anchors=[],
             captured_at=now,
         )
@@ -666,7 +666,7 @@ class TestIdentityResolver:
         )
 
         outcome = await resolver.resolve(
-            global_tracks=[committed_gt],
+            hypotheses=[committed_gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -696,7 +696,7 @@ class TestIdentityResolver:
         # Frame 1: face fires — identity committed.
         face_anchor = _make_face_anchor("person_0", confidence=0.92, tracklet_id="t1")
         outcome1 = await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[face_anchor],
             captured_at=datetime.now(UTC),
         )
@@ -718,7 +718,7 @@ class TestIdentityResolver:
         # Frames 2-5: face cooldown, no ReID evidence → maintenance window.
         for _ in range(4):
             outcome_quiet = await resolver.resolve(
-                global_tracks=[committed_gt],
+                hypotheses=[committed_gt],
                 new_face_anchors=[],
                 captured_at=datetime.now(UTC),
             )
@@ -844,7 +844,7 @@ class TestGalleryBoost:
         )
 
         outcome = await resolver.resolve(
-            global_tracks=[new_gt],
+            hypotheses=[new_gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -912,7 +912,7 @@ class TestGalleryBoost:
         )
 
         outcome = await resolver.resolve(
-            global_tracks=[new_gt],
+            hypotheses=[new_gt],
             new_face_anchors=[],
             captured_at=datetime.now(UTC),
         )
@@ -939,7 +939,7 @@ class TestFaceLock:
         anchor = _make_face_anchor("alice", confidence=0.90, tracklet_id="t1")
 
         await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[anchor],
             captured_at=datetime.now(UTC),
         )
@@ -958,7 +958,7 @@ class TestFaceLock:
         anchor = _make_face_anchor("alice", confidence=0.50, tracklet_id="t1")
 
         await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[anchor],
             captured_at=datetime.now(UTC),
         )
@@ -976,7 +976,7 @@ class TestFaceLock:
         # First: alice face lock set.
         gt = _make_gt(global_track_id="gt-1", tracklet_ids=["t1"])
         await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[_make_face_anchor("alice", confidence=0.90, tracklet_id="t1")],
             captured_at=datetime.now(UTC),
         )
@@ -989,7 +989,7 @@ class TestFaceLock:
             tracklet_ids=["t1"],
         )
         await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[_make_face_anchor("bob", confidence=0.90, tracklet_id="t1")],
             captured_at=datetime.now(UTC),
         )
@@ -1019,7 +1019,7 @@ class TestFaceLock:
         # First: commit alice via face anchor.
         gt = _make_gt(global_track_id="gt-1", tracklet_ids=["t1"])
         await resolver.resolve(
-            global_tracks=[gt],
+            hypotheses=[gt],
             new_face_anchors=[_make_face_anchor("alice", confidence=0.95, tracklet_id="t1")],
             captured_at=now,
         )
@@ -1039,7 +1039,7 @@ class TestFaceLock:
             state="active",
         )
         outcome = await resolver.resolve(
-            global_tracks=[gt_with_alice],
+            hypotheses=[gt_with_alice],
             new_face_anchors=[],
             captured_at=next_frame,
         )
@@ -1103,7 +1103,7 @@ class TestCrossGtFacePropagation:
         anchor = _make_face_anchor("alice", confidence=0.95, tracklet_id="t-a")
 
         outcome = await resolver.resolve(
-            global_tracks=[gt_a, gt_b],
+            hypotheses=[gt_a, gt_b],
             new_face_anchors=[anchor],
             captured_at=datetime.now(UTC),
         )
@@ -1161,7 +1161,7 @@ class TestCrossGtFacePropagation:
         anchor = _make_face_anchor("alice", confidence=0.95, tracklet_id="t-a")
 
         outcome = await resolver.resolve(
-            global_tracks=[gt_a, gt_b],
+            hypotheses=[gt_a, gt_b],
             new_face_anchors=[anchor],
             captured_at=datetime.now(UTC),
         )

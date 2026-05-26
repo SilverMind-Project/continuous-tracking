@@ -68,6 +68,7 @@ from .tracking.association_solver import AssociationConfig
 from .tracking.global_track_merger import GlobalTrackMerger
 from .tracking.identity_resolver import ResolverConfig
 from .tracking.tracklet_manager import TrackletConfig
+from .tracking.world.config import WorldTrackerConfig
 from .trajectory.depth_posture_strategy import DepthPostureStrategy
 from .trajectory.fused_posture_strategy import FusedPostureStrategy
 from .trajectory.posture_strategy import RTMPosePostureStrategy
@@ -212,6 +213,29 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
     )
 
 
+def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
+    """Build WorldTrackerConfig from required settings.yaml keys."""
+    wt = s.section("world_tracker")
+    return WorldTrackerConfig(
+        gate_chi2=wt.as_float("gate_chi2"),
+        alpha_geo=wt.as_float("alpha_geo"),
+        alpha_app=wt.as_float("alpha_app"),
+        alpha_height=wt.as_float("alpha_height"),
+        observation_noise_m=wt.as_float("observation_noise_m"),
+        process_noise_accel_m_s2=wt.as_float("process_noise_accel_m_s2"),
+        ph_close_grace_s=wt.as_float("ph_close_grace_s"),
+        min_observations_to_publish=wt.as_int("min_observations_to_publish"),
+        face_conflict_threshold=wt.as_float("face_conflict_threshold"),
+        inferred_handoff_max_s=wt.as_float("inferred_handoff_max_s"),
+        inferred_handoff_max_distance_m=wt.as_float("inferred_handoff_max_distance_m"),
+        initial_position_sigma_m=wt.as_float("initial_position_sigma_m"),
+        initial_velocity_sigma_m_s=wt.as_float("initial_velocity_sigma_m_s"),
+        velocity_decay_s=wt.as_float("velocity_decay_s"),
+        height_sigma_m=wt.as_float("height_sigma_m"),
+        evidence_window_s=wt.as_float("evidence_window_s"),
+    )
+
+
 def _build_tracklet_config(s: Settings) -> TrackletConfig:
     """Build TrackletConfig from required settings.yaml keys."""
     t = s.section("tracklet")
@@ -319,15 +343,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Build config objects from settings (env-interpolated YAML).
     resolver_config = _build_resolver_config(settings)
-    tracklet_config = _build_tracklet_config(settings)
-    cross_cam_config = _build_cross_cam_config(settings)
+    world_tracker_config = _build_world_tracker_config(settings)
     sampler_config = _build_sampler_config(settings)
 
     config = PipelineConfig(
         transport=transport_config,
         resolver=resolver_config,
-        tracklet=tracklet_config,
-        cross_cam=cross_cam_config,
+        world_tracker=world_tracker_config,
         sampler=sampler_config,
         signals=_build_signal_config(settings),
         face_id=_build_face_id_config(settings, face_id_camera_configs),

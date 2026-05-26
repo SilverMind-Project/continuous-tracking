@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 # ---------------------------------------------------------------------------
 # Spatial calibration
@@ -67,6 +67,150 @@ GalleryEntryId = str
 ActivityId = str
 CorrectionId = str
 PrivacyZoneId = str
+
+
+# ---------------------------------------------------------------------------
+# Protocol: what the IdentityResolver needs from any tracked entity
+# ---------------------------------------------------------------------------
+
+
+class IdentityResolvableEntity(Protocol):
+    """What the IdentityResolver needs from any tracked thing (GT or PH)."""
+
+    @property
+    def entity_id(self) -> str: ...
+    @property
+    def observation_ids(self) -> list[str]: ...
+    @property
+    def camera_ids(self) -> list[str]: ...
+    @property
+    def current_identity_id(self) -> str | None: ...
+    @property
+    def current_identity_committed_at(self) -> datetime | None: ...
+    @property
+    def last_seen_at(self) -> datetime: ...
+    @property
+    def started_at(self) -> datetime: ...
+
+
+# ---------------------------------------------------------------------------
+# Person Hypothesis types (M1 world-coordinate tracker)
+# ---------------------------------------------------------------------------
+
+PersonHypothesisId = str
+PH_MEAN_LEN = 4  # [x, y, vx, vy] in metres and metres/sec
+PH_COV_LEN = 16  # 4x4 covariance matrix, row-major, in metres^2 and (metres/sec)^2
+
+
+@dataclass(frozen=True)
+class WorldObservation:
+    """One camera-detection projected to floor coordinates."""
+
+    camera_id: str
+    frame_index: int
+    captured_at: datetime
+    floor_point: FloorPoint
+    bbox: BoundingBox
+    embedding: list[float]
+    detection_confidence: float
+    height_estimate_m: float | None = None
+    face_anchor: FaceAnchor | None = None
+
+
+@dataclass(frozen=True)
+class PersonHypothesis:
+    """A persistent person track in world (floor-plane) coordinates.
+
+    Replaces both ``Tracklet`` (per-camera) and ``GlobalTrack`` (cross-camera).
+    There is one PH per physical person; observations from any camera update
+    its Kalman state via a single Hungarian association per frame.
+    """
+
+    ph_id: PersonHypothesisId
+    state_mean: tuple[float, float, float, float]  # [x, y, vx, vy] metres + m/s
+    state_cov: tuple[float, ...]  # 16 floats, 4x4 row-major
+    born_at: datetime
+    last_seen_at: datetime
+    last_seen_camera: str
+    observation_count: int
+    current_identity_id: str | None = None
+    current_identity_committed_at: datetime | None = None
+    gallery_mean: list[float] | None = None  # L2-normalised SOLIDER embedding
+    height_estimate_m: float | None = None
+    active_cameras: frozenset[str] = frozenset()
+    closed_at: datetime | None = None
+    last_floor_speed_m_s: float = 0.0
+    last_posture: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if len(self.state_mean) != PH_MEAN_LEN:
+            raise ValueError(f"state_mean must have {PH_MEAN_LEN} elements")
+        if len(self.state_cov) != PH_COV_LEN:
+            raise ValueError(f"state_cov must have {PH_COV_LEN} elements")
+
+    # ---- IdentityResolvableEntity protocol (structural) ----
+
+    @property
+    def entity_id(self) -> str:
+        return self.ph_id
+
+    @property
+    def observation_ids(self) -> list[str]:
+        return []  # set by repository; list of recent observation UUIDs
+
+    @property
+    def camera_ids(self) -> list[str]:
+        return list(self.active_cameras)
+
+    @property
+    def started_at(self) -> datetime:
+        return self.born_at
+
+
+@dataclass(frozen=True)
+class PHContinuationCandidate:
+    """Emitted when a newly-spawned PH might continue a recently-closed PH.
+
+    Published to ``tracking.continuations`` for M4's inferred-presence consumer.
+    """
+
+    predecessor_ph_id: str
+    successor_ph_id: str
+    predecessor_closed_at: datetime
+    successor_born_at: datetime
+    distance_m: float
+    seconds_elapsed: float
+    predicted_drift_m: float
+    predecessor_identity_id: str | None = None
+
+
+@dataclass(frozen=True)
+class WorldFrameSnapshot:
+    """Per-PH view exposed to downstream stages after world tracking.
+
+    Carries enough data for trajectory writer, posture, keyframes, and
+    publish stages without coupling them to PH internals.
+    """
+
+    ph_id: str
+    camera_id: str
+    frame_index: int
+    captured_at: datetime
+    floor_x_m: float
+    floor_y_m: float
+    floor_vx_m_s: float
+    floor_vy_m_s: float
+    position_sigma_m: float
+    identity_id: str | None = None
+    identity_confidence: float = 0.0
+    posterior_entropy: float = 0.0
+    direct_face_evidence: bool = False
+    bbox: BoundingBox | None = None
+    detection_confidence: float = 0.0
+    height_m: float | None = None
+    room_id: str = ""
+    room_name: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +333,16 @@ class GlobalTrack:
     current_identity_committed_at: datetime | None = None
     state: Literal["active", "closed"] = "active"
     last_posterior_jsonb: dict[str, Any] | None = None
+
+    # ---- IdentityResolvableEntity protocol (structural) ----
+
+    @property
+    def entity_id(self) -> str:
+        return self.global_track_id
+
+    @property
+    def observation_ids(self) -> list[str]:
+        return list(self.tracklet_ids)
 
 
 # ---------------------------------------------------------------------------

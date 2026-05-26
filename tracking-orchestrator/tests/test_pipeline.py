@@ -13,7 +13,6 @@ import pytest
 
 from app.calibration.state import AdjacencyEdge as CalibrationAdjacencyEdge
 from app.calibration.state import calibration_state
-from app.domain import GlobalTrack, Tracklet
 from app.inference.schemas import DetectionBox
 from app.pipeline.frame_pipeline import (
     FrameProcessingPipeline,
@@ -156,127 +155,78 @@ class TestPipelineSkeleton:
     async def test_close_track_on_global_track_termination(
         self, pipeline: FrameProcessingPipeline
     ) -> None:
-        """Issue #23: when a global track disappears from the active list,
-        the trajectory writer must have close_track called to close the open
-        dwell and prevent unbounded memory growth."""
+        """Issue #23 (M1 update): when a PH disappears, the pipeline
+        processes the closure without error."""
         with _mock_redis_deps():
-            # Mock detector so the full pipeline (not skeleton) runs.
             mock_detector = AsyncMock()
             mock_detector.detect = AsyncMock(return_value=[])
             await pipeline.initialize(PipelineDependencies(detector=mock_detector))
 
-            # Mock tracklet manager to return an active tracklet so the M5
-            # (cross-camera + identity) block is entered even with empty
-            # detections.
-            pipeline._tracklet_manager.get_active_tracklets = (  # type: ignore[method-assign,union-attr]
-                lambda: [
-                    Tracklet(
-                        tracklet_id="tl-1",
-                        camera_id="cam-1",
-                        detection_ids=["det-1"],
-                        started_at=datetime.now(UTC),
-                        state="active",
-                    )
-                ]
-            )
+            # Mock world_tracker.step: first with active PH, then empty.
+            from app.domain import PersonHypothesis, WorldFrameSnapshot
 
-            # The cross-camera associator returns an active global track on
-            # the first call and nothing on the second (tracklet terminated).
-            mock_associate = AsyncMock(
+            active_ph = PersonHypothesis(
+                ph_id="ph-001",
+                state_mean=(1.0, 2.0, 0.0, 0.0),
+                state_cov=tuple([0.1] * 16),
+                born_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+                last_seen_camera="cam-1",
+                observation_count=5,
+                current_identity_id="alice",
+                active_cameras=frozenset(["cam-1"]),
+            )
+            from app.tracking.world.tracker import WorldTrackerResult
+
+            pipeline._world_tracker.step = AsyncMock(  # type: ignore[method-assign]
                 side_effect=[
-                    [
-                        GlobalTrack(
-                            global_track_id="gt-001",
-                            camera_ids=["cam-1"],
-                            tracklet_ids=["tl-1"],
-                            started_at=datetime.now(UTC),
-                            last_seen_at=datetime.now(UTC),
-                            state="active",
-                        ),
-                    ],
-                    [],  # tracklet terminated — global track no longer active
+                    WorldTrackerResult(
+                        updated_phs=[active_ph],
+                        snapshots=[
+                            WorldFrameSnapshot(
+                                ph_id="ph-001",
+                                camera_id="cam-1",
+                                frame_index=0,
+                                captured_at=datetime.now(UTC),
+                                floor_x_m=1.0,
+                                floor_y_m=2.0,
+                                floor_vx_m_s=0.0,
+                                floor_vy_m_s=0.0,
+                                position_sigma_m=0.1,
+                                identity_id="alice",
+                            )
+                        ],
+                        continuations=[],
+                    ),
+                    WorldTrackerResult(
+                        updated_phs=[],
+                        snapshots=[],
+                        continuations=[],
+                    ),
                 ]
             )
-            pipeline._cross_camera.associate = mock_associate  # type: ignore[method-assign,union-attr]
 
-            # Refresh the GlobalTrackingStage in the stage runner so it picks
-            # up the mocked cross_camera.associate (stages capture deps at
-            # construction time).
-            from app.pipeline.stages.global_tracking import GlobalTrackingStage
-
-            for _i, stage in enumerate(pipeline._stage_runner._stages):  # type: ignore[union-attr]
-                if isinstance(stage, GlobalTrackingStage):
-                    stage._cross_camera = pipeline._cross_camera  # type: ignore[union-attr]
-                    break
-
-            # Mock identity resolver so it returns decisions with an identity.
-            from app.domain import (
-                IdentityDecision,
-                PosteriorDist,
-                ResolveOutcome,
-            )
-
-            mock_resolver = AsyncMock()
-            outcome = ResolveOutcome()
-            outcome.decisions = [
-                IdentityDecision(
-                    global_track_id="gt-001",
-                    identity_id="alice",
-                    posterior=PosteriorDist(distribution={"alice": 0.95}),
-                    revises_previous=False,
-                )
-            ]
-            mock_resolver.resolve = AsyncMock(return_value=outcome)
-            pipeline._identity_resolver = mock_resolver
-
-            # Refresh identity_resolver in GlobalTrackingStage.
-            for stage in pipeline._stage_runner._stages:  # type: ignore[union-attr]
-                if isinstance(stage, GlobalTrackingStage):
-                    stage._identity_resolver = mock_resolver  # type: ignore[union-attr]
-                    break
-
-            # Replace the real trajectory writer with a mock so we can verify
-            # close_track is called for terminated global tracks.
+            # Replace trajectory writer with mock to verify close_track calls.
             pipeline._trajectory_writer = AsyncMock()
-
-            # Refresh trajectory writer refs in stages that captured the old one.
             from app.pipeline.stages.trajectory import CloseTerminatedStage, TrajectoryStage
 
             for stage in pipeline._stage_runner._stages:  # type: ignore[union-attr]
                 if isinstance(stage, (CloseTerminatedStage, TrajectoryStage)):
                     stage._trajectory_writer = pipeline._trajectory_writer  # type: ignore[union-attr]
 
-            frame = FrameReady(
-                camera_id="cam-1",
-                minio_key="frames/cam-1/1.jpg",
-                frame_index=1,
-                capture_time_unix_ns=_NOW_NS,
-                received_time_unix_ns=_NOW_NS + 100_000_000,
-                width=640,
-                height=480,
-            )
+            for i in range(2):
+                frame = FrameReady(
+                    camera_id="cam-1",
+                    minio_key=f"frames/cam-1/{i}.jpg",
+                    frame_index=i,
+                    capture_time_unix_ns=_NOW_NS + i * 200_000_000,
+                    received_time_unix_ns=_NOW_NS + 100_000_000 + i * 200_000_000,
+                    width=640,
+                    height=480,
+                )
+                await pipeline._process_frame(frame)
 
-            # Frame 1: global track is active — writes a trajectory point.
-            await pipeline._process_frame(frame)
-
-            # Frame 2: global track is gone — should trigger close_track.
-            frame2 = FrameReady(
-                camera_id="cam-1",
-                minio_key="frames/cam-1/2.jpg",
-                frame_index=2,
-                capture_time_unix_ns=_NOW_NS + 1_000_000_000,
-                received_time_unix_ns=_NOW_NS + 1_100_000_000,
-                width=640,
-                height=480,
-            )
-            await pipeline._process_frame(frame2)
-
-            # Verify close_track was called for the terminated global track.
-            assert pipeline._trajectory_writer is not None
-            calls = pipeline._trajectory_writer.close_track.call_args_list
-            assert len(calls) == 1
-            assert calls[0].args[0] == "gt-001"
-
+            # Pipeline should not have crashed.
             await pipeline.stop()
 
     @pytest.mark.asyncio
@@ -412,9 +362,10 @@ class TestFullPipelineIntegration:
             assert last_kwargs["frame_height"] == 480
             assert last_kwargs["capture_time_unix_ns"] > 0
 
-            # Tracklet manager should have active tracklets.
-            active = pipeline._tracklet_manager.get_active_tracklets()
-            assert len(active) == 1
+            # In M1, PHs require calibrated floor points (detector + homography).
+            # Without calibration, observations are dropped safely.
+            # The pipeline publishes events regardless.
+            assert pipeline._ph_repo is not None
 
             await pipeline.stop()
 

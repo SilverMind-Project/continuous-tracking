@@ -40,10 +40,8 @@ from ..pipeline.stages import (
     DetectStage,
     FaceIdentityStage,
     FetchStage,
-    GlobalTrackingStage,
     InferenceStage,
     KeyframeStage,
-    LocalTrackingStage,
     PostureStage,
     PrivacyStage,
     PublishStage,
@@ -52,6 +50,7 @@ from ..pipeline.stages import (
     StageRunner,
     TrailsStage,
     TrajectoryStage,
+    WorldTrackingStage,
 )
 from ..pipeline.types import FaceIdCameraConfig, FrameImageFetcher, ReidEmbedderProtocol
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
@@ -80,16 +79,20 @@ from ..storage.base import (
     TrackingRepository,
     TrajectoryRepository,
 )
-from ..tracking.association_solver import AssociationConfig
 from ..tracking.camera_adjacency import AdjacencyEdge as GraphAdjacencyEdge
 from ..tracking.camera_adjacency import CameraAdjacency
 from ..tracking.floor_projector import FloorProjector
-from ..tracking.global_track_service import GlobalTrackService
 from ..tracking.identity_committer import IdentityCommitter
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
-from ..tracking.tracker import PerCameraTrackers, TrackerConfig
-from ..tracking.tracklet_manager import TrackletConfig, TrackletManager
+from ..tracking.world.config import WorldTrackerConfig
+from ..tracking.world.repository import (
+    InMemoryPHRepository,
+    InMemoryWorldObservationRepository,
+    PHRepositoryProtocol,
+    WorldObservationRepository,
+)
+from ..tracking.world.tracker import WorldTracker
 from ..trajectory.dementia_signals import DementiaSignalWorker
 from ..trajectory.dementia_signals import SignalConfig as DementiaSignalConfig
 from ..trajectory.motion_energy import MotionEnergyTracker
@@ -171,6 +174,9 @@ class PipelineDependencies:
     identity_rewriter: IdentityRewriter | None = None
     bbox_repo: BboxAnnotationRepository | None = None
     dnf_repo: DoNotFuseRepository | None = None
+    # M1 world tracker repositories
+    ph_repo: PHRepositoryProtocol | None = None
+    obs_repo: WorldObservationRepository | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -191,8 +197,7 @@ class PipelineConfig:
     pose_enabled: bool = True
 
     # --- Tracking ---
-    tracklet: TrackletConfig = field(default_factory=TrackletConfig)
-    cross_cam: AssociationConfig = field(default_factory=AssociationConfig)
+    world_tracker: WorldTrackerConfig = field(default_factory=WorldTrackerConfig)
 
     # --- Identity resolution ---
     resolver: ResolverConfig = field(default_factory=ResolverConfig)
@@ -253,8 +258,6 @@ class FrameProcessingPipeline:
         self._config = config or PipelineConfig()
         self._transport: RedisStreamsTransport | None = None
         self._detector: PersonDetector | None = None
-        self._tracklet_manager: TrackletManager | None = None
-        self._tracker: PerCameraTrackers | None = None
         self._repo: TrackingRepository | None = None
         self._gallery_repo: GalleryRepository | None = None
         self._gallery_cache: GalleryCache | None = None
@@ -262,13 +265,16 @@ class FrameProcessingPipeline:
         self._settings_repo: SettingsRepository | None = None
         # Cameras whose FK row we've already ensured this process lifetime.
         self._seen_cameras: set[str] = set()
-        self._cross_camera: GlobalTrackService | None = None
         self._identity_resolver: IdentityResolver | None = None
         self._revision_publisher: RevisionPublisher | None = None
         self._adjacency: CameraAdjacency | None = None
         self._adjacency_version: int = -1
         # Overlap groups fetched from CC at startup; preserved across adjacency reloads.
         self._overlap_groups: list[OverlapGroup] = []
+        # M1 world tracker
+        self._world_tracker: WorldTracker | None = None
+        self._ph_repo: PHRepositoryProtocol | None = None
+        self._obs_repo: WorldObservationRepository | None = None
         self._frame_fetcher: FrameImageFetcher | None = None
         self._reid_embedder: ReidEmbedderProtocol | None = None
         # M6
@@ -374,48 +380,21 @@ class FrameProcessingPipeline:
         # Bbox annotation repository
         self._bbox_repo = deps.bbox_repo or InMemoryBboxAnnotationRepository()
 
-        # Tracklet manager
-        tracker = PerCameraTrackers(
-            TrackerConfig(
-                dedup_iou_threshold=self._config.tracker_dedup_iou_threshold,
-            )
+        # M1: World-coordinate person tracker replaces per-camera + cross-camera.
+        self._ph_repo = deps.ph_repo or InMemoryPHRepository()
+        self._obs_repo = deps.obs_repo or InMemoryWorldObservationRepository()
+        self._world_tracker = WorldTracker(
+            ph_repo=self._ph_repo,
+            obs_repo=self._obs_repo,
+            config=self._config.world_tracker,
         )
 
-        tracklet_config = TrackletConfig(
-            min_hit_ratio=self._config.tracklet.min_hit_ratio,
-            close_grace_frames=self._config.tracklet.close_grace_frames,
-            gallery_min_quality=self._config.tracklet.gallery_min_quality,
-            gallery_max_per_tracklet=self._config.tracklet.gallery_max_per_tracklet,
-            min_detection_confidence=self._config.tracklet.min_detection_confidence,
-            enabled=self._config.tracklet.enabled,
-            min_frames_to_publish=self._config.tracker_min_frames_to_publish,
-        )
-
-        self._tracklet_manager = TrackletManager(
-            repo=self._repo,
-            gallery=gallery,
-            config=tracklet_config,
-        )
-
-        # Store tracker reference for pipeline step
-        self._tracker = tracker
-
-        # ---- Cross-camera + identity resolution ----
+        # ---- Camera adjacency + identity resolution ----
         self._adjacency = CameraAdjacency()
 
         self._floor_projector = FloorProjector(calibration_state)
         self._spatial_projection = SpatialProjectionService(calibration_state)
 
-        self._cross_camera = GlobalTrackService(
-            gallery=gallery,
-            adjacency=self._adjacency,
-            global_track_repo=self._global_track_repo,
-            config=self._config.cross_cam,
-            spatial_projection=self._spatial_projection,
-            dnf_repo=deps.dnf_repo,
-            gallery_cache=self._gallery_cache,
-        )
-        self._dnf_repo = deps.dnf_repo
         self._sync_adjacency()
 
         self._identity_resolver = IdentityResolver(
@@ -519,29 +498,19 @@ class FrameProcessingPipeline:
                     pose_estimator=self._pose_estimator,
                     pose_enabled=self._config.pose_enabled,
                 ),
-                LocalTrackingStage(
-                    tracker=self._tracker,
-                    tracklet_manager=self._tracklet_manager,
-                ),
                 FaceIdentityStage(
                     face_id_client=self._face_id_client,
-                    tracklet_manager=self._tracklet_manager,
+                    tracklet_manager=None,  # tracklets removed in M1
                     gallery_repo=self._gallery_repo,
                     face_id_cooldown_s=self._config.face_id.cooldown_s,
                     face_id_min_confidence=self._config.face_id.min_confidence,
                     face_id_camera_configs=self._config.face_id.camera_configs,
                     last_face_id_by_tracklet=self._last_face_id_by_tracklet,
                 ),
-                GlobalTrackingStage(
-                    tracklet_manager=self._tracklet_manager,
-                    cross_camera=self._cross_camera,
-                    identity_resolver=self._identity_resolver,
-                    identity_committer=self._identity_committer,
-                    global_track_repo=self._global_track_repo,
-                    gallery_repo=self._gallery_repo,
-                    floor_projector=self._floor_projector,
-                    gallery_identity_backfill_delay_s=self._config.gallery_identity_backfill_delay_s,
-                    last_face_id_by_tracklet=self._last_face_id_by_tracklet,
+                WorldTrackingStage(
+                    tracker=self._world_tracker,
+                    config=self._config.world_tracker,
+                    camera_room_map=self._config.camera_room_map,
                 ),
                 CloseTerminatedStage(
                     global_track_repo=self._global_track_repo,
@@ -559,7 +528,7 @@ class FrameProcessingPipeline:
                     floor_projector=self._floor_projector,
                     motion_energy_tracker=self._motion_energy_tracker,
                     posture_tracker=self._posture_tracker,
-                    tracklet_manager=self._tracklet_manager,
+                    tracklet_manager=None,  # tracklets removed in M1
                     camera_room_map=self._config.camera_room_map,
                 ),
                 KeyframeStage(
@@ -573,7 +542,7 @@ class FrameProcessingPipeline:
                     bbox_repo=self._bbox_repo,
                     identity_rewrite_on_face_commit=self._config.identity_rewrite_on_face_commit,
                 ),
-                DetectionBackfillStage(tracklet_manager=self._tracklet_manager),
+                DetectionBackfillStage(tracklet_manager=None),  # tracklets removed in M1
                 TrailsStage(
                     trail_by_tracklet=self._trail_by_tracklet,
                     trail_maxlen=self._TRAIL_MAXLEN,
@@ -831,15 +800,7 @@ class FrameProcessingPipeline:
         new_adjacency.set_overlap_groups(self._overlap_groups)
         self._adjacency = new_adjacency
         self._adjacency_version = calibration_state.version
-        if self._gallery_repo is not None and self._global_track_repo is not None:
-            self._cross_camera = GlobalTrackService(
-                gallery=self._gallery_repo,
-                adjacency=new_adjacency,
-                global_track_repo=self._global_track_repo,
-                spatial_projection=self._spatial_projection,
-                dnf_repo=self._dnf_repo,
-                gallery_cache=self._gallery_cache,
-            )
+        # Identity resolver uses adjacency for face propagation; kept for M1 transition.
 
     def set_overlap_groups(self, groups: list[OverlapGroup]) -> None:
         """Apply overlap group data from CC.
@@ -858,7 +819,7 @@ class FrameProcessingPipeline:
 
         if self._is_stale(frame):
             return
-        if self._detector is None or self._tracklet_manager is None or self._tracker is None:
+        if self._detector is None:
             await self._skeleton_frame(frame)
             return
 

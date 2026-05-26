@@ -223,6 +223,26 @@ sampler:
   periodic_expires_hours: "${SAMPLER_PERIODIC_EXPIRES_HOURS:-72}"
   trigger_expires_days: "${SAMPLER_TRIGGER_EXPIRES_DAYS:-30}"
 
+# World tracker (M1 floor-plane Kalman tracker)
+world_tracker:
+  enabled: "${WORLD_TRACKER_ENABLED:-true}"
+  gate_chi2: "${WORLD_TRACKER_GATE_CHI2:-9.21}"
+  alpha_geo: "${WORLD_TRACKER_ALPHA_GEO:-0.5}"
+  alpha_app: "${WORLD_TRACKER_ALPHA_APP:-0.4}"
+  alpha_height: "${WORLD_TRACKER_ALPHA_HEIGHT:-0.1}"
+  observation_noise_m: "${WORLD_TRACKER_OBSERVATION_NOISE_M:-0.25}"
+  process_noise_accel_m_s2: "${WORLD_TRACKER_PROCESS_NOISE_ACCEL_M_S2:-0.5}"
+  ph_close_grace_s: "${WORLD_TRACKER_PH_CLOSE_GRACE_S:-5.0}"
+  min_observations_to_publish: "${WORLD_TRACKER_MIN_OBSERVATIONS_TO_PUBLISH:-3}"
+  face_conflict_threshold: "${WORLD_TRACKER_FACE_CONFLICT_THRESHOLD:-0.70}"
+  inferred_handoff_max_s: "${WORLD_TRACKER_INFERRED_HANDOFF_MAX_S:-600}"
+  inferred_handoff_max_distance_m: "${WORLD_TRACKER_INFERRED_HANDOFF_MAX_DISTANCE_M:-5.0}"
+  initial_position_sigma_m: "${WORLD_TRACKER_INITIAL_POSITION_SIGMA_M:-1.0}"
+  initial_velocity_sigma_m_s: "${WORLD_TRACKER_INITIAL_VELOCITY_SIGMA_M_S:-2.0}"
+  velocity_decay_s: "${WORLD_TRACKER_VELOCITY_DECAY_S:-3.0}"
+  height_sigma_m: "${WORLD_TRACKER_HEIGHT_SIGMA_M:-0.15}"
+  evidence_window_s: "${WORLD_TRACKER_EVIDENCE_WINDOW_S:-30.0}"
+
 # Environment label (dev / staging / production)
 env: "${CTS_ENV:-production}"
 

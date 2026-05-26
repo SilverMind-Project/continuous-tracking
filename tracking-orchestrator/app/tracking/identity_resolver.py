@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -37,10 +38,10 @@ if TYPE_CHECKING:
 
 from ..domain import (
     FaceAnchor,
-    GlobalTrack,
     Identity,
     IdentityCandidate,
     IdentityDecision,
+    IdentityResolvableEntity,
     IdentityRevision,
     PosteriorDist,
     ResolveOutcome,
@@ -254,19 +255,19 @@ class IdentityResolver:
 
     async def resolve(
         self,
-        global_tracks: list[GlobalTrack],
+        hypotheses: Sequence[IdentityResolvableEntity],
         new_face_anchors: list[FaceAnchor],
         captured_at: datetime,
-        tracklet_heights: dict[str, float] | None = None,
+        ph_heights: dict[str, float] | None = None,
         face_evidence: list[FaceEvidence] | None = None,
     ) -> ResolveOutcome:
-        """Resolve identities for a batch of GlobalTracks.
+        """Resolve identities for a batch of tracked entities.
 
         Args:
-            global_tracks: active GlobalTracks to resolve.
+            hypotheses: active entities (PHs or GlobalTracks) to resolve.
             new_face_anchors: face anchors from this frame.
             captured_at: wall-clock time of the current frame.
-            tracklet_heights: optional tracklet_id → height_mm mapping.
+            ph_heights: optional entity_id → height_m mapping.
             face_evidence: optional typed FaceEvidence records with source
                 metadata. When provided, direct evidence receives normal
                 weight and propagated evidence receives reduced weight.
@@ -280,28 +281,28 @@ class IdentityResolver:
         enrolled = await self._gallery_repo.list_identities(active_only=True)
         self._identities = {ident.identity_id: ident for ident in enrolled}
 
-        # Propagate face anchors from face-evidenced GTs to similar adjacent GTs
-        # that share the same physical space but weren't merged by the cross-camera
-        # associator (appearance below merge threshold, or different overlap groups).
-        augmented_anchors = await self._propagate_face_anchors(global_tracks, new_face_anchors)
+        # Propagate face anchors from face-evidenced entities to similar adjacent
+        # entities that share the same physical space but weren't merged by the
+        # cross-camera associator.
+        augmented_anchors = await self._propagate_face_anchors(hypotheses, new_face_anchors)
         augmented_evidence = self._augment_face_evidence(
-            global_tracks, face_evidence or [], augmented_anchors
+            hypotheses, face_evidence or [], augmented_anchors
         )
 
         outcome = ResolveOutcome()
 
-        for gt in global_tracks:
-            prior = self._build_prior(gt, captured_at)
+        for entity in hypotheses:
+            prior = self._build_prior(entity, captured_at)
             face_likelihood, best_face_conf = self._from_face_anchors(
-                gt, augmented_anchors, augmented_evidence
+                entity, augmented_anchors, augmented_evidence
             )
-            reid_likelihood = await self._from_gallery(gt)
-            height_likelihood = self._from_height(gt, tracklet_heights or {})
+            reid_likelihood = await self._from_gallery(entity)
+            height_likelihood = self._from_height(entity, ph_heights or {})
             posterior = self._combine(prior, face_likelihood, reid_likelihood, height_likelihood)
 
-            # Build identity evidence ledger for this GT.
+            # Build identity evidence ledger for this entity.
             evidence_items = self._build_evidence_ledger(
-                gt,
+                entity,
                 face_likelihood,
                 reid_likelihood,
                 augmented_evidence,
@@ -310,7 +311,7 @@ class IdentityResolver:
             )
 
             decision = self._commit(
-                gt, posterior, face_likelihood, reid_likelihood, captured_at, best_face_conf
+                entity, posterior, face_likelihood, reid_likelihood, captured_at, best_face_conf
             )
             # Attach evidence summary.
             ep = EvidencePosterior(
@@ -342,7 +343,7 @@ class IdentityResolver:
             )
 
             if decision.revises_previous:
-                revision = self._build_revision(gt, decision, captured_at)
+                revision = self._build_revision(entity, decision, captured_at)
                 if revision is not None:
                     outcome.revisions.append(revision)
 
@@ -354,7 +355,9 @@ class IdentityResolver:
     # Prior construction
     # ------------------------------------------------------------------
 
-    def _build_prior(self, gt: GlobalTrack, captured_at: datetime) -> PosteriorDist:
+    def _build_prior(
+        self, entity: IdentityResolvableEntity, captured_at: datetime
+    ) -> PosteriorDist:
         """Build the temporal prior from the previous identity assignment.
 
         The prior is a mixture of:
@@ -364,15 +367,15 @@ class IdentityResolver:
         """
         prior_weight = self._config.prior_weight
 
-        if gt.current_identity_id:
+        if entity.current_identity_id:
             # Strong prior on the previous identity.
             prior: dict[str, float] = {
-                gt.current_identity_id: prior_weight,
+                entity.current_identity_id: prior_weight,
             }
             # Add small mass to other known identities.
             other_weight = (1 - prior_weight) / max(len(self._identities), 1)
             for ident_id in self._identities:
-                if ident_id != gt.current_identity_id:
+                if ident_id != entity.current_identity_id:
                     prior[ident_id] = other_weight
         else:
             # No previous identity: uniform over known identities.
@@ -390,14 +393,14 @@ class IdentityResolver:
 
     def _from_face_anchors(
         self,
-        gt: GlobalTrack,
+        entity: IdentityResolvableEntity,
         face_anchors: list[FaceAnchor],
         face_evidence: list[FaceEvidence] | None = None,
     ) -> tuple[PosteriorDist, float | None]:
-        """Build likelihood from face anchors associated with this GlobalTrack.
+        """Build likelihood from face anchors associated with this entity.
 
         Face anchors are the strongest evidence. A face anchor is associated
-        with a GlobalTrack if its tracklet_id is in the tracklet's list.
+        with an entity if its tracklet_id is in the entity's observation list.
 
         When ``face_evidence`` is provided, propagated evidence receives
         reduced weight (propagated_face_weight_multiplier) compared to
@@ -406,16 +409,16 @@ class IdentityResolver:
         Returns (PosteriorDist, best_confidence) where best_confidence is the
         strongest face anchor's confidence, or None when no anchor matched.
         """
-        gt_tracklet_ids = set(gt.tracklet_ids)
+        entity_obs_ids = set(entity.observation_ids)
 
-        # Find face anchors whose tracklet belongs to this GlobalTrack.
-        relevant_anchors = [fa for fa in face_anchors if fa.tracklet_id in gt_tracklet_ids]
+        # Find face anchors whose tracklet belongs to this entity.
+        relevant_anchors = [fa for fa in face_anchors if fa.tracklet_id in entity_obs_ids]
 
         if not relevant_anchors:
             logger.debug(
-                "face_no_match_for_gt",
-                global_track_id=gt.global_track_id,
-                gt_tracklet_count=len(gt_tracklet_ids),
+                "face_no_match_for_entity",
+                entity_id=entity.entity_id,
+                obs_count=len(entity_obs_ids),
                 face_anchor_count=len(face_anchors),
             )
             return PosteriorDist({}), None
@@ -438,7 +441,7 @@ class IdentityResolver:
 
         logger.debug(
             "face_anchor_matched",
-            global_track_id=gt.global_track_id,
+            entity_id=entity.entity_id,
             person_id=best.person_id,
             confidence=round(best.confidence, 3),
             source=source,
@@ -480,24 +483,24 @@ class IdentityResolver:
     # ReID likelihood from gallery
     # ------------------------------------------------------------------
 
-    async def _from_gallery(self, gt: GlobalTrack) -> PosteriorDist:
+    async def _from_gallery(self, entity: IdentityResolvableEntity) -> PosteriorDist:
         """Build likelihood from gallery k-NN search.
 
-        Queries the gallery for similar embeddings to the tracklet's
+        Queries the gallery for similar embeddings to the entity's
         gallery entries. Maps results to per-identity scores using a
         calibrated logistic curve.
         """
-        # Build a real query embedding from the GlobalTrack's existing
-        # gallery entries (mean of recent embeddings per tracklet).
+        # Build a real query embedding from the entity's existing
+        # gallery entries (mean of recent embeddings per observation).
         try:
             recent = await self._gallery_repo.list_gallery_entries_for_tracklets(
-                tracklet_ids=set(gt.tracklet_ids),
+                tracklet_ids=set(entity.observation_ids),
                 limit=20,
             )
         except Exception:
             logger.warning(
                 "reid_gallery_lookup_failed",
-                global_track_id=gt.global_track_id,
+                entity_id=entity.entity_id,
                 exc_info=True,
             )
             return PosteriorDist({})
@@ -505,8 +508,8 @@ class IdentityResolver:
         if not recent:
             logger.debug(
                 "reid_no_gallery_entries",
-                global_track_id=gt.global_track_id,
-                tracklet_count=len(gt.tracklet_ids),
+                entity_id=entity.entity_id,
+                obs_count=len(entity.observation_ids),
             )
             return PosteriorDist({})
 
@@ -539,7 +542,7 @@ class IdentityResolver:
         except Exception:
             logger.warning(
                 "reid_search_failed",
-                global_track_id=gt.global_track_id,
+                entity_id=entity.entity_id,
                 query_dim=len(query),
                 exc_info=True,
             )
@@ -548,15 +551,12 @@ class IdentityResolver:
         if not similar:
             logger.debug(
                 "reid_no_similar_matches",
-                global_track_id=gt.global_track_id,
+                entity_id=entity.entity_id,
                 query_entries=len(recent),
             )
             return PosteriorDist({})
 
         # Map hits to per-identity scores using logistic curve.
-        # Face-confirmed entries (identity_id set) above the boost threshold
-        # get a likelihood floor so a back-facing query finding front-facing
-        # gallery entries at sim≈0.73 still crosses the commit threshold.
         likelihood: dict[str, list[float]] = defaultdict(list)
         boosted = False
         for entry, sim in similar:
@@ -579,11 +579,6 @@ class IdentityResolver:
         if not avg:
             return PosteriorDist({})
 
-        # When a face-confirmed entry was boosted, explicitly fill a low
-        # floor for every known identity NOT already in the results.
-        # Without this, _combine()'s smoothing term (1/(n+1)) assigns 0.50
-        # to missing identities, collapsing the boosted posterior from ~0.83
-        # to ~0.35.
         if boosted:
             non_match_floor = (1.0 - self._config.identified_entry_min_likelihood) / max(
                 len(self._identities), 1
@@ -594,7 +589,6 @@ class IdentityResolver:
             if "UNKNOWN" not in avg:
                 avg["UNKNOWN"] = non_match_floor
 
-        # Coherence boost: stable embedding sequence → multiply the top match.
         coherence_boosted_identity: str | None = None
         if coherence_active and avg:
             best_key = max(avg, key=lambda k: avg[k])
@@ -603,11 +597,10 @@ class IdentityResolver:
                 avg[best_key] = min(0.99, original * self._config.embedding_coherence_boost)
                 coherence_boosted_identity = best_key
 
-        # Log top ReID match for diagnostics.
         top_reid = max(avg.items(), key=lambda x: x[1])
         logger.debug(
             "reid_top_match",
-            global_track_id=gt.global_track_id,
+            entity_id=entity.entity_id,
             top_identity=top_reid[0],
             top_score=round(top_reid[1], 4),
             candidate_count=len(avg),
@@ -635,20 +628,20 @@ class IdentityResolver:
 
     def _from_height(
         self,
-        gt: GlobalTrack,
-        tracklet_heights: dict[str, float],
+        entity: IdentityResolvableEntity,
+        ph_heights: dict[str, float],
     ) -> PosteriorDist:
         """Build likelihood from height estimates.
 
-        Compares the mean height of this GT's tracklets against enrolled
-        identity height profiles. Returns an empty distribution (uniform,
-        no effect) when:
-        - No height data is available for this GT.
+        Compares the mean height of this entity's observations against
+        enrolled identity height profiles. Returns an empty distribution
+        (uniform, no effect) when:
+        - No height data is available for this entity.
         - No enrolled identities have height profiles.
         """
         heights_mm: list[float] = []
-        for tid in gt.tracklet_ids:
-            h = tracklet_heights.get(tid)
+        for oid in entity.observation_ids:
+            h = ph_heights.get(oid)
             if h is not None:
                 heights_mm.append(h)
 
@@ -750,7 +743,7 @@ class IdentityResolver:
 
     def _commit(
         self,
-        gt: GlobalTrack,
+        entity: IdentityResolvableEntity,
         posterior: PosteriorDist,
         face_likelihood: PosteriorDist,
         reid_likelihood: PosteriorDist,
@@ -767,7 +760,7 @@ class IdentityResolver:
           maintain an existing assignment but not create one.
 
         Face locks: when a face anchor's confidence exceeds face_commit_min_confidence,
-        a face lock is set on this GT.  The face-locked identity uses the longer
+        a face lock is set on this entity.  The face-locked identity uses the longer
         face_lock_maintenance_max_age_s window so it persists across frames where
         face-id is on cooldown.  A different identity's face anchor at the same
         threshold displaces the lock.
@@ -777,7 +770,7 @@ class IdentityResolver:
         (top_id, top_prob), margin = posterior.top_with_margin()
 
         # --- Face lock management ---
-        existing_lock = self._face_locks.get(gt.global_track_id)
+        existing_lock = self._face_locks.get(entity.entity_id)
         is_face_evidence = top_id in face_likelihood.distribution and top_id not in ("UNKNOWN", "")
         # Narrow type: only enter the block when confidence is a float.
         if (
@@ -787,75 +780,54 @@ class IdentityResolver:
         ):
             face_conf: float = best_face_confidence  # narrowed
             if existing_lock is None or existing_lock.identity_id == top_id:
-                # Set or refresh the face lock for the same identity.
-                self._face_locks[gt.global_track_id] = _FaceLock(
+                self._face_locks[entity.entity_id] = _FaceLock(
                     identity_id=top_id,
                     confidence=face_conf,
                     locked_at=captured_at,
                 )
             else:
-                # Different identity at sufficient confidence: displace the lock.
                 logger.info(
                     "face_lock_displaced",
-                    global_track_id=gt.global_track_id,
+                    entity_id=entity.entity_id,
                     old_identity=existing_lock.identity_id,
                     new_identity=top_id,
                     old_confidence=round(existing_lock.confidence, 3),
                     new_confidence=round(face_conf, 3),
                 )
-                self._face_locks[gt.global_track_id] = _FaceLock(
+                self._face_locks[entity.entity_id] = _FaceLock(
                     identity_id=top_id,
                     confidence=face_conf,
                     locked_at=captured_at,
                 )
 
-        # Require evidence from at least one non-prior source.
-        # The prior encodes temporal continuity (a track likely keeps
-        # its current identity) but should not be the sole basis for
-        # a new assignment.  Face anchors and ReID gallery hits are
-        # the evidence that justifies an assignment or reassignment.
         has_evidence = (
             top_id in face_likelihood.distribution or top_id in reid_likelihood.distribution
         )
 
-        # When the top identity matches the current assignment AND the
-        # most recent evidence-backed commit was recent enough, allow
-        # the prior alone to maintain the identity across frames where
-        # face-id is on cooldown or ReID is momentarily quiet.  Without
-        # this gate every non-evidence frame would clear the assignment.
-        prev_id = gt.current_identity_id
+        prev_id = entity.current_identity_id
         identity_unchanged = top_id == prev_id and prev_id is not None
         within_maintenance_window = False
         if identity_unchanged:
-            face_lock = self._face_locks.get(gt.global_track_id)
+            face_lock = self._face_locks.get(entity.entity_id)
             if face_lock is not None and face_lock.identity_id == prev_id:
-                # Face lock provides extended maintenance window (300 s).
                 lock_age_s = (captured_at - face_lock.locked_at).total_seconds()
                 within_maintenance_window = (
                     lock_age_s <= self._config.face_lock_maintenance_max_age_s
                 )
-            elif gt.current_identity_committed_at is not None:
-                # Standard maintenance window from committed_at — the
-                # identity naturally decays after prior_maintenance_max_age_s
-                # without fresh confirming evidence.
-                identity_age_s = (captured_at - gt.current_identity_committed_at).total_seconds()
+            elif entity.current_identity_committed_at is not None:
+                age_delta = captured_at - entity.current_identity_committed_at
+                identity_age_s = age_delta.total_seconds()
                 within_maintenance_window = (
                     identity_age_s <= self._config.prior_maintenance_max_age_s
                 )
             else:
-                # Backward-compat: no committed_at timestamp (pre-migration GT).
-                # Use last_seen_at which is ~0 for active tracks, yielding the
-                # old indefinite-maintenance behaviour.  Remove after 2026-06-07.
-                identity_age_s = (captured_at - gt.last_seen_at).total_seconds()
+                identity_age_s = (captured_at - entity.last_seen_at).total_seconds()
                 within_maintenance_window = (
                     identity_age_s <= self._config.prior_maintenance_max_age_s
                 )
 
         evidence_ok = has_evidence or within_maintenance_window
 
-        # Detect dense scenes: when ≥ 2 candidate identities each have
-        # posterior > 0.3, escalate thresholds to prevent confident-but-wrong
-        # commits from ambiguous ReID evidence in multi-person frames.
         dense_candidates = sum(1 for p in posterior.distribution.values() if p > 0.3)
         is_dense = dense_candidates >= 2
         effective_commit_prob = (
@@ -865,16 +837,8 @@ class IdentityResolver:
             self._config.commit_margin_dense if is_dense else self._config.commit_margin
         )
 
-        # Apply commit rule.
         evidence_backed = False
         if within_maintenance_window:
-            # Carry the existing identity forward without re-applying the
-            # probability threshold.  The threshold governs initial commits
-            # and genuine identity changes; during an evidence gap (same top
-            # candidate, no new evidence, within maintenance window) the
-            # prior-only posterior falls below commit_prob when N>=4 enrolled
-            # identities — applying the threshold here would clear a valid
-            # face-confirmed identity on every quiet frame.
             new_id = prev_id
             evidence_backed = has_evidence
         elif (
@@ -883,19 +847,17 @@ class IdentityResolver:
             new_id = top_id if top_id != "UNKNOWN" else None
             evidence_backed = has_evidence
         else:
-            new_id = None  # Committed as UNKNOWN.
+            new_id = None
 
-        # Track identity decays: maintenance window expired on an identified GT
-        # without fresh confirming evidence.
         if prev_id is not None and not within_maintenance_window and not has_evidence:
             metrics.metrics.identity_decays_total.inc()
             logger.info(
                 "identity_maintenance_window_expired",
-                global_track_id=gt.global_track_id,
+                entity_id=entity.entity_id,
                 prev_identity_id=prev_id,
                 identity_age_s=round(
                     (
-                        captured_at - (gt.current_identity_committed_at or gt.last_seen_at)
+                        captured_at - (entity.current_identity_committed_at or entity.last_seen_at)
                     ).total_seconds(),
                     1,
                 ),
@@ -916,22 +878,16 @@ class IdentityResolver:
                     f"(p={top_prob:.3f}, margin={margin:.3f})"
                 )
 
-        # Observability: record posterior entropy for every decision so we
-        # can plot entropy distributions per resident in Grafana.
         metrics.metrics.posterior_entropy.observe(posterior.entropy())
         if new_id is not None and revises:
             metrics.metrics.identity_commits_total.labels(
                 source="face" if top_id in face_likelihood.distribution else "reid",
             ).inc()
 
-        # Diagnostic logging: surface why a commit was accepted or refused.
-        # Log for ALL failed commits — not only when prev_id is set — so new
-        # tracks with strong ReID hits that fail the probability/margin gate
-        # are visible rather than silently staying UNKNOWN.
         if new_id is None:
             logger.debug(
                 "identity_not_committed",
-                global_track_id=gt.global_track_id,
+                entity_id=entity.entity_id,
                 top_id=top_id,
                 top_prob=round(top_prob, 4),
                 margin=round(margin, 4),
@@ -944,14 +900,14 @@ class IdentityResolver:
         elif within_maintenance_window:
             logger.debug(
                 "identity_maintained_by_prior",
-                global_track_id=gt.global_track_id,
+                entity_id=entity.entity_id,
                 identity_id=new_id,
                 top_prob=round(top_prob, 4),
-                age_s=round((captured_at - gt.last_seen_at).total_seconds(), 1),
+                age_s=round((captured_at - entity.last_seen_at).total_seconds(), 1),
             )
 
         return IdentityDecision(
-            global_track_id=gt.global_track_id,
+            global_track_id=entity.entity_id,
             identity_id=new_id,
             posterior=posterior,
             revises_previous=revises,
@@ -966,13 +922,13 @@ class IdentityResolver:
 
     def _build_revision(
         self,
-        gt: GlobalTrack,
+        entity: IdentityResolvableEntity,
         decision: IdentityDecision,
         captured_at: datetime,
     ) -> IdentityRevision | None:
         """Build an IdentityRevision when identity changes.
 
-        The revision covers all tracklets in the GlobalTrack that were
+        The revision covers all observations in the entity that were
         active within the revision horizon.
 
         Rate-limited: max_revisions_per_gt_per_minute.
@@ -980,14 +936,14 @@ class IdentityResolver:
         # Rate limiting.
         now = captured_at
         window_start = now.timestamp() - 60.0
-        log_key = gt.global_track_id
+        log_key = entity.entity_id
         recent = [
             ts for ts in self._revision_log.get(log_key, []) if ts.timestamp() >= window_start
         ]
         if len(recent) >= self._config.max_revisions_per_gt_per_minute:
             logger.warning(
                 "Revision rate limit exceeded",
-                global_track_id=log_key,
+                entity_id=log_key,
                 recent_count=len(recent),
             )
             return None
@@ -997,12 +953,10 @@ class IdentityResolver:
             ts for ts in self._revision_log[log_key] if ts.timestamp() >= window_start
         ]
 
-        # Collect tracklet IDs within the revision horizon.
-        # In production, query the tracking repo for tracklets in the horizon.
-        # For now, use all tracklet_ids from the GlobalTrack.
-        tracklet_ids = list(gt.tracklet_ids)
+        # Collect observation IDs within the revision horizon.
+        observation_ids = list(entity.observation_ids)
 
-        if not tracklet_ids:
+        if not observation_ids:
             return None
 
         # Build candidates from the posterior.
@@ -1031,8 +985,8 @@ class IdentityResolver:
 
         revision = IdentityRevision(
             revision_id=str(uuid.uuid4()),
-            global_track_id=gt.global_track_id,
-            tracklet_ids=tracklet_ids,
+            global_track_id=entity.entity_id,
+            tracklet_ids=observation_ids,
             candidates=candidates,
             map_identity_id=top_id,
             posterior_entropy=entropy,
@@ -1046,7 +1000,7 @@ class IdentityResolver:
             revision_time=now,
         )
 
-        self._revision_log[gt.global_track_id].append(now)
+        self._revision_log[entity.entity_id].append(now)
         return revision
 
     # ------------------------------------------------------------------
@@ -1055,19 +1009,19 @@ class IdentityResolver:
 
     def _build_evidence_ledger(
         self,
-        gt: GlobalTrack,
+        entity: IdentityResolvableEntity,
         face_likelihood: PosteriorDist,
         reid_likelihood: PosteriorDist,
         face_evidence: list[FaceEvidence],
         best_face_conf: float | None,
         captured_at: datetime,
     ) -> list[IdentityEvidence]:
-        """Build the evidence ledger for one global track in one frame."""
+        """Build the evidence ledger for one entity in one frame."""
         items: list[IdentityEvidence] = []
 
         # Face evidence.
         for fe in face_evidence:
-            if fe.tracklet_id and fe.tracklet_id in set(gt.tracklet_ids):
+            if fe.tracklet_id and fe.tracklet_id in set(entity.observation_ids):
                 if fe.source == "direct":
                     items.append(
                         IdentityEvidence.direct_face(
@@ -1100,10 +1054,10 @@ class IdentityResolver:
                 )
 
         # Temporal prior.
-        if gt.current_identity_id:
+        if entity.current_identity_id:
             items.append(
                 IdentityEvidence.temporal_prior(
-                    identity_id=gt.current_identity_id,
+                    identity_id=entity.current_identity_id,
                     confidence=0.6,
                 )
             )
@@ -1116,7 +1070,7 @@ class IdentityResolver:
 
     def _augment_face_evidence(
         self,
-        global_tracks: list[GlobalTrack],
+        hypotheses: Sequence[IdentityResolvableEntity],
         face_evidence: list[FaceEvidence],
         augmented_anchors: list[FaceAnchor],
     ) -> list[FaceEvidence]:
@@ -1161,48 +1115,48 @@ class IdentityResolver:
 
     async def _propagate_face_anchors(
         self,
-        global_tracks: list[GlobalTrack],
+        hypotheses: Sequence[IdentityResolvableEntity],
         face_anchors: list[FaceAnchor],
     ) -> list[FaceAnchor]:
-        """Propagate face anchors from face-evidenced GTs to similar adjacent GTs.
+        """Propagate face anchors from face-evidenced entities to similar adjacent ones.
 
         When Camera A gets a face match for Alice but Camera B (same room,
-        overlapping FOV) has a separate GlobalTrack for the same person, this
-        method creates synthetic FaceAnchors for Camera B's GT so that the
+        overlapping FOV) has a separate entity for the same person, this
+        method creates synthetic FaceAnchors for Camera B's entity so that the
         Bayesian resolver can commit Alice's identity there too.
 
         Confidence of the synthetic anchor is scaled by the gallery cosine
-        similarity between the two GTs.  Only GTs with no direct face evidence
-        this frame are candidates for propagation.
+        similarity between the two entities.  Only entities with no direct
+        face evidence this frame are candidates for propagation.
         """
-        if not face_anchors or len(global_tracks) < 2:
+        if not face_anchors or len(hypotheses) < 2:
             return face_anchors
 
-        # Map each tracklet to its GT for fast lookup.
-        gt_by_tracklet: dict[str, GlobalTrack] = {}
-        for gt in global_tracks:
-            for tid in gt.tracklet_ids:
-                gt_by_tracklet[tid] = gt
+        # Map each observation to its entity for fast lookup.
+        entity_by_obs: dict[str, IdentityResolvableEntity] = {}
+        for entity in hypotheses:
+            for oid in entity.observation_ids:
+                entity_by_obs[oid] = entity
 
-        # Find which GTs have direct face evidence and pick the best anchor per GT.
-        evidenced_gt_ids: set[str] = set()
-        best_anchor_by_gt: dict[str, FaceAnchor] = {}
+        # Find which entities have direct face evidence and pick the best anchor per entity.
+        evidenced_entity_ids: set[str] = set()
+        best_anchor_by_entity: dict[str, FaceAnchor] = {}
         for fa in face_anchors:
-            src_gt = gt_by_tracklet.get(fa.tracklet_id)
-            if src_gt is None:
+            src_entity = entity_by_obs.get(fa.tracklet_id)
+            if src_entity is None:
                 continue
-            evidenced_gt_ids.add(src_gt.global_track_id)
-            existing = best_anchor_by_gt.get(src_gt.global_track_id)
+            evidenced_entity_ids.add(src_entity.entity_id)
+            existing = best_anchor_by_entity.get(src_entity.entity_id)
             if existing is None or (
                 fa.confidence * fa.quality > existing.confidence * existing.quality
             ):
-                best_anchor_by_gt[src_gt.global_track_id] = fa
+                best_anchor_by_entity[src_entity.entity_id] = fa
 
-        if not evidenced_gt_ids:
+        if not evidenced_entity_ids:
             return face_anchors
 
-        # Candidate GTs for propagation: no direct face evidence this frame.
-        unevidenced = [gt for gt in global_tracks if gt.global_track_id not in evidenced_gt_ids]
+        # Candidate entities for propagation: no direct face evidence this frame.
+        unevidenced = [e for e in hypotheses if e.entity_id not in evidenced_entity_ids]
         if not unevidenced:
             return face_anchors
 
@@ -1211,44 +1165,41 @@ class IdentityResolver:
         synthetic: list[FaceAnchor] = []
         propagated_count = 0
 
-        for src_gt_id, src_anchor in best_anchor_by_gt.items():
+        for src_entity_id, src_anchor in best_anchor_by_entity.items():
             if propagated_count >= max_props:
                 break
-            src_gt = next((gt for gt in global_tracks if gt.global_track_id == src_gt_id), None)
-            if src_gt is None or not src_gt.tracklet_ids:
+            src_entity = next((e for e in hypotheses if e.entity_id == src_entity_id), None)
+            if src_entity is None or not src_entity.observation_ids:
                 continue
 
-            for dst_gt in unevidenced:
+            for dst_entity in unevidenced:
                 if propagated_count >= max_props:
                     break
-                if not dst_gt.tracklet_ids:
+                if not dst_entity.observation_ids:
                     continue
 
                 sim = await self._gallery_similarity(
-                    set(src_gt.tracklet_ids), set(dst_gt.tracklet_ids)
+                    set(src_entity.observation_ids), set(dst_entity.observation_ids)
                 )
                 if sim < threshold:
                     logger.debug(
                         "face_propagation_skipped_low_similarity",
-                        src_gt=src_gt_id,
-                        dst_gt=dst_gt.global_track_id,
+                        src_entity=src_entity_id,
+                        dst_entity=dst_entity.entity_id,
                         similarity=round(sim, 4),
                         threshold=threshold,
                     )
                     continue
 
-                # Synthetic anchor for dst_gt; confidence scaled by similarity.
-                # Only create if the result is strong enough to set a face lock;
-                # weak synthetic anchors add noise without commitment power.
                 syn_confidence = src_anchor.confidence * sim
                 if syn_confidence < self._config.face_commit_min_confidence:
                     continue
                 syn = FaceAnchor(
                     person_id=src_anchor.person_id,
                     confidence=syn_confidence,
-                    quality=src_anchor.quality * 0.8,  # penalty for indirect evidence
-                    tracklet_id=dst_gt.tracklet_ids[0],
-                    camera_id=dst_gt.camera_ids[0] if dst_gt.camera_ids else "",
+                    quality=src_anchor.quality * 0.8,
+                    tracklet_id=dst_entity.observation_ids[0],
+                    camera_id=dst_entity.camera_ids[0] if dst_entity.camera_ids else "",
                     captured_at=src_anchor.captured_at,
                 )
                 synthetic.append(syn)
@@ -1257,8 +1208,8 @@ class IdentityResolver:
 
                 logger.info(
                     "face_anchor_propagated",
-                    src_gt=src_gt_id,
-                    dst_gt=dst_gt.global_track_id,
+                    src_entity=src_entity_id,
+                    dst_entity=dst_entity.entity_id,
                     person_id=src_anchor.person_id,
                     original_confidence=round(src_anchor.confidence, 3),
                     propagated_confidence=round(syn.confidence, 3),

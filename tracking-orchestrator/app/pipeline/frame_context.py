@@ -95,6 +95,9 @@ class FrameContext:
     # --- Stage: trajectory ---
     det_posture: dict[str, PostureType] = field(default_factory=dict)
 
+    # --- Stage: world_tracking (M1) ---
+    _world_snapshots: list[object] = field(default_factory=list)
+
     # --- Stage: publish ---
     identities: dict[str, tuple[str, float]] = field(default_factory=dict)
     evidence_by_gt: dict[str, tuple[float, float, bool]] = field(default_factory=dict)

@@ -17,6 +17,7 @@ layers =
     app.domain
 optional = true
 
+
 [importlinter:contract:no-proto-leak]
 name = Generated proto code is leaf-only
 type = forbidden

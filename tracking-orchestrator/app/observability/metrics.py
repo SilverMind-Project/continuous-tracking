@@ -84,6 +84,15 @@ class Metrics:
     signal_worker_emitted_total: Counter
     signal_baseline_cache_hits_total: Counter
 
+    # ---- M1 world tracker ----------------------------------------------
+    world_tracker_ph_open: Gauge
+    world_tracker_ph_spawned_total: Counter
+    world_tracker_ph_closed_total: Counter
+    world_tracker_observations_total: Counter
+    world_tracker_assignment_cost: Histogram
+    world_tracker_continuations_total: Counter
+    world_tracker_clock_skew_ms: Histogram
+
     # ---- Latency -----------------------------------------------------
     frame_end_to_end_latency_ms: Histogram
     triton_inference_latency_ms: Histogram
@@ -266,6 +275,39 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_revision_rows_rewritten_total",
             "DB rows retroactively relabelled by the identity rewriter.",
             ["table"],
+        ),
+        # ---- M1 world tracker ------------------------------------------------
+        world_tracker_ph_open=_gauge(
+            "cts_world_tracker_ph_open",
+            "Currently open Person Hypotheses.",
+        ),
+        world_tracker_ph_spawned_total=_counter(
+            "cts_world_tracker_ph_spawned_total",
+            "PHs created since process start.",
+        ),
+        world_tracker_ph_closed_total=_counter(
+            "cts_world_tracker_ph_closed_total",
+            "PHs closed since process start.",
+        ),
+        world_tracker_observations_total=_counter(
+            "cts_world_tracker_observations_total",
+            "Observations consumed by the world tracker.",
+            ["camera_id", "result"],
+        ),
+        world_tracker_assignment_cost=_hist(
+            "cts_world_tracker_assignment_cost",
+            "Final cost of matched (PH, obs) pairs.",
+            (0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9),
+        ),
+        world_tracker_continuations_total=_counter(
+            "cts_world_tracker_continuations_total",
+            "PH continuation candidates published.",
+        ),
+        world_tracker_clock_skew_ms=_hist(
+            "cts_world_tracker_clock_skew_ms",
+            "Per-camera clock skew vs orchestrator wall-clock.",
+            (1, 5, 10, 25, 50, 100, 200, 500),
+            ["camera_id"],
         ),
         signal_worker_run_seconds=_hist(
             "cts_signal_worker_run_seconds",

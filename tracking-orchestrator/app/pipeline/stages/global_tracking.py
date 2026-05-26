@@ -82,10 +82,10 @@ class GlobalTrackingStage(FrameStage):
             ctx.active_tracklets, captured_at=ctx.event_time
         )
         outcome = await self._identity_resolver.resolve(
-            global_tracks=ctx.active_global_tracks,
+            hypotheses=ctx.active_global_tracks,
             new_face_anchors=ctx.face_anchors,
             captured_at=ctx.event_time,
-            tracklet_heights=None,
+            ph_heights=None,
             face_evidence=ctx._face_evidence if ctx._face_evidence else None,
         )
         ctx.outcome_decisions = outcome.decisions
