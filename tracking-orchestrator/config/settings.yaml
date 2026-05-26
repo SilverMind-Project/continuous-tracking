@@ -164,6 +164,10 @@ cognitive_companion:
   url: "${CC_API_URL:-}"
   api_key: "${CC_INGRESS_API_KEY:-}"
 
+# CC config sync (M2)
+cc_sync:
+  poll_interval_s: "${CC_SYNC_POLL_INTERVAL_S:-60.0}"
+
 # Identity resolver — Bayesian posterior parameters
 resolver:
   commit_prob: "${RESOLVER_COMMIT_PROB:-0.65}"

@@ -214,6 +214,58 @@ class WorldFrameSnapshot:
 
 
 # ---------------------------------------------------------------------------
+# M2: Calibration correctness and transit zones
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HomographyValidation:
+    """Result of server-side homography sanity checks."""
+
+    ok: bool
+    severity: str  # "ok" | "warning" | "error"
+    issues: list[str] = field(default_factory=list)
+    metrics: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CameraRoomBinding:
+    """Immutable camera→room mapping from CC."""
+
+    camera_id: str
+    room_id: str
+    room_name: str
+    bound_at: datetime
+
+
+@dataclass(frozen=True)
+class TransitZone:
+    """A door/threshold zone on the floor plan for entry/exit detection."""
+
+    zone_id: str
+    name: str
+    kind: str  # "door" | "threshold"
+    polygon: list[tuple[float, float]]  # normalized [0,1] floor-plan coords
+    inside_room_id: str
+    outside_room_id: str
+    direction_vec: tuple[float, float]  # inside→outside direction
+
+
+@dataclass(frozen=True)
+class RoomTransitionEvent:
+    """Emitted when a PH crosses a transit zone boundary."""
+
+    ph_id: str
+    transit_zone_id: str
+    direction: str  # "enter" | "exit"
+    inside_room_id: str
+    outside_room_id: str
+    floor_x_m: float
+    floor_y_m: float
+    event_time: datetime
+
+
+# ---------------------------------------------------------------------------
 # Detection
 # ---------------------------------------------------------------------------
 

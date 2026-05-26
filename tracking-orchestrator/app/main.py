@@ -10,6 +10,7 @@ env-var interpolation — see :mod:`app.config`.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -592,6 +593,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await _pipeline.start()
 
+    # M2: CC config sync service (camera→room map + homography sync).
+    from .services.camera_room_map import CameraRoomMap
+    from .services.cc_config_sync import CCConfigSyncService
+
+    camera_room_map = CameraRoomMap()
+    _poll_s = settings.as_float("cc_sync.poll_interval_s")
+    cc_sync_service = CCConfigSyncService(
+        client=cc_client,
+        calibration_state=calibration_state,
+        camera_room_map=camera_room_map,
+        poll_interval_s=_poll_s,
+    )
+    app.state.cc_sync_service = cc_sync_service
+    app.state.cc_sync_task = asyncio.create_task(cc_sync_service.run())
+    app.state.camera_room_map = camera_room_map
+    # Wire CameraRoomMap into the pipeline so stages read room bindings.
+    _pipeline.set_camera_room_map(camera_room_map)
+
     # Wire router modules to share the pipeline's repositories.
     if _pipeline.tracking_repo is not None and _pipeline.global_track_repo is not None:
         global_track_merger = GlobalTrackMerger(_pool) if _pool is not None else None
@@ -629,6 +648,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # -------------------------------------------------------------------
     # Shutdown
     # -------------------------------------------------------------------
+    # M2: stop CC config sync before pipeline.
+    _cc_sync = getattr(app.state, "cc_sync_service", None)
+    if _cc_sync is not None:
+        await _cc_sync.stop()
+
     if _pipeline is not None:
         await _pipeline.stop()
         _pipeline = None

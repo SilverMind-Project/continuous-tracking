@@ -802,6 +802,15 @@ class FrameProcessingPipeline:
         self._adjacency_version = calibration_state.version
         # Identity resolver uses adjacency for face propagation; kept for M1 transition.
 
+    def set_camera_room_map(self, camera_room_map: object) -> None:
+        """M2: Inject the live CameraRoomMap into pipeline stages.
+
+        Called at startup after the CCConfigSyncService is created.
+        Stages that need room attribution read from this map instead of
+        the static ``PipelineConfig.camera_room_map`` dict.
+        """
+        self._camera_room_map = camera_room_map
+
     def set_overlap_groups(self, groups: list[OverlapGroup]) -> None:
         """Apply overlap group data from CC.
 
