@@ -76,8 +76,8 @@ def validate_homography(
         and image_height > 0
         and m.shape == (3, 3)
     ):
-        from shapely.geometry import Point as ShapelyPoint  # type: ignore[import-untyped]
-        from shapely.geometry import Polygon as ShapelyPolygon  # type: ignore[import-untyped]
+        from shapely.geometry import Point as ShapelyPoint
+        from shapely.geometry import Polygon as ShapelyPolygon
 
         room_poly = ShapelyPolygon(camera_room_polygon)
         corners_px = [

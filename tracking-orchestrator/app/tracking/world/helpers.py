@@ -7,7 +7,7 @@ passed in. Easy to unit test.
 from __future__ import annotations
 
 import numpy as np
-from shapely.geometry import Point, Polygon  # type: ignore[import-untyped]
+from shapely.geometry import Point, Polygon
 
 
 def update_gallery_mean(

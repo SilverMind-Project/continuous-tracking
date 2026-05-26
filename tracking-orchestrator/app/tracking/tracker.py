@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import numpy.typing as npt
-from scipy.optimize import linear_sum_assignment  # type: ignore[import-untyped]
+from scipy.optimize import linear_sum_assignment
 
 from ..domain import BoundingBox, Detection
 from ..inference.schemas import Embedding

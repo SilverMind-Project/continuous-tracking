@@ -121,6 +121,9 @@ pipeline:
   # True only in unit tests that run without a detector.
   allow_skeleton: "${PIPELINE_ALLOW_SKELETON:-false}"
 
+  # M3: minimum detection confidence for keyframe bbox annotations
+  min_keyframe_detection_confidence: "${M3_MIN_KEYFRAME_DETECTION_CONFIDENCE:-0.5}"
+
   # Read by: main.py → PipelineConfig(batch_window_s=, max_batch_size=)
   # batch_window_s=0 disables frame batching (process each frame immediately).
   batch_window_s: "${PIPELINE_BATCH_WINDOW_S:-0.5}"

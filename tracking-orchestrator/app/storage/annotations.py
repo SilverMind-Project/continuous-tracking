@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Literal, Protocol
 
 from ..domain import BboxAnnotation
+
+
+class BboxBatchOperation:
+    """A single operation in a bbox annotation batch (M3)."""
+
+    def __init__(
+        self,
+        op: Literal["create", "update", "delete"],
+        annotation_id: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        self.op = op
+        self.annotation_id = annotation_id
+        self.data = data or {}
 
 
 class BboxAnnotationRepository(Protocol):
@@ -44,6 +60,30 @@ class BboxAnnotationRepository(Protocol):
 
     async def delete_annotation(self, annotation_id: str) -> None:
         """Delete a single bbox annotation by its UUID."""
+        ...
+
+    # --- M3: idempotent delete + batch ops ---
+
+    async def delete_annotation_if_exists(self, annotation_id: str) -> bool:
+        """Delete by ID. Returns True if a row was deleted, False if none existed."""
+        ...
+
+    def transaction(self) -> AsyncIterator[None]:
+        """Async context manager for batch operations. Yield, then commit/rollback."""
+        ...
+
+    async def apply_bbox_batch(
+        self,
+        keyframe_id: str,
+        operations: list[BboxBatchOperation],
+    ) -> list[dict[str, Any]]:
+        """Apply a batch of create/update/delete operations atomically."""
+        ...
+
+    async def delete_annotations_below_confidence(
+        self, threshold: float, since: datetime
+    ) -> int:
+        """Drop annotations with detection_confidence below *threshold*. Returns count."""
         ...
 
 
@@ -118,3 +158,81 @@ class InMemoryBboxAnnotationRepository:
                 self._by_tracklet[ann.tracklet_id] = [
                     i for i in self._by_tracklet[ann.tracklet_id] if i != annotation_id
                 ]
+
+    # --- M3 methods ---
+
+    async def delete_annotation_if_exists(self, annotation_id: str) -> bool:
+        existed = annotation_id in self._rows
+        await self.delete_annotation(annotation_id)
+        return existed
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]:
+        # InMemory: no-op (operations are already atomic in dict).
+        yield
+
+    async def apply_bbox_batch(
+        self,
+        keyframe_id: str,
+        operations: list[BboxBatchOperation],
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for op in operations:
+            if op.op == "delete" and op.annotation_id:
+                await self.delete_annotation(op.annotation_id)
+                results.append({"op": "delete", "annotation_id": op.annotation_id, "ok": True})
+            elif op.op == "update" and op.annotation_id and op.data:
+                if op.annotation_id in self._rows:
+                    ann = self._rows[op.annotation_id]
+                    d = op.data
+                    self._rows[op.annotation_id] = BboxAnnotation(
+                        **{
+                            **ann.__dict__,
+                            "x1": d.get("x1", ann.x1),
+                            "y1": d.get("y1", ann.y1),
+                            "x2": d.get("x2", ann.x2),
+                            "y2": d.get("y2", ann.y2),
+                        }
+                    )
+                    results.append({"op": "update", "annotation_id": op.annotation_id, "ok": True})
+                else:
+                    results.append({
+                        "op": "update",
+                        "annotation_id": op.annotation_id,
+                        "ok": False,
+                        "error": "not_found",
+                    })
+            elif op.op == "create" and op.data:
+                new_id = str(uuid.uuid4())
+                ann = BboxAnnotation(
+                    keyframe_id=keyframe_id,
+                    tracklet_id="",
+                    camera_id="",
+                    x1=float(op.data.get("x1", 0)),
+                    y1=float(op.data.get("y1", 0)),
+                    x2=float(op.data.get("x2", 0)),
+                    y2=float(op.data.get("y2", 0)),
+                    detection_confidence=float(op.data.get("detection_confidence", 0.5)),
+                    frame_width=int(op.data.get("frame_width", 0)),
+                    frame_height=int(op.data.get("frame_height", 0)),
+                    identity_id=op.data.get("identity_id"),
+                    created_at=datetime.now(UTC),
+                    id=new_id,
+                )
+                self._rows[new_id] = ann
+                self._by_keyframe.setdefault(keyframe_id, []).append(new_id)
+                results.append({"op": "create", "annotation_id": new_id, "ok": True})
+        return results
+
+    async def delete_annotations_below_confidence(
+        self, threshold: float, since: datetime
+    ) -> int:
+        count = 0
+        for ann_id, ann in list(self._rows.items()):
+            if (
+                ann.detection_confidence < threshold
+                and ann.created_at >= since
+            ):
+                await self.delete_annotation(ann_id)
+                count += 1
+        return count

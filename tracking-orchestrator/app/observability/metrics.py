@@ -93,6 +93,9 @@ class Metrics:
     world_tracker_continuations_total: Counter
     world_tracker_clock_skew_ms: Histogram
 
+    # ---- M3 keyframe quality -------------------------------------------
+    keyframe_dropped_low_confidence_total: Counter
+
     # ---- Latency -----------------------------------------------------
     frame_end_to_end_latency_ms: Histogram
     triton_inference_latency_ms: Histogram
@@ -308,6 +311,11 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Per-camera clock skew vs orchestrator wall-clock.",
             (1, 5, 10, 25, 50, 100, 200, 500),
             ["camera_id"],
+        ),
+        # ---- M3 keyframe quality -------------------------------------------
+        keyframe_dropped_low_confidence_total=_counter(
+            "cts_keyframe_dropped_low_confidence_total",
+            "Keyframe bbox annotations skipped due to low detection confidence.",
         ),
         signal_worker_run_seconds=_hist(
             "cts_signal_worker_run_seconds",

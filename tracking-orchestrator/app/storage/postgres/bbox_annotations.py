@@ -5,7 +5,10 @@ Uses asyncpg with $N positional placeholders.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Any
 
 import asyncpg  # type: ignore[import-untyped]
 
@@ -25,8 +28,9 @@ class PostgresBboxAnnotationRepository:
                 INSERT INTO continuous_tracking.keyframe_bbox_annotations
                     (keyframe_id, tracklet_id, camera_id,
                      x1, y1, x2, y2, detection_confidence,
-                     frame_width, frame_height, identity_id, created_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                     frame_width, frame_height, identity_id, created_at,
+                     bbox_age_frames)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
                 ON CONFLICT DO NOTHING
                 """,
                 [
@@ -43,6 +47,7 @@ class PostgresBboxAnnotationRepository:
                         ann.frame_height,
                         ann.identity_id,
                         ann.created_at,
+                        ann.bbox_age_frames,
                     )
                     for ann in annotations
                 ],
@@ -55,6 +60,7 @@ class PostgresBboxAnnotationRepository:
                 SELECT id, keyframe_id, tracklet_id::text, camera_id,
                        x1, y1, x2, y2, detection_confidence,
                        frame_width, frame_height, identity_id, created_at,
+                       bbox_age_frames,
                        override_x1, override_y1, override_x2, override_y2,
                        override_by, override_at
                 FROM continuous_tracking.keyframe_bbox_annotations
@@ -72,6 +78,7 @@ class PostgresBboxAnnotationRepository:
                 SELECT id, keyframe_id, tracklet_id::text, camera_id,
                        x1, y1, x2, y2, detection_confidence,
                        frame_width, frame_height, identity_id, created_at,
+                       bbox_age_frames,
                        override_x1, override_y1, override_x2, override_y2,
                        override_by, override_at
                 FROM continuous_tracking.keyframe_bbox_annotations
@@ -128,6 +135,7 @@ class PostgresBboxAnnotationRepository:
                 SELECT id, keyframe_id, tracklet_id::text, camera_id,
                        x1, y1, x2, y2, detection_confidence,
                        frame_width, frame_height, identity_id, created_at,
+                       bbox_age_frames,
                        override_x1, override_y1, override_x2, override_y2,
                        override_by, override_at
                 FROM continuous_tracking.keyframe_bbox_annotations
@@ -159,6 +167,100 @@ class PostgresBboxAnnotationRepository:
                 annotation_id,
             )
 
+    # --- M3 methods ---
+
+    async def delete_annotation_if_exists(self, annotation_id: str) -> bool:
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM continuous_tracking.keyframe_bbox_annotations "
+                "WHERE id = $1::uuid",
+                annotation_id,
+            )
+        # asyncpg returns "DELETE N" — parse the count.
+        from contextlib import suppress
+        deleted = 0
+        with suppress(ValueError, IndexError):
+            deleted = int(result.split()[-1])
+        return deleted > 0
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]:
+        async with self._pool.acquire() as conn, conn.transaction():
+            self._tx_conn = conn
+            try:
+                yield
+            finally:
+                self._tx_conn = None
+
+    async def apply_bbox_batch(
+        self,
+        keyframe_id: str,
+        operations: list[Any],
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        async with self._pool.acquire() as conn, conn.transaction():
+            for op in operations:
+                if op.op == "delete" and op.annotation_id:
+                    await conn.execute(
+                        "DELETE FROM continuous_tracking.keyframe_bbox_annotations "
+                        "WHERE id = $1::uuid",
+                        op.annotation_id,
+                    )
+                    results.append({"op": "delete", "annotation_id": op.annotation_id, "ok": True})
+                elif op.op == "update" and op.annotation_id and op.data:
+                    d = op.data
+                    await conn.execute(
+                        "UPDATE continuous_tracking.keyframe_bbox_annotations "
+                        "SET x1 = $2, y1 = $3, x2 = $4, y2 = $5 WHERE id = $1::uuid",
+                        op.annotation_id,
+                        float(d.get("x1", 0)),
+                        float(d.get("y1", 0)),
+                        float(d.get("x2", 0)),
+                        float(d.get("y2", 0)),
+                    )
+                    results.append({"op": "update", "annotation_id": op.annotation_id, "ok": True})
+                elif op.op == "create" and op.data:
+                    import uuid as _uuid
+                    new_id = str(_uuid.uuid4())
+                    d = op.data
+                    await conn.execute(
+                        """INSERT INTO continuous_tracking.keyframe_bbox_annotations
+                            (id, keyframe_id, tracklet_id, camera_id,
+                             x1, y1, x2, y2, detection_confidence,
+                             frame_width, frame_height, identity_id, created_at)
+                            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                        new_id,
+                        keyframe_id,
+                        "",
+                        "",
+                        float(d.get("x1", 0)),
+                        float(d.get("y1", 0)),
+                        float(d.get("x2", 0)),
+                        float(d.get("y2", 0)),
+                        float(d.get("detection_confidence", 0.5)),
+                        int(d.get("frame_width", 0)),
+                        int(d.get("frame_height", 0)),
+                        d.get("identity_id"),
+                        datetime.now(UTC),
+                    )
+                    results.append({"op": "create", "annotation_id": new_id, "ok": True})
+        return results
+
+    async def delete_annotations_below_confidence(
+        self, threshold: float, since: datetime
+    ) -> int:
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM continuous_tracking.keyframe_bbox_annotations "
+                "WHERE detection_confidence < $1 AND created_at >= $2",
+                threshold,
+                since,
+            )
+        try:
+            return int(result.split()[-1])
+        except (ValueError, IndexError):
+            return 0
+
 
 def _row_to_domain(row: asyncpg.Record) -> BboxAnnotation:
     return BboxAnnotation(
@@ -175,6 +277,7 @@ def _row_to_domain(row: asyncpg.Record) -> BboxAnnotation:
         identity_id=row["identity_id"],
         created_at=row["created_at"],
         id=str(row["id"]) if row["id"] is not None else None,
+        bbox_age_frames=row["bbox_age_frames"],
         override_x1=row["override_x1"],
         override_y1=row["override_y1"],
         override_x2=row["override_x2"],

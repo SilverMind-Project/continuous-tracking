@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.storage.base import (
     BboxAnnotationRepository,
@@ -40,7 +40,7 @@ router = APIRouter(tags=["dashboard-internal"])
 _signal_repo: DementiaSignalRepository = InMemoryDementiaSignalRepository()
 _trajectory_repo: TrajectoryRepository = InMemoryTrajectoryRepository()
 _keyframe_repo: KeyframeRepository = InMemoryKeyframeRepository()
-_bbox_repo: BboxAnnotationRepository = InMemoryBboxAnnotationRepository()
+_bbox_repo: BboxAnnotationRepository = InMemoryBboxAnnotationRepository()  # type: ignore[assignment]
 
 
 def get_signal_repo() -> DementiaSignalRepository:
@@ -404,17 +404,44 @@ async def delete_bbox(
     annotation_id: str,
     repo: BboxAnnotationRepository = Depends(get_bbox_repo),
 ) -> None:
-    """Delete a single bbox annotation by ID."""
-    existing = await repo.get_annotation_by_id(annotation_id)
-    if existing is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "bbox_annotation.not_found",
-                "message": f"Bbox annotation {annotation_id} not found.",
-            },
+    """Delete a single bbox annotation by ID (idempotent — always 204)."""
+    await repo.delete_annotation_if_exists(annotation_id)
+
+
+# ---------------------------------------------------------------------------
+# M3: POST /internal/bboxes/batch
+# ---------------------------------------------------------------------------
+
+
+class BboxOpBody(BaseModel):
+    op: str = Field(..., pattern="^(create|update|delete)$")
+    annotation_id: str | None = None
+    data: dict[str, object] | None = None
+
+
+class BboxBatchRequest(BaseModel):
+    keyframe_id: str
+    operations: list[BboxOpBody] = Field(..., min_length=1, max_length=50)
+
+
+@router.post("/internal/bboxes/batch")
+async def apply_bbox_batch(
+    body: BboxBatchRequest,
+    repo: BboxAnnotationRepository = Depends(get_bbox_repo),
+) -> dict[str, object]:
+    """Apply a batch of bbox create/update/delete operations atomically."""
+    from ..storage.annotations import BboxBatchOperation
+
+    operations = [
+        BboxBatchOperation(
+            op=op.op,  # type: ignore[arg-type]
+            annotation_id=op.annotation_id,
+            data=op.data if op.data else None,
         )
-    await repo.delete_annotation(annotation_id)
+        for op in body.operations
+    ]
+    results = await repo.apply_bbox_batch(body.keyframe_id, operations)
+    return {"applied": len(results), "results": results}
 
 
 # ---------------------------------------------------------------------------

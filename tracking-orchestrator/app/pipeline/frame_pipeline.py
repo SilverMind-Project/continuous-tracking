@@ -230,6 +230,7 @@ class PipelineConfig:
 
     # --- Keyframe sampling ---
     sampler: SamplerConfig = field(default_factory=SamplerConfig)
+    min_keyframe_detection_confidence: float = 0.5
     camera_room_map: dict[str, str] = field(default_factory=dict)
 
     # --- Signals ---
@@ -378,7 +379,7 @@ class FrameProcessingPipeline:
         self._identity_rewriter = deps.identity_rewriter or InMemoryIdentityRewriter()
 
         # Bbox annotation repository
-        self._bbox_repo = deps.bbox_repo or InMemoryBboxAnnotationRepository()
+        self._bbox_repo = deps.bbox_repo or InMemoryBboxAnnotationRepository()  # type: ignore[assignment]
 
         # M1: World-coordinate person tracker replaces per-camera + cross-camera.
         self._ph_repo = deps.ph_repo or InMemoryPHRepository()
@@ -534,6 +535,7 @@ class FrameProcessingPipeline:
                 KeyframeStage(
                     keyframe_sampler=self._keyframe_sampler,
                     scene_publisher=self._scene_publisher,
+                    min_keyframe_detection_confidence=self._config.min_keyframe_detection_confidence,
                 ),
                 RevisionsStage(
                     revision_publisher=self._revision_publisher,

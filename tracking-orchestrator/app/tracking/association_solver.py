@@ -397,7 +397,7 @@ class AssociationSolver:
 
         # Solve Hungarian assignment.
         try:
-            from scipy.optimize import linear_sum_assignment  # type: ignore[import-untyped]
+            from scipy.optimize import linear_sum_assignment
 
             row_ind, col_ind = linear_sum_assignment(cost)
         except ImportError:

@@ -552,7 +552,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         pose_estimator=pose_estimator,
         posture_strategy=posture_strategy,
         identity_rewriter=identity_rewriter,
-        bbox_repo=bbox_repo,
+        bbox_repo=bbox_repo,  # type: ignore[arg-type]
         dnf_repo=dnf_repo,
     )
     await _pipeline.initialize(deps)
@@ -611,6 +611,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Wire CameraRoomMap into the pipeline so stages read room bindings.
     _pipeline.set_camera_room_map(camera_room_map)
 
+    # M3: keyframe revalidator background task.
+    if bbox_repo is not None:
+        from .services.keyframe_revalidator import KeyframeRevalidator
+
+        _revalidator = KeyframeRevalidator(
+            bbox_repo=bbox_repo,
+            threshold=settings.as_float(
+                "pipeline.min_keyframe_detection_confidence"
+            ),
+        )
+        app.state.keyframe_revalidator = _revalidator
+        app.state.keyframe_revalidator_task = asyncio.create_task(
+            _revalidator.run()
+        )
+
     # Wire router modules to share the pipeline's repositories.
     if _pipeline.tracking_repo is not None and _pipeline.global_track_repo is not None:
         global_track_merger = GlobalTrackMerger(_pool) if _pool is not None else None
@@ -641,13 +656,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
     if bbox_repo is not None:
-        dashboard_router_mod.set_bbox_repo(bbox_repo)
+        dashboard_router_mod.set_bbox_repo(bbox_repo)  # type: ignore[arg-type]
 
     yield
 
     # -------------------------------------------------------------------
     # Shutdown
     # -------------------------------------------------------------------
+    # M3: stop keyframe revalidator.
+    _m3_revalidator = getattr(app.state, "keyframe_revalidator", None)
+    if _m3_revalidator is not None:
+        await _m3_revalidator.stop()
+
     # M2: stop CC config sync before pipeline.
     _cc_sync = getattr(app.state, "cc_sync_service", None)
     if _cc_sync is not None:

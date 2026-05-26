@@ -739,6 +739,8 @@ class BboxAnnotation:
     identity_id: str | None = None  # None if not yet resolved
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     id: str | None = None  # DB-generated UUID; None for new annotations before persist
+    # M3: frames since the contributing detection. 0 = same-frame.
+    bbox_age_frames: int = 0
     # User-drawn override bbox (M4 will write to these columns)
     override_x1: float | None = None
     override_y1: float | None = None
