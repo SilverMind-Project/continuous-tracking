@@ -33,8 +33,13 @@ CREATE INDEX idx_ph_closed_at
     ON person_hypotheses (closed_at DESC)
     WHERE closed_at IS NOT NULL;
 
+-- TimescaleDB requires the partitioning column (captured_at) to be part of
+-- every UNIQUE index, including the primary key. PK is composite
+-- (observation_id, captured_at); observation_id stays globally unique because
+-- UUIDs are unique on their own — the composite only satisfies the hypertable
+-- invariant.
 CREATE TABLE world_observations (
-    observation_id       UUID         PRIMARY KEY,
+    observation_id       UUID         NOT NULL,
     ph_id                UUID         NOT NULL REFERENCES person_hypotheses(ph_id) ON DELETE CASCADE,
     camera_id            TEXT         NOT NULL,
     frame_index          BIGINT       NOT NULL,
@@ -44,7 +49,8 @@ CREATE TABLE world_observations (
     detection_confidence FLOAT4       NOT NULL,
     bbox                 JSONB        NOT NULL,
     height_m             FLOAT8,
-    metadata             JSONB        NOT NULL DEFAULT '{}'
+    metadata             JSONB        NOT NULL DEFAULT '{}',
+    PRIMARY KEY (observation_id, captured_at)
 );
 
 SELECT create_hypertable(
