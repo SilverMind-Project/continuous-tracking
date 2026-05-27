@@ -23,9 +23,6 @@ from .repository import (
     InMemoryWorldObservationRepository as InMemoryWorldObservationRepository,
 )
 from .repository import (
-    PHObservationRepository as PHObservationRepository,
-)
-from .repository import (
     PHRepositoryProtocol as PHRepositoryProtocol,
 )
 from .repository import (
@@ -41,7 +38,6 @@ __all__ = [
     "InMemoryPHRepository",
     "InMemoryWorldObservationRepository",
     "KalmanState",
-    "PHObservationRepository",
     "PHRepositoryProtocol",
     "WorldObservationRepository",
     "WorldTracker",

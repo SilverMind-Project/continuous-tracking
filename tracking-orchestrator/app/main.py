@@ -47,6 +47,8 @@ from .routers.corrections import router as corrections_router
 from .routers.dashboard import router as dashboard_router
 from .routers.gallery import router as gallery_router
 from .routers.live import router as live_router
+from .routers.ph import router as ph_router
+from .routers.ph import set_ph_repository
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
 from .sampling.keyframe_sampler import SamplerConfig
@@ -62,6 +64,7 @@ from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
 from .tracking.identity_resolver import ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
+from .tracking.world.repository import PostgresPHRepository
 from .trajectory.depth_posture_strategy import DepthPostureStrategy
 from .trajectory.fused_posture_strategy import FusedPostureStrategy
 from .trajectory.posture_strategy import RTMPosePostureStrategy
@@ -487,6 +490,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         posture_strategy = fast_strategy
         logger.info("Posture strategy: RTMPose only (depth slow-path disabled)")
 
+    # -- N1: PH repository (Postgres or in-memory fallback) --
+    from .tracking.world.repository import InMemoryPHRepository as _InMemPH
+
+    if _pool is not None:
+        _ph_repo_n1: _InMemPH | PostgresPHRepository = PostgresPHRepository(_pool)
+    else:
+        _ph_repo_n1 = _InMemPH()
+    set_ph_repository(_ph_repo_n1)
+    deps_ph_repo = _ph_repo_n1
+
     # -- Wire everything and start --
     identity_rewriter = (
         PostgresIdentityRewriter(_pool) if _pool is not None else InMemoryIdentityRewriter()
@@ -494,6 +507,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     deps = PipelineDependencies(
         detector=detector,
         gallery_repo=gallery_repo,
+        ph_repo=deps_ph_repo,  # N1: Postgres-backed PH repository
         trajectory_repo=trajectory_repo,
         keyframe_repo=keyframe_repo,
         signal_repo=signal_repo,
@@ -638,6 +652,7 @@ def create_app() -> FastAPI:
     app.include_router(corrections_router)
     app.include_router(gallery_router)
     app.include_router(live_router)
+    app.include_router(ph_router)
     app.include_router(trajectory_router)
 
     @app.get("/health")
