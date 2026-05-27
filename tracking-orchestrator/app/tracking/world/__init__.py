@@ -16,18 +16,6 @@ from .kalman import initialize as initialize
 from .kalman import mahalanobis2_position as mahalanobis2_position
 from .kalman import predict as predict
 from .kalman import update as update
-from .repository import (
-    InMemoryPHRepository as InMemoryPHRepository,
-)
-from .repository import (
-    InMemoryWorldObservationRepository as InMemoryWorldObservationRepository,
-)
-from .repository import (
-    PHRepositoryProtocol as PHRepositoryProtocol,
-)
-from .repository import (
-    WorldObservationRepository as WorldObservationRepository,
-)
 from .tracker import ContinuationPublisher as ContinuationPublisher
 from .tracker import WorldTracker as WorldTracker
 
@@ -35,11 +23,7 @@ __all__ = [
     "GATE_INF",
     "Assignment",
     "ContinuationPublisher",
-    "InMemoryPHRepository",
-    "InMemoryWorldObservationRepository",
     "KalmanState",
-    "PHRepositoryProtocol",
-    "WorldObservationRepository",
     "WorldTracker",
     "WorldTrackerConfig",
     "associate",

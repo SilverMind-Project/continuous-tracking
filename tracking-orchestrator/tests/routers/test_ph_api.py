@@ -20,7 +20,7 @@ from app.domain import (
 )
 from app.main import create_app
 from app.routers.ph import set_ph_repository
-from app.tracking.world.repository import InMemoryPHRepository
+from app.storage.base import InMemoryPHRepository
 
 
 @pytest.fixture

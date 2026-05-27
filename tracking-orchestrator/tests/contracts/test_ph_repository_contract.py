@@ -10,9 +10,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.tracking.world.repository import (
-    InMemoryPHRepository,
+from app.domain import (
     PersonHypothesis,
+)
+from app.storage.base import (
+    InMemoryPHRepository,
 )
 
 
@@ -48,7 +50,7 @@ async def test_list_active_filters_by_identity():
     repo = InMemoryPHRepository()
     await repo.save(_make_ph("ph-1"))
     await repo.save(_make_ph("ph-2", identity_id="alice"))
-    items, total = await repo.list_active(identity_id="alice")
+    items, total = await repo.list_active(identity_id="alice", include_transient=True)
     assert total == 1
     assert items[0].ph_id == "ph-2"
 
@@ -58,7 +60,7 @@ async def test_list_active_respects_limit_offset():
     repo = InMemoryPHRepository()
     for i in range(10):
         await repo.save(_make_ph(f"ph-{i}"))
-    items, total = await repo.list_active(limit=3, offset=2)
+    items, total = await repo.list_active(limit=3, offset=2, include_transient=True)
     assert total == 10
     assert len(items) == 3
 

@@ -71,25 +71,23 @@ from ..storage.base import (
     InMemoryGalleryRepository,
     InMemoryGlobalTrackRepository,
     InMemoryKeyframeRepository,
+    InMemoryPHRepository,
     InMemorySettingsRepository,
     InMemoryTrackingRepository,
     InMemoryTrajectoryRepository,
+    InMemoryWorldObservationRepository,
     KeyframeRepository,
+    PHRepositoryProtocol,
     SettingsRepository,
     TrackingRepository,
     TrajectoryRepository,
+    WorldObservationRepositoryProtocol,
 )
 from ..tracking.floor_projector import FloorProjector
 from ..tracking.identity_committer import IdentityCommitter
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
 from ..tracking.world.config import WorldTrackerConfig
-from ..tracking.world.repository import (
-    InMemoryPHRepository,
-    InMemoryWorldObservationRepository,
-    PHRepositoryProtocol,
-    WorldObservationRepository,
-)
 from ..tracking.world.tracker import WorldTracker
 from ..trajectory.dementia_signals import DementiaSignalWorker
 from ..trajectory.dementia_signals import SignalConfig as DementiaSignalConfig
@@ -174,7 +172,7 @@ class PipelineDependencies:
     dnf_repo: DoNotFuseRepository | None = None
     # M1 world tracker repositories
     ph_repo: PHRepositoryProtocol | None = None
-    obs_repo: WorldObservationRepository | None = None
+    obs_repo: WorldObservationRepositoryProtocol | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -271,7 +269,7 @@ class FrameProcessingPipeline:
         # M1 world tracker
         self._world_tracker: WorldTracker | None = None
         self._ph_repo: PHRepositoryProtocol | None = None
-        self._obs_repo: WorldObservationRepository | None = None
+        self._obs_repo: WorldObservationRepositoryProtocol | None = None
         self._frame_fetcher: FrameImageFetcher | None = None
         self._reid_embedder: ReidEmbedderProtocol | None = None
         # M6

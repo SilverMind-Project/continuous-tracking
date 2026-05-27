@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.tracking.world.repository import InMemoryPHRepository
+from app.storage.base import InMemoryPHRepository
 
 # hypothesis may not be installed; skip if unavailable
 try:

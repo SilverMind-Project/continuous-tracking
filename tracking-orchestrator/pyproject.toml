@@ -110,10 +110,17 @@ layers = [
     "app.core",
     "app.domain",
     "app.storage",
+    "app.tracking.world",
     "app.services",
     "app.transport",
     "app.routers",
 ]
+
+[[tool.importlinter.contracts]]
+name = "PH repository imports must go through storage"
+type = "forbidden"
+source_modules = ["app.routers"]
+forbidden_modules = ["app.tracking.world"]
 
 [[tool.importlinter.contracts]]
 name = "Legacy BoT-SORT tracking modules are forbidden"

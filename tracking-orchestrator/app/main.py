@@ -59,12 +59,12 @@ from .storage.migrations import MigrationRunner
 from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
+from .storage.postgres.ph_repo import PostgresPHRepository
 from .storage.postgres.settings_repo import PostgresSettingsRepository
 from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
 from .tracking.identity_resolver import ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
-from .tracking.world.repository import PostgresPHRepository
 from .trajectory.depth_posture_strategy import DepthPostureStrategy
 from .trajectory.fused_posture_strategy import FusedPostureStrategy
 from .trajectory.posture_strategy import RTMPosePostureStrategy
@@ -424,6 +424,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ) from None
             _triton_client = None
         else:
+            assert _triton_client is not None  # narrow for mypy
             detector = PersonDetector(
                 _triton_client,
                 model_name=detector_model_name,
@@ -511,7 +512,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("Posture strategy: RTMPose only (depth slow-path disabled)")
 
     # -- N1: PH repository (Postgres or in-memory fallback) --
-    from .tracking.world.repository import InMemoryPHRepository as _InMemPH
+    from .storage.base import InMemoryPHRepository as _InMemPH
 
     if _pool is not None:
         _ph_repo_n1: _InMemPH | PostgresPHRepository = PostgresPHRepository(_pool)

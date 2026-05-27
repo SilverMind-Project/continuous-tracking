@@ -1,6 +1,6 @@
 """WorldTracker: top-level orchestrator for world-coordinate person tracking.
 
-Depends on Protocols (PHRepositoryProtocol, WorldObservationRepository);
+Depends on Protocols (PHRepositoryProtocol, WorldObservationRepositoryProtocol);
 no direct I/O. Called by WorldTrackingStage once per frame.
 """
 
@@ -27,6 +27,7 @@ from ...domain import (
     WorldFrameSnapshot,
     WorldObservation,
 )
+from ...storage.base import PHRepositoryProtocol, WorldObservationRepositoryProtocol
 from .association import associate
 from .config import WorldTrackerConfig
 from .helpers import (
@@ -38,7 +39,6 @@ from .helpers import (
     update_height_ema,
 )
 from .kalman import KalmanState, initialize, predict, update
-from .repository import PHRepositoryProtocol, WorldObservationRepository
 
 logger = get_logger(__name__)
 
@@ -117,7 +117,7 @@ class WorldTracker:
     def __init__(
         self,
         ph_repo: PHRepositoryProtocol,
-        obs_repo: WorldObservationRepository,
+        obs_repo: WorldObservationRepositoryProtocol,
         config: WorldTrackerConfig | None = None,
         continuation_publisher: ContinuationPublisher | None = None,
         identity_resolver: IdentityResolver | None = None,
@@ -467,7 +467,7 @@ async def _resolve_identities(
     *,
     resolver: IdentityResolver | None,
     revision_publisher: RevisionPublisher | None,
-    obs_repo: WorldObservationRepository,
+    obs_repo: WorldObservationRepositoryProtocol,
     ph_repo: PHRepositoryProtocol,
     phs: list[PersonHypothesis],
     ph_obs_meta: dict[str, tuple[int, BoundingBox | None, float]],

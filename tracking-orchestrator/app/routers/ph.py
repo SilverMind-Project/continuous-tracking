@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from structlog import get_logger
 
-from ..tracking.world.repository import PHRepositoryProtocol, RevisionKind
+from ..storage.base import PHRepositoryProtocol
 from .ph_schemas import (
     BatchCorrectRequest,
     BatchCorrectResponse,
@@ -98,7 +98,7 @@ async def list_revisions(
     before_id: str | None = Query(default=None),
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> RevisionsFeedResponse:
-    kind_val: RevisionKind | None = None
+    kind_val: str | None = None
     if kind is not None:
         valid_kinds = {"auto", "manual_correct", "manual_merge", "manual_split"}
         if kind not in valid_kinds:
@@ -109,7 +109,7 @@ async def list_revisions(
                     "message": f"kind must be one of {sorted(valid_kinds)}",
                 },
             )
-        kind_val = kind  # type: ignore[assignment]
+        kind_val = kind
 
     items, has_more = await repo.list_revisions(
         ph_id=ph_id,
