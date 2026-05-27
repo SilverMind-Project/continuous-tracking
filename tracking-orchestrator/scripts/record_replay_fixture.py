@@ -20,6 +20,10 @@ import struct
 import sys
 import time
 
+from structlog import get_logger
+
+logger = get_logger(__name__)
+
 
 async def _main() -> None:
     parser = argparse.ArgumentParser(description="Record a replay fixture from frames.ready")
@@ -50,13 +54,19 @@ async def _main() -> None:
     redis_url: str = args.redis_url
     stream: str = args.stream
 
-    print(f"Recording {duration}s from cameras {camera_ids} to {output_path}...")
-    print(f"Redis: {redis_url}  Stream: {stream}")
+    logger.info(
+        "capture_started",
+        output=output_path,
+        duration_seconds=duration,
+        cameras=list(camera_ids),
+        redis=redis_url,
+        stream=stream,
+    )
 
     try:
         import redis.asyncio as aioredis
     except ImportError:
-        print("Error: redis[hiredis] is required. Install with: uv sync --extra dev")
+        logger.error("redis_not_installed", hint="uv sync --extra dev")
         sys.exit(1)
 
     client = aioredis.from_url(redis_url, decode_responses=False)
@@ -71,7 +81,7 @@ async def _main() -> None:
             try:
                 messages = await client.xread({stream: last_id}, count=10, block=1000)
             except Exception as exc:
-                print(f"Redis error: {exc}")
+                logger.warning("redis_read_error", error=str(exc))
                 await asyncio.sleep(1)
                 continue
 
@@ -110,16 +120,23 @@ async def _main() -> None:
                     byte_count += 4 + msg_len
 
             elapsed = time.monotonic() - start_time
-            if frame_count > 0:
-                print(
-                    f"\r  {frame_count} frames ({byte_count / 1024:.0f} KB) in {elapsed:.0f}s",
-                    end="",
+            if frame_count > 0 and frame_count % 100 == 0:
+                logger.info(
+                    "capture_progress",
+                    frames=frame_count,
+                    kb=int(byte_count / 1024),
+                    elapsed_s=int(elapsed),
                 )
 
     await client.aclose()
     elapsed = time.monotonic() - start_time
-    print(f"\nDone. {frame_count} frames ({byte_count / 1024:.0f} KB) in {elapsed:.1f}s")
-    print(f"Written to {output_path}")
+    logger.info(
+        "capture_complete",
+        output=output_path,
+        total_frames=frame_count,
+        total_kb=int(byte_count / 1024),
+        elapsed_seconds=round(elapsed, 1),
+    )
 
 
 if __name__ == "__main__":

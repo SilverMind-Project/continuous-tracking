@@ -35,10 +35,14 @@ messages from the named cameras for the specified duration.
 ## Replaying
 
 ```bash
-pytest -m integration tests/integration/test_world_tracker_e2e.py
+# Requires TEST_DATABASE_URL pointing to a disposable Postgres instance
+TEST_DATABASE_URL=postgresql://localhost:5432/test_cts \
+  pytest -m integration tests/integration/test_world_tracker_e2e.py
 ```
 
-Requires testcontainer Postgres and Redis (the test boots these automatically).
+Tests are skipped automatically when `TEST_DATABASE_URL` is not set or the
+`.bin` fixture files are absent. The `db_pool` fixture in
+`tests/integration/conftest.py` runs migrations and truncates tables on teardown.
 
 ## Regeneration
 
