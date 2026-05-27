@@ -105,35 +105,27 @@ class CCConfigSyncService:
                     image_width=cam.get("frame_natural_width", 0) or 0,
                     image_height=cam.get("frame_natural_height", 0) or 0,
                 )
-                if not validation.ok:
-                    reason = (
-                        "high_residual"
-                        if any("residual" in i for i in validation.issues)
-                        else "degenerate"
-                        if any("degenerate" in i for i in validation.issues)
-                        else "validation_failed"
-                    )
+                if validation.severity == "error":
                     logger.warning(
                         "cc_config_sync_homography_rejected",
                         camera_id=camera_id,
                         severity=validation.severity,
-                        code=reason,
+                        code=validation.code,
                         issues=validation.issues,
                     )
                     _m.metrics.homography_rejected_total.labels(
-                        reason=reason, camera_id=camera_id
+                        reason=validation.code, camera_id=camera_id
                     ).inc()
                     continue  # skip this camera's homography
 
                 if validation.severity == "warning":
-                    warn_reason = "high_residual"
                     _m.metrics.homography_warning_total.labels(
-                        reason=warn_reason, camera_id=camera_id
+                        reason=validation.code, camera_id=camera_id
                     ).inc()
                     logger.info(
                         "cc_config_sync_homography_warning",
                         camera_id=camera_id,
-                        code=warn_reason,
+                        code=validation.code,
                         issues=validation.issues,
                     )
 

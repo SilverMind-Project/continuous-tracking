@@ -16,11 +16,22 @@ import numpy as np
 
 
 @dataclass(frozen=True)
-class HomographyValidation:
-    ok: bool
+class ValidationResult:
+    """Result of a calibration validation pass."""
+
     severity: str  # "ok" | "warning" | "error"
+    code: str  # machine-readable error code
+    residual_m: float | None = None  # mean reprojection error in metres
     issues: list[str] = field(default_factory=list)
-    metrics: dict[str, float] = field(default_factory=dict)
+
+
+# Retained for backward compatibility with existing importers.
+class HomographyValidation(ValidationResult):
+    """Deprecated alias — prefer :class:`ValidationResult`."""
+
+    @property
+    def ok(self) -> bool:
+        return self.severity != "error"
 
 
 def validate_homography(
@@ -30,7 +41,7 @@ def validate_homography(
     image_height: int = 0,
     camera_room_polygon: list[tuple[float, float]] | None = None,
     floor_plan_mpp: float | None = None,
-) -> HomographyValidation:
+) -> ValidationResult:
     """Sanity checks beyond raw residuals.
 
     Args:
@@ -97,13 +108,26 @@ def validate_homography(
     # 4. Severity classification.
     is_error = any("exceeds 0.5" in i or "degenerate" in i for i in issues)
     severity = "error" if is_error else ("warning" if issues else "ok")
+    code = _derive_error_code(issues)
 
-    return HomographyValidation(
-        ok=(severity != "error"),
+    return ValidationResult(
         severity=severity,
+        code=code,
+        residual_m=metrics.get("mean_residual_m"),
         issues=list(issues),
-        metrics=metrics,
     )
+
+
+def _derive_error_code(issues: list[str]) -> str:
+    """Map issue descriptions to a single machine-readable error code."""
+    for issue in issues:
+        if "residual" in issue.lower():
+            return "homography.high_residual"
+        if "collinear" in issue.lower():
+            return "homography.collinear_points"
+        if "points" in issue.lower():
+            return "homography.insufficient_points"
+    return "homography.invalid"
 
 
 def _project_point(
