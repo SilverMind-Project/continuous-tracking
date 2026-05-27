@@ -89,10 +89,14 @@ warn_return_any = false
 asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = ["error::DeprecationWarning"]
+markers = [
+    "integration: integration tests requiring testcontainers (skipped by default)",
+]
 
 [dependency-groups]
 dev = [
     "fakeredis>=2.35.1",
+    "hypothesis>=6.100.0",
     "types-pyyaml>=6.0",
 ]
 
@@ -130,6 +134,12 @@ forbidden_modules = [
     "app.storage.postgres.tracking_repo",
     "app.storage.postgres.do_not_fuse",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Scripts must not be imported from app code"
+type = "forbidden"
+source_modules = ["app"]
+forbidden_modules = ["scripts"]
 
 [tool.uv.sources]
 triton-shared = { git = "https://github.com/SilverMind-Project/triton-shared" }
