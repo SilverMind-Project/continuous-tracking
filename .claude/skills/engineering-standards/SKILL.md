@@ -184,6 +184,96 @@ def _from_gallery(self, gt: GlobalTrack) -> PosteriorDist:
 
 ---
 
+## Import Discipline
+
+Rules based on [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html) and Microsoft pyright best practices, adapted to this codebase.
+
+### All imports at the top of the file
+
+Imports go at the top of the file, after the module docstring, before any executable code. Every import statement is executed at module load time — no exception.
+
+```python
+# RIGHT
+from __future__ import annotations
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+from app.domain import PersonHypothesis
+
+# THEN executable code
+def process(ph: PersonHypothesis) -> None: ...
+
+# WRONG — conditional import on runtime data
+if adjacency_edges_raw:
+    from .calibration.state import calibration_state  # may never execute
+```
+
+### No conditional imports on runtime data
+
+Never guard an import behind a condition that depends on runtime values (API responses, config flags, database contents). This produces `UnboundLocalError` when the condition is false and the name is referenced later.
+
+The only legitimate conditional imports are:
+
+| Pattern | Example | Why permitted |
+|---|---|---|
+| Optional dependency | `try: import numpy` / `except ImportError: ...` | Library may not be installed |
+| Platform-specific | `if sys.platform == "win32": import msvcrt` | Module only exists on that platform |
+| TYPE_CHECKING guard | `if TYPE_CHECKING: from ..pipeline import ...` | Avoids circular imports at runtime |
+| Version fallback | `if sys.version_info >= (3, 12): ...` | Polyfill for older Python |
+
+Any other conditional import is a bug. If a module-level import would cause a circular dependency, use `TYPE_CHECKING` or restructure the code — don't bury the import in a function body.
+
+### No import side-effects
+
+Importing a module must not mutate global state, start threads, open connections, register atexit handlers, or modify `sys.path`. If a module needs initialization, expose a factory function or class.
+
+```python
+# WRONG — side-effect at import time
+# calibration/state.py
+calibration_state = CalibrationState()  # singleton created on import
+
+# RIGHT — explicit initialization controlled by the caller
+# calibration/state.py
+def create_calibration_state() -> CalibrationState:
+    return CalibrationState()
+```
+
+The existing `calibration_state` module-level singleton is a known exception (tracked as tech debt). No new singletons created at import time.
+
+### Import ordering
+
+Use three groups separated by a blank line, enforced by ruff `I001`:
+
+1. Standard library (`from __future__`, `from datetime`, `import asyncio`, ...)
+2. Third-party (`import asyncpg`, `from pydantic import BaseModel`, ...)
+3. First-party (`from app.domain import ...`, `from .config import ...`)
+
+Never use relative imports across package boundaries. `from ..pipeline.stages import ...` from inside `app/tracking/` is a layering violation that also creates cycles.
+
+### Wildcard imports are forbidden
+
+`from module import *` pollutes the namespace, defeats static analysis, and hides the origin of names. Import each symbol explicitly.
+
+### Circular Import Prevention
+
+The `tracking <-> pipeline` boundary is the most fragile import path in this codebase. When a tracking submodule imports from `..pipeline.*`, and the pipeline package init re-enters tracking, the module fails with `ImportError: cannot import name ... from partially initialized module`.
+
+1. **Use `TYPE_CHECKING` for cross-boundary type annotations.** When a tracking module needs a pipeline type only for annotations, put the import inside `if TYPE_CHECKING:`. With `from __future__ import annotations`, the annotation is a string at runtime so the import is never executed.
+
+    ```python
+    from __future__ import annotations
+    from typing import TYPE_CHECKING
+
+    if TYPE_CHECKING:
+        from ..pipeline.gallery_cache import GalleryCache
+    ```
+
+2. **Do not eagerly re-export types in `__init__.py` that create cycles.** Package init files should be minimal. Any re-export that triggers a chain back to the importing module is a cycle.
+
+3. **Shared types between packages live in a neutral module.** Types needed by both `frame_pipeline` and `stages/` live in `pipeline/types.py` — imported by both sides without creating a cycle.
+
+---
+
 ## Type Safety
 
 ### `from __future__ import annotations` in every file
@@ -194,12 +284,59 @@ All annotations are strings at runtime (PEP 563). This enables forward reference
 
 All function signatures have parameter and return types. No bare `def foo(x):` — always `def foo(x: int) -> str:`. `mypy --strict` runs on `domain/`, `storage/`, `services/`, and `transport/`.
 
+### Strict Optional
+
+Implicit `None` is a leading source of production bugs. `mypy` strict-optional is enabled. Every value that can be `None` must be annotated as `T | None`.
+
+```python
+# RIGHT — explicit about nullability
+def lookup(key: str) -> PersonHypothesis | None: ...
+
+# WRONG — no annotation, caller doesn't know None is possible
+def lookup(key: str): ...
+```
+
+When a variable starts as `None` but is always assigned before use, declare it upfront with its full type:
+
+```python
+result: PersonHypothesis | None = None
+if match:
+    result = match
+# mypy understands the narrowing
+```
+
+### Use modern union syntax
+
+Python 3.10+ union syntax (`T | None`, `int | str`) throughout. No `Optional[T]`, no `Union[T, U]`. This is enforced by ruff `UP007` / `UP045`.
+
 ### No escape hatches without justification
 
 - `# type: ignore` must use the specific mypy error code: `# type: ignore[arg-type]`.
 - Bare `# type: ignore` is deprecated and fails CI.
 - Remove `type: ignore` comments when the underlying issue is resolved — mypy flags unused suppressions with `[unused-ignore]`.
 - `Any` is prohibited in constructor signatures and return types. It is tolerated only in `**kwargs` passthrough to third-party libraries with `cast()` at the boundary.
+
+### TypedDict for structured dicts, NamedTuple for simple carriers
+
+When a dict has a known set of keys, use `TypedDict` so mypy can verify key access. Prefer `NamedTuple` for small, immutable value objects that don't need the overhead of a frozen dataclass.
+
+```python
+from typing import NamedTuple, TypedDict
+
+class CameraEdge(TypedDict):
+    from_camera: str
+    to_camera: str
+    min_transit_s: float
+    max_transit_s: float
+
+class PixelCoord(NamedTuple):
+    x: float
+    y: float
+```
+
+### `Protocol` for structural subtyping, `ABC` only when state is shared
+
+Use `typing.Protocol` for dependency inversion (repository interfaces, strategy contracts). Reserve `abc.ABC` / `abc.abstractmethod` for base classes that share concrete state or template methods.
 
 ### NumPy type boundaries
 
@@ -212,29 +349,11 @@ def is_degenerate(crop: npt.NDArray[np.uint8]) -> bool:
 
 ### `callable` is not a type
 
-The builtin `callable` is a function, not a valid type annotation. Use `Callable[[ArgType], ReturnType]` from `typing` when the signature matters, or `list[object]` for heterogeneous callable containers.
+The builtin `callable` is a function, not a valid type annotation. Use `Callable[[ArgType], ReturnType]` from `collections.abc` when the signature matters, or `list[object]` for heterogeneous callable containers.
 
----
+### Pydantic at boundaries, frozen dataclasses internally
 
-## Circular Import Prevention
-
-The `tracking <-> pipeline` boundary is the most fragile import path in the codebase. When a tracking submodule imports from `..pipeline.*`, and the pipeline package init re-enters tracking, the module fails with `ImportError: cannot import name ... from partially initialized module`.
-
-### Rules
-
-1. **Use `TYPE_CHECKING` for cross-boundary type annotations.** When a tracking module needs a pipeline type only for annotations (constructor parameter types, return types, attribute types), put the import inside `if TYPE_CHECKING:`. With `from __future__ import annotations`, the annotation is a string at runtime so the import is never executed.
-
-    ```python
-    from __future__ import annotations
-    from typing import TYPE_CHECKING
-
-    if TYPE_CHECKING:
-        from ..pipeline.gallery_cache import GalleryCache
-    ```
-
-2. **Do not eagerly re-export types in `__init__.py` that create cycles.** Package init files should be minimal. Any re-export that triggers a chain back to the importing module is a cycle.
-
-3. **Shared types between packages live in a neutral module.** Types needed by both `frame_pipeline` and `stages/` (e.g., `FaceIdCameraConfig`, `FrameImageFetcher`, `ReidEmbedderProtocol`) live in `pipeline/types.py` — imported by both sides without creating a cycle.
+Use Pydantic v2 models for HTTP request/response bodies, Redis payloads, config files, and any data crossing a service boundary. Use frozen dataclasses for internal domain objects. Never leak Pydantic model instances into service or repository layers — convert to domain types at the boundary.
 
 ---
 

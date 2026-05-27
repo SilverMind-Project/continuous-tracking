@@ -1,4 +1,4 @@
--- 0009_bbox_annotation_indexes.up.sql
+-- 0020_bbox_annotation_indexes.up.sql
 -- Indexes for batch bbox annotation operations + bbox_age_frames column (M3).
 SET search_path = continuous_tracking, public;
 

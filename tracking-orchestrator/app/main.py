@@ -393,9 +393,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     depth_model_name = settings.as_str("triton.depth_model")
     depth_estimator: DepthEstimator | None = None
     if triton_url:
-        try:
-            _triton_client = TritonGrpcClient(triton_url, timeout_ms=triton_timeout_ms)
-            await _triton_client.__aenter__()
+        startup_wait_s = settings.as_int("triton.startup_wait_s")
+        startup_retry_s = settings.as_int("triton.startup_retry_interval_s")
+        deadline = asyncio.get_event_loop().time() + startup_wait_s
+        last_exc: Exception | None = None
+        connected = False
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                _triton_client = TritonGrpcClient(triton_url, timeout_ms=triton_timeout_ms)
+                await _triton_client.__aenter__()
+                connected = True
+                break
+            except Exception as exc:
+                last_exc = exc
+                remaining = deadline - asyncio.get_event_loop().time()
+                logger.warning(
+                    "triton_not_ready",
+                    url=triton_url,
+                    remaining_s=round(remaining, 1),
+                    retry_interval_s=startup_retry_s,
+                )
+                await asyncio.sleep(startup_retry_s)
+
+        if not connected:
+            logger.exception("Failed to connect to Triton Inference Server", exc_info=last_exc)
+            if env in ("production", "staging"):
+                raise RuntimeError(
+                    "Triton Inference Server is required in production/staging. "
+                    "Set PIPELINE_ALLOW_SKELETON=true to override for testing."
+                ) from None
+            _triton_client = None
+        else:
             detector = PersonDetector(
                 _triton_client,
                 model_name=detector_model_name,
@@ -422,14 +450,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                         model=depth_model_name,
                         hint="export_depth_anything_v2.py must be run to produce model.onnx",
                     )
-        except Exception:
-            logger.exception("Failed to connect to Triton Inference Server")
-            if env in ("production", "staging"):
-                raise RuntimeError(
-                    "Triton Inference Server is required in production/staging. "
-                    "Set PIPELINE_ALLOW_SKELETON=true to override for testing."
-                ) from None
-            _triton_client = None
 
     # -- MinIO --
     minio_endpoint = settings.as_str("minio.endpoint")
@@ -523,9 +543,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _pipeline.set_overlap_groups(overlap_groups)
 
     # Restore persisted adjacency edges from CC DB into in-memory calibration state.
+    from .calibration.state import AdjacencyEdge as _AdjacencyEdge
+    from .calibration.state import calibration_state
+
     if adjacency_edges_raw:
-        from .calibration.state import AdjacencyEdge as _AdjacencyEdge
-        from .calibration.state import calibration_state
 
         edges: list[_AdjacencyEdge] = []
         for e in adjacency_edges_raw:

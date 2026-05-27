@@ -1,4 +1,4 @@
--- 0009_bbox_annotation_indexes.down.sql
+-- 0020_bbox_annotation_indexes.down.sql
 SET search_path = continuous_tracking, public;
 
 DROP INDEX IF EXISTS idx_bbox_annotations_keyframe;

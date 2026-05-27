@@ -38,6 +38,8 @@ triton:
   depth_enabled: "${TRITON_DEPTH_ENABLED:-true}"
   depth_model: "${TRITON_DEPTH_MODEL:-depth-anything-v2}"
   timeout_ms: "${TRITON_TIMEOUT_MS:-5000}"
+  startup_wait_s: "${TRITON_STARTUP_WAIT_S:-120}"
+  startup_retry_interval_s: "${TRITON_STARTUP_RETRY_INTERVAL_S:-5}"
 
 # MinIO / S3-compatible object storage
 minio:
