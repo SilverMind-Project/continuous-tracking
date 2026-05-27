@@ -547,7 +547,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from .calibration.state import calibration_state
 
     if adjacency_edges_raw:
-
         edges: list[_AdjacencyEdge] = []
         for e in adjacency_edges_raw:
             try:
