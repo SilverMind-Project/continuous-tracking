@@ -66,6 +66,7 @@ class Metrics:
     identity_decays_total: Counter
     posterior_entropy: Histogram
     homography_rejected_total: Counter
+    homography_warning_total: Counter
 
     # ---- Staleness / backlog -----------------------------------------
     frames_dropped_stale_total: Counter
@@ -230,6 +231,12 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         homography_rejected_total=_counter(
             "cts_homography_rejected_total",
             "Homography matrices rejected by the server-side validator during CC sync.",
+            ["reason", "camera_id"],
+        ),
+        homography_warning_total=_counter(
+            "cts_homography_warning_total",
+            "Homography matrices accepted with warnings during CC sync.",
+            ["reason", "camera_id"],
         ),
         face_id_cooldown_skips_total=_counter(
             "cts_face_id_cooldown_skips_total",
