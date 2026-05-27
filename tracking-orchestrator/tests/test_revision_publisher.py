@@ -7,26 +7,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.domain import (
-    IdentityCandidate,
-    IdentityRevision,
-)
+from app.domain import IdentityRevision
 from app.transport.base_publisher import BasePublisher
 from app.transport.revision_publisher import RevisionPublisher
 
 
 def _make_revision(
-    global_track_id: str = "gt-1",
+    ph_id: str = "ph-1",
     identity_id: str = "alice",
 ) -> IdentityRevision:
     return IdentityRevision(
         revision_id="rev-1",
-        global_track_id=global_track_id,
-        tracklet_ids=["t1"],
-        candidates=[IdentityCandidate(identity_id, "Alice", 0.9)],
-        map_identity_id=identity_id,
-        posterior_entropy=0.3,
-        revision_time=datetime.now(UTC),
+        ph_id=ph_id,
+        previous_identity_id=None,
+        new_identity_id=identity_id,
+        actor="resolver",
+        reason="initial_assignment",
+        applied_at=datetime.now(UTC),
+        rewritten_rows=1,
     )
 
 

@@ -8,7 +8,6 @@ from ...domain import BoundingBox, FloorPoint, PostureType
 from ...inference.schemas import PoseResult
 from ...storage.base import GlobalTrackRepository
 from ...tracking.floor_projector import FloorProjector
-from ...tracking.tracklet_manager import TrackletManager
 from ...trajectory.motion_energy import MotionEnergyTracker
 from ...trajectory.posture import GlobalPostureTracker
 from ...trajectory.trajectory_writer import TrajectoryWriter
@@ -68,7 +67,7 @@ class TrajectoryStage(FrameStage):
         floor_projector: FloorProjector | None = None,
         motion_energy_tracker: MotionEnergyTracker | None = None,
         posture_tracker: GlobalPostureTracker | None = None,
-        tracklet_manager: TrackletManager | None = None,
+        tracklet_manager: object | None = None,  # N0: was TrackletManager, deleted
         camera_room_map: dict[str, str] | None = None,
     ) -> None:
         self._trajectory_writer = trajectory_writer
@@ -170,7 +169,7 @@ class TrajectoryStage(FrameStage):
     ) -> tuple[PoseResult | None, str | None]:
         for domain_det in ctx.domain_detections:
             tid = (
-                self._tracklet_manager.get_tracklet_id_for_detection(domain_det.detection_id)
+                self._tracklet_manager.get_tracklet_id_for_detection(domain_det.detection_id)  # type: ignore[attr-defined]
                 if self._tracklet_manager
                 else ""
             )

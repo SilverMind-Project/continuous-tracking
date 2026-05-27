@@ -39,7 +39,7 @@ class KeyframeStage(FrameStage):
                 det_by_tracklet[det.tracklet_id] = det
 
         sample_time = ctx.event_time
-        revised_gt_ids = {rev.global_track_id for rev in ctx.new_revisions}
+        revised_gt_ids = {rev.ph_id for rev in ctx.new_revisions}
         for tracklet in ctx.active_tracklets:
             detection = det_by_tracklet.get(tracklet.tracklet_id)
             if detection is None:

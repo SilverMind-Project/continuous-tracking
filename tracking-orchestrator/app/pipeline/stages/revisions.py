@@ -43,19 +43,14 @@ class RevisionsStage(FrameStage):
             for rev in ctx.new_revisions:
                 if rev.previous_identity_id is None or rev.new_identity_id is None:
                     continue
-                applies_from = gt_start_by_id.get(rev.global_track_id, rewrite_time)
+                applies_from = gt_start_by_id.get(rev.ph_id, rewrite_time)
                 await self._identity_rewriter.rewrite(
                     revision_id=str(rev.revision_id),
-                    global_track_id=str(rev.global_track_id),
+                    global_track_id=str(rev.ph_id),  # N0: ph_id passed as global_track_id
                     old_identity_id=str(rev.previous_identity_id),
                     new_identity_id=str(rev.new_identity_id),
                     applies_from=applies_from,
                     applies_to=rewrite_time,
                 )
 
-        if ctx.new_revisions and self._bbox_repo is not None:
-            for rev in ctx.new_revisions:
-                if rev.new_identity_id is None:
-                    continue
-                for tid in rev.tracklet_ids:
-                    await self._bbox_repo.update_identity_id(tid, rev.new_identity_id)
+        # N0: tracklet_ids bbox update removed (tracklets no longer exist)

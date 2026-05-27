@@ -123,12 +123,12 @@ class InMemoryTrackingRepository(TrackingRepository):
         return self._global_tracks.get(global_track_id)
 
     async def save_identity_revision(self, revision: IdentityRevision) -> None:
-        self._revisions.setdefault(revision.global_track_id, []).append(revision)
+        self._revisions.setdefault(revision.ph_id, []).append(revision)
 
     async def list_identity_revisions(
         self, global_track_id: str, after: datetime | None = None
     ) -> list[IdentityRevision]:
         revisions = self._revisions.get(global_track_id, [])
         if after is not None:
-            revisions = [revision for revision in revisions if revision.revision_time >= after]
+            revisions = [revision for revision in revisions if revision.applied_at >= after]
         return revisions

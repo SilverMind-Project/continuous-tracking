@@ -98,6 +98,7 @@ class IdentityResolvableEntity(Protocol):
 # ---------------------------------------------------------------------------
 
 PersonHypothesisId = str
+PHId = PersonHypothesisId  # shorthand used by IdentityRevision and N1 API
 PH_MEAN_LEN = 4  # [x, y, vx, vy] in metres and metres/sec
 PH_COV_LEN = 16  # 4x4 covariance matrix, row-major, in metres^2 and (metres/sec)^2
 
@@ -416,25 +417,35 @@ class IdentityCandidate:
 
 
 @dataclass(frozen=True)
-class IdentityRevision:
-    """Bayesian posterior update for a global track at a point in time.
+class IdentityEvidence:
+    """Snapshot of posterior distribution and evidence sources at revision time."""
 
-    Emitted when a GlobalTrack's identity assignment changes. Covers all
-    tracklets within the revision horizon that were part of the same
-    GlobalTrack at the time of the decision.
+    top_identity_id: str | None = None
+    top_probability: float = 0.0
+    second_probability: float = 0.0
+    posterior_entropy: float = 0.0
+    evidence_sources: list[str] = field(default_factory=list)
+    observation_count: int = 0
+
+
+@dataclass(frozen=True)
+class IdentityRevision:
+    """Record of an identity assignment change for a Person Hypothesis.
+
+    Emitted when a PH's identity assignment is created, changed,
+    or demoted.  Replaces the pre-N0 GlobalTrack-based revision
+    which referenced ``global_track_id`` and ``tracklet_ids``.
     """
 
     revision_id: RevisionId
-    global_track_id: GlobalTrackId
-    tracklet_ids: list[TrackletId]
-    candidates: list[IdentityCandidate]
-    map_identity_id: IdentityId
-    posterior_entropy: float
-    previous_identity_id: IdentityId | None = None
-    new_identity_id: IdentityId | None = None
-    reason: str = ""
-    evidence: dict[str, Any] = field(default_factory=dict)
-    revision_time: datetime = field(default_factory=lambda: datetime.now(UTC))
+    ph_id: PHId
+    previous_identity_id: IdentityId | None
+    new_identity_id: IdentityId | None
+    actor: str  # "system" | "resolver" | "user:<id>"
+    reason: str
+    applied_at: datetime
+    rewritten_rows: int
+    evidence: IdentityEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -792,6 +803,9 @@ DementiaSignalKind = Literal[
     "nighttime_movement",
     "stillness_anomaly",
     "absence",
+    "inferred_dwell_exceeded",
+    "presumed_location_unknown",
+    "identity_disagreement",
 ]
 
 DementiaSignalSeverity = Literal["info", "warning", "emergency"]

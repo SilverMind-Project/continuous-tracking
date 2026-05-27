@@ -39,10 +39,8 @@ from .pipeline.frame_pipeline import (
     SignalConfig,
 )
 from .pipeline.types import FaceIdCameraConfig
-from .routers import corrections as corrections_router_mod
 from .routers import dashboard as dashboard_router_mod
 from .routers import gallery as gallery_router_mod
-from .routers import live as live_router_mod
 from .routers.calibration import router as calibration_router
 from .routers.calibration import set_auto_calibration_context
 from .routers.corrections import router as corrections_router
@@ -57,18 +55,12 @@ from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdenti
 from .services.overlap_group_sync import fetch_adjacency_edges, fetch_overlap_groups
 from .storage.migrations import MigrationRunner
 from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
-from .storage.postgres.do_not_fuse import PostgresDoNotFuseRepository
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
-from .storage.postgres.global_track_repo import PostgresGlobalTrackRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
 from .storage.postgres.settings_repo import PostgresSettingsRepository
 from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
-from .storage.postgres.tracking_repo import PostgresTrackingRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
-from .tracking.association_solver import AssociationConfig
-from .tracking.global_track_merger import GlobalTrackMerger
 from .tracking.identity_resolver import ResolverConfig
-from .tracking.tracklet_manager import TrackletConfig
 from .tracking.world.config import WorldTrackerConfig
 from .trajectory.depth_posture_strategy import DepthPostureStrategy
 from .trajectory.fused_posture_strategy import FusedPostureStrategy
@@ -237,40 +229,6 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
     )
 
 
-def _build_tracklet_config(s: Settings) -> TrackletConfig:
-    """Build TrackletConfig from required settings.yaml keys."""
-    t = s.section("tracklet")
-    return TrackletConfig(
-        min_hit_ratio=t.as_float("min_hit_ratio"),
-        close_grace_frames=t.as_int("close_grace_frames"),
-        gallery_min_quality=t.as_float("gallery_min_quality"),
-        gallery_max_per_tracklet=t.as_int("gallery_max_per_tracklet"),
-        min_detection_confidence=t.as_float("min_detection_confidence"),
-        enabled=t.as_bool("enabled"),
-        min_frames_to_publish=s.as_int("pipeline.tracker.min_frames_to_publish"),
-    )
-
-
-def _build_cross_cam_config(s: Settings) -> AssociationConfig:
-    """Build AssociationConfig from required settings.yaml keys."""
-    cc = s.section("cross_camera")
-    return AssociationConfig(
-        alpha=cc.as_float("alpha"),
-        floor_sigma_m=cc.as_float("floor_sigma_m"),
-        max_floor_distance_m=cc.as_float("max_floor_distance_m"),
-        min_link_score=cc.as_float("min_link_score"),
-        unknown_merge_appearance_threshold=cc.as_float("unknown_merge_appearance_threshold"),
-        within_group_min_score=cc.as_float("within_group_min_score"),
-        inter_gt_consolidation_appearance_threshold=cc.as_float(
-            "inter_gt_consolidation_appearance_threshold"
-        ),
-        known_identity_reentry_threshold=cc.as_float("known_identity_reentry_threshold"),
-        same_camera_reentry_max_gap_s=cc.as_float("same_camera_reentry_max_gap_s"),
-        unknown_merge_max_gap_s=cc.as_float("unknown_merge_max_gap_s"),
-        unknown_merge_max_distance_m=cc.as_float("unknown_merge_max_distance_m"),
-    )
-
-
 def _build_sampler_config(s: Settings) -> SamplerConfig:
     """Build SamplerConfig from required settings.yaml keys."""
     sp = s.section("sampler")
@@ -402,19 +360,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         runner = MigrationRunner(_pool, MIGRATIONS_DIR)
         await runner.migrate()
-        tracking_repo = PostgresTrackingRepository(_pool)
         gallery_repo = PostgresGalleryRepository(_pool)
-        global_track_repo = PostgresGlobalTrackRepository(_pool)
         trajectory_repo = PostgresTrajectoryRepository(_pool)
         keyframe_repo = PostgresKeyframeRepository(_pool)
         signal_repo = PostgresDementiaSignalRepository(_pool)
         settings_repo = PostgresSettingsRepository(_pool)
         bbox_repo = PostgresBboxAnnotationRepository(_pool)
-        dnf_repo = PostgresDoNotFuseRepository(_pool)
     else:
-        tracking_repo = None
         gallery_repo = None
-        global_track_repo = None
         trajectory_repo = None
         keyframe_repo = None
         signal_repo = None
@@ -540,9 +493,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     deps = PipelineDependencies(
         detector=detector,
-        tracking_repo=tracking_repo,
         gallery_repo=gallery_repo,
-        global_track_repo=global_track_repo,
         trajectory_repo=trajectory_repo,
         keyframe_repo=keyframe_repo,
         signal_repo=signal_repo,
@@ -553,7 +504,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         posture_strategy=posture_strategy,
         identity_rewriter=identity_rewriter,
         bbox_repo=bbox_repo,  # type: ignore[arg-type]
-        dnf_repo=dnf_repo,
     )
     await _pipeline.initialize(deps)
     _pipeline.set_overlap_groups(overlap_groups)
@@ -622,21 +572,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.keyframe_revalidator = _revalidator
         app.state.keyframe_revalidator_task = asyncio.create_task(_revalidator.run())
 
-    # Wire router modules to share the pipeline's repositories.
-    if _pipeline.tracking_repo is not None and _pipeline.global_track_repo is not None:
-        global_track_merger = GlobalTrackMerger(_pool) if _pool is not None else None
-        corrections_router_mod.set_context(
-            tracking_repo=_pipeline.tracking_repo,
-            global_track_repo=_pipeline.global_track_repo,
-            publisher=_pipeline.revision_publisher,
-            dnf_repo=dnf_repo,
-            merger=global_track_merger,
-        )
-        live_router_mod.set_context(
-            global_track_repo=_pipeline.global_track_repo,
-            keyframe_repo=keyframe_repo,
-            gallery_repo=gallery_repo,
-        )
+    # NOTE(N0): corrections and live router wiring removed since their
+    # Postgres repositories (tracking_repo, global_track_repo, dnf_repo)
+    # were deleted. These routers need PH-native replacements (N1+N2+N3).
 
     if trajectory_repo is not None:
         set_trajectory_context(trajectory_repo=trajectory_repo)

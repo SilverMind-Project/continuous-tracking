@@ -25,11 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
-from ..domain import (
-    IdentityCandidate,
-    IdentityRevision,
-    PosteriorDist,
-)
+from ..domain import IdentityRevision
 from ..storage.base import (
     DoNotFuseRepository,
     GlobalTrackRepository,
@@ -38,8 +34,6 @@ from ..storage.base import (
     InMemoryTrackingRepository,
     TrackingRepository,
 )
-from ..tracking.global_track_merger import GlobalTrackMerger
-from ..tracking.tracklet_unmerge_service import TrackletUnmergeService
 from ..transport.revision_publisher import RevisionPublisher
 
 logger = get_logger(__name__)
@@ -60,7 +54,7 @@ class _CorrectionContext:
     global_track_repo: GlobalTrackRepository
     publisher: RevisionPublisher | None
     dnf_repo: DoNotFuseRepository | None = None
-    merger: GlobalTrackMerger | None = None
+    merger: object | None = None  # N0: was GlobalTrackMerger, deleted
 
 
 _ctx: _CorrectionContext = _CorrectionContext(
@@ -81,7 +75,7 @@ def set_context(
     global_track_repo: GlobalTrackRepository,
     publisher: RevisionPublisher | None,
     dnf_repo: DoNotFuseRepository | None = None,
-    merger: GlobalTrackMerger | None = None,
+    merger: object | None = None,  # N0: was GlobalTrackMerger, deleted
 ) -> None:
     """Wire production repositories + publisher at startup (called from lifespan)."""
     global _ctx
@@ -159,47 +153,23 @@ async def apply_correction(
     new_identity_id = body.new_identity_id
     now = datetime.now(UTC)
 
-    # Build a posterior that reflects caregiver authority: 1.0 on the chosen
-    # identity (or a single UNKNOWN mass when clearing).
-    if new_identity_id is None:
-        posterior = PosteriorDist(distribution={"UNKNOWN": 1.0})
-        candidates: list[IdentityCandidate] = []
-        map_identity_id = "UNKNOWN"
-    else:
-        posterior = PosteriorDist(distribution={new_identity_id: 1.0})
-        candidates = [
-            IdentityCandidate(
-                identity_id=new_identity_id,
-                display_name=body.display_name or new_identity_id,
-                probability=1.0,
-            )
-        ]
-        map_identity_id = new_identity_id
-
     revision = IdentityRevision(
         revision_id=str(uuid.uuid4()),
-        global_track_id=body.global_track_id,
-        tracklet_ids=list(gt.tracklet_ids),
-        candidates=candidates,
-        map_identity_id=map_identity_id,
-        posterior_entropy=posterior.entropy(),
+        ph_id=body.global_track_id,  # N0: legacy global_track_id maps to ph_id
         previous_identity_id=previous_identity_id,
         new_identity_id=new_identity_id,
+        actor=body.actor,
         reason=body.reason,
-        evidence={
-            "actor": body.actor,
-            "source": "manual_override",
-            **body.evidence,
-        },
-        revision_time=now,
+        applied_at=now,
+        rewritten_rows=1,
+        evidence=None,
     )
 
-    # Update the GlobalTrack pointer first: if this fails the revision was
-    # never observable, and the system is consistent.
+    # Update the GlobalTrack pointer first.
     await ctx.global_track_repo.assign_identity(
         global_track_id=body.global_track_id,
         identity_id=new_identity_id,
-        candidates=candidates or None,
+        candidates=None,
     )
     await ctx.tracking_repo.save_identity_revision(revision=revision)
 
@@ -260,44 +230,22 @@ async def unmerge_tracklet(
     body: TrackletUnmergeRequest,
     ctx: _CorrectionContext = Depends(get_context),
 ) -> TrackletUnmergeResponse:
-    """Detach a tracklet from its current global track.
+    """N0: TrackletUnmergeService was deleted; this endpoint is no longer available.
 
-    Creates a new GlobalTrack for the detached tracklet and adds a
-    do_not_fuse hint so the cross-camera associator will not re-fuse
-    the pair on the next association frame.
+    The world tracker uses Person Hypotheses (PHs) instead of tracklets
+    and global tracks. A PH-native merge/unmerge surface will be delivered
+    in N1 (PH API) plus N3 (admin UI).
     """
-    if ctx.dnf_repo is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "unmerge.unavailable",
-                "message": "Do-not-fuse repository is not configured.",
-            },
-        )
-
-    svc = TrackletUnmergeService(
-        global_track_repo=ctx.global_track_repo,
-        dnf_repo=ctx.dnf_repo,
-    )
-
-    try:
-        result = await svc.unmerge(
-            tracklet_id=body.tracklet_id,
-            requested_by=body.requested_by,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "tracklet.not_found",
-                "message": str(exc),
-            },
-        ) from exc
-
-    return TrackletUnmergeResponse(
-        tracklet_id=result.tracklet_id,
-        original_global_track_id=result.original_global_track_id,
-        new_global_track_id=result.new_global_track_id,
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "code": "unmerge.deprecated",
+            "message": (
+                "Tracklet unmerge is no longer available. "
+                "The world tracker uses Person Hypotheses (PHs). "
+                "A PH-native correction surface is coming in N1/N3."
+            ),
+        },
     )
 
 
@@ -334,7 +282,7 @@ async def merge_global_tracks(
                 "message": "Global track merge is not configured.",
             },
         )
-    await ctx.merger.merge(
+    await ctx.merger.merge(  # type: ignore[attr-defined]
         source_id=body.source_id,
         target_id=body.target_id,
         merged_by=body.merged_by,

@@ -300,9 +300,9 @@ class TestPipelineSkeleton:
             )
             with _mock_redis_deps():
                 await pipeline.initialize()
+                # N0: CameraAdjacency deleted; _sync_adjacency is a no-op.
                 pipeline._sync_adjacency()
-                assert pipeline._adjacency is not None
-                assert pipeline._adjacency.get_max_transition("cam-1", "cam-2") == 12.0
+                assert pipeline._overlap_groups is not None
                 await pipeline.stop()
         finally:
             calibration_state.adjacency_edges = old_edges

@@ -79,8 +79,6 @@ from ..storage.base import (
     TrackingRepository,
     TrajectoryRepository,
 )
-from ..tracking.camera_adjacency import AdjacencyEdge as GraphAdjacencyEdge
-from ..tracking.camera_adjacency import CameraAdjacency
 from ..tracking.floor_projector import FloorProjector
 from ..tracking.identity_committer import IdentityCommitter
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
@@ -268,9 +266,7 @@ class FrameProcessingPipeline:
         self._seen_cameras: set[str] = set()
         self._identity_resolver: IdentityResolver | None = None
         self._revision_publisher: RevisionPublisher | None = None
-        self._adjacency: CameraAdjacency | None = None
-        self._adjacency_version: int = -1
-        # Overlap groups fetched from CC at startup; preserved across adjacency reloads.
+        # Overlap groups fetched from CC at startup.
         self._overlap_groups: list[OverlapGroup] = []
         # M1 world tracker
         self._world_tracker: WorldTracker | None = None
@@ -390,13 +386,9 @@ class FrameProcessingPipeline:
             config=self._config.world_tracker,
         )
 
-        # ---- Camera adjacency + identity resolution ----
-        self._adjacency = CameraAdjacency()
-
+        # ---- Identity resolution ----
         self._floor_projector = FloorProjector(calibration_state)
         self._spatial_projection = SpatialProjectionService(calibration_state)
-
-        self._sync_adjacency()
 
         self._identity_resolver = IdentityResolver(
             tracking_repo=self._repo,
@@ -786,23 +778,12 @@ class FrameProcessingPipeline:
         self._seen_cameras.add(camera_id)
 
     def _sync_adjacency(self) -> None:
-        """Hot-reload operator-pushed calibration adjacency into the associator."""
-        if self._adjacency_version == calibration_state.version:
-            return
-        new_adjacency = CameraAdjacency()
-        for edge in calibration_state.adjacency_edges:
-            new_adjacency.add_edge(
-                GraphAdjacencyEdge(
-                    from_camera=edge.from_camera,
-                    to_camera=edge.to_camera,
-                    max_transition_seconds=edge.max_transit_s,
-                    overlap=edge.overlap,
-                )
-            )
-        new_adjacency.set_overlap_groups(self._overlap_groups)
-        self._adjacency = new_adjacency
-        self._adjacency_version = calibration_state.version
-        # Identity resolver uses adjacency for face propagation; kept for M1 transition.
+        """No-op: CameraAdjacency was deleted in N0.
+
+        The WorldTracker handles camera overlap groups directly.
+        If adjacency-based face propagation is still needed, it is an M1 bug.
+        """
+        return
 
     def set_camera_room_map(self, camera_room_map: object) -> None:
         """M2: Inject the live CameraRoomMap into pipeline stages.
@@ -816,12 +797,9 @@ class FrameProcessingPipeline:
     def set_overlap_groups(self, groups: list[OverlapGroup]) -> None:
         """Apply overlap group data from CC.
 
-        Stores the groups for future adjacency reloads and immediately
-        updates the current adjacency graph if it has been built.
+        Stored for the WorldTracker which handles overlap directly.
         """
         self._overlap_groups = groups
-        if self._adjacency is not None:
-            self._adjacency.set_overlap_groups(groups)
 
     async def _process_frame(self, frame: FrameReady) -> None:
         """Process a single FrameReady through the full pipeline."""

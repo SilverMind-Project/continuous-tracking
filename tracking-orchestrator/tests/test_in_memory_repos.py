@@ -12,7 +12,6 @@ from app.domain import (
     GalleryEmbedding,
     GlobalTrack,
     Identity,
-    IdentityCandidate,
     IdentityCorrection,
     IdentityRevision,
     PersonActivity,
@@ -180,17 +179,18 @@ async def test_save_global_track(tracking_repo: InMemoryTrackingRepository) -> N
 async def test_identity_revision(tracking_repo: InMemoryTrackingRepository) -> None:
     rev = IdentityRevision(
         revision_id="revision-1",
-        global_track_id="gt1",
-        tracklet_ids=["t1"],
-        candidates=[IdentityCandidate("i1", "Alice", 0.8)],
-        map_identity_id="i1",
-        posterior_entropy=0.5,
-        revision_time=NOW,
+        ph_id="ph1",
+        previous_identity_id=None,
+        new_identity_id="i1",
+        actor="resolver",
+        reason="initial_assignment",
+        applied_at=NOW,
+        rewritten_rows=1,
     )
     await tracking_repo.save_identity_revision(rev)
-    results = await tracking_repo.list_identity_revisions("gt1")
+    results = await tracking_repo.list_identity_revisions("ph1")
     assert len(results) == 1
-    assert results[0].map_identity_id == "i1"
+    assert results[0].new_identity_id == "i1"
 
 
 # -----------------------------------------------------------------------

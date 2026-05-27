@@ -168,8 +168,17 @@ type DementiaSignal struct {
 	// the semantics of value/baseline/z_score may have changed.  Consumers
 	// should use this to filter stale-version signals out of "active" rollups.
 	AlgorithmVersion int32 `protobuf:"varint,14,opt,name=algorithm_version,json=algorithmVersion,proto3" json:"algorithm_version,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Human-readable algorithm name for clinical documentation.
+	AlgorithmName string `protobuf:"bytes,15,opt,name=algorithm_name,json=algorithmName,proto3" json:"algorithm_name,omitempty"`
+	// Evidence grade for clinical signal interpretation:
+	// clinical_review | observational_study | caregiver_guidance |
+	// local_baseline_only | experimental
+	EvidenceGrade string `protobuf:"bytes,16,opt,name=evidence_grade,json=evidenceGrade,proto3" json:"evidence_grade,omitempty"`
+	// JSON-serialized algorithm specification including thresholds,
+	// window sizes, and detector hyperparameters.
+	AlgorithmSpecJson string `protobuf:"bytes,17,opt,name=algorithm_spec_json,json=algorithmSpecJson,proto3" json:"algorithm_spec_json,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DementiaSignal) Reset() {
@@ -300,11 +309,32 @@ func (x *DementiaSignal) GetAlgorithmVersion() int32 {
 	return 0
 }
 
+func (x *DementiaSignal) GetAlgorithmName() string {
+	if x != nil {
+		return x.AlgorithmName
+	}
+	return ""
+}
+
+func (x *DementiaSignal) GetEvidenceGrade() string {
+	if x != nil {
+		return x.EvidenceGrade
+	}
+	return ""
+}
+
+func (x *DementiaSignal) GetAlgorithmSpecJson() string {
+	if x != nil {
+		return x.AlgorithmSpecJson
+	}
+	return ""
+}
+
 var File_continuoustracking_v1_signals_proto protoreflect.FileDescriptor
 
 const file_continuoustracking_v1_signals_proto_rawDesc = "" +
 	"\n" +
-	"#continuoustracking/v1/signals.proto\x12\x15continuoustracking.v1\"\xc1\x04\n" +
+	"#continuoustracking/v1/signals.proto\x12\x15continuoustracking.v1\"\xbf\x05\n" +
 	"\x0eDementiaSignal\x12\x1b\n" +
 	"\tsignal_id\x18\x01 \x01(\tR\bsignalId\x12\x1f\n" +
 	"\videntity_id\x18\x02 \x01(\tR\n" +
@@ -321,7 +351,10 @@ const file_continuoustracking_v1_signals_proto_rawDesc = "" +
 	"\x12window_end_unix_ns\x18\v \x01(\x06R\x0fwindowEndUnixNs\x12+\n" +
 	"\x12emitted_at_unix_ns\x18\f \x01(\x06R\x0femittedAtUnixNs\x12!\n" +
 	"\fcontext_json\x18\r \x01(\tR\vcontextJson\x12+\n" +
-	"\x11algorithm_version\x18\x0e \x01(\x05R\x10algorithmVersion*\xb2\x02\n" +
+	"\x11algorithm_version\x18\x0e \x01(\x05R\x10algorithmVersion\x12%\n" +
+	"\x0ealgorithm_name\x18\x0f \x01(\tR\ralgorithmName\x12%\n" +
+	"\x0eevidence_grade\x18\x10 \x01(\tR\revidenceGrade\x12.\n" +
+	"\x13algorithm_spec_json\x18\x11 \x01(\tR\x11algorithmSpecJson*\xb2\x02\n" +
 	"\x12DementiaSignalKind\x12$\n" +
 	" DEMENTIA_SIGNAL_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bDEMENTIA_SIGNAL_KIND_PACING\x10\x01\x12)\n" +

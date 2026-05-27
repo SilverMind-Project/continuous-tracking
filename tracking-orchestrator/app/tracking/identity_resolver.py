@@ -39,7 +39,6 @@ if TYPE_CHECKING:
 from ..domain import (
     FaceAnchor,
     Identity,
-    IdentityCandidate,
     IdentityDecision,
     IdentityResolvableEntity,
     IdentityRevision,
@@ -959,45 +958,16 @@ class IdentityResolver:
         if not observation_ids:
             return None
 
-        # Build candidates from the posterior.
-        top_id, top_prob = decision.posterior.top_identity()
-        candidates = [
-            IdentityCandidate(
-                identity_id=ident_id,
-                display_name=self._identities.get(
-                    ident_id,
-                    Identity(
-                        identity_id=ident_id,
-                        display_name=ident_id,
-                        enrolled_at=now,
-                    ),
-                ).display_name,
-                probability=prob,
-            )
-            for ident_id, prob in sorted(
-                decision.posterior.distribution.items(),
-                key=lambda x: x[1],
-                reverse=True,
-            )
-        ]
-
-        entropy = decision.posterior.entropy()
-
         revision = IdentityRevision(
             revision_id=str(uuid.uuid4()),
-            global_track_id=entity.entity_id,
-            tracklet_ids=observation_ids,
-            candidates=candidates,
-            map_identity_id=top_id,
-            posterior_entropy=entropy,
+            ph_id=entity.entity_id,  # N0: entity_id is a PH id
             previous_identity_id=decision.previous_identity_id,
             new_identity_id=decision.identity_id,
+            actor="resolver",
             reason=decision.reason,
-            evidence={
-                "top_probability": top_prob,
-                "margin": decision.posterior.top_with_margin()[1],
-            },
-            revision_time=now,
+            applied_at=now,
+            rewritten_rows=len(observation_ids),
+            evidence=None,
         )
 
         self._revision_log[entity.entity_id].append(now)

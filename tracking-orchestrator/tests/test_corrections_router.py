@@ -85,7 +85,7 @@ def test_correction_applies_and_publishes(client_and_publisher):
     assert rev.new_identity_id == "grandpa"
     assert rev.previous_identity_id == "grandma"
     assert rev.reason == "manual"
-    assert rev.evidence["actor"] == "caregiver@home"
+    assert rev.actor == "caregiver@home"
 
 
 def test_correction_unknown_track_returns_404(client_and_publisher):
@@ -115,7 +115,7 @@ def test_clearing_identity_publishes_unknown_revision(client_and_publisher):
     assert resp.status_code == 200
     rev = pub.published[0]
     assert rev.new_identity_id is None
-    assert rev.map_identity_id == "UNKNOWN"
+    assert rev.reason == "manual"
 
 
 def test_disconnected_publisher_still_returns_200(client_and_publisher):

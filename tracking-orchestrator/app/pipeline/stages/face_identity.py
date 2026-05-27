@@ -13,7 +13,6 @@ from ...inference.evidence import FaceEvidence
 from ...inference.face_id_client import FaceIdentificationClient
 from ...observability import metrics as _metrics
 from ...storage.base import GalleryRepository
-from ...tracking.tracklet_manager import TrackletManager
 from ..frame_context import FrameContext
 from ..types import FaceIdCameraConfig
 from .base import FrameStage
@@ -27,7 +26,7 @@ class FaceIdentityStage(FrameStage):
     def __init__(
         self,
         face_id_client: FaceIdentificationClient | None = None,
-        tracklet_manager: TrackletManager | None = None,
+        tracklet_manager: object | None = None,  # N0: was TrackletManager, deleted
         gallery_repo: GalleryRepository | None = None,
         face_id_cooldown_s: float = 5.0,
         face_id_min_confidence: float = 0.5,
@@ -71,7 +70,7 @@ class FaceIdentityStage(FrameStage):
         sent_tracklet_ids: set[str] = set()
 
         for idx, det in enumerate(ctx.domain_detections):
-            tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(det.detection_id)
+            tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(det.detection_id)  # type: ignore[attr-defined]
             if not tracklet_id:
                 continue
             last_call = self._last_face_id_by_tracklet.get(tracklet_id)
@@ -186,7 +185,7 @@ class FaceIdentityStage(FrameStage):
 
                 tracklet_id = ""
                 if self._tracklet_manager is not None:
-                    tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(
+                    tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(  # type: ignore[attr-defined]
                         det.detection_id
                     )
 

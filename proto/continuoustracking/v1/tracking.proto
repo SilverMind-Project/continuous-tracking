@@ -145,54 +145,49 @@ message FloorPoint {
   bool calibrated = 3;
 }
 
-// IdentityRevision is dual-purpose: it serves both as a TrackingEvent
-// sub-message (Bayesian posterior snapshot for one global track at one
-// event time) and as the standalone message published to the
-// tracking.revisions Redis Stream when an identity assignment changes.
-// Stream consumers care about tags 6+ which are absent from the
-// per-detection variant.
+// IdentityRevision is published to the tracking.revisions Redis Stream
+// when an identity assignment for a Person Hypothesis changes.
+// N0: renamed global_track_id -> ph_id; tracklet_ids reserved.
 message IdentityRevision {
-  // The global track being updated.
-  string global_track_id = 1;
+  // The Person Hypothesis whose identity is being revised.
+  string ph_id = 1;
 
   // Probability distribution over candidate identities.
+  // N0: unused by the PH-native revision; kept for wire compatibility.
   repeated IdentityCandidate candidates = 2;
 
   // The MAP (maximum a posteriori) estimate.
+  // N0: unused; kept for wire compatibility.
   string map_identity_id = 3;
 
-  // Entropy of the posterior (measure of uncertainty, in nats).
-  // Lower = more certain. Used by the dementia layer for confidence gating.
+  // Entropy of the posterior (measure of uncertainty, in bits).
+  // Lower = more certain.
+  // N0: unused at this field; posterior_entropy moved into evidence_json.
   float posterior_entropy = 4;
 
   // When this revision was computed.
   fixed64 revision_time_unix_ns = 5;
 
-  // -- stream-message-only fields (unused in the per-detection variant) --
+  // -- stream-message-only fields --
 
   // Unique ID of this revision. Used for idempotent CC-side rewrites.
   string revision_id = 6;
 
-  // Tracklets that fall within the revision horizon and are affected.
-  repeated string tracklet_ids = 7;
+  // N0: tracklet_ids removed.  Reserved to prevent accidental reuse.
+  reserved 7;
 
   // Identity before the revision (empty when promoting from UNKNOWN).
   string previous_identity_id = 8;
 
   // Identity after the revision (empty when demoting to UNKNOWN).
-  // Consumers SHOULD soft-delete PersonLocationHistory rows for this
-  // global_track_id when new_identity_id is empty.  The orchestrator does
-  // NOT relabel trajectory or dwell rows on demotion — old identity labels
-  // are retained until a future non-empty revision provides a replacement.
   string new_identity_id = 9;
 
   // Human-readable reason: initial_assignment | identity_change |
   // demoted_to_unknown | manual_override | merge.
   string reason = 10;
 
-  // Free-form evidence snapshot (top_probability, margin, anchor_ids, ...)
-  // serialised as JSON. Keeping it as a string sidesteps a Struct
-  // dependency without losing fidelity for a debug-only field.
+  // N0: evidence_json extended with actor, rewritten_rows, observation_count,
+  // and evidence_sources in addition to the legacy posterior fields.
   string evidence_json = 11;
 }
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from ...tracking.tracklet_manager import TrackletManager
 from ..frame_context import FrameContext
 from .base import FrameStage
 
@@ -12,7 +11,8 @@ from .base import FrameStage
 class DetectionBackfillStage(FrameStage):
     name = "detection_backfill"
 
-    def __init__(self, tracklet_manager: TrackletManager | None = None) -> None:
+    # N0: was TrackletManager, deleted
+    def __init__(self, tracklet_manager: object | None = None) -> None:
         self._tracklet_manager = tracklet_manager
 
     async def run(self, ctx: FrameContext) -> None:
@@ -30,7 +30,7 @@ class DetectionBackfillStage(FrameStage):
 
         updated = []
         for domain_det in ctx.domain_detections:
-            tid = self._tracklet_manager.get_tracklet_id_for_detection(domain_det.detection_id)
+            tid = self._tracklet_manager.get_tracklet_id_for_detection(domain_det.detection_id)  # type: ignore[attr-defined]
             gt_id = tracklet_to_gt.get(tid, "")
             updated.append(replace(domain_det, tracklet_id=tid, global_track_id=gt_id))
         ctx.domain_detections = updated

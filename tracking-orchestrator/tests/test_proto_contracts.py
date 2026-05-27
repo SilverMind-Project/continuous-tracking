@@ -63,19 +63,19 @@ class TestIdentitySnapshotRoundTrip:
         assert parsed.identity_snapshots[2].identity_id == ""
 
     def test_legacy_identity_revisions_still_present(self) -> None:
-        """Field 5 (identity_revisions) is deprecated but must still work."""
+        """Field 5 (identity_revisions) uses ph_id (N0 rename from global_track_id)."""
         event = tracking_pb2.TrackingEvent(camera_id="cam-1", event_id="ev-1")
 
         rev = event.identity_revisions.add()
-        rev.global_track_id = "gt-1"
+        rev.ph_id = "ph-1"
         rev.map_identity_id = "alice"
         rev.candidates.add(identity_id="alice", probability=0.95)
 
         data = event.SerializeToString()
         parsed = tracking_pb2.TrackingEvent.FromString(data)
 
-        # Both fields should be present.
         assert len(parsed.identity_revisions) == 1
+        assert parsed.identity_revisions[0].ph_id == "ph-1"
         assert parsed.identity_revisions[0].map_identity_id == "alice"
 
 

@@ -79,7 +79,6 @@ follow_imports = "skip"
 
 [[tool.mypy.overrides]]
 module = [
-    "app.tracking.tracker",
     "app.transport.redis_streams",
     "app.storage.postgres.*",
 ]
@@ -95,6 +94,41 @@ filterwarnings = ["error::DeprecationWarning"]
 dev = [
     "fakeredis>=2.35.1",
     "types-pyyaml>=6.0",
+]
+
+[tool.importlinter]
+root_package = "app"
+
+[[tool.importlinter.contracts]]
+name = "Layering: core → domain → storage → services → transport → routers"
+type = "layers"
+layers = [
+    "app.core",
+    "app.domain",
+    "app.storage",
+    "app.services",
+    "app.transport",
+    "app.routers",
+]
+
+[[tool.importlinter.contracts]]
+name = "Legacy BoT-SORT tracking modules are forbidden"
+type = "forbidden"
+source_modules = ["app"]
+forbidden_modules = [
+    "app.tracking.tracker",
+    "app.tracking.cross_camera",
+    "app.tracking.tracklet_manager",
+    "app.tracking.association_solver",
+    "app.tracking.camera_adjacency",
+    "app.tracking.global_track_service",
+    "app.tracking.global_track_merger",
+    "app.tracking.tracklet_unmerge_service",
+    "app.pipeline.stages.local_tracking",
+    "app.pipeline.stages.global_tracking",
+    "app.storage.postgres.global_track_repo",
+    "app.storage.postgres.tracking_repo",
+    "app.storage.postgres.do_not_fuse",
 ]
 
 [tool.uv.sources]

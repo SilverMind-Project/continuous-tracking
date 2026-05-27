@@ -15,7 +15,7 @@ import json
 
 from structlog import get_logger
 
-from ..domain import IdentityRevision
+from ..domain import IdentityEvidence, IdentityRevision
 from ..observability import metrics
 from ..proto.continuoustracking.v1 import tracking_pb2
 from .base_publisher import BasePublisher
@@ -43,7 +43,7 @@ class RevisionPublisher(BasePublisher):
         logger.info(
             "Published identity revision",
             revision_id=revision.revision_id,
-            global_track_id=revision.global_track_id,
+            ph_id=revision.ph_id,
             previous_identity_id=revision.previous_identity_id,
             new_identity_id=revision.new_identity_id,
             message_id=message_id,
@@ -81,23 +81,34 @@ class RevisionPublisher(BasePublisher):
 
 
 def _to_proto(revision: IdentityRevision) -> tracking_pb2.IdentityRevision:
-    """Convert a domain IdentityRevision to its proto wire form."""
+    """Convert a domain IdentityRevision to its proto wire form.
+
+    N0: fields renamed from global_track_id/tracklet_ids to ph_id.
+    The proto message still carries the legacy field numbers for
+    wire compatibility during the N0-N3 transition; CC subscriber
+    decodes accordingly.
+    """
+    evidence = revision.evidence or IdentityEvidence()
     pb = tracking_pb2.IdentityRevision(
         revision_id=revision.revision_id,
-        global_track_id=revision.global_track_id,
-        tracklet_ids=list(revision.tracklet_ids),
-        map_identity_id=revision.map_identity_id,
-        posterior_entropy=revision.posterior_entropy,
+        ph_id=revision.ph_id,
         previous_identity_id=revision.previous_identity_id or "",
         new_identity_id=revision.new_identity_id or "",
         reason=revision.reason,
-        evidence_json=json.dumps(revision.evidence, default=str),
-        revision_time_unix_ns=int(revision.revision_time.timestamp() * 1e9),
+        revision_time_unix_ns=int(revision.applied_at.timestamp() * 1e9),
+        evidence_json=json.dumps(
+            {
+                "top_identity_id": evidence.top_identity_id,
+                "top_probability": evidence.top_probability,
+                "second_probability": evidence.second_probability,
+                "posterior_entropy": evidence.posterior_entropy,
+                "evidence_sources": evidence.evidence_sources,
+                "observation_count": evidence.observation_count,
+                "actor": revision.actor,
+                "rewritten_rows": revision.rewritten_rows,
+            },
+            default=str,
+        ),
     )
-    for candidate in revision.candidates:
-        pb.candidates.add(
-            identity_id=candidate.identity_id,
-            display_name=getattr(candidate, "display_name", "") or "",
-            probability=float(candidate.probability),
-        )
+    # tracklet_ids and map_identity_id left at proto defaults (empty / "")
     return pb

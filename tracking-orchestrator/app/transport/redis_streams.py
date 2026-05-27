@@ -438,16 +438,12 @@ def _build_tracking_event_pb(
             d.evidence.top2_prob = top2_prob
             d.evidence.face_anchor_used = face_anchor_used
 
-    # Per-detection identity decisions are folded into the per-event
-    # IdentityRevision repeated field. Stream-level revision fields
-    # (revision_id, tracklet_ids, ...) are unset here -- those carry
-    # meaning only on the standalone tracking.revisions stream.
-    # DEPRECATED: kept for one compatibility release.
+    # N0: per-detection identity revisions now use ph_id.
     for global_track_id, (identity_id, confidence) in identities.items():
         if not global_track_id or not identity_id:
             continue
         revision = event.identity_revisions.add(
-            global_track_id=global_track_id,
+            ph_id=global_track_id,
             map_identity_id=identity_id,
         )
         revision.candidates.add(identity_id=identity_id, probability=float(confidence))
