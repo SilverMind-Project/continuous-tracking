@@ -839,3 +839,17 @@ class DementiaSignal:
         ""
     )
     algorithm_spec_json: str = ""  # JSON-serialized algorithm specification
+
+
+@dataclass(frozen=True)
+class Keyframe:
+    """A MinIO-stored keyframe linked to a world observation or PH."""
+
+    observation_id: str
+    observed_at: datetime
+    camera_id: str
+    minio_key: str
+    floor_x_mm: float | None = None
+    floor_y_mm: float | None = None
+    pose_class: str | None = None
+    reid_confidence: float | None = None

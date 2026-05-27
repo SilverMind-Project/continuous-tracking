@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..domain import IdentityRevision, PersonHypothesis, WorldObservation
+from ..domain import IdentityRevision, Keyframe, PersonHypothesis, WorldObservation
 
 # ---------------------------------------------------------------------------
 # Observation
@@ -243,3 +243,65 @@ class BatchCorrectResponse(BaseModel):
 class RevisionsFeedResponse(BaseModel):
     items: list[RevisionResponse]
     has_more: bool
+
+
+# ---------------------------------------------------------------------------
+# Keyframes
+# ---------------------------------------------------------------------------
+
+
+class KeyframeResponse(BaseModel):
+    observation_id: str
+    observed_at: datetime | None = None
+    camera_id: str = ""
+    minio_key: str = ""
+    floor_x_mm: float | None = None
+    floor_y_mm: float | None = None
+    pose_class: str | None = None
+    reid_confidence: float | None = None
+
+    @classmethod
+    def from_domain(cls, kf: Keyframe) -> KeyframeResponse:
+        return cls(
+            observation_id=kf.observation_id,
+            observed_at=kf.observed_at,
+            camera_id=kf.camera_id,
+            minio_key=kf.minio_key,
+            floor_x_mm=kf.floor_x_mm,
+            floor_y_mm=kf.floor_y_mm,
+            pose_class=kf.pose_class,
+            reid_confidence=kf.reid_confidence,
+        )
+
+
+class PHKeyframesResponse(BaseModel):
+    ph_id: str
+    items: list[KeyframeResponse]
+    count: int
+
+
+# ---------------------------------------------------------------------------
+# Co-present
+# ---------------------------------------------------------------------------
+
+
+class PHCoPresentItem(BaseModel):
+    ph_id: str
+    current_identity_id: str | None = None
+    last_seen_at: datetime | None = None
+    last_seen_camera: str = ""
+
+    @classmethod
+    def from_domain(cls, ph: PersonHypothesis) -> PHCoPresentItem:
+        return cls(
+            ph_id=ph.ph_id,
+            current_identity_id=ph.current_identity_id,
+            last_seen_at=ph.last_seen_at,
+            last_seen_camera=ph.last_seen_camera,
+        )
+
+
+class PHCoPresentResponse(BaseModel):
+    ph_id: str
+    co_present: list[PHCoPresentItem]
+    radius_m: float = 5.0

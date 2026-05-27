@@ -14,6 +14,7 @@ from structlog import get_logger
 
 from ..domain import (
     IdentityRevision,
+    Keyframe,
     PersonHypothesis,
     WorldObservation,
 )
@@ -112,7 +113,7 @@ class PHRepositoryProtocol(Protocol):
     ) -> list[PersonHypothesis]: ...
     async def get_keyframes(
         self, ph_id: str, *, limit: int = 20, offset: int = 0
-    ) -> tuple[list[dict[str, Any]], int]: ...
+    ) -> tuple[list[Keyframe], int]: ...
 
     async def correct_identity(
         self,
@@ -138,7 +139,13 @@ class PHRepositoryProtocol(Protocol):
         actor: str,
         reason: str,
     ) -> tuple[str, str]: ...
-    async def batch_correct(self, revisions: list[IdentityRevision]) -> None: ...
+    async def batch_correct(
+        self,
+        ph_ids: list[str],
+        new_identity_ids: list[str | None],
+        actor: str,
+        reasons: list[str],
+    ) -> list[IdentityRevision]: ...
     async def list_revisions(
         self,
         *,
@@ -236,21 +243,34 @@ class InMemoryPHRepository:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[PersonHypothesis], int]:
-        results = [
-            ph
-            for ph in self._phs.values()
-            if ph.closed_at is None
-            and (since is None or ph.last_seen_at >= since)
-            and (until is None or ph.born_at <= until)
-            and (identity_id is None or ph.current_identity_id == identity_id)
-            and (
-                search is None or search.lower() in str(ph.metadata.get("display_name", "")).lower()
-            )
-        ]
+        if state == "ended":
+            results = [
+                ph
+                for ph in self._phs.values()
+                if ph.closed_at is not None
+                and (since is None or ph.last_seen_at >= since)
+                and (until is None or ph.born_at <= until)
+                and (identity_id is None or ph.current_identity_id == identity_id)
+                and (
+                    search is None
+                    or search.lower() in str(ph.metadata.get("display_name", "")).lower()
+                )
+            ]
+        else:
+            results = [
+                ph
+                for ph in self._phs.values()
+                if ph.closed_at is None
+                and (since is None or ph.last_seen_at >= since)
+                and (until is None or ph.born_at <= until)
+                and (identity_id is None or ph.current_identity_id == identity_id)
+                and (
+                    search is None
+                    or search.lower() in str(ph.metadata.get("display_name", "")).lower()
+                )
+            ]
         if state == "active":
             results = [ph for ph in results if ph.closed_at is None]
-        elif state == "ended":
-            results = [ph for ph in results if ph.closed_at is not None]
         if not include_transient:
             now = datetime.now(UTC)
             results = [
@@ -331,12 +351,14 @@ class InMemoryPHRepository:
         return [
             p
             for p in self._phs.values()
-            if p.ph_id != ph_id and abs((p.last_seen_at - ref_time).total_seconds()) <= 30
+            if p.ph_id != ph_id
+            and p.closed_at is None
+            and abs((p.last_seen_at - ref_time).total_seconds()) <= 30
         ]
 
     async def get_keyframes(
         self, ph_id: str, *, limit: int = 20, offset: int = 0
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[list[Keyframe], int]:
         return [], 0
 
     # -- corrections --
@@ -515,30 +537,55 @@ class InMemoryPHRepository:
         self._revisions.append(revision)
         return ph_id, new_ph_id
 
-    async def batch_correct(self, revisions: list[IdentityRevision]) -> None:
+    async def batch_correct(
+        self,
+        ph_ids: list[str],
+        new_identity_ids: list[str | None],
+        actor: str,
+        reasons: list[str],
+    ) -> list[IdentityRevision]:
+        now = datetime.now(UTC)
+        revisions: list[IdentityRevision] = []
         async with self._lock:
-            for revision in revisions:
-                ph = self._phs.get(str(revision.ph_id))
-                if ph is not None:
-                    self._phs[str(revision.ph_id)] = PersonHypothesis(
-                        ph_id=ph.ph_id,
-                        state_mean=ph.state_mean,
-                        state_cov=ph.state_cov,
-                        born_at=ph.born_at,
-                        last_seen_at=ph.last_seen_at,
-                        last_seen_camera=ph.last_seen_camera,
-                        observation_count=ph.observation_count,
-                        current_identity_id=revision.new_identity_id,
-                        current_identity_committed_at=revision.applied_at,
-                        gallery_mean=ph.gallery_mean,
-                        height_estimate_m=ph.height_estimate_m,
-                        active_cameras=ph.active_cameras,
-                        closed_at=ph.closed_at,
-                        last_floor_speed_m_s=ph.last_floor_speed_m_s,
-                        last_posture=ph.last_posture,
-                        metadata=ph.metadata,
-                    )
+            for ph_id, new_identity_id, reason in zip(
+                ph_ids, new_identity_ids, reasons, strict=True
+            ):
+                ph = self._phs.get(ph_id)
+                if ph is None:
+                    raise ValueError(f"PH not found: {ph_id}")
+                previous = ph.current_identity_id
+                self._phs[ph_id] = PersonHypothesis(
+                    ph_id=ph.ph_id,
+                    state_mean=ph.state_mean,
+                    state_cov=ph.state_cov,
+                    born_at=ph.born_at,
+                    last_seen_at=ph.last_seen_at,
+                    last_seen_camera=ph.last_seen_camera,
+                    observation_count=ph.observation_count,
+                    current_identity_id=new_identity_id,
+                    current_identity_committed_at=now,
+                    gallery_mean=ph.gallery_mean,
+                    height_estimate_m=ph.height_estimate_m,
+                    active_cameras=ph.active_cameras,
+                    closed_at=ph.closed_at,
+                    last_floor_speed_m_s=ph.last_floor_speed_m_s,
+                    last_posture=ph.last_posture,
+                    metadata=ph.metadata,
+                )
+                revision = IdentityRevision(
+                    revision_id=str(uuid.uuid4()),
+                    ph_id=ph_id,
+                    previous_identity_id=previous,
+                    new_identity_id=new_identity_id,
+                    actor=actor,
+                    reason=reason,
+                    applied_at=now,
+                    rewritten_rows=1,
+                    evidence=None,
+                )
                 self._revisions.append(revision)
+                revisions.append(revision)
+        return revisions
 
     async def list_revisions(
         self,

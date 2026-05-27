@@ -118,6 +118,12 @@ class Metrics:
     # ---- Batching ----------------------------------------------------
     batch_size_metric: Histogram
 
+    # ---- PH operations -------------------------------------------------
+    cts_ph_corrections_total: Counter
+    cts_ph_merges_total: Counter
+    cts_ph_splits_total: Counter
+    cts_ph_api_latency_seconds: Histogram
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -399,6 +405,28 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_batch_size",
             "Number of frames accumulated in a batch flush (across cameras).",
             (1, 2, 3, 4, 5, 6, 8, 12, 16),
+        ),
+        # ---- PH operations -------------------------------------------------
+        cts_ph_corrections_total=_counter(
+            "cts_ph_corrections_total",
+            "Total PH identity corrections applied",
+            ["actor"],
+        ),
+        cts_ph_merges_total=_counter(
+            "cts_ph_merges_total",
+            "Total PH merge operations",
+            ["actor"],
+        ),
+        cts_ph_splits_total=_counter(
+            "cts_ph_splits_total",
+            "Total PH split operations",
+            ["actor"],
+        ),
+        cts_ph_api_latency_seconds=_hist(
+            "cts_ph_api_latency_seconds",
+            "PH API endpoint request latency in seconds",
+            (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5),
+            ["endpoint"],
         ),
     )
 

@@ -18,6 +18,7 @@ from ...domain import (
     FloorPoint,
     IdentityEvidence,
     IdentityRevision,
+    Keyframe,
     PersonHypothesis,
     WorldObservation,
 )
@@ -335,29 +336,31 @@ class PostgresPHRepository:
 
     async def get_keyframes(
         self, ph_id: str, *, limit: int = 20, offset: int = 0
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[list[Keyframe], int]:
         async with self._pool.acquire() as conn:
             total: int = await conn.fetchval(
-                "SELECT COUNT(*) FROM continuous_tracking.keyframes WHERE ph_id = $1",
+                "SELECT COUNT(*) FROM continuous_tracking.world_observations WHERE ph_id = $1",
                 ph_id,
             )
             rows = await conn.fetch(
-                "SELECT * FROM continuous_tracking.keyframes "
+                "SELECT observation_id, captured_at, camera_id, "
+                "floor_x_m, floor_y_m, detection_confidence "
+                "FROM continuous_tracking.world_observations "
                 "WHERE ph_id = $1 ORDER BY captured_at DESC LIMIT $2 OFFSET $3",
                 ph_id,
                 limit,
                 offset,
             )
         return [
-            {
-                "keyframe_id": str(row["keyframe_id"]),
-                "ph_id": str(row["ph_id"]),
-                "camera_id": str(row["camera_id"]),
-                "captured_at": row["captured_at"].isoformat(),
-                "minio_key": row["minio_key"],
-                "floor_x_m": float(row["floor_x_m"]) if row["floor_x_m"] else None,
-                "floor_y_m": float(row["floor_y_m"]) if row["floor_y_m"] else None,
-            }
+            Keyframe(
+                observation_id=str(row["observation_id"]),
+                observed_at=row["captured_at"],
+                camera_id=str(row["camera_id"]),
+                minio_key=f"frames/{row['camera_id']}/{row['captured_at'].isoformat()}.jpg",
+                floor_x_mm=float(row["floor_x_m"]) * 1000 if row["floor_x_m"] else None,
+                floor_y_mm=float(row["floor_y_m"]) * 1000 if row["floor_y_m"] else None,
+                reid_confidence=float(row["detection_confidence"]),
+            )
             for row in rows
         ], total
 
@@ -610,36 +613,78 @@ class PostgresPHRepository:
 
     # -- batch_correct (single transaction) --
 
-    async def batch_correct(self, revisions: list[IdentityRevision]) -> None:
+    async def batch_correct(
+        self,
+        ph_ids: list[str],
+        new_identity_ids: list[str | None],
+        actor: str,
+        reasons: list[str],
+    ) -> list[IdentityRevision]:
+        """Apply identity corrections atomically.
+
+        Looks up current identity for each PH within the transaction,
+        applies updates, and returns the resulting revisions.
+        """
+        now = datetime.now(UTC)
+        revisions: list[IdentityRevision] = []
+
         async with self._pool.acquire() as conn, conn.transaction():
-            for revision in revisions:
+            for ph_id, new_identity_id, reason in zip(
+                ph_ids, new_identity_ids, reasons, strict=True
+            ):
+                revision_id = str(uuid.uuid4())
+                ph_row = await conn.fetchrow(
+                    "SELECT current_identity_id FROM continuous_tracking.person_hypotheses "
+                    "WHERE ph_id = $1 FOR UPDATE",
+                    ph_id,
+                )
+                if ph_row is None:
+                    raise ValueError(f"PH not found: {ph_id}")
+                previous = ph_row["current_identity_id"]
+
                 await conn.execute(
                     """
                     INSERT INTO continuous_tracking.ph_revisions
                         (revision_id, ph_id, previous_identity_id, new_identity_id,
                          actor, reason, applied_at, kind, rewritten_rows)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (revision_id, applied_at) DO NOTHING
                     """,
-                    str(revision.revision_id),
-                    str(revision.ph_id),
-                    revision.previous_identity_id,
-                    revision.new_identity_id,
-                    revision.actor,
-                    revision.reason,
-                    revision.applied_at,
-                    "correct_identity",
-                    revision.rewritten_rows,
+                    revision_id,
+                    ph_id,
+                    previous,
+                    new_identity_id,
+                    actor,
+                    reason,
+                    now,
+                    "manual_correct",
+                    1,
                 )
                 await conn.execute(
                     """
                     UPDATE continuous_tracking.person_hypotheses
-                       SET identity_id = $1, last_seen_at = $2
+                       SET current_identity_id = $1,
+                           current_identity_committed_at = $2
                      WHERE ph_id = $3
                     """,
-                    revision.new_identity_id,
-                    revision.applied_at,
-                    str(revision.ph_id),
+                    new_identity_id,
+                    now,
+                    ph_id,
                 )
+                revisions.append(
+                    IdentityRevision(
+                        revision_id=revision_id,
+                        ph_id=ph_id,
+                        previous_identity_id=previous,
+                        new_identity_id=new_identity_id,
+                        actor=actor,
+                        reason=reason,
+                        applied_at=now,
+                        rewritten_rows=1,
+                        evidence=None,
+                    )
+                )
+        return revisions
 
     # -- list_revisions --
 

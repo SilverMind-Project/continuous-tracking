@@ -7,23 +7,29 @@ and ``/identity/decisions*`` surfaces.
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from structlog import get_logger
 
+from ..observability.metrics import metrics
 from ..storage.base import PHRepositoryProtocol
 from .ph_schemas import (
     BatchCorrectRequest,
     BatchCorrectResponse,
     CorrectIdentityRequest,
     CorrectIdentityResponse,
+    KeyframeResponse,
     MergeRequest,
     MergeResponse,
     ObservationResponse,
     PaginatedPHList,
+    PHCoPresentItem,
+    PHCoPresentResponse,
     PHDetail,
+    PHKeyframesResponse,
     PHObservationsList,
     PHSummary,
     RevisionResponse,
@@ -68,26 +74,45 @@ async def get_repo() -> PHRepositoryProtocol:
 @router.get("/ph", response_model=PaginatedPHList)
 async def list_phs(
     since: str | None = Query(default=None, description="ISO-8601 lower bound on last_seen_at"),
+    until: str | None = Query(default=None, description="ISO-8601 upper bound on first_seen_at"),
     room_id: str | None = Query(default=None),
     identity_id: str | None = Query(default=None),
+    state: Literal["active", "coasting", "ended"] | None = Query(default=None),
+    include_transient: bool = Query(default=False, description="Include PHs with duration < 2s"),
+    min_duration_s: float | None = Query(
+        default=None, ge=0, description="Minimum PH duration in seconds"
+    ),
+    search: str | None = Query(
+        default=None, max_length=200, description="Search by identity display name (ILIKE)"
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> PaginatedPHList:
-    since_dt = _parse_iso(since) if since else None
-    items, total = await repo.list_active(
-        since=since_dt,
-        room_id=room_id,
-        identity_id=identity_id,
-        limit=limit,
-        offset=offset,
-    )
-    return PaginatedPHList(
-        items=[PHSummary.from_domain(ph) for ph in items],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    start = time.monotonic()
+    try:
+        since_dt = _parse_iso(since) if since else None
+        until_dt = _parse_iso(until) if until else None
+        items, total = await repo.list_active(
+            since=since_dt,
+            until=until_dt,
+            room_id=room_id,
+            identity_id=identity_id,
+            state=state,
+            include_transient=include_transient,
+            min_duration_s=min_duration_s,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+        return PaginatedPHList(
+            items=[PHSummary.from_domain(ph) for ph in items],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+    finally:
+        metrics.cts_ph_api_latency_seconds.labels(endpoint="list").observe(time.monotonic() - start)
 
 
 @router.get("/ph/revisions", response_model=RevisionsFeedResponse)
@@ -146,6 +171,7 @@ async def merge_phs(
             status_code=422,
             detail={"code": "ph.merge.invalid", "message": str(exc)},
         ) from exc
+    metrics.cts_ph_merges_total.labels(actor="operator").inc()
     return MergeResponse(
         revision=RevisionResponse.from_domain(revision, kind="manual_merge"),
         source_ph_id=body.source_ph_id,
@@ -159,23 +185,26 @@ async def batch_correct(
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> BatchCorrectResponse:
     actor = _actor_from_headers()
-    revisions: list[RevisionResponse] = []
-    errors: list[dict[str, str]] = []
-    for item in body.corrections:
-        try:
-            rev = await repo.correct_identity(
-                ph_id=item.ph_id,
-                new_identity_id=item.new_identity_id,
-                reason=item.reason,
-                actor=actor,
-            )
-            revisions.append(RevisionResponse.from_domain(rev, kind="manual_correct"))
-        except ValueError as exc:
-            errors.append({"ph_id": item.ph_id, "error": str(exc)})
+    ph_ids = [item.ph_id for item in body.corrections]
+    new_identity_ids = [item.new_identity_id for item in body.corrections]
+    reasons = [item.reason for item in body.corrections]
+    try:
+        revs = await repo.batch_correct(
+            ph_ids=ph_ids,
+            new_identity_ids=new_identity_ids,
+            actor=actor,
+            reasons=reasons,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "ph.batch_correct.invalid", "message": str(exc)},
+        ) from exc
+    metrics.cts_ph_corrections_total.labels(actor="batch").inc(len(revs))
     return BatchCorrectResponse(
-        revisions=revisions,
-        applied=len(revisions),
-        errors=errors,
+        revisions=[RevisionResponse.from_domain(r, kind="manual_correct") for r in revs],
+        applied=len(revs),
+        errors=[],
     )
 
 
@@ -218,19 +247,25 @@ async def list_ph_observations(
     )
 
 
-@router.get("/ph/{ph_id}/keyframes", response_model=dict)
+@router.get("/ph/{ph_id}/keyframes", response_model=PHKeyframesResponse)
 async def list_ph_keyframes(
     ph_id: str,
     limit: int = Query(default=24, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     repo: PHRepositoryProtocol = Depends(get_repo),
-) -> dict[str, Any]:
+) -> PHKeyframesResponse:
     ph = await repo.get_by_id(ph_id)
     if ph is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "ph.not_found", "message": f"PH {ph_id} not found"},
         )
-    return {"ph_id": ph_id, "items": [], "count": 0}
+    kfs, total = await repo.get_keyframes(ph_id, limit=limit, offset=offset)
+    return PHKeyframesResponse(
+        ph_id=ph_id,
+        items=[KeyframeResponse.from_domain(kf) for kf in kfs],
+        count=total,
+    )
 
 
 @router.get("/ph/{ph_id}/trail", response_model=dict)
@@ -255,19 +290,24 @@ async def get_ph_trail(
     return {"ph_id": ph_id, "points": [t.model_dump() for t in trail], "count": len(trail)}
 
 
-@router.get("/ph/{ph_id}/co_present", response_model=dict)
+@router.get("/ph/{ph_id}/co_present", response_model=PHCoPresentResponse)
 async def get_co_present(
     ph_id: str,
     radius_m: float = Query(default=5.0, ge=0.5, le=50.0),
     repo: PHRepositoryProtocol = Depends(get_repo),
-) -> dict[str, Any]:
+) -> PHCoPresentResponse:
     ph = await repo.get_by_id(ph_id)
     if ph is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "ph.not_found", "message": f"PH {ph_id} not found"},
         )
-    return {"ph_id": ph_id, "co_present": [], "radius_m": radius_m}
+    co_present = await repo.get_co_present(ph_id)
+    return PHCoPresentResponse(
+        ph_id=ph_id,
+        co_present=[PHCoPresentItem.from_domain(p) for p in co_present],
+        radius_m=radius_m,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +338,7 @@ async def correct_identity(
             status_code=422,
             detail={"code": "ph.correct.invalid", "message": str(exc)},
         ) from exc
+    metrics.cts_ph_corrections_total.labels(actor="operator").inc()
     return CorrectIdentityResponse(
         revision=RevisionResponse.from_domain(revision, kind="manual_correct"),
     )
@@ -328,6 +369,7 @@ async def split_ph(
             status_code=422,
             detail={"code": "ph.split.invalid", "message": msg},
         ) from exc
+    metrics.cts_ph_splits_total.labels(actor="operator").inc()
     return SplitResponse(original_ph_id=original_id, new_ph_id=new_id)
 
 
