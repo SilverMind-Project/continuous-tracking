@@ -378,11 +378,6 @@ class FrameProcessingPipeline:
         # M1: World-coordinate person tracker replaces per-camera + cross-camera.
         self._ph_repo = deps.ph_repo or InMemoryPHRepository()
         self._obs_repo = deps.obs_repo or InMemoryWorldObservationRepository()
-        self._world_tracker = WorldTracker(
-            ph_repo=self._ph_repo,
-            obs_repo=self._obs_repo,
-            config=self._config.world_tracker,
-        )
 
         # ---- Identity resolution ----
         self._floor_projector = FloorProjector(calibration_state)
@@ -401,6 +396,14 @@ class FrameProcessingPipeline:
             redis_url=self._config.transport.redis_url,
         )
         await self._revision_publisher.connect()
+
+        self._world_tracker = WorldTracker(
+            ph_repo=self._ph_repo,
+            obs_repo=self._obs_repo,
+            config=self._config.world_tracker,
+            identity_resolver=self._identity_resolver,
+            revision_publisher=self._revision_publisher,
+        )
 
         # ---- Trajectory writer + keyframe sampler ----
         # Use a single in-memory fallback so the signal worker can read

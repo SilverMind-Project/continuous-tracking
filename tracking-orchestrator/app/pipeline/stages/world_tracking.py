@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from structlog import get_logger
 
+from ...domain import GlobalTrack, PersonHypothesis
 from ...tracking.world.config import WorldTrackerConfig
 from ...tracking.world.tracker import WorldTracker
 from ...tracking.world.transit_detector import TransitDetector, TransitZone
@@ -130,9 +131,9 @@ class WorldTrackingStage(FrameStage):
                     self._transit_detector.remove_ph(ph.ph_id)
 
         # Populate frame context for downstream stages.
-        ctx.active_global_tracks = []  # legacy field; downstream stages use snapshots
+        ctx.active_global_tracks = _phs_to_global_tracks(result.updated_phs)
         ctx.outcome_decisions = list(result.identity_decisions)
-        ctx.new_revisions = []
+        ctx.new_revisions = list(result.revisions)
         ctx.committed_ids = {ph.ph_id: ph.current_identity_id for ph in result.updated_phs}
 
         # Store snapshots on the context for downstream stages.
@@ -147,3 +148,29 @@ class WorldTrackingStage(FrameStage):
             snapshots=len(result.snapshots),
             continuations=len(result.continuations),
         )
+
+
+def _phs_to_global_tracks(phs: list[PersonHypothesis]) -> list[GlobalTrack]:
+    """Build a transitional GlobalTrack view for legacy stages.
+
+    Open PHs (closed_at is None) only — closed PHs must not appear in
+    the active list, otherwise CloseTerminatedStage cannot detect them as
+    terminated next frame.
+    """
+    out: list[GlobalTrack] = []
+    for ph in phs:
+        if ph.closed_at is not None:
+            continue
+        out.append(
+            GlobalTrack(
+                global_track_id=ph.ph_id,
+                tracklet_ids=[],
+                camera_ids=list(ph.active_cameras),
+                started_at=ph.born_at,
+                last_seen_at=ph.last_seen_at,
+                current_identity_id=ph.current_identity_id,
+                current_identity_committed_at=ph.current_identity_committed_at,
+                state="active",
+            )
+        )
+    return out

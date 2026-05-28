@@ -18,6 +18,13 @@ logger = get_logger(__name__)
 
 
 class CloseTerminatedStage(FrameStage):
+    """Close global tracks that have disappeared from the active set.
+
+    ``ctx.active_global_tracks`` is sourced from open PH state by
+    ``WorldTrackingStage`` (WT2 bridge).  A GT is considered terminated
+    when it was active on the previous frame but is absent this frame.
+    """
+
     name = "close_terminated"
 
     def __init__(

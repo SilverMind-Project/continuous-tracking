@@ -22,6 +22,7 @@ from ...domain import (
     FaceAnchor,
     IdentityDecision,
     IdentityResolvableEntity,
+    IdentityRevision,
     PersonHypothesis,
     PHContinuationCandidate,
     WorldFrameSnapshot,
@@ -52,7 +53,7 @@ class ContinuationPublisher(Protocol):
 class RevisionPublisher(Protocol):
     """Publishes IdentityRevision events to tracking.revisions."""
 
-    async def publish(self, revision: object) -> None: ...
+    async def publish(self, revision: IdentityRevision) -> str: ...
 
 
 @dataclass
@@ -104,6 +105,7 @@ class WorldTrackerResult:
     snapshots: list[WorldFrameSnapshot]
     continuations: list[PHContinuationCandidate]
     identity_decisions: list[IdentityDecision] = field(default_factory=list)
+    revisions: list[IdentityRevision] = field(default_factory=list)
 
 
 class WorldTracker:
@@ -396,7 +398,7 @@ class WorldTracker:
 
         # 9. Identity resolution: run the Bayesian resolver on PHs that
         #    received observations this frame.
-        identity_decisions, _revisions, identity_by_ph = await _resolve_identities(
+        identity_decisions, revisions, identity_by_ph = await _resolve_identities(
             resolver=self._identity_resolver,
             revision_publisher=self._revision_publisher,
             obs_repo=self._obs_repo,
@@ -455,6 +457,7 @@ class WorldTracker:
             snapshots=snapshots,
             continuations=continuations,
             identity_decisions=identity_decisions,
+            revisions=revisions,
         )
 
 
@@ -474,7 +477,7 @@ async def _resolve_identities(
     face_anchors: list[FaceAnchor],
     now: datetime,
     config: WorldTrackerConfig,
-) -> tuple[list[IdentityDecision], list[object], dict[str, dict[str, object]]]:
+) -> tuple[list[IdentityDecision], list[IdentityRevision], dict[str, dict[str, object]]]:
     """Run the Bayesian identity resolver on PHs that received observations.
 
     Returns:
@@ -549,18 +552,8 @@ async def _resolve_identities(
             ),
         }
 
-    # Publish revisions.
-    revisions: list[object] = []
-    if revision_publisher is not None:
-        for revision in outcome.revisions:
-            try:
-                await revision_publisher.publish(revision)
-                revisions.append(revision)
-            except Exception:
-                logger.exception(
-                    "revision_publish_failed",
-                    revision_id=getattr(revision, "revision_id", "unknown"),
-                )
+    # Collect revisions (publishing is handled by RevisionsStage).
+    revisions: list[IdentityRevision] = list(outcome.revisions)
 
     logger.info(
         "identity_resolution_complete",
