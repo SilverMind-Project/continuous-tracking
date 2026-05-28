@@ -152,35 +152,31 @@ class PostgresPHRepository:
             params.append(since)
             idx += 1
         if until is not None:
-            predicates.append(f"first_seen_at <= ${idx}")
+            predicates.append(f"born_at <= ${idx}")
             params.append(until)
             idx += 1
         if room_id is not None:
-            predicates.append(f"last_room_id = ${idx}")
+            predicates.append(f"metadata->>'last_room_id' = ${idx}")
             params.append(room_id)
             idx += 1
         if identity_id is not None:
-            predicates.append(f"identity_id = ${idx}")
+            predicates.append(f"current_identity_id = ${idx}")
             params.append(identity_id)
             idx += 1
-        if state == "active":
-            predicates.append("closed_at IS NULL AND coasting IS FALSE")
-        elif state == "coasting":
-            predicates.append("closed_at IS NULL AND coasting IS TRUE")
+        if state in ("active", "coasting"):
+            predicates.append("closed_at IS NULL")
         elif state == "ended":
             predicates.append("closed_at IS NOT NULL")
         if not include_transient:
-            predicates.append(
-                "EXTRACT(EPOCH FROM (COALESCE(closed_at, NOW()) - first_seen_at)) >= 2.0"
-            )
+            predicates.append("EXTRACT(EPOCH FROM (COALESCE(closed_at, NOW()) - born_at)) >= 2.0")
         if min_duration_s is not None:
             predicates.append(
-                f"EXTRACT(EPOCH FROM (COALESCE(closed_at, NOW()) - first_seen_at)) >= ${idx}"
+                f"EXTRACT(EPOCH FROM (COALESCE(closed_at, NOW()) - born_at)) >= ${idx}"
             )
             params.append(min_duration_s)
             idx += 1
         if search is not None:
-            predicates.append(f"identity_display_name ILIKE ${idx}")
+            predicates.append(f"COALESCE(current_identity_id, '') ILIKE ${idx}")
             params.append(f"%{search}%")
             idx += 1
 
