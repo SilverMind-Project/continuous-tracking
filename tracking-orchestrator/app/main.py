@@ -176,6 +176,9 @@ def _build_transport_config(s: Settings) -> TransportConfig:
         batch_max_size=s.as_int("redis.batch_max_size"),
         xack_timeout_ms=s.as_int("redis.xack_timeout_ms"),
         ack_ttl_seconds=s.as_int("redis.ack_ttl_seconds"),
+        revisions_stream=s.as_str("redis.revisions_stream"),
+        signals_stream=s.as_str("redis.signals_stream"),
+        scene_samples_stream=s.as_str("redis.scene_samples_stream"),
     )
 
 

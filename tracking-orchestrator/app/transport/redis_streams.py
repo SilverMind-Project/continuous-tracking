@@ -58,6 +58,9 @@ class TransportConfig:
     batch_max_size: int = 8
     xack_timeout_ms: int = 5000
     ack_ttl_seconds: int = 300
+    revisions_stream: str = "tracking.revisions"
+    signals_stream: str = "tracking.signals"
+    scene_samples_stream: str = "scene.samples"
 
 
 # Re-export proto FrameReady so callers use the wire type directly without

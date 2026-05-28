@@ -18,7 +18,6 @@ redis:
   revisions_stream: "${CTS_REVISIONS_STREAM:-tracking.revisions}"
   signals_stream: "${CTS_SIGNALS_STREAM:-tracking.signals}"
   scene_samples_stream: "${CTS_SCENE_SAMPLES_STREAM:-scene.samples}"
-  stream_maxlen: "${CTS_STREAM_MAXLEN:-100000}"
   batch_max_wait_ms: "${CTS_BATCH_MAX_WAIT_MS:-100}"
   batch_max_size: "${CTS_BATCH_MAX_SIZE:-8}"
   xack_timeout_ms: "${CTS_XACK_TIMEOUT_MS:-5000}"
@@ -199,33 +198,6 @@ resolver:
   cross_gt_face_propagation_threshold: "${RESOLVER_CROSS_GT_FACE_PROPAGATION_THRESHOLD:-0.65}"
   cross_gt_face_propagation_max_gts: "${RESOLVER_CROSS_GT_FACE_PROPAGATION_MAX_GTS:-4}"
 
-# Tracklet lifecycle
-tracklet:
-  min_hit_ratio: "${TRACKLET_MIN_HIT_RATIO:-0.5}"
-  close_grace_frames: "${TRACKLET_CLOSE_GRACE_FRAMES:-30}"
-  gallery_min_quality: "${TRACKLET_GALLERY_MIN_QUALITY:-0.4}"
-  gallery_max_per_tracklet: "${TRACKLET_GALLERY_MAX_PER_TRACKLET:-20}"
-  # Second-line detection gate inside the tracker. Must be < pipeline.detector_confidence
-  # (currently 0.6). Effectively a no-op in normal operation; protects against
-  # future changes to the detector that lower its internal threshold.
-  min_detection_confidence: "${TRACKLET_MIN_DETECTION_CONFIDENCE:-0.3}"
-  enabled: "${TRACKLET_ENABLED:-true}"
-  # min_frames_to_publish is controlled by pipeline.tracker.min_frames_to_publish
-
-# Cross-camera association
-cross_camera:
-  alpha: "${CC_ALPHA:-0.7}"
-  floor_sigma_m: "${CC_FLOOR_SIGMA_M:-1.5}"
-  max_floor_distance_m: "${CC_MAX_FLOOR_DISTANCE_M:-8.0}"
-  min_link_score: "${CC_MIN_LINK_SCORE:-0.50}"
-  unknown_merge_appearance_threshold: "${CC_UNKNOWN_MERGE_APPEARANCE_THRESHOLD:-0.90}"
-  within_group_min_score: "${CC_WITHIN_GROUP_MIN_SCORE:-0.35}"
-  inter_gt_consolidation_appearance_threshold: "${CC_INTER_GT_CONSOLIDATION_APPEARANCE_THRESHOLD:-0.82}"
-  known_identity_reentry_threshold: "${CC_KNOWN_IDENTITY_REENTRY_THRESHOLD:-0.70}"
-  same_camera_reentry_max_gap_s: "${CC_SAME_CAMERA_REENTRY_MAX_GAP_S:-30.0}"
-  unknown_merge_max_gap_s: "${CC_UNKNOWN_MERGE_MAX_GAP_S:-120.0}"
-  unknown_merge_max_distance_m: "${CC_UNKNOWN_MERGE_MAX_DISTANCE_M:-2.0}"
-
 # Keyframe sampler
 sampler:
   keyframe_min_interval_s: "${SAMPLER_KEYFRAME_MIN_INTERVAL_S:-30.0}"
@@ -234,7 +206,6 @@ sampler:
 
 # World tracker (M1 floor-plane Kalman tracker)
 world_tracker:
-  enabled: "${WORLD_TRACKER_ENABLED:-true}"
   gate_chi2: "${WORLD_TRACKER_GATE_CHI2:-9.21}"
   alpha_geo: "${WORLD_TRACKER_ALPHA_GEO:-0.5}"
   alpha_app: "${WORLD_TRACKER_ALPHA_APP:-0.4}"

@@ -392,6 +392,7 @@ class FrameProcessingPipeline:
 
         self._revision_publisher = RevisionPublisher(
             redis_url=self._config.transport.redis_url,
+            stream=self._config.transport.revisions_stream,
         )
         await self._revision_publisher.connect()
 
@@ -416,6 +417,7 @@ class FrameProcessingPipeline:
 
         self._scene_publisher = SceneSamplesPublisher(
             redis_url=self._config.transport.redis_url,
+            stream=self._config.transport.scene_samples_stream,
         )
         await self._scene_publisher.connect()
 
@@ -424,6 +426,7 @@ class FrameProcessingPipeline:
         if self._config.signals.enabled:
             self._signal_publisher = SignalPublisher(
                 redis_url=self._config.transport.redis_url,
+                stream=self._config.transport.signals_stream,
             )
             await self._signal_publisher.connect()
             # Build a baseline repository from the same trajectory source.

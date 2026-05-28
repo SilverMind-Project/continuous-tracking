@@ -54,54 +54,6 @@ def test_resolver_face_commit_min_confidence_reads_from_env(monkeypatch):
     assert float(s.require("resolver.face_commit_min_confidence")) == pytest.approx(0.85)
 
 
-def test_tracklet_close_grace_frames_reads_from_env(monkeypatch):
-    monkeypatch.setenv("TRACKLET_CLOSE_GRACE_FRAMES", "42")
-    s = _reload_with_env(monkeypatch)
-    assert int(s.require("tracklet.close_grace_frames")) == 42
-
-
-def test_tracklet_gallery_min_quality_reads_from_env(monkeypatch):
-    monkeypatch.setenv("TRACKLET_GALLERY_MIN_QUALITY", "0.75")
-    s = _reload_with_env(monkeypatch)
-    assert float(s.require("tracklet.gallery_min_quality")) == pytest.approx(0.75)
-
-
-def test_tracklet_gallery_max_per_tracklet_reads_from_env(monkeypatch):
-    monkeypatch.setenv("TRACKLET_GALLERY_MAX_PER_TRACKLET", "50")
-    s = _reload_with_env(monkeypatch)
-    assert int(s.require("tracklet.gallery_max_per_tracklet")) == 50
-
-
-def test_tracklet_min_detection_confidence_reads_from_env(monkeypatch):
-    monkeypatch.setenv("TRACKLET_MIN_DETECTION_CONFIDENCE", "0.55")
-    s = _reload_with_env(monkeypatch)
-    assert float(s.require("tracklet.min_detection_confidence")) == pytest.approx(0.55)
-
-
-def test_cross_camera_alpha_reads_from_env(monkeypatch):
-    monkeypatch.setenv("CC_ALPHA", "0.85")
-    s = _reload_with_env(monkeypatch)
-    assert float(s.require("cross_camera.alpha")) == pytest.approx(0.85)
-
-
-def test_cross_camera_min_link_score_reads_from_env(monkeypatch):
-    monkeypatch.setenv("CC_MIN_LINK_SCORE", "0.70")
-    s = _reload_with_env(monkeypatch)
-    assert float(s.require("cross_camera.min_link_score")) == pytest.approx(0.70)
-
-
-def test_cross_camera_known_identity_reentry_threshold_reads_from_env(monkeypatch):
-    monkeypatch.setenv("CC_KNOWN_IDENTITY_REENTRY_THRESHOLD", "0.80")
-    s = _reload_with_env(monkeypatch)
-    assert float(s.require("cross_camera.known_identity_reentry_threshold")) == pytest.approx(0.80)
-
-
-def test_cross_camera_same_camera_reentry_max_gap_s_reads_from_env(monkeypatch):
-    monkeypatch.setenv("CC_SAME_CAMERA_REENTRY_MAX_GAP_S", "60.0")
-    s = _reload_with_env(monkeypatch)
-    assert float(s.require("cross_camera.same_camera_reentry_max_gap_s")) == pytest.approx(60.0)
-
-
 def test_sampler_keyframe_min_interval_s_reads_from_env(monkeypatch):
     monkeypatch.setenv("SAMPLER_KEYFRAME_MIN_INTERVAL_S", "15.0")
     s = _reload_with_env(monkeypatch)
