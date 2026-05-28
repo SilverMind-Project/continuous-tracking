@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from structlog import get_logger
 
-from ...domain import BoundingBox, FloorPoint, PostureType
+from ...domain import FloorPoint, PostureType
 from ...inference.schemas import PoseResult
 from ...storage.base import GlobalTrackRepository
 from ...tracking.floor_projector import FloorProjector
@@ -85,109 +85,70 @@ class TrajectoryStage(FrameStage):
         self._camera_room_map = camera_room_map or {}
 
     async def run(self, ctx: FrameContext) -> None:
-        if not ctx.outcome_decisions or not self._trajectory_writer:
+        if not ctx.world_snapshots or not self._trajectory_writer:
             return
 
         traj_time = ctx.event_time
-        room_name = self._camera_room_map.get(ctx.frame.camera_id, "")
+        decision_by_ph = {d.global_track_id: d for d in ctx.outcome_decisions}
 
-        gt_bbox: dict[str, BoundingBox] = {}
-        if ctx.active_tracklets and self._floor_projector:
-            for tracklet in ctx.active_tracklets:
-                if tracklet.camera_id != ctx.frame.camera_id:
-                    continue
-                last_bbox: BoundingBox | None = getattr(tracklet, "last_bbox", None)
-                if last_bbox is None:
-                    continue
-                for gt in ctx.active_global_tracks:
-                    if tracklet.tracklet_id in gt.tracklet_ids:
-                        gt_bbox[gt.global_track_id] = last_bbox
-                        break
-
-        for decision in ctx.outcome_decisions:
-            gt_bbox_entry = gt_bbox.get(decision.global_track_id)
-            if gt_bbox_entry is None:
+        for snap in ctx.world_snapshots:
+            if snap.camera_id != ctx.frame.camera_id:
                 continue
 
-            floor_point = (
-                self._floor_projector.project(ctx.frame.camera_id, gt_bbox_entry)
-                if self._floor_projector is not None
-                else FloorPoint(0, 0)
-            )
-            _top_id, top_prob = decision.posterior.top_identity()
+            # Snap floor_x/y are in metres; FloorPoint uses mm.
+            floor_point = FloorPoint(int(snap.floor_x_m * 1000.0), int(snap.floor_y_m * 1000.0))
+
+            # Pose / motion-energy attribution: WT3 transitional — returns
+            # (None, None) until WT4 stamps global_track_id on detections.
+            pose, det_id = self._find_pose_for_ph(ctx, snap.ph_id)
 
             gt_posture: PostureType = "unknown"
             gt_motion_energy: float | None = None
-            pose, matching_detection_id = self._find_pose_for_gt(ctx, decision.global_track_id)
-
-            if pose is not None and matching_detection_id is not None:
-                if self._motion_energy_tracker is not None:
-                    bbox_diag = (gt_bbox_entry.width**2 + gt_bbox_entry.height**2) ** 0.5
+            if pose is not None and det_id is not None and self._motion_energy_tracker is not None:
+                bbox = snap.bbox
+                if bbox is not None:
+                    bbox_diag = (bbox.width**2 + bbox.height**2) ** 0.5
                     me = self._motion_energy_tracker.update(
-                        decision.global_track_id, pose, traj_time, bbox_diag_px=bbox_diag
+                        snap.ph_id, pose, traj_time, bbox_diag_px=bbox_diag
                     )
                     gt_motion_energy = me.mean_keypoint_velocity_px_s
-
-                posture_scores = ctx.det_posture_scores.get(matching_detection_id)
+                posture_scores = ctx.det_posture_scores.get(det_id)
                 if posture_scores is not None and self._posture_tracker is not None:
-                    gt_obj = next(
-                        (
-                            gt
-                            for gt in ctx.active_global_tracks
-                            if gt.global_track_id == decision.global_track_id
-                        ),
-                        None,
-                    )
-                    active_camera_ids = gt_obj.camera_ids if gt_obj else [ctx.frame.camera_id]
-                    prev_posture = self._posture_tracker.committed_posture(decision.global_track_id)
                     gt_posture = self._posture_tracker.update(
-                        global_track_id=decision.global_track_id,
-                        camera_id=ctx.frame.camera_id,
+                        global_track_id=snap.ph_id,
+                        camera_id=snap.camera_id,
                         scores=posture_scores,
-                        active_camera_ids=active_camera_ids,
+                        active_camera_ids=[snap.camera_id],
                         motion_energy=gt_motion_energy,
                     )
-                    if prev_posture is not None and prev_posture != gt_posture:
-                        logger.info(
-                            "Posture changed",
-                            global_track_id=decision.global_track_id,
-                            camera_id=ctx.frame.camera_id,
-                            previous=prev_posture,
-                            current=gt_posture,
-                        )
-                    ctx.det_posture[matching_detection_id] = gt_posture
-            elif matching_detection_id is not None:
-                gt_posture = ctx.det_posture.get(matching_detection_id, "unknown")
+                    ctx.det_posture[det_id] = gt_posture
 
-            gt_identity = ctx.committed_ids.get(decision.global_track_id)
+            decision = decision_by_ph.get(snap.ph_id)
+            identity_confidence = (
+                decision.posterior.top_identity()[1]
+                if decision is not None
+                else snap.identity_confidence
+            )
+
             await self._trajectory_writer.write(
-                identity_id=gt_identity,
-                global_track_id=decision.global_track_id,
-                room_name=room_name,
+                identity_id=snap.identity_id,
+                global_track_id=snap.ph_id,
+                room_name=snap.room_name,
                 floor_point=floor_point,
                 captured_at=traj_time,
-                identity_confidence=top_prob,
-                posture=gt_posture,
-                motion_energy=gt_motion_energy,
+                identity_confidence=identity_confidence,
+                posture="unknown",
+                motion_energy=None,
             )
 
-    def _find_pose_for_gt(
-        self, ctx: FrameContext, global_track_id: str
+    def _find_pose_for_ph(
+        self, ctx: FrameContext, ph_id: str
     ) -> tuple[PoseResult | None, str | None]:
-        for domain_det in ctx.domain_detections:
-            tid = (
-                self._tracklet_manager.get_tracklet_id_for_detection(domain_det.detection_id)  # type: ignore[attr-defined]
-                if self._tracklet_manager
-                else ""
-            )
-            if not tid:
-                continue
-            gt_for_det = next(
-                (gt.global_track_id for gt in ctx.active_global_tracks if tid in gt.tracklet_ids),
-                "",
-            )
-            if gt_for_det != global_track_id:
-                continue
-            pose = ctx.det_pose_result.get(domain_det.detection_id)
-            return pose, domain_det.detection_id
+        """WT3 transitional: match by global_track_id on detection.
+
+        Returns (None, None) until WT4 stamps det.global_track_id = ph_id.
+        """
+        for det in ctx.domain_detections:
+            if det.global_track_id == ph_id:
+                return ctx.det_pose_result.get(det.detection_id), det.detection_id
         return None, None

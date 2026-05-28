@@ -137,7 +137,7 @@ class WorldTrackingStage(FrameStage):
         ctx.committed_ids = {ph.ph_id: ph.current_identity_id for ph in result.updated_phs}
 
         # Store snapshots on the context for downstream stages.
-        ctx._world_snapshots = list(result.snapshots)
+        ctx.world_snapshots = list(result.snapshots)
 
         logger.debug(
             "world_tracking_frame",

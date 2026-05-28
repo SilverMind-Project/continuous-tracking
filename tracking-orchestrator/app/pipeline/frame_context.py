@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         IdentityRevision,
         PostureType,
         Tracklet,
+        WorldFrameSnapshot,
     )
     from ..inference.evidence import (
         AppearanceEvidence,
@@ -96,7 +97,9 @@ class FrameContext:
     det_posture: dict[str, PostureType] = field(default_factory=dict)
 
     # --- Stage: world_tracking (M1) ---
-    _world_snapshots: list[object] = field(default_factory=list)
+    # Producer: WorldTrackingStage. Consumers: TrajectoryStage, KeyframeStage,
+    # PublishStage (WT4), TrailsStage (WT4).
+    world_snapshots: list[WorldFrameSnapshot] = field(default_factory=list)
 
     # --- Stage: publish ---
     identities: dict[str, tuple[str, float]] = field(default_factory=dict)

@@ -1,8 +1,8 @@
 """Keyframe stage: samples keyframes and publishes to scene.samples.
 
-M3 fix: only include bbox annotations for tracklets that had a detection
-this frame. Stale tracklets (alive via grace window but no current detection)
-are excluded, preventing bboxes drawn against empty space.
+WT3: rewired to consume WorldFrameSnapshot instead of active_tracklets.
+Each open PH with a detection this frame is a candidate for periodic
+or identity-change-triggered keyframe sampling.
 """
 
 from __future__ import annotations
@@ -29,47 +29,38 @@ class KeyframeStage(FrameStage):
         self._min_det_conf = min_keyframe_detection_confidence
 
     async def run(self, ctx: FrameContext) -> None:
-        if not self._keyframe_sampler or not ctx.active_tracklets:
+        if not self._keyframe_sampler or not ctx.world_snapshots:
             return
 
-        # Build a lookup of tracklet_id → detection for current-frame detections.
-        det_by_tracklet: dict[str, object] = {}
-        for det in ctx.domain_detections:
-            if det.tracklet_id:
-                det_by_tracklet[det.tracklet_id] = det
-
+        revised_ph_ids = {rev.ph_id for rev in ctx.new_revisions}
         sample_time = ctx.event_time
-        revised_gt_ids = {rev.ph_id for rev in ctx.new_revisions}
-        for tracklet in ctx.active_tracklets:
-            detection = det_by_tracklet.get(tracklet.tracklet_id)
+
+        # Build detection-by-PH lookup.  Until WT4 stamps global_track_id
+        # on detections this dict will be empty and detection-specific
+        # metadata (bbox, confidence) is unavailable.
+        det_by_ph: dict[str, object] = {
+            d.global_track_id: d for d in ctx.domain_detections if d.global_track_id
+        }
+
+        for snap in ctx.world_snapshots:
+            if snap.camera_id != ctx.frame.camera_id:
+                continue
+            detection = det_by_ph.get(snap.ph_id)
             if detection is None:
-                # M3: Tracklet is alive via grace window but no detection this
-                # frame. Skip bbox annotation entirely — do not draw a stale
-                # box against the current image.
                 continue
 
-            # M3: gate on detection confidence.
             det_conf = float(getattr(detection, "confidence", 1.0))
             if det_conf < self._min_det_conf:
                 _metrics.metrics.keyframe_dropped_low_confidence_total.inc()
                 continue
 
-            gt_id = next(
-                (
-                    gt.global_track_id
-                    for gt in ctx.active_global_tracks
-                    if tracklet.tracklet_id in gt.tracklet_ids
-                ),
-                tracklet.tracklet_id,
-            )
-            identity_id = ctx.committed_ids.get(gt_id, "") or ""
+            identity_id = snap.identity_id or ""
             annotations: dict[str, object] = {
-                "tracklet_id": tracklet.tracklet_id,
-                "camera_id": tracklet.camera_id,
-                "identity_id": identity_id or "",
+                "ph_id": snap.ph_id,
+                "camera_id": snap.camera_id,
+                "identity_id": identity_id,
             }
 
-            # Use the detection bbox (current-frame), NOT tracklet.last_bbox.
             det_bbox = getattr(detection, "bbox", None)
             if det_bbox is not None:
                 annotations["bbox"] = {
@@ -88,11 +79,13 @@ class KeyframeStage(FrameStage):
                 bbox_data = None
 
             sampled: TaggedKeyframe | None
-            if gt_id in revised_gt_ids:
+            # WT3: pass ph_id as tracklet_id (Option C).  Rename to ph_id
+            # in a follow-up cleanup.
+            if snap.ph_id in revised_ph_ids:
                 sampled = await self._keyframe_sampler.trigger_sample(
-                    tracklet_id=tracklet.tracklet_id,
-                    global_track_id=gt_id,
-                    camera_id=tracklet.camera_id,
+                    tracklet_id=snap.ph_id,
+                    global_track_id=snap.ph_id,
+                    camera_id=snap.camera_id,
                     minio_key=ctx.frame.minio_key,
                     captured_at=sample_time,
                     annotations=annotations,
@@ -105,9 +98,9 @@ class KeyframeStage(FrameStage):
                 )
             else:
                 sampled = await self._keyframe_sampler.maybe_sample(
-                    tracklet_id=tracklet.tracklet_id,
-                    global_track_id=gt_id,
-                    camera_id=tracklet.camera_id,
+                    tracklet_id=snap.ph_id,
+                    global_track_id=snap.ph_id,
+                    camera_id=snap.camera_id,
                     minio_key=ctx.frame.minio_key,
                     captured_at=sample_time,
                     annotations=annotations,
