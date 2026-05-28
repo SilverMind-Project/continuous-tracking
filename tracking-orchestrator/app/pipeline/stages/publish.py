@@ -60,7 +60,7 @@ class PublishStage(FrameStage):
         for snap in ctx.world_snapshots:
             seen_ph_ids.add(snap.ph_id)
             id_snap: dict[str, object] = {
-                "global_track_id": snap.ph_id,
+                "ph_id": snap.ph_id,
                 "identity_id": snap.identity_id or "",
                 "top_probability": snap.identity_confidence,
                 "second_probability": 0.0,
@@ -81,7 +81,7 @@ class PublishStage(FrameStage):
                 top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
                 identity_snapshots.append(
                     {
-                        "global_track_id": ph_id,
+                        "ph_id": ph_id,
                         "identity_id": decision.identity_id or "",
                         "top_probability": top_prob,
                         "second_probability": top2_prob,

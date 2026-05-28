@@ -244,7 +244,7 @@ class RedisStreamsTransport:
             detections: per-person detections to embed in the proto.
             minio_key: MinIO key of the frame for downstream review.
             room_name: resolved room name for the camera.
-            identities: mapping ``global_track_id -> (identity_id, confidence)``
+            identities: mapping ``ph_id -> (identity_id, confidence)``
                 for detections that resolved to a committed identity. Each
                 entry becomes an ``IdentityRevision`` sub-message.
             frame_width: source frame pixel width.
@@ -383,7 +383,7 @@ def _build_tracking_event_pb(
     Optional enrichment kwargs:
         pose_results: detection_id → PoseResult (17 COCO keypoints).
         trail_by_tracklet: tracklet_id → list of (x, y) normalised foot-points.
-        evidence_by_gt: global_track_id → (top_prob, top2_prob, face_anchor_used).
+        evidence_by_gt: ph_id → (top_prob, top2_prob, face_anchor_used).
         det_posture: detection_id → posture string (standing|sitting|walking|lying|unknown).
         identity_snapshots: list of dicts with identity snapshot fields.
     """
@@ -441,12 +441,12 @@ def _build_tracking_event_pb(
             d.evidence.top2_prob = top2_prob
             d.evidence.face_anchor_used = face_anchor_used
 
-    # N0: per-detection identity revisions now use ph_id.
-    for global_track_id, (identity_id, confidence) in identities.items():
-        if not global_track_id or not identity_id:
+    # N0/R3: per-detection identity revisions use ph_id.
+    for ph_id, (identity_id, confidence) in identities.items():
+        if not ph_id or not identity_id:
             continue
         revision = event.identity_revisions.add(
-            ph_id=global_track_id,
+            ph_id=ph_id,
             map_identity_id=identity_id,
         )
         revision.candidates.add(identity_id=identity_id, probability=float(confidence))
@@ -455,7 +455,7 @@ def _build_tracking_event_pb(
     if identity_snapshots:
         for snap in identity_snapshots:
             s = event.identity_snapshots.add()
-            s.global_track_id = str(snap.get("global_track_id", ""))
+            s.global_track_id = str(snap.get("ph_id", ""))
             s.identity_id = str(snap.get("identity_id", "") or "")
             s.top_probability = float(snap.get("top_probability", 0.0) or 0.0)  # type: ignore[arg-type]
             s.second_probability = float(snap.get("second_probability", 0.0) or 0.0)  # type: ignore[arg-type]
