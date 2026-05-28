@@ -35,7 +35,11 @@ def client(repo: InMemoryPHRepository) -> TestClient:
     return TestClient(app)
 
 
-def _make_ph(ph_id: str, identity_id: str | None = None) -> PersonHypothesis:
+def _make_ph(
+    ph_id: str,
+    identity_id: str | None = None,
+    active_cameras: frozenset[str] | None = None,
+) -> PersonHypothesis:
     now = datetime.now(UTC)
     return PersonHypothesis(
         ph_id=ph_id,
@@ -47,7 +51,7 @@ def _make_ph(ph_id: str, identity_id: str | None = None) -> PersonHypothesis:
         observation_count=15,
         current_identity_id=identity_id,
         current_identity_committed_at=now if identity_id else None,
-        active_cameras=frozenset(["cam-1", "cam-2"]),
+        active_cameras=active_cameras or frozenset(["cam-1", "cam-2"]),
         last_floor_speed_m_s=0.5,
         last_posture="walking",
     )
@@ -178,8 +182,8 @@ class TestPHCorrect:
 class TestPHMerge:
     @pytest.mark.asyncio
     async def test_merge(self, client: TestClient, repo: InMemoryPHRepository) -> None:
-        await repo.save(_make_ph("ph-1"))
-        await repo.save(_make_ph("ph-2"))
+        await repo.save(_make_ph("ph-1", active_cameras=frozenset(["cam-1"])))
+        await repo.save(_make_ph("ph-2", active_cameras=frozenset(["cam-2"])))
         resp = client.post(
             "/ph/merge",
             json={

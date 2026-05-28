@@ -89,8 +89,13 @@ class TestPHMetrics:
     ) -> None:
         from app.observability.metrics import metrics
 
+        from dataclasses import replace
+
         await repo.save(_make_ph("ph-1"))
         await repo.save(_make_ph("ph-2"))
+        # WTR6: must use non-overlapping cameras for merge.
+        repo._phs["ph-1"] = replace(repo._phs["ph-1"], active_cameras=frozenset(["cam-1"]))
+        repo._phs["ph-2"] = replace(repo._phs["ph-2"], active_cameras=frozenset(["cam-2"]))
         before = _counter_value(metrics.cts_ph_merges_total, {"actor": "operator"})
         client.post(
             "/ph/merge",

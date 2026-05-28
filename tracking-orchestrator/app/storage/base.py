@@ -122,6 +122,7 @@ class PHRepositoryProtocol(Protocol):
         new_identity_id: str | None,
         reason: str,
         actor: str,
+        idempotency_key: str | None = None,
     ) -> IdentityRevision: ...
     async def merge(
         self,
@@ -130,6 +131,7 @@ class PHRepositoryProtocol(Protocol):
         target_ph_id: str,
         actor: str,
         reason: str,
+        idempotency_key: str | None = None,
     ) -> IdentityRevision: ...
     async def split(
         self,
@@ -138,6 +140,7 @@ class PHRepositoryProtocol(Protocol):
         at_observation_id: str,
         actor: str,
         reason: str,
+        idempotency_key: str | None = None,
     ) -> tuple[str, str]: ...
     async def batch_correct(
         self,
@@ -145,6 +148,7 @@ class PHRepositoryProtocol(Protocol):
         new_identity_ids: list[str | None],
         actor: str,
         reasons: list[str],
+        idempotency_key: str | None = None,
     ) -> list[IdentityRevision]: ...
     async def list_revisions(
         self,
@@ -178,6 +182,7 @@ class InMemoryPHRepository:
         self._observations: dict[str, list[WorldObservation]] = {}
         self._revisions: list[IdentityRevision] = []
         self._merges: dict[str, str] = {}
+        self._idempotency: dict[str, IdentityRevision] = {}
         self._lock = asyncio.Lock()
 
     # -- save / get / list_open / list_closed_since / update_identity --
@@ -370,11 +375,19 @@ class InMemoryPHRepository:
         new_identity_id: str | None,
         reason: str,
         actor: str,
+        idempotency_key: str | None = None,
     ) -> IdentityRevision:
+        if idempotency_key and idempotency_key in self._idempotency:
+            return self._idempotency[idempotency_key]
         async with self._lock:
             ph = self._phs.get(ph_id)
             if ph is None:
                 raise ValueError(f"PH not found: {ph_id}")
+            # WTR6: cannot correct a closed PH.
+            if ph.closed_at is not None:
+                raise ValueError(
+                    f"Cannot correct closed PH {ph_id} (closed at {ph.closed_at.isoformat()})"
+                )
             previous = ph.current_identity_id
             now = datetime.now(UTC)
             self._phs[ph_id] = PersonHypothesis(
@@ -407,6 +420,8 @@ class InMemoryPHRepository:
             evidence=None,
         )
         self._revisions.append(revision)
+        if idempotency_key:
+            self._idempotency[idempotency_key] = revision
         return revision
 
     async def merge(
@@ -416,12 +431,21 @@ class InMemoryPHRepository:
         target_ph_id: str,
         actor: str,
         reason: str,
+        idempotency_key: str | None = None,
     ) -> IdentityRevision:
+        if idempotency_key and idempotency_key in self._idempotency:
+            return self._idempotency[idempotency_key]
         async with self._lock:
             source = self._phs.get(source_ph_id)
             target = self._phs.get(target_ph_id)
             if source is None or target is None:
                 raise ValueError("Source or target PH not found")
+            # WTR6: cannot merge PHs with overlapping same-camera observations.
+            if source.active_cameras & target.active_cameras:
+                overlap_cams = source.active_cameras & target.active_cameras
+                raise ValueError(
+                    f"Cannot merge PHs with overlapping camera observations: {overlap_cams}"
+                )
             src_obs = self._observations.pop(source_ph_id, [])
             self._observations.setdefault(target_ph_id, []).extend(src_obs)
             now = datetime.now(UTC)
@@ -456,6 +480,8 @@ class InMemoryPHRepository:
             evidence=None,
         )
         self._revisions.append(revision)
+        if idempotency_key:
+            self._idempotency[idempotency_key] = revision
         return revision
 
     async def split(
@@ -465,6 +491,7 @@ class InMemoryPHRepository:
         at_observation_id: str,
         actor: str,
         reason: str,
+        idempotency_key: str | None = None,
     ) -> tuple[str, str]:
         async with self._lock:
             ph = self._phs.get(ph_id)
@@ -543,6 +570,7 @@ class InMemoryPHRepository:
         new_identity_ids: list[str | None],
         actor: str,
         reasons: list[str],
+        idempotency_key: str | None = None,
     ) -> list[IdentityRevision]:
         now = datetime.now(UTC)
         revisions: list[IdentityRevision] = []

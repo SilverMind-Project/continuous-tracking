@@ -48,7 +48,7 @@ from .routers.dashboard import router as dashboard_router
 from .routers.gallery import router as gallery_router
 from .routers.live import router as live_router
 from .routers.ph import router as ph_router
-from .routers.ph import set_ph_repository
+from .routers.ph import set_ph_repository, set_revision_publisher
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
 from .sampling.keyframe_sampler import SamplerConfig
@@ -523,6 +523,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _ph_repo_n1 = _InMemPH()
     set_ph_repository(_ph_repo_n1)
     deps_ph_repo = _ph_repo_n1
+
+    # WTR6: wire revision publisher for manual PH corrections.
+    if _pipeline._revision_publisher is not None:
+        set_revision_publisher(_pipeline._revision_publisher)
 
     # -- Wire everything and start --
     identity_rewriter = (

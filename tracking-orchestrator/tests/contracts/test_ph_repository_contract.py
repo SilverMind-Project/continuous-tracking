@@ -6,6 +6,7 @@ produce identical observable behaviour for the same sequence of operations.
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 
 import pytest
@@ -89,6 +90,8 @@ async def test_merge_closes_source():
     repo = InMemoryPHRepository()
     await repo.save(_make_ph("ph-1"))
     await repo.save(_make_ph("ph-2"))
+    # WTR6: must use non-overlapping cameras.
+    repo._phs["ph-2"] = dataclasses.replace(repo._phs["ph-2"], active_cameras=frozenset(["cam-2"]))
     await repo.merge(
         source_ph_id="ph-1",
         target_ph_id="ph-2",

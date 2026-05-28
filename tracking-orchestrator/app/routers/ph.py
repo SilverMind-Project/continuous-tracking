@@ -1,8 +1,11 @@
-"""Person Hypothesis HTTP API (N1).
+"""Person Hypothesis HTTP API (N1, updated WTR6).
 
 Provides read, correction, merge, split, and audit endpoints for
 Person Hypotheses.  Replaces the deleted ``/identity/global_tracks*``
 and ``/identity/decisions*`` surfaces.
+
+WTR6: Actor extracted from X-Actor-Subject header. Idempotency keys
+enforced for all mutation endpoints.
 """
 
 from __future__ import annotations
@@ -11,9 +14,10 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from structlog import get_logger
 
+from ..domain import IdentityRevision
 from ..observability.metrics import metrics
 from ..storage.base import PHRepositoryProtocol
 from .ph_schemas import (
@@ -50,11 +54,18 @@ router = APIRouter(tags=["ph"])
 
 
 _repo: PHRepositoryProtocol | None = None
+_revision_publisher: object | None = None  # RevisionPublisher
 
 
 def set_ph_repository(repo: PHRepositoryProtocol) -> None:
     global _repo
     _repo = repo
+
+
+def set_revision_publisher(publisher: object) -> None:
+    """WTR6: Inject RevisionPublisher for manual correction publishing."""
+    global _revision_publisher
+    _revision_publisher = publisher
 
 
 async def get_repo() -> PHRepositoryProtocol:
@@ -64,6 +75,16 @@ async def get_repo() -> PHRepositoryProtocol:
             detail={"code": "ph.repository.not_wired", "message": "PH repository not configured"},
         )
     return _repo
+
+
+async def _publish_manual_revision(revision: IdentityRevision, kind: str) -> None:
+    """Publish a manual correction revision through the same revision stream (WTR6)."""
+    if _revision_publisher is not None:
+        try:
+            await _revision_publisher.publish(revision)  # type: ignore[union-attr]
+            logger.info("manual_revision_published", kind=kind, revision_id=revision.revision_id)
+        except Exception:
+            logger.exception("manual_revision_publish_failed", revision_id=revision.revision_id)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +172,7 @@ async def list_revisions(
 @router.post("/ph/merge", response_model=MergeResponse)
 async def merge_phs(
     body: MergeRequest,
+    request: Request,
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> MergeResponse:
     if body.source_ph_id == body.target_ph_id:
@@ -158,13 +180,15 @@ async def merge_phs(
             status_code=422,
             detail={"code": "cts.ph.merge.same_ph", "message": "Source and target PH are the same"},
         )
-    actor = _actor_from_headers()
+    actor = _actor_from_request(request)
+    idem_key = _idempotency_key_from_request(request)
     try:
         revision = await repo.merge(
             source_ph_id=body.source_ph_id,
             target_ph_id=body.target_ph_id,
             actor=actor,
             reason=body.reason,
+            idempotency_key=idem_key,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -172,6 +196,7 @@ async def merge_phs(
             detail={"code": "ph.merge.invalid", "message": str(exc)},
         ) from exc
     metrics.cts_ph_merges_total.labels(actor="operator").inc()
+    await _publish_manual_revision(revision, "manual_merge")
     return MergeResponse(
         revision=RevisionResponse.from_domain(revision, kind="manual_merge"),
         source_ph_id=body.source_ph_id,
@@ -182,9 +207,11 @@ async def merge_phs(
 @router.post("/ph/batch_correct", response_model=BatchCorrectResponse)
 async def batch_correct(
     body: BatchCorrectRequest,
+    request: Request,
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> BatchCorrectResponse:
-    actor = _actor_from_headers()
+    actor = _actor_from_request(request)
+    idem_key = _idempotency_key_from_request(request)
     ph_ids = [item.ph_id for item in body.corrections]
     new_identity_ids = [item.new_identity_id for item in body.corrections]
     reasons = [item.reason for item in body.corrections]
@@ -194,6 +221,7 @@ async def batch_correct(
             new_identity_ids=new_identity_ids,
             actor=actor,
             reasons=reasons,
+            idempotency_key=idem_key,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -201,6 +229,8 @@ async def batch_correct(
             detail={"code": "ph.batch_correct.invalid", "message": str(exc)},
         ) from exc
     metrics.cts_ph_corrections_total.labels(actor="batch").inc(len(revs))
+    for rev in revs:
+        await _publish_manual_revision(rev, "manual_correct")
     return BatchCorrectResponse(
         revisions=[RevisionResponse.from_domain(r, kind="manual_correct") for r in revs],
         applied=len(revs),
@@ -315,23 +345,42 @@ async def get_co_present(
 # ---------------------------------------------------------------------------
 
 
-def _actor_from_headers() -> str:
+def _actor_from_request(request: Request) -> str:
+    """Extract actor identity from request headers (WTR6)."""
+    actor = request.headers.get("X-Actor-Subject", "").strip()
+    if actor:
+        return actor
+    # Fallback: check if there's an auth context
+    auth = getattr(request.state, "auth_context", None)
+    if auth:
+        sub = getattr(auth, "subject", None)
+        if sub:
+            return str(sub)
     return "system"
+
+
+def _idempotency_key_from_request(request: Request) -> str | None:
+    """Extract idempotency key from request headers."""
+    key = request.headers.get("X-Idempotency-Key", "").strip()
+    return key if key else None
 
 
 @router.post("/ph/{ph_id}/correct", response_model=CorrectIdentityResponse)
 async def correct_identity(
     ph_id: str,
     body: CorrectIdentityRequest,
+    request: Request,
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> CorrectIdentityResponse:
-    actor = _actor_from_headers()
+    actor = _actor_from_request(request)
+    idem_key = _idempotency_key_from_request(request)
     try:
         revision = await repo.correct_identity(
             ph_id=ph_id,
             new_identity_id=body.new_identity_id,
             reason=body.reason,
             actor=actor,
+            idempotency_key=idem_key,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -339,6 +388,7 @@ async def correct_identity(
             detail={"code": "ph.correct.invalid", "message": str(exc)},
         ) from exc
     metrics.cts_ph_corrections_total.labels(actor="operator").inc()
+    await _publish_manual_revision(revision, "manual_correct")
     return CorrectIdentityResponse(
         revision=RevisionResponse.from_domain(revision, kind="manual_correct"),
     )
@@ -348,15 +398,18 @@ async def correct_identity(
 async def split_ph(
     ph_id: str,
     body: SplitRequest,
+    request: Request,
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> SplitResponse:
-    actor = _actor_from_headers()
+    actor = _actor_from_request(request)
+    idem_key = _idempotency_key_from_request(request)
     try:
         original_id, new_id = await repo.split(
             ph_id=ph_id,
             at_observation_id=body.at_observation_id,
             actor=actor,
             reason=body.reason,
+            idempotency_key=idem_key,
         )
     except ValueError as exc:
         msg = str(exc)
@@ -370,6 +423,19 @@ async def split_ph(
             detail={"code": "ph.split.invalid", "message": msg},
         ) from exc
     metrics.cts_ph_splits_total.labels(actor="operator").inc()
+    # WTR6: publish a split revision (same stream as automatic corrections).
+    split_revision = IdentityRevision(
+        revision_id=f"manual-split-{original_id}-{new_id}",
+        ph_id=original_id,
+        previous_identity_id=None,
+        new_identity_id=None,
+        actor=actor,
+        reason=body.reason,
+        applied_at=datetime.now(UTC),
+        rewritten_rows=1,
+        evidence=None,
+    )
+    await _publish_manual_revision(split_revision, "manual_split")
     return SplitResponse(original_ph_id=original_id, new_ph_id=new_id)
 
 
