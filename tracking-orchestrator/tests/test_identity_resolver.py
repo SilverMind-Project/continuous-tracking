@@ -488,7 +488,7 @@ class TestIdentityResolver:
             identities=identities,
             config=ResolverConfig(
                 commit_prob=0.5,
-                max_revisions_per_gt_per_minute=1,
+                max_revisions_per_ph_per_minute=1,
             ),
         )
 

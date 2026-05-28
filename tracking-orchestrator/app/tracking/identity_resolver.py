@@ -90,8 +90,8 @@ class ResolverConfig:
     # this window from the revision time.
     revision_horizon_s: float = 600.0
 
-    # Maximum revisions per GlobalTrack per minute (rate limiting).
-    max_revisions_per_gt_per_minute: int = 3
+    # Maximum revisions per PH per minute (rate limiting).
+    max_revisions_per_ph_per_minute: int = 3
 
     # Unknown mass: minimum probability for the UNKNOWN state.
     # Prevents weak-but-best matches from crowding out "we do not know".
@@ -930,7 +930,7 @@ class IdentityResolver:
         The revision covers all observations in the entity that were
         active within the revision horizon.
 
-        Rate-limited: max_revisions_per_gt_per_minute.
+        Rate-limited: max_revisions_per_ph_per_minute.
         """
         # Rate limiting.
         now = captured_at
@@ -939,7 +939,7 @@ class IdentityResolver:
         recent = [
             ts for ts in self._revision_log.get(log_key, []) if ts.timestamp() >= window_start
         ]
-        if len(recent) >= self._config.max_revisions_per_gt_per_minute:
+        if len(recent) >= self._config.max_revisions_per_ph_per_minute:
             logger.warning(
                 "Revision rate limit exceeded",
                 entity_id=log_key,

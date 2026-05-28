@@ -190,7 +190,7 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         commit_margin=r.as_float("commit_margin"),
         reid_decision_sim=r.as_float("reid_decision_sim"),
         revision_horizon_s=r.as_float("revision_horizon_s"),
-        max_revisions_per_gt_per_minute=r.as_int("max_revisions_per_gt_per_minute"),
+        max_revisions_per_ph_per_minute=r.as_int("max_revisions_per_ph_per_minute"),
         unknown_mass=r.as_float("unknown_mass"),
         prior_weight=r.as_float("prior_weight"),
         face_weight_multiplier=r.as_float("face_weight_multiplier"),
@@ -324,8 +324,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         allow_skeleton=settings.as_bool("pipeline.allow_skeleton"),
         # Phase 1: noise reduction
         detection_iou_dedup_threshold=settings.as_float("pipeline.detection.iou_dedup_threshold"),
-        tracker_dedup_iou_threshold=settings.as_float("pipeline.tracker.dedup_iou_threshold"),
-        tracker_min_frames_to_publish=settings.as_int("pipeline.tracker.min_frames_to_publish"),
         identity_commit_window_s=settings.as_float("pipeline.identity.commit_window_s"),
         identity_high_confidence_face_threshold=settings.as_float(
             "pipeline.identity.high_confidence_face_threshold"

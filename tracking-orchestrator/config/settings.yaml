@@ -135,21 +135,9 @@ pipeline:
     # Drops near-duplicate YOLO boxes that survived the model's baked NMS.
     iou_dedup_threshold: "${PIPELINE_DETECTION_IOU_DEDUP:-0.50}"
 
-  tracker:
-    # Read by: main.py → PipelineConfig(tracker_dedup_iou_threshold=)
-    # Newly-spawned tracklets overlapping an established track (age ≥5 frames)
-    # by more than this IoU are immediately dropped.
-    dedup_iou_threshold: "${PIPELINE_TRACKER_DEDUP_IOU:-0.7}"
-
-    # Read by: main.py → PipelineConfig(tracker_min_frames_to_publish=)
-    # Tracklets must survive this many detection frames before being exposed
-    # to cross-camera association, identity resolution, and publication.
-    # Higher values reduce ghost tracks; lower values reduce detection lag.
-    min_frames_to_publish: "${PIPELINE_TRACKER_MIN_FRAMES:-5}"
-
   identity:
     # Read by: main.py → PipelineConfig(identity_commit_window_s=)
-    # At most one identity commit per global track per N seconds.
+    # At most one identity commit per PH per N seconds.
     commit_window_s: "${PIPELINE_IDENTITY_COMMIT_WINDOW_S:-3.0}"
 
     # Read by: main.py → PipelineConfig(identity_high_confidence_face_threshold=)
@@ -178,7 +166,7 @@ resolver:
   commit_margin: "${RESOLVER_COMMIT_MARGIN:-0.15}"
   reid_decision_sim: "${RESOLVER_REID_DECISION_SIM:-0.70}"
   revision_horizon_s: "${RESOLVER_REVISION_HORIZON_S:-600.0}"
-  max_revisions_per_gt_per_minute: "${RESOLVER_MAX_REVISIONS_PER_GT_PER_MINUTE:-3}"
+  max_revisions_per_ph_per_minute: "${RESOLVER_MAX_REVISIONS_PER_PH_PER_MINUTE:-3}"
   unknown_mass: "${RESOLVER_UNKNOWN_MASS:-0.05}"
   prior_weight: "${RESOLVER_PRIOR_WEIGHT:-0.6}"
   face_weight_multiplier: "${RESOLVER_FACE_WEIGHT_MULTIPLIER:-3.0}"
