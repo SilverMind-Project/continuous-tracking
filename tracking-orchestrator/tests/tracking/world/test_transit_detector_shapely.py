@@ -1,4 +1,5 @@
 """WTR5: TransitDetector tests with shapely-backed polygons."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

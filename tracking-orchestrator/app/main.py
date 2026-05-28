@@ -519,7 +519,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _ph_repo_n1: _InMemPH | PostgresPHRepository = PostgresPHRepository(_pool)
     else:
         _ph_repo_n1 = _InMemPH()
-    set_ph_repository(_ph_repo_n1)
+    set_ph_repository(_ph_repo_n1)  # type: ignore[arg-type]
     deps_ph_repo = _ph_repo_n1
 
     # WTR6: wire revision publisher for manual PH corrections.
@@ -533,7 +533,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     deps = PipelineDependencies(
         detector=detector,
         gallery_repo=gallery_repo,
-        ph_repo=deps_ph_repo,  # N1: Postgres-backed PH repository
+        ph_repo=deps_ph_repo,  # type: ignore[arg-type] # N1: Postgres-backed PH repository
         trajectory_repo=trajectory_repo,
         keyframe_repo=keyframe_repo,
         signal_repo=signal_repo,
@@ -617,7 +617,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     continue
                 _poly_raw = tz.get("polygon", [])
                 _polygon: list[tuple[float, float]] = [
-                    (float(p[0]), float(p[1])) for p in _poly_raw if isinstance(p, list) and len(p) >= 2
+                    (float(p[0]), float(p[1]))
+                    for p in _poly_raw
+                    if isinstance(p, list) and len(p) >= 2
                 ]
                 if len(_polygon) < 3:
                     continue
@@ -642,12 +644,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     _transit_detector = _TransitDetector()
     _room_transition_pub = _RoomTransitionPublisher(
-        redis_url=settings.as_str("redis.url", allow_empty=False),
+        redis_url=settings.as_str("redis.url"),
     )
     await _room_transition_pub.connect()
     _pipeline.set_transit_config(
         transit_detector=_transit_detector,
-        transit_zones=_transit_zones,
+        transit_zones=_transit_zones,  # type: ignore[arg-type]
         room_transition_publisher=_room_transition_pub,
     )
 
@@ -665,12 +667,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             cc_assertion_cache = IdentityAssertionCache()
             # Use a dedicated Redis client for the subscriber so it does not
             # share the pipeline's pub/sub connection.
-            import redis.asyncio as aioredis  # type: ignore[import-untyped]
+            import redis.asyncio as aioredis
 
             _cc_redis = aioredis.from_url(redis_url, decode_responses=False)
             cc_assertion_subscriber = CCIdentityAssertionSubscriber(
                 redis_client=_cc_redis,
-                cache=cc_assertion_cache,  # type: ignore[arg-type]
+                cache=cc_assertion_cache,
             )
             await cc_assertion_subscriber.start()
             logger.info("cc_assertion_subscriber_started", stream="cc.identity_assertions")
@@ -683,7 +685,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if cc_assertion_cache is not None and _pipeline._stage_runner is not None:
         for stage in _pipeline._stage_runner._stages:
             if stage.name == "world_tracking":
-                stage._assertion_cache = cc_assertion_cache
+                stage._assertion_cache = cc_assertion_cache  # type: ignore[attr-defined]
                 break
 
     # M3: keyframe revalidator background task.
@@ -729,11 +731,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # WTR2: stop CC assertion subscriber.
     if cc_assertion_subscriber is not None:
-        await cc_assertion_subscriber.stop()  # type: ignore[union-attr]
+        await cc_assertion_subscriber.stop()  # type: ignore[attr-defined]
 
     # WTR5: disconnect room transition publisher.
     if "_room_transition_pub" in dir():
-        await _room_transition_pub.disconnect()  # type: ignore[union-attr]
+        await _room_transition_pub.disconnect()
 
     # M2: stop CC config sync before pipeline.
     _cc_sync = getattr(app.state, "cc_sync_service", None)
@@ -795,7 +797,8 @@ def create_app() -> FastAPI:
             overall = "degraded"
 
         # PH repository
-        ph_repo_ok = _repo is not None
+        _ph_repo_ref = _pipeline._ph_repo if _pipeline else None
+        ph_repo_ok = _ph_repo_ref is not None
         checks["ph_repository"] = {
             "status": "ok" if ph_repo_ok else "degraded",
             "message": "wired" if ph_repo_ok else "not configured",

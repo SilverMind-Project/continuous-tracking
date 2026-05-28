@@ -3,11 +3,11 @@
 Tests that _resolve_identities() receives real observation IDs from the
 repository, not synthetic camera/frame/time strings.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import numpy as np
 import pytest
 
 from app.domain import (

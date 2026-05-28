@@ -5,18 +5,17 @@ In PH mode (tracklet_manager=None), the stage must:
 - Respect cooldown per detection_id.
 - Drop low-confidence face results.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
 
 from app.domain import BoundingBox, Detection, FloorPoint
-from app.inference.evidence import FaceEvidence
 from app.inference.face_id_client import FaceIdentificationClient
-from app.observability import metrics as _metrics
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.face_identity import FaceIdentityStage
 from app.pipeline.types import FaceIdCameraConfig

@@ -87,9 +87,9 @@ class TestPHMetrics:
     async def test_merge_increments_merges_counter(
         self, client: TestClient, repo: InMemoryPHRepository
     ) -> None:
-        from app.observability.metrics import metrics
-
         from dataclasses import replace
+
+        from app.observability.metrics import metrics
 
         await repo.save(_make_ph("ph-1"))
         await repo.save(_make_ph("ph-2"))

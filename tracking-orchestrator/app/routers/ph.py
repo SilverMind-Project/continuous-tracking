@@ -81,7 +81,7 @@ async def _publish_manual_revision(revision: IdentityRevision, kind: str) -> Non
     """Publish a manual correction revision through the same revision stream (WTR6)."""
     if _revision_publisher is not None:
         try:
-            await _revision_publisher.publish(revision)  # type: ignore[union-attr]
+            await _revision_publisher.publish(revision)  # type: ignore[attr-defined]
             logger.info("manual_revision_published", kind=kind, revision_id=revision.revision_id)
         except Exception:
             logger.exception("manual_revision_publish_failed", revision_id=revision.revision_id)

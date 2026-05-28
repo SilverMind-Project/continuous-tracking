@@ -8,8 +8,7 @@ from __future__ import annotations
 
 from structlog import get_logger
 
-from ...domain import GlobalTrack, PersonHypothesis
-from ...domain import TransitZone
+from ...domain import GlobalTrack, PersonHypothesis, TransitZone
 from ...tracking.world.config import WorldTrackerConfig
 from ...tracking.world.tracker import WorldTracker
 from ...tracking.world.transit_detector import TransitDetector
@@ -90,7 +89,7 @@ class WorldTrackingStage(FrameStage):
         cc_face_anchors: list[FaceAnchor] = []
         if self._assertion_cache is not None:
             try:
-                recent_assertions = await self._assertion_cache.get_recent()
+                recent_assertions = await self._assertion_cache.get_recent()  # type: ignore[attr-defined]
                 cc_face_anchors = match_assertions_to_face_anchors(
                     assertions=recent_assertions,
                     observations=observations,

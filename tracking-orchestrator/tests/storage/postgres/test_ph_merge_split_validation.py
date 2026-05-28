@@ -1,11 +1,12 @@
 """WTR6: Merge/split validation tests for InMemoryPHRepository."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
 import pytest
 
-from app.domain import PersonHypothesis, WorldObservation, BoundingBox, FloorPoint
+from app.domain import BoundingBox, FloorPoint, PersonHypothesis, WorldObservation
 from app.storage.base import InMemoryPHRepository, InMemoryWorldObservationRepository
 
 
@@ -42,7 +43,6 @@ def _make_obs(camera_id: str = "cam-1", frame_index: int = 1) -> WorldObservatio
 async def test_overlap_validation_blocks_unsafe_merge():
     """Cannot merge PHs with overlapping same-camera observations."""
     repo = InMemoryPHRepository()
-    obs_repo = InMemoryWorldObservationRepository()
 
     ph1 = _make_ph("ph-1", cameras=frozenset(["cam-1", "cam-2"]))
     ph2 = _make_ph("ph-2", cameras=frozenset(["cam-1"]))  # overlap on cam-1

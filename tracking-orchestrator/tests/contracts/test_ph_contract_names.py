@@ -95,8 +95,7 @@ def test_ph_api_schemas_use_ph_id_not_global_track_id(file_path: Path):
 
     assert not violations, (
         f"{file_path.name}: Pydantic models must not expose legacy field names "
-        f"outside approved boundary files. Violations:\n"
-        + "\n".join(violations)
+        f"outside approved boundary files. Violations:\n" + "\n".join(violations)
     )
 
 

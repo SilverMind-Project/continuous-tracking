@@ -3,12 +3,14 @@
 Tests that ClosePHStage closes trajectory, motion energy, and posture state
 by PH id when a previously-active PH disappears from ctx.active_ph_ids.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.trajectory import ClosePHStage
 from app.trajectory.motion_energy import MotionEnergyTracker

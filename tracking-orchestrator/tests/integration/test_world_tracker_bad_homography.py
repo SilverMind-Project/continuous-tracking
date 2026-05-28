@@ -2,6 +2,7 @@
 
 Uncalibrated detections must be counted as diagnostics, not placed on the floor plan.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -14,7 +15,10 @@ from app.tracking.world.tracker import WorldTracker
 
 
 def _make_calibrated_obs(
-    camera_id: str, frame_index: int, fx: float, fy: float,
+    camera_id: str,
+    frame_index: int,
+    fx: float,
+    fy: float,
 ) -> WorldObservation:
     return WorldObservation(
         camera_id=camera_id,
@@ -28,7 +32,8 @@ def _make_calibrated_obs(
 
 
 def _make_uncalibrated_obs(
-    camera_id: str, frame_index: int,
+    camera_id: str,
+    frame_index: int,
 ) -> WorldObservation:
     return WorldObservation(
         camera_id=camera_id,
@@ -61,13 +66,8 @@ async def test_uncalibrated_detections_not_tracked():
     # Uncalibrated observations should be filtered out before association.
     # No PHs should be spawned.
     new_phs = [ph for ph in result.updated_phs if ph.observation_count == 1]
-    uncalibrated_phs = [
-        ph for ph in new_phs
-        if "cam-3" in ph.active_cameras
-    ]
-    assert len(uncalibrated_phs) == 0, (
-        "Uncalibrated detections must not spawn PHs"
-    )
+    uncalibrated_phs = [ph for ph in new_phs if "cam-3" in ph.active_cameras]
+    assert len(uncalibrated_phs) == 0, "Uncalibrated detections must not spawn PHs"
 
 
 @pytest.mark.asyncio
@@ -84,13 +84,9 @@ async def test_calibrated_detections_are_tracked():
         observations=[
             _make_calibrated_obs("cam-1", 1, 1.0, 2.0),
         ],
-        now=now, room_polygons=room_polygons,
+        now=now,
+        room_polygons=room_polygons,
     )
 
-    calibrated_phs = [
-        ph for ph in result.updated_phs
-        if ph.observation_count >= 1
-    ]
-    assert len(calibrated_phs) >= 1, (
-        "Calibrated detections must produce PHs"
-    )
+    calibrated_phs = [ph for ph in result.updated_phs if ph.observation_count >= 1]
+    assert len(calibrated_phs) >= 1, "Calibrated detections must produce PHs"

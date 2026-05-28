@@ -91,7 +91,9 @@ class PublishStage(FrameStage):
                             if decision.evidence
                             else False
                         ),
-                        "evidence_json": json.dumps(decision.evidence) if decision.evidence else "{}",
+                        "evidence_json": (
+                            json.dumps(decision.evidence) if decision.evidence else "{}"
+                        ),
                     }
                 )
 

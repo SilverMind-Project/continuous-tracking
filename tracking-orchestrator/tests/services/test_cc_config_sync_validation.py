@@ -1,7 +1,8 @@
 """WTR5: CC config sync validation tests."""
+
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -60,7 +61,6 @@ def test_ok_homography_passes():
 async def test_rejected_homography_does_not_reach_calibration_state():
     """Error-severity homography must not call set_homography."""
     from app.calibration.state import CalibrationState
-    from app.observability import metrics as _m
     from app.services.cc_config_sync import CCConfigSyncService
 
     cal_state = CalibrationState()
@@ -69,16 +69,18 @@ async def test_rejected_homography_does_not_reach_calibration_state():
     camera_room_map.set_all = AsyncMock()
 
     client = MagicMock()
-    client.get = AsyncMock(return_value=[
-        {
-            "id": "cam-1",
-            "enabled": True,
-            "room_id": 1,
-            "room_name": "living_room",
-            "homography_matrix": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1e-7]],
-            "homography_residual_m": 0.6,
-        },
-    ])
+    client.get = AsyncMock(
+        return_value=[
+            {
+                "id": "cam-1",
+                "enabled": True,
+                "room_id": 1,
+                "room_name": "living_room",
+                "homography_matrix": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1e-7]],
+                "homography_residual_m": 0.6,
+            },
+        ]
+    )
 
     svc = CCConfigSyncService(
         client=client,

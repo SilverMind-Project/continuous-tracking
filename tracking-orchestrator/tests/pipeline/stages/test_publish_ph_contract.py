@@ -1,4 +1,5 @@
 """WTR3: PublishStage PH contract tests."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -39,7 +40,10 @@ def _make_ctx(snapshots: list[WorldFrameSnapshot]) -> FrameContext:
     from app.transport.redis_streams import FrameReady
 
     frame = FrameReady(
-        camera_id="cam-1", minio_key="k", width=640, height=480,
+        camera_id="cam-1",
+        minio_key="k",
+        width=640,
+        height=480,
         frame_index=1,
         capture_time_unix_ns=int(datetime.now(UTC).timestamp() * 1e9),
     )
@@ -55,10 +59,12 @@ async def test_publishes_identity_snapshots_for_known_and_unknown_phs():
     transport.publish_event = AsyncMock()
 
     stage = PublishStage(transport=transport)
-    ctx = _make_ctx([
-        _make_snap("ph-1", "alice"),
-        _make_snap("ph-2", None),
-    ])
+    ctx = _make_ctx(
+        [
+            _make_snap("ph-1", "alice"),
+            _make_snap("ph-2", None),
+        ]
+    )
     await stage.run(ctx)
 
     transport.publish_event.assert_called_once()

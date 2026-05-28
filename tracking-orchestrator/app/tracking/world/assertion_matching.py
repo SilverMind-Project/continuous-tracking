@@ -12,12 +12,13 @@ contaminating the identity posterior.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from ...domain import FaceAnchor, WorldObservation
 
 
 def match_assertions_to_face_anchors(
-    assertions: list[dict],
+    assertions: list[dict[str, Any]],
     observations: list[WorldObservation],
     now: datetime,
     anchor_match_window_s: float = 30.0,

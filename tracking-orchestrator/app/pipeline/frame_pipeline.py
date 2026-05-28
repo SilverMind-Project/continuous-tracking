@@ -802,9 +802,9 @@ class FrameProcessingPipeline:
         if self._stage_runner is not None:
             for stage in self._stage_runner._stages:
                 if stage.name == "world_tracking":
-                    stage._transit_detector = transit_detector
-                    stage._transit_zones = transit_zones
-                    stage._room_transition_publisher = room_transition_publisher
+                    stage._transit_detector = transit_detector  # type: ignore[attr-defined]
+                    stage._transit_zones = transit_zones  # type: ignore[attr-defined]
+                    stage._room_transition_publisher = room_transition_publisher  # type: ignore[attr-defined]
                     break
 
     def set_overlap_groups(self, groups: list[OverlapGroup]) -> None:

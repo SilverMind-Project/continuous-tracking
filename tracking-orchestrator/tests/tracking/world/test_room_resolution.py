@@ -1,4 +1,5 @@
 """WTR5: Room resolution from floor point and polygons."""
+
 from __future__ import annotations
 
 from app.tracking.world.helpers import is_in_any_room_polygon, resolve_room

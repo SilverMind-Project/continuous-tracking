@@ -41,7 +41,10 @@ def _find_product_files() -> list[Path]:
         if "__pycache__" in str(f):
             continue
         rel = str(f.relative_to(root))
-        if any(rel.startswith(g.replace("tests/", "")) for g in _GRANDFATHERED if g.startswith("tests")):
+        is_test_skip = any(
+            rel.startswith(g.replace("tests/", "")) for g in _GRANDFATHERED if g.startswith("tests")
+        )
+        if is_test_skip:
             continue
         if rel in _GRANDFATHERED:
             continue
@@ -61,11 +64,10 @@ def _has_forbidden_import(file_path: Path) -> list[str]:
                 for forbidden in _FORBIDDEN_MODULES:
                     if alias.name == forbidden or alias.name.startswith(forbidden + "."):
                         violations.append(f"  {alias.name}")
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                for forbidden in _FORBIDDEN_MODULES:
-                    if node.module == forbidden or node.module.startswith(forbidden + "."):
-                        violations.append(f"  from {node.module}")
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for forbidden in _FORBIDDEN_MODULES:
+                if node.module == forbidden or node.module.startswith(forbidden + "."):
+                    violations.append(f"  from {node.module}")
     return violations
 
 

@@ -3,6 +3,7 @@
 Tests the assertion cache, field decoding, expiry, and malformed message
 handling without requiring Redis testcontainers.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -14,7 +15,6 @@ from app.services.cc_identity_assertion_subscriber import (
     CCIdentityAssertionSubscriber,
     IdentityAssertionCache,
 )
-
 
 # ---------------------------------------------------------------------------
 # IdentityAssertionCache tests

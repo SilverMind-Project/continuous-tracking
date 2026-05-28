@@ -1,13 +1,13 @@
 """WTR6: Actor extraction and idempotency tests for PH API."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.domain import IdentityRevision, PersonHypothesis
+from app.domain import PersonHypothesis
 from app.main import create_app
 from app.routers.ph import set_ph_repository, set_revision_publisher
 from app.storage.base import InMemoryPHRepository

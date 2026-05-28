@@ -3,6 +3,7 @@
 Tests the spatial/temporal matching of CC identity assertions to
 WorldObservations, producing FaceAnchors for the identity resolver.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
