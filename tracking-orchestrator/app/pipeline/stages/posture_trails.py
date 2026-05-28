@@ -17,7 +17,7 @@ from .base import FrameStage
 
 
 class TrailsStage(FrameStage):
-    """Maintains per-tracklet foot-position trails and snapshots them into ctx."""
+    """Maintains per-PH foot-position trails and snapshots them into ctx."""
 
     name = "trails"
 
@@ -26,7 +26,9 @@ class TrailsStage(FrameStage):
         trail_by_tracklet: dict[str, deque[tuple[float, float]]] | None = None,
         trail_maxlen: int = 12,
     ) -> None:
-        self._trail_by_tracklet: dict[str, deque[tuple[float, float]]] = (
+        # Parameter name kept for backward compat with frame_pipeline.py
+        # construction; attribute renamed to _trail_by_ph (WT4).
+        self._trail_by_ph: dict[str, deque[tuple[float, float]]] = (
             trail_by_tracklet if trail_by_tracklet is not None else {}
         )
         self._TRAIL_MAXLEN = trail_maxlen
@@ -35,24 +37,22 @@ class TrailsStage(FrameStage):
         frame_w = float(ctx.effective_width) if ctx.effective_width else 1.0
         frame_h = float(ctx.effective_height) if ctx.effective_height else 1.0
         for domain_det in ctx.domain_detections:
-            if not domain_det.tracklet_id:
+            if not domain_det.global_track_id:
                 continue
             foot_x = (domain_det.bbox.x_min + domain_det.bbox.x_max) / 2.0 / frame_w
             foot_y = domain_det.bbox.y_max / frame_h
-            trail_dq = self._trail_by_tracklet.get(domain_det.tracklet_id)
+            trail_dq = self._trail_by_ph.get(domain_det.global_track_id)
             if trail_dq is None:
                 trail_dq = deque(maxlen=self._TRAIL_MAXLEN)
-                self._trail_by_tracklet[domain_det.tracklet_id] = trail_dq
+                self._trail_by_ph[domain_det.global_track_id] = trail_dq
             trail_dq.append((float(foot_x), float(foot_y)))
 
-        active_tids = {d.tracklet_id for d in ctx.domain_detections if d.tracklet_id}
-        stale_tids = set(self._trail_by_tracklet) - active_tids
-        for tid in stale_tids:
-            del self._trail_by_tracklet[tid]
+        active_phs = {d.global_track_id for d in ctx.domain_detections if d.global_track_id}
+        stale_phs = set(self._trail_by_ph) - active_phs
+        for pid in stale_phs:
+            del self._trail_by_ph[pid]
 
-        ctx.trail_by_tracklet_snapshot = {
-            tid: list(dq) for tid, dq in self._trail_by_tracklet.items()
-        }
+        ctx.trail_by_tracklet_snapshot = {pid: list(dq) for pid, dq in self._trail_by_ph.items()}
 
 
 class PostureAndTrailsStage(FrameStage):

@@ -79,6 +79,7 @@ class WorldTrackingStage(FrameStage):
                     detection_confidence=det.confidence,
                     height_estimate_m=None,
                     face_anchor=face_anchor,
+                    detection_id=det.detection_id,
                 )
             )
 
@@ -138,6 +139,7 @@ class WorldTrackingStage(FrameStage):
 
         # Store snapshots on the context for downstream stages.
         ctx.world_snapshots = list(result.snapshots)
+        ctx.det_to_ph = dict(result.det_to_ph)
 
         logger.debug(
             "world_tracking_frame",

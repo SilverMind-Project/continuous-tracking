@@ -307,9 +307,9 @@ class FrameProcessingPipeline:
         self._identity_rewriter: IdentityRewriter | None = None
         # M3: Bbox annotation repository for per-keyframe bbox persistence.
         self._bbox_repo: BboxAnnotationRepository | None = None
-        # Phase 7: per-tracklet trail deque (last 12 normalised foot-points).
+        # Phase 7: per-PH trail deque (last 12 normalised foot-points).
         _trail_maxlen = 12
-        self._trail_by_tracklet: dict[str, deque[tuple[float, float]]] = {}
+        self._trail_by_ph: dict[str, deque[tuple[float, float]]] = {}
         self._TRAIL_MAXLEN = _trail_maxlen
         # Frame batcher (optional; None when batch_window_s=0).
         self._batcher: FrameBatcher | None = None
@@ -506,6 +506,7 @@ class FrameProcessingPipeline:
                     config=self._config.world_tracker,
                     camera_room_map=self._config.camera_room_map,
                 ),
+                DetectionBackfillStage(),
                 CloseTerminatedStage(
                     global_track_repo=self._global_track_repo,
                     trajectory_writer=self._trajectory_writer,
@@ -537,9 +538,8 @@ class FrameProcessingPipeline:
                     bbox_repo=self._bbox_repo,
                     identity_rewrite_on_face_commit=self._config.identity_rewrite_on_face_commit,
                 ),
-                DetectionBackfillStage(tracklet_manager=None),  # tracklets removed in M1
                 TrailsStage(
-                    trail_by_tracklet=self._trail_by_tracklet,
+                    trail_by_tracklet=self._trail_by_ph,
                     trail_maxlen=self._TRAIL_MAXLEN,
                 ),
                 PublishStage(

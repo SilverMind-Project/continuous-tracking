@@ -116,6 +116,7 @@ class WorldObservation:
     detection_confidence: float
     height_estimate_m: float | None = None
     face_anchor: FaceAnchor | None = None
+    detection_id: str = ""
 
 
 @dataclass(frozen=True)

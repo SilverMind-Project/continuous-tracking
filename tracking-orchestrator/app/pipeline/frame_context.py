@@ -100,6 +100,8 @@ class FrameContext:
     # Producer: WorldTrackingStage. Consumers: TrajectoryStage, KeyframeStage,
     # PublishStage (WT4), TrailsStage (WT4).
     world_snapshots: list[WorldFrameSnapshot] = field(default_factory=list)
+    # Producer: WorldTrackingStage. Consumer: DetectionBackfillStage (WT4).
+    det_to_ph: dict[str, str] = field(default_factory=dict)
 
     # --- Stage: publish ---
     identities: dict[str, tuple[str, float]] = field(default_factory=dict)

@@ -106,6 +106,7 @@ class WorldTrackerResult:
     continuations: list[PHContinuationCandidate]
     identity_decisions: list[IdentityDecision] = field(default_factory=list)
     revisions: list[IdentityRevision] = field(default_factory=list)
+    det_to_ph: dict[str, str] = field(default_factory=dict)
 
 
 class WorldTracker:
@@ -159,6 +160,7 @@ class WorldTracker:
         camera_room_map = camera_room_map or {}
         continuations: list[PHContinuationCandidate] = []
         identity_decisions: list[IdentityDecision] = []
+        det_to_ph: dict[str, str] = {}
 
         # 1. Load active PHs and predict forward.
         active_phs = await self._ph_repo.list_open()
@@ -262,6 +264,8 @@ class WorldTracker:
                 obs.bbox,
                 obs.detection_confidence,
             )
+            if obs.detection_id:
+                det_to_ph[obs.detection_id] = ph.ph_id
 
             # Persist the observation.
             await self._obs_repo.save(obs, ph_id=ph.ph_id)
@@ -308,6 +312,8 @@ class WorldTracker:
                 obs.detection_confidence,
             )
             await self._obs_repo.save(obs, ph_id=new_ph.ph_id)
+            if obs.detection_id:
+                det_to_ph[obs.detection_id] = new_ph.ph_id
 
             # 6. Check for PH continuations from recently closed PHs.
             if self._continuation_publisher is not None:
@@ -458,6 +464,7 @@ class WorldTracker:
             continuations=continuations,
             identity_decisions=identity_decisions,
             revisions=revisions,
+            det_to_ph=det_to_ph,
         )
 
 
