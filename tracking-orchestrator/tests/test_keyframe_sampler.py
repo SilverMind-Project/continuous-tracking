@@ -45,7 +45,11 @@ async def test_first_sample_always_taken(
     sampler: KeyframeSampler,
     repo: InMemoryKeyframeRepository,
 ) -> None:
-    kf = await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "frame.jpg", _T0, _ANNS)
+    kf = await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="frame.jpg",
+        captured_at=_T0, annotations=_ANNS,
+    )
     assert kf is not None
     assert kf.tracklet_id == "tl-001"
     assert kf.tag_reason == "periodic"
@@ -55,10 +59,16 @@ async def test_first_sample_always_taken(
 
 
 async def test_within_interval_returns_none(sampler: KeyframeSampler) -> None:
-    await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f1.jpg", _T0, _ANNS)
+    await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f1.jpg",
+        captured_at=_T0, annotations=_ANNS,
+    )
     # 15 seconds later — within the 30s interval.
     kf = await sampler.maybe_sample(
-        "tl-001", "gt-001", "cam-a", "f2.jpg", _T0 + timedelta(seconds=15), _ANNS
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f2.jpg",
+        captured_at=_T0 + timedelta(seconds=15), annotations=_ANNS,
     )
     assert kf is None
 
@@ -67,9 +77,17 @@ async def test_after_interval_returns_keyframe(
     sampler: KeyframeSampler,
     repo: InMemoryKeyframeRepository,
 ) -> None:
-    await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f1.jpg", _T0, _ANNS)
+    await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f1.jpg",
+        captured_at=_T0, annotations=_ANNS,
+    )
     t2 = _T0 + timedelta(seconds=31)
-    kf = await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f2.jpg", t2, _ANNS)
+    kf = await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f2.jpg",
+        captured_at=t2, annotations=_ANNS,
+    )
     assert kf is not None
     assert kf.captured_at == t2
 
@@ -82,11 +100,17 @@ async def test_trigger_sample_always_returns(
     repo: InMemoryKeyframeRepository,
 ) -> None:
     # Take a periodic sample first.
-    await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f1.jpg", _T0, _ANNS)
+    await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f1.jpg",
+        captured_at=_T0, annotations=_ANNS,
+    )
     # Trigger 5 seconds later — well within the 30s periodic interval.
     t2 = _T0 + timedelta(seconds=5)
     kf = await sampler.trigger_sample(
-        "tl-001", "gt-001", "cam-a", "f2.jpg", t2, _ANNS, tag_reason="identity_changed"
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f2.jpg",
+        captured_at=t2, annotations=_ANNS, tag_reason="identity_changed",
     )
     assert kf is not None
     assert kf.tag_reason == "identity_changed"
@@ -96,22 +120,40 @@ async def test_trigger_sample_always_returns(
 
 
 async def test_trigger_does_not_reset_periodic_timer(sampler: KeyframeSampler) -> None:
-    await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f1.jpg", _T0, _ANNS)
+    await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f1.jpg",
+        captured_at=_T0, annotations=_ANNS,
+    )
     t_trigger = _T0 + timedelta(seconds=5)
-    await sampler.trigger_sample("tl-001", "gt-001", "cam-a", "f2.jpg", t_trigger, _ANNS, "hazard")
+    await sampler.trigger_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f2.jpg",
+        captured_at=t_trigger, annotations=_ANNS, tag_reason="hazard",
+    )
     # The periodic timer was set at T0; 29s total — should still be None.
     t_check = _T0 + timedelta(seconds=29)
-    kf = await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f3.jpg", t_check, _ANNS)
+    kf = await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f3.jpg",
+        captured_at=t_check, annotations=_ANNS,
+    )
     assert kf is None
 
 
 async def test_periodic_expiry_is_shorter_than_trigger(sampler: KeyframeSampler) -> None:
-    periodic = await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f1.jpg", _T0, _ANNS)
+    periodic = await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f1.jpg",
+        captured_at=_T0, annotations=_ANNS,
+    )
     assert periodic is not None
     periodic_duration = (periodic.expires_at - _T0).total_seconds()
 
     trigger = await sampler.trigger_sample(
-        "tl-002", "gt-002", "cam-b", "f2.jpg", _T0, _ANNS, "identity_changed"
+        tracklet_id="tl-002", global_track_id="gt-002",
+        camera_id="cam-b", minio_key="f2.jpg",
+        captured_at=_T0, annotations=_ANNS, tag_reason="identity_changed",
     )
     trigger_duration = (trigger.expires_at - _T0).total_seconds()
 
@@ -125,22 +167,42 @@ async def test_multiple_tracklets_independent(
     repo: InMemoryKeyframeRepository,
 ) -> None:
     # Sample tracklet 1.
-    await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f1.jpg", _T0, _ANNS)
+    await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f1.jpg",
+        captured_at=_T0, annotations=_ANNS,
+    )
     # 15s later: tl-001 is still within interval, tl-002 has no timer yet.
     t2 = _T0 + timedelta(seconds=15)
-    kf1 = await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f2.jpg", t2, _ANNS)
-    kf2 = await sampler.maybe_sample("tl-002", "gt-002", "cam-b", "f3.jpg", t2, _ANNS)
+    kf1 = await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f2.jpg",
+        captured_at=t2, annotations=_ANNS,
+    )
+    kf2 = await sampler.maybe_sample(
+        tracklet_id="tl-002", global_track_id="gt-002",
+        camera_id="cam-b", minio_key="f3.jpg",
+        captured_at=t2, annotations=_ANNS,
+    )
 
     assert kf1 is None  # within interval
     assert kf2 is not None  # first sample for tl-002
 
 
 async def test_reset_tracklet_clears_timer(sampler: KeyframeSampler) -> None:
-    await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f1.jpg", _T0, _ANNS)
+    await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f1.jpg",
+        captured_at=_T0, annotations=_ANNS,
+    )
     sampler.reset_tracklet("tl-001")
     # After reset, the next call should sample even if within the old interval.
     t2 = _T0 + timedelta(seconds=5)
-    kf = await sampler.maybe_sample("tl-001", "gt-001", "cam-a", "f2.jpg", t2, _ANNS)
+    kf = await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-a", minio_key="f2.jpg",
+        captured_at=t2, annotations=_ANNS,
+    )
     assert kf is not None
 
 
@@ -149,7 +211,11 @@ async def test_keyframe_stored_with_correct_fields(
     repo: InMemoryKeyframeRepository,
 ) -> None:
     anns = {"bbox": [1, 2, 3, 4], "person_id": "alice"}
-    kf = await sampler.maybe_sample("tl-001", "gt-001", "cam-x", "frames/x.jpg", _T0, anns)
+    kf = await sampler.maybe_sample(
+        tracklet_id="tl-001", global_track_id="gt-001",
+        camera_id="cam-x", minio_key="frames/x.jpg",
+        captured_at=_T0, annotations=anns,
+    )
     assert kf is not None
     stored = await repo.list_keyframes(tracklet_id="tl-001")
     assert len(stored) == 1

@@ -1,4 +1,4 @@
-"""Trajectory stages: close terminated global tracks and write trajectory points."""
+"""Trajectory stages: close terminated PHs and write trajectory points."""
 
 from __future__ import annotations
 
@@ -18,11 +18,10 @@ logger = get_logger(__name__)
 
 
 class CloseTerminatedStage(FrameStage):
-    """Close global tracks that have disappeared from the active set.
+    """DEPRECATED (WTR3): replaced by ClosePHStage.
 
-    ``ctx.active_global_tracks`` is sourced from open PH state by
-    ``WorldTrackingStage`` (WT2 bridge).  A GT is considered terminated
-    when it was active on the previous frame but is absent this frame.
+    Close global tracks that have disappeared from the active set.
+    Kept for backward compat with tests referencing the class name.
     """
 
     name = "close_terminated"
@@ -39,7 +38,6 @@ class CloseTerminatedStage(FrameStage):
         self._trajectory_writer = trajectory_writer
         self._motion_energy_tracker = motion_energy_tracker
         self._posture_tracker = posture_tracker
-        # Shared mutable state (owned by pipeline).
         self._prev_active_gt_ids: set[str] = (
             prev_active_gt_ids if prev_active_gt_ids is not None else set()
         )
@@ -65,7 +63,51 @@ class CloseTerminatedStage(FrameStage):
         self._prev_active_gt_ids = current_gt_ids
 
 
+class ClosePHStage(FrameStage):
+    """Close PHs that have disappeared from the active set (WTR3).
+
+    Uses ``ctx.active_ph_ids`` directly. No GlobalTrackRepository dependency.
+    Closes trajectory, motion energy, and posture state by PH id.
+    """
+
+    name = "close_ph"
+
+    def __init__(
+        self,
+        trajectory_writer: TrajectoryWriter | None = None,
+        motion_energy_tracker: MotionEnergyTracker | None = None,
+        posture_tracker: GlobalPostureTracker | None = None,
+        prev_active_ph_ids: set[str] | None = None,
+    ) -> None:
+        self._trajectory_writer = trajectory_writer
+        self._motion_energy_tracker = motion_energy_tracker
+        self._posture_tracker = posture_tracker
+        self._prev_active_ph_ids: set[str] = (
+            prev_active_ph_ids if prev_active_ph_ids is not None else set()
+        )
+
+    async def run(self, ctx: FrameContext) -> None:
+        current_ph_ids = ctx.active_ph_ids
+        terminated_ph_ids = self._prev_active_ph_ids - current_ph_ids
+        if not terminated_ph_ids:
+            self._prev_active_ph_ids = current_ph_ids
+            return
+
+        close_time = ctx.event_time
+        for ph_id in terminated_ph_ids:
+            logger.debug("Closing terminated PH", ph_id=ph_id)
+            if self._trajectory_writer:
+                await self._trajectory_writer.close_track(ph_id, closed_at=close_time)
+            if self._motion_energy_tracker is not None:
+                self._motion_energy_tracker.evict_track(ph_id)
+            if self._posture_tracker is not None:
+                self._posture_tracker.evict_track(ph_id)
+        self._prev_active_ph_ids = current_ph_ids
+
+
 class TrajectoryStage(FrameStage):
+    """Writes trajectory points from WorldFrameSnapshots (WTR3)."""
+
     name = "trajectory"
 
     def __init__(
@@ -74,7 +116,7 @@ class TrajectoryStage(FrameStage):
         floor_projector: FloorProjector | None = None,
         motion_energy_tracker: MotionEnergyTracker | None = None,
         posture_tracker: GlobalPostureTracker | None = None,
-        tracklet_manager: object | None = None,  # N0: was TrackletManager, deleted
+        tracklet_manager: object | None = None,
         camera_room_map: dict[str, str] | None = None,
     ) -> None:
         self._trajectory_writer = trajectory_writer
@@ -95,11 +137,8 @@ class TrajectoryStage(FrameStage):
             if snap.camera_id != ctx.frame.camera_id:
                 continue
 
-            # Snap floor_x/y are in metres; FloorPoint uses mm.
             floor_point = FloorPoint(int(snap.floor_x_m * 1000.0), int(snap.floor_y_m * 1000.0))
 
-            # Pose / motion-energy attribution: WT3 transitional — returns
-            # (None, None) until WT4 stamps global_track_id on detections.
             pose, det_id = self._find_pose_for_ph(ctx, snap.ph_id)
 
             gt_posture: PostureType = "unknown"
@@ -137,17 +176,14 @@ class TrajectoryStage(FrameStage):
                 floor_point=floor_point,
                 captured_at=traj_time,
                 identity_confidence=identity_confidence,
-                posture="unknown",
-                motion_energy=None,
+                posture=gt_posture,
+                motion_energy=gt_motion_energy,
             )
 
     def _find_pose_for_ph(
         self, ctx: FrameContext, ph_id: str
     ) -> tuple[PoseResult | None, str | None]:
-        """WT3 transitional: match by global_track_id on detection.
-
-        Returns (None, None) until WT4 stamps det.global_track_id = ph_id.
-        """
+        """Match pose to PH via backfilled global_track_id (WTR3)."""
         for det in ctx.domain_detections:
             if det.global_track_id == ph_id:
                 return ctx.det_pose_result.get(det.detection_id), det.detection_id

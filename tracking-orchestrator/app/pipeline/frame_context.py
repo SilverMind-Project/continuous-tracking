@@ -78,7 +78,9 @@ class FrameContext:
     face_anchors: list[FaceAnchor] = field(default_factory=list)
     _face_evidence: list[FaceEvidence] = field(default_factory=list)
 
-    # --- Stage: cross_camera_and_resolve ---
+    # --- Stage: cross_camera_and_resolve (legacy: replaced by world_tracking) ---
+    # DEPRECATED (WTR3): populated from PH ids for backward compat during
+    # transition.  New stages must use ``active_ph_ids`` instead.
     active_global_tracks: list[GlobalTrack] = field(default_factory=list)
     outcome_decisions: list[IdentityDecision] = field(default_factory=list)
     new_revisions: list[IdentityRevision] = field(default_factory=list)
@@ -91,16 +93,20 @@ class FrameContext:
     det_posture: dict[str, PostureType] = field(default_factory=dict)
 
     # --- Stage: world_tracking (M1) ---
-    # Producer: WorldTrackingStage. Consumers: TrajectoryStage, KeyframeStage,
-    # PublishStage (WT4), TrailsStage (WT4).
+    # Producer: WorldTrackingStage. Consumers: ClosePHStage, TrajectoryStage,
+    # KeyframeStage, PublishStage, TrailsStage.
     world_snapshots: list[WorldFrameSnapshot] = field(default_factory=list)
-    # Producer: WorldTrackingStage. Consumer: DetectionBackfillStage (WT4).
+    # Producer: WorldTrackingStage. Consumer: DetectionBackfillStage.
     det_to_ph: dict[str, str] = field(default_factory=dict)
+    # Producer: WorldTrackingStage. Consumers: ClosePHStage.
+    active_ph_ids: set[str] = field(default_factory=set)
 
     # --- Stage: publish ---
     identities: dict[str, tuple[str, float]] = field(default_factory=dict)
     evidence_by_gt: dict[str, tuple[float, float, bool]] = field(default_factory=dict)
     trail_by_tracklet_snapshot: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
+    # WTR3: PH-native trail alias (TrailsStage populates both).
+    trail_by_ph_snapshot: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
 
     # --- Diagnostics (CI / observability, not business logic) ---
     stage_notes: dict[str, str] = field(default_factory=dict)

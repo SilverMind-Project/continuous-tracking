@@ -9,7 +9,7 @@ from .base import FrameStage
 
 
 class TrailsStage(FrameStage):
-    """Maintains per-PH foot-position trails and snapshots them into ctx."""
+    """Maintains per-PH foot-position trails and snapshots them into ctx (WTR3)."""
 
     name = "trails"
 
@@ -18,8 +18,7 @@ class TrailsStage(FrameStage):
         trail_by_tracklet: dict[str, deque[tuple[float, float]]] | None = None,
         trail_maxlen: int = 12,
     ) -> None:
-        # Parameter name kept for backward compat with frame_pipeline.py
-        # construction; attribute renamed to _trail_by_ph (WT4).
+        # Parameter kept for backward compat with frame_pipeline.py.
         self._trail_by_ph: dict[str, deque[tuple[float, float]]] = (
             trail_by_tracklet if trail_by_tracklet is not None else {}
         )
@@ -29,14 +28,15 @@ class TrailsStage(FrameStage):
         frame_w = float(ctx.effective_width) if ctx.effective_width else 1.0
         frame_h = float(ctx.effective_height) if ctx.effective_height else 1.0
         for domain_det in ctx.domain_detections:
-            if not domain_det.global_track_id:
+            ph_id = domain_det.global_track_id  # backfilled from det_to_ph (WTR3)
+            if not ph_id:
                 continue
             foot_x = (domain_det.bbox.x_min + domain_det.bbox.x_max) / 2.0 / frame_w
             foot_y = domain_det.bbox.y_max / frame_h
-            trail_dq = self._trail_by_ph.get(domain_det.global_track_id)
+            trail_dq = self._trail_by_ph.get(ph_id)
             if trail_dq is None:
                 trail_dq = deque(maxlen=self._TRAIL_MAXLEN)
-                self._trail_by_ph[domain_det.global_track_id] = trail_dq
+                self._trail_by_ph[ph_id] = trail_dq
             trail_dq.append((float(foot_x), float(foot_y)))
 
         active_phs = {d.global_track_id for d in ctx.domain_detections if d.global_track_id}
@@ -45,3 +45,5 @@ class TrailsStage(FrameStage):
             del self._trail_by_ph[pid]
 
         ctx.trail_by_tracklet_snapshot = {pid: list(dq) for pid, dq in self._trail_by_ph.items()}
+        # WTR3: PH-native alias (trail_by_tracklet_snapshot kept for PublishStage compat).
+        ctx.trail_by_ph_snapshot = ctx.trail_by_tracklet_snapshot

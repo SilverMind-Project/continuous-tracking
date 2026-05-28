@@ -35,6 +35,7 @@ from ..pipeline.batcher import FrameBatcher
 from ..pipeline.frame_context import FrameContext
 from ..pipeline.gallery_cache import GalleryCache
 from ..pipeline.stages import (
+    ClosePHStage,
     CloseTerminatedStage,
     DetectionBackfillStage,
     DetectStage,
@@ -280,7 +281,9 @@ class FrameProcessingPipeline:
         self._frame_tasks: set[asyncio.Task[None]] = set()
         self._frame_semaphore: asyncio.Semaphore | None = None
         self._camera_locks: dict[str, asyncio.Lock] = {}
-        # Track previously active global track IDs for close_track wiring (Issue #23).
+        # Track previously active PH ids for ClosePHStage (WTR3).
+        self._prev_active_ph_ids: set[str] = set()
+        # Legacy: previously active GT ids for CloseTerminatedStage (deprecated).
         self._prev_active_gt_ids: set[str] = set()
         # Dementia signal worker
         self._signal_publisher: SignalPublisher | None = None
@@ -500,6 +503,12 @@ class FrameProcessingPipeline:
                     camera_room_map=self._config.camera_room_map,
                 ),
                 DetectionBackfillStage(),
+                ClosePHStage(
+                    trajectory_writer=self._trajectory_writer,
+                    motion_energy_tracker=self._motion_energy_tracker,
+                    posture_tracker=self._posture_tracker,
+                    prev_active_ph_ids=self._prev_active_ph_ids,
+                ),
                 CloseTerminatedStage(
                     global_track_repo=self._global_track_repo,
                     trajectory_writer=self._trajectory_writer,

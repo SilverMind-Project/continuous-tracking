@@ -29,13 +29,13 @@ class PublishStage(FrameStage):
         identities: dict[str, tuple[str, float]] = {}
         evidence_by_gt: dict[str, tuple[float, float, bool]] = {}
 
-        # Primary source: snapshots from this frame.
+        # Primary source: WorldFrameSnapshots from this frame (WTR3).
         for snap in ctx.world_snapshots:
             if snap.identity_id and snap.identity_id != "UNKNOWN":
                 identities[snap.ph_id] = (snap.identity_id, snap.identity_confidence)
                 evidence_by_gt[snap.ph_id] = (
                     snap.identity_confidence,
-                    0.0,  # second_probability: not exposed on snapshot today
+                    0.0,
                     snap.direct_face_evidence,
                 )
 
@@ -47,53 +47,51 @@ class PublishStage(FrameStage):
                     continue
                 top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
                 top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
-                identities[decision.global_track_id] = (top_id, top_prob)
-                evidence_by_gt[decision.global_track_id] = (top_prob, top2_prob, False)
-
-        # Fallback: GTs with committed identities that have no snapshot entry.
-        for gt in ctx.active_global_tracks:
-            if gt.global_track_id not in identities and gt.current_identity_id:
-                identities[gt.global_track_id] = (gt.current_identity_id, 0.0)
+                ph_id = decision.global_track_id  # WTR3: entity_id is the PH id
+                identities[ph_id] = (top_id, top_prob)
+                evidence_by_gt[ph_id] = (top_prob, top2_prob, False)
 
         ctx.identities = identities
         ctx.evidence_by_gt = evidence_by_gt
 
-        # Build identity_snapshots from outcome decisions.
+        # Build identity_snapshots from WorldFrameSnapshots (WTR3).
         identity_snapshots: list[dict[str, object]] = []
+        seen_ph_ids: set[str] = set()
+        for snap in ctx.world_snapshots:
+            seen_ph_ids.add(snap.ph_id)
+            id_snap: dict[str, object] = {
+                "global_track_id": snap.ph_id,
+                "identity_id": snap.identity_id or "",
+                "top_probability": snap.identity_confidence,
+                "second_probability": 0.0,
+                "posterior_entropy": snap.posterior_entropy,
+                "direct_face_evidence": snap.direct_face_evidence,
+                "evidence_json": "{}",
+            }
+            identity_snapshots.append(id_snap)
+
+        # Include outcome decisions for PHs not yet in snapshots.
         if ctx.outcome_decisions:
             for decision in ctx.outcome_decisions:
+                ph_id = decision.global_track_id
+                if ph_id in seen_ph_ids:
+                    continue
                 top_id, top_prob = decision.posterior.top_identity()
                 top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
                 top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
-                id_snap: dict[str, object] = {
-                    "global_track_id": decision.global_track_id,
-                    "identity_id": decision.identity_id or "",
-                    "top_probability": top_prob,
-                    "second_probability": top2_prob,
-                    "posterior_entropy": decision.posterior.entropy(),
-                    "direct_face_evidence": (
-                        cast(float, decision.evidence.get("direct_face_confidence", 0.0)) > 0
-                        if decision.evidence
-                        else False
-                    ),
-                    "evidence_json": json.dumps(decision.evidence) if decision.evidence else "{}",
-                }
-                identity_snapshots.append(id_snap)
-
-        # Also include GTs with committed identities that have no outcome decision.
-        for gt in ctx.active_global_tracks:
-            if gt.current_identity_id and gt.global_track_id not in {
-                d.global_track_id for d in ctx.outcome_decisions
-            }:
                 identity_snapshots.append(
                     {
-                        "global_track_id": gt.global_track_id,
-                        "identity_id": gt.current_identity_id,
-                        "top_probability": 0.0,
-                        "second_probability": 0.0,
-                        "posterior_entropy": 0.0,
-                        "direct_face_evidence": False,
-                        "evidence_json": "{}",
+                        "global_track_id": ph_id,
+                        "identity_id": decision.identity_id or "",
+                        "top_probability": top_prob,
+                        "second_probability": top2_prob,
+                        "posterior_entropy": decision.posterior.entropy(),
+                        "direct_face_evidence": (
+                            cast(float, decision.evidence.get("direct_face_confidence", 0.0)) > 0
+                            if decision.evidence
+                            else False
+                        ),
+                        "evidence_json": json.dumps(decision.evidence) if decision.evidence else "{}",
                     }
                 )
 

@@ -40,12 +40,12 @@ async def test_maybe_sample_saves_bbox_annotation(
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     kf = await sampler.maybe_sample(
-        "tl-001",
-        "gt-001",
-        "cam-a",
-        "frame.jpg",
-        _T0,
-        _ANNS,
+        tracklet_id="tl-001",
+        global_track_id="gt-001",
+        camera_id="cam-a",
+        minio_key="frame.jpg",
+        captured_at=_T0,
+        annotations=_ANNS,
         detection_bbox=(10.0, 20.0, 100.0, 200.0),
         detection_confidence=0.95,
         detection_frame_width=1920,
@@ -74,12 +74,12 @@ async def test_trigger_sample_saves_bbox_annotation(
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     kf = await sampler.trigger_sample(
-        "tl-001",
-        "gt-001",
-        "cam-a",
-        "frame.jpg",
-        _T0,
-        _ANNS,
+        tracklet_id="tl-001",
+        global_track_id="gt-001",
+        camera_id="cam-a",
+        minio_key="frame.jpg",
+        captured_at=_T0,
+        annotations=_ANNS,
         tag_reason="identity_changed",
         detection_bbox=(50.0, 60.0, 150.0, 250.0),
         detection_confidence=0.88,
@@ -101,34 +101,31 @@ async def test_maybe_sample_no_bbox_when_within_interval(
     sampler: KeyframeSampler,
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
-    # First sample
     await sampler.maybe_sample(
-        "tl-001",
-        "gt-001",
-        "cam-a",
-        "f1.jpg",
-        _T0,
-        _ANNS,
+        tracklet_id="tl-001",
+        global_track_id="gt-001",
+        camera_id="cam-a",
+        minio_key="f1.jpg",
+        captured_at=_T0,
+        annotations=_ANNS,
         detection_bbox=(10.0, 20.0, 100.0, 200.0),
         detection_frame_width=1920,
         detection_frame_height=1080,
     )
-    # Second sample within interval — should return None and NOT save bbox.
     t2 = _T0 + timedelta(seconds=15)
     kf = await sampler.maybe_sample(
-        "tl-001",
-        "gt-001",
-        "cam-a",
-        "f2.jpg",
-        t2,
-        _ANNS,
+        tracklet_id="tl-001",
+        global_track_id="gt-001",
+        camera_id="cam-a",
+        minio_key="f2.jpg",
+        captured_at=t2,
+        annotations=_ANNS,
         detection_bbox=(10.0, 20.0, 100.0, 200.0),
         detection_frame_width=1920,
         detection_frame_height=1080,
     )
     assert kf is None
 
-    # Only one annotation should exist (from the first sample).
     all_anns = await bbox_repo.get_bbox_annotations_for_tracklet("tl-001")
     assert len(all_anns) == 1
 
@@ -138,12 +135,12 @@ async def test_no_bbox_saved_when_detection_bbox_is_none(
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     kf = await sampler.maybe_sample(
-        "tl-001",
-        "gt-001",
-        "cam-a",
-        "frame.jpg",
-        _T0,
-        _ANNS,
+        tracklet_id="tl-001",
+        global_track_id="gt-001",
+        camera_id="cam-a",
+        minio_key="frame.jpg",
+        captured_at=_T0,
+        annotations=_ANNS,
         detection_bbox=None,
     )
     assert kf is not None
@@ -158,12 +155,12 @@ async def test_no_bbox_saved_when_bbox_repo_not_configured() -> None:
         bbox_repo=None,
     )
     kf = await sampler_no_bbox.maybe_sample(
-        "tl-001",
-        "gt-001",
-        "cam-a",
-        "frame.jpg",
-        _T0,
-        _ANNS,
+        tracklet_id="tl-001",
+        global_track_id="gt-001",
+        camera_id="cam-a",
+        minio_key="frame.jpg",
+        captured_at=_T0,
+        annotations=_ANNS,
         detection_bbox=(10.0, 20.0, 100.0, 200.0),
         detection_frame_width=1920,
         detection_frame_height=1080,

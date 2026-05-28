@@ -189,7 +189,10 @@ class WorldTrackingStage(FrameStage):
                 if ph.closed_at is not None:
                     self._transit_detector.remove_ph(ph.ph_id)
 
-        # Populate frame context for downstream stages.
+        # Populate frame context for downstream stages (PH-native, WTR3).
+        ctx.active_ph_ids = {ph.ph_id for ph in result.updated_phs if ph.closed_at is None}
+        # Legacy bridge: build GlobalTrack views from open PHs for stages
+        # not yet migrated (deprecated — remove in WTR9).
         ctx.active_global_tracks = _phs_to_global_tracks(result.updated_phs)
         ctx.outcome_decisions = list(result.identity_decisions)
         ctx.new_revisions = list(result.revisions)

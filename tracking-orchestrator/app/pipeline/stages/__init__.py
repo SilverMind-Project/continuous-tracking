@@ -13,10 +13,11 @@ from .privacy import PrivacyStage
 from .publish import PublishStage
 from .revisions import RevisionsStage
 from .spatial_projection import SpatialProjectionStage
-from .trajectory import CloseTerminatedStage, TrajectoryStage
+from .trajectory import ClosePHStage, CloseTerminatedStage, TrajectoryStage
 from .world_tracking import WorldTrackingStage
 
 __all__ = [
+    "ClosePHStage",
     "CloseTerminatedStage",
     "DetectStage",
     "DetectionBackfillStage",

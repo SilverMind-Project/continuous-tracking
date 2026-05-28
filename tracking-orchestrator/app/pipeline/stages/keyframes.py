@@ -79,11 +79,9 @@ class KeyframeStage(FrameStage):
                 bbox_data = None
 
             sampled: TaggedKeyframe | None
-            # WT3: pass ph_id as tracklet_id (Option C).  Rename to ph_id
-            # in a follow-up cleanup.
             if snap.ph_id in revised_ph_ids:
                 sampled = await self._keyframe_sampler.trigger_sample(
-                    tracklet_id=snap.ph_id,
+                    ph_id=snap.ph_id,
                     global_track_id=snap.ph_id,
                     camera_id=snap.camera_id,
                     minio_key=ctx.frame.minio_key,
@@ -98,7 +96,7 @@ class KeyframeStage(FrameStage):
                 )
             else:
                 sampled = await self._keyframe_sampler.maybe_sample(
-                    tracklet_id=snap.ph_id,
+                    ph_id=snap.ph_id,
                     global_track_id=snap.ph_id,
                     camera_id=snap.camera_id,
                     minio_key=ctx.frame.minio_key,
