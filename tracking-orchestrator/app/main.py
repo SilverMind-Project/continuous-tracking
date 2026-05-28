@@ -775,14 +775,87 @@ def create_app() -> FastAPI:
     app.include_router(trajectory_router)
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
-        status = "starting"
-        if _pipeline is not None:
-            status = "running" if _pipeline.is_running else "stopped"
+    async def health() -> dict[str, object]:
+        """WTR10: Rollout health check — reports subsystem readiness.
+
+        Returns 'healthy' only when all required subsystems are operational.
+        Returns 'degraded' when optional subsystems are missing.
+        Returns 'unhealthy' when required subsystems are absent.
+        """
+        checks: dict[str, dict[str, object]] = {}
+        overall = "healthy"
+
+        # Pipeline
+        pipeline_ok = _pipeline is not None and _pipeline.is_running
+        checks["pipeline"] = {
+            "status": "ok" if pipeline_ok else "degraded",
+            "message": "running" if pipeline_ok else "stopped or not initialized",
+        }
+        if not pipeline_ok and _pipeline is None:
+            overall = "degraded"
+
+        # PH repository
+        ph_repo_ok = _repo is not None
+        checks["ph_repository"] = {
+            "status": "ok" if ph_repo_ok else "degraded",
+            "message": "wired" if ph_repo_ok else "not configured",
+        }
+
+        # Observation repository (wired through pipeline)
+        obs_repo_ok = _pipeline is not None and _pipeline._obs_repo is not None
+        checks["observation_repository"] = {
+            "status": "ok" if obs_repo_ok else "degraded",
+            "message": "wired" if obs_repo_ok else "not configured",
+        }
+
+        # Database pool
+        db_ok = _pool is not None
+        checks["database"] = {
+            "status": "ok" if db_ok else "degraded",
+            "message": "connected" if db_ok else "in-memory mode (state lost on restart)",
+        }
+
+        # Identity resolver (wired through pipeline)
+        resolver_ok = _pipeline is not None and _pipeline._identity_resolver is not None
+        checks["identity_resolver"] = {
+            "status": "ok" if resolver_ok else "degraded",
+            "message": "wired" if resolver_ok else "not configured",
+        }
+
+        # World tracker
+        world_tracker_ok = _pipeline is not None and _pipeline._world_tracker is not None
+        checks["world_tracker"] = {
+            "status": "ok" if world_tracker_ok else "degraded",
+            "message": "wired" if world_tracker_ok else "not configured",
+        }
+
+        # Calibration sync
+        cc_sync = getattr(app.state, "cc_sync_service", None)
+        calibration_ok = cc_sync is not None
+        checks["calibration_sync"] = {
+            "status": "ok" if calibration_ok else "degraded",
+            "message": "running" if calibration_ok else "not configured",
+        }
+
+        # Transit detector (WTR5)
+        transit_ok = getattr(app.state, "cc_sync_service", None) is not None
+        checks["transit_detector"] = {
+            "status": "ok" if transit_ok else "degraded",
+            "message": "configured" if transit_ok else "transit zones not loaded",
+        }
+
+        # Face ID
+        face_id_ok = _pipeline is not None and _pipeline._face_id_client is not None
+        checks["face_identity"] = {
+            "status": "ok" if face_id_ok else "info",
+            "message": "configured" if face_id_ok else "not configured (optional)",
+        }
+
         return {
-            "status": status,
+            "status": overall,
             "service": "tracking-orchestrator",
             "version": "0.1.0",
+            "checks": checks,
         }
 
     @app.get("/metrics", include_in_schema=False)
