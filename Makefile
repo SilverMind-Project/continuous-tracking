@@ -68,8 +68,8 @@ format: venv ## Format Python code
 format-check: venv ## Check Python formatting
 	$(PY_BIN)/ruff format --check tracking-orchestrator
 
-test: venv ## Run Python tests
-	cd tracking-orchestrator && ../$(PY_BIN)/pytest tests -v
+test: venv ## Run Python tests (excludes integration marker; no Docker needed)
+	cd tracking-orchestrator && ../$(PY_BIN)/pytest tests -m "not integration" -v
 
 mypy: venv ## Type-check Python code
 	$(PY_BIN)/mypy --config-file tracking-orchestrator/pyproject.toml tracking-orchestrator/app
@@ -84,6 +84,11 @@ check: venv ## Run the Python quality gate
 	$(MAKE) import-lint
 	$(MAKE) test
 	@bash scripts/check-env-var-drift.sh
+
+test-integration: venv ## Run integration tests (testcontainer Postgres required)
+	cd tracking-orchestrator && ../$(PY_BIN)/pytest -m integration tests/integration tests/contracts -v
+
+ci: all-check test-integration ## Authoritative CI gate: full check + integration proofs
 
 all-check: check go-check proto-lint ## Run the full repo quality gate
 

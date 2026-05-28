@@ -50,18 +50,25 @@ def _make_ph(ph_id: str, identity_id: str | None = None) -> Any:
 
 if HAS_HYPOTHESIS:
 
+    @pytest.mark.integration
+    @pytest.mark.usefixtures("set_db_url_for_hypothesis")
     class TestPHRepositoryProperty:
-        """Property-based tests for PH repository parity.
+        """Property-based tests for PH repository parity (T5).
 
-        When TEST_DATABASE_URL is set, both InMemory and Postgres repos
-        are tested with identical operation sequences. Otherwise only
-        InMemory is tested.
+        Runs under ``-m integration``.  The ``set_db_url_for_hypothesis``
+        fixture exposes the testcontainer URL as TEST_DATABASE_URL so the
+        Hypothesis test can create its own asyncpg pool without direct fixture
+        injection (which ``@given`` does not support).
+
+        When TEST_DATABASE_URL is set, both InMemory and Postgres repos are
+        tested with identical operation sequences. Otherwise only InMemory is
+        tested (never the case under ``make test-integration``).
         """
 
         ops = st.sampled_from(["save", "list_active", "correct"])
 
         @given(st.lists(ops, min_size=1, max_size=20))
-        @settings(max_examples=50)
+        @settings(max_examples=50, deadline=None)
         @pytest.mark.asyncio
         async def test_operation_sequence_parity(self, operations: list[str]):
             """InMemory and Postgres produce identical results for any sequence."""
@@ -77,15 +84,19 @@ if HAS_HYPOTHESIS:
             else:
                 repo_b = InMemoryPHRepository()
 
+            import uuid as _uuid
+
             from app.domain import PersonHypothesis
 
             now = datetime.now(UTC)
             ph_id_counter = 0
+            # Use deterministic UUIDs: a fixed namespace + counter.
+            _ns = _uuid.UUID("12345678-1234-5678-1234-567812345678")
 
             try:
                 for op in operations:
                     if op == "save":
-                        ph_id = f"ph-{ph_id_counter}"
+                        ph_id = str(_uuid.uuid5(_ns, str(ph_id_counter)))
                         ph_id_counter += 1
                         ph = PersonHypothesis(
                             ph_id=ph_id,
@@ -116,7 +127,7 @@ if HAS_HYPOTHESIS:
 
                     elif op == "correct":
                         if ph_id_counter > 0:
-                            target_id = f"ph-{ph_id_counter - 1}"
+                            target_id = str(_uuid.uuid5(_ns, str(ph_id_counter - 1)))
                             try:
                                 rev_a = await repo_a.correct_identity(
                                     ph_id=target_id,
@@ -142,10 +153,6 @@ if HAS_HYPOTHESIS:
                     await pool.close()
 
     @pytest.mark.integration
-    @pytest.mark.skipif(
-        not os.getenv("TEST_DATABASE_URL"),
-        reason="requires TEST_DATABASE_URL for Postgres parity tests",
-    )
     class TestPHRepositoryParity:
         """Explicit parity tests between InMemory and Postgres repos."""
 
@@ -158,8 +165,10 @@ if HAS_HYPOTHESIS:
             pg = PostgresPHRepository(db_pool)
 
             now = datetime.now(UTC)
+            import uuid as _uuid
+
             ph = PersonHypothesis(
-                ph_id="parity-1",
+                ph_id=str(_uuid.uuid4()),
                 state_mean=(1.0, 2.0, 0.1, 0.0),
                 state_cov=(0.1,) * 16,
                 born_at=now,
@@ -187,8 +196,10 @@ if HAS_HYPOTHESIS:
             pg = PostgresPHRepository(db_pool)
 
             now = datetime.now(UTC)
+            import uuid as _uuid
+
             ph = PersonHypothesis(
-                ph_id="parity-2",
+                ph_id=str(_uuid.uuid4()),
                 state_mean=(1.0, 2.0, 0.1, 0.0),
                 state_cov=(0.1,) * 16,
                 born_at=now,
@@ -201,13 +212,13 @@ if HAS_HYPOTHESIS:
             await pg.save(ph)
 
             revs_inmem = await inmem.batch_correct(
-                ph_ids=["parity-2"],
+                ph_ids=[ph.ph_id],
                 new_identity_ids=["alice"],
                 actor="test",
                 reasons=["parity test"],
             )
             revs_pg = await pg.batch_correct(
-                ph_ids=["parity-2"],
+                ph_ids=[ph.ph_id],
                 new_identity_ids=["alice"],
                 actor="test",
                 reasons=["parity test"],

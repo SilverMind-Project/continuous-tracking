@@ -1,57 +1,37 @@
 # Frame Replay Fixtures
 
-On-disk format: a length-prefixed stream of protobuf `FrameReady` messages.
+On-disk format: length-prefixed JSON binary (R1). Each chunk is one call
+to `WorldTracker.step()`, encoded as a JSON array of observation dicts.
 
 ```
-[u32 length BE][protobuf bytes][u32 length BE][protobuf bytes]...
+[u32 length BE][JSON bytes] [u32 length BE][JSON bytes] ...
 ```
 
-Each length is a 4-byte unsigned integer in big-endian byte order,
-immediately followed by that many bytes of serialized `continuoustracking.v1.FrameReady`
-protobuf message.
+Note: `FrameReady` carries no detection data, so these fixtures store
+pre-computed `WorldObservation` fields directly. See
+`scripts/synthesize_replay_fixture.py` for the generator.
 
 ## Fixtures
 
-| File | Description | Expected size |
+| File | Description | Method |
 |---|---|---|
-| `two_cameras_one_room.bin` | One person walks under two cameras whose views overlap one room (kitchen) | ~5-15 MB |
-| `two_rooms_two_people.bin` | Two people in two non-overlapping rooms, brief swap | ~5-15 MB |
+| `two_cameras_one_room.bin` | One person: sequential cam-1 to cam-2 handoff (proves C1) | synthetic |
+| `two_rooms_two_people.bin` | Two people in non-overlapping rooms, never merge (proves C2) | synthetic |
 
-## Recording a fixture
-
-Run against a live dev stack:
+## Regeneration
 
 ```bash
 cd tracking-orchestrator
-uv run python -m scripts.record_replay_fixture \
-    --camera-id cam_kitchen_1 --camera-id cam_kitchen_2 \
-    --duration-seconds 30 \
-    --output tests/fixtures/frame_replays/two_cameras_one_room.bin
+uv run python scripts/synthesize_replay_fixture.py
 ```
 
-The recorder subscribes to the `frames.ready` Redis stream and captures
-messages from the named cameras for the specified duration.
+Regenerate when `WorldObservation` fields change or tracker thresholds shift.
 
 ## Replaying
 
 ```bash
-# Requires TEST_DATABASE_URL pointing to a disposable Postgres instance
-TEST_DATABASE_URL=postgresql://localhost:5432/test_cts \
-  pytest -m integration tests/integration/test_world_tracker_e2e.py
+# Testcontainer Postgres started automatically; no external DB needed.
+pytest -m integration tests/integration/test_world_tracker_e2e.py -v
 ```
 
-Tests are skipped automatically when `TEST_DATABASE_URL` is not set or the
-`.bin` fixture files are absent. The `db_pool` fixture in
-`tests/integration/conftest.py` runs migrations and truncates tables on teardown.
-
-## Regeneration
-
-These fixtures should be regenerated when:
-1. The `FrameReady` protobuf schema changes.
-2. The camera configuration in the dev stack changes significantly.
-3. A new tracker release requires fresh fixtures for validation.
-
-Fixtures are binary files committed to git. Add `.gitattributes`:
-```
-*.bin binary
-```
+`.gitattributes` marks `*.bin` as binary.

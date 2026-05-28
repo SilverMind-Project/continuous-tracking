@@ -81,7 +81,7 @@ class PostgresPHRepository:
                 ph.gallery_mean,
                 ph.height_estimate_m,
                 list(ph.active_cameras),
-                ph.metadata,
+                json.dumps(ph.metadata),
             )
 
     async def get(self, ph_id: str) -> PersonHypothesis | None:
@@ -761,7 +761,7 @@ class PostgresWorldObservationRepository:
                     }
                 ),
                 observation.height_estimate_m,
-                {},
+                json.dumps({}),
             )
         return oid
 

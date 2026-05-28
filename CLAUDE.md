@@ -381,9 +381,12 @@ These rules come from bugs caught during implementation and are non-negotiable.
 Run before every PR. CI runs the same checks.
 
 ```bash
-make check        # Python: ruff check + ruff format --check + mypy + import-linter + pytest
+make check        # Python: ruff check + ruff format --check + mypy + import-linter + pytest (fast local gate)
 make all-check    # Python + Go (golangci-lint + go test -race + go build) + buf lint
+make ci           # Authoritative gate: all-check + integration proofs (requires Docker)
 ```
+
+**`make ci` is the authoritative gate.** `make check` is the fast local gate; `make all-check` adds Go and proto validation. `make ci` additionally runs `pytest -m integration` which proves C1/C2 (WorldTracker end-to-end) and T5 (PH repository parity) against a testcontainer Postgres. These proofs must pass before merging any change to the tracker or storage layer.
 
 Install pre-commit hooks (ruff, mypy, golangci-lint, buf):
 

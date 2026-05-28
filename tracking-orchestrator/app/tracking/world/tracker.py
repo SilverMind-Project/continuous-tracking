@@ -303,6 +303,8 @@ class WorldTracker:
                 obs.bbox,
                 obs.detection_confidence,
             )
+            # Save the new PH first so the FK constraint on world_observations is satisfied.
+            await self._ph_repo.save(new_ph)
             await self._obs_repo.save(obs, ph_id=new_ph.ph_id)
             if obs.detection_id:
                 det_to_ph[obs.detection_id] = new_ph.ph_id

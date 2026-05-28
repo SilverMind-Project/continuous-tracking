@@ -98,6 +98,7 @@ dev = [
     "fakeredis>=2.35.1",
     "hypothesis>=6.100.0",
     "types-pyyaml>=6.0",
+    "testcontainers[postgres]>=4.9.0",
 ]
 
 [tool.importlinter]
