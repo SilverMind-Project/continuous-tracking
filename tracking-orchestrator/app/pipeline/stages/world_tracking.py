@@ -9,9 +9,10 @@ from __future__ import annotations
 from structlog import get_logger
 
 from ...domain import GlobalTrack, PersonHypothesis
+from ...domain import TransitZone
 from ...tracking.world.config import WorldTrackerConfig
 from ...tracking.world.tracker import WorldTracker
-from ...tracking.world.transit_detector import TransitDetector, TransitZone
+from ...tracking.world.transit_detector import TransitDetector
 from ...transport.room_transition_publisher import RoomTransitionPublisher
 from ..frame_context import FrameContext
 from .base import FrameStage
@@ -150,12 +151,16 @@ class WorldTrackingStage(FrameStage):
             face_anchors=all_face_anchors,
         )
 
-        # M2: detect transit zone crossings for each active PH.
+        # M2: detect transit zone crossings for each active PH (WTR5).
         if (
             self._transit_detector is not None
             and self._transit_zones
             and self._room_transition_publisher is not None
         ):
+            # Build ph_id -> current_identity_id lookup for publishing.
+            ph_identity: dict[str, str | None] = {
+                ph.ph_id: ph.current_identity_id for ph in result.updated_phs
+            }
             for ph in result.updated_phs:
                 events = self._transit_detector.check(
                     ph_id=ph.ph_id,
@@ -166,19 +171,10 @@ class WorldTrackingStage(FrameStage):
                 )
                 for event in events:
                     try:
-                        from ...domain import RoomTransitionEvent as DomainTransition
-
-                        domain_event = DomainTransition(
-                            ph_id=event.ph_id,
-                            transit_zone_id=event.transit_zone_id,
-                            direction=event.direction,
-                            inside_room_id=event.inside_room_id,
-                            outside_room_id=event.outside_room_id,
-                            floor_x_m=event.floor_x_m,
-                            floor_y_m=event.floor_y_m,
-                            event_time=event.event_time,
+                        identity_id = ph_identity.get(event.ph_id)
+                        await self._room_transition_publisher.publish(
+                            event, identity_id=identity_id
                         )
-                        await self._room_transition_publisher.publish(domain_event)
                     except Exception:
                         logger.exception(
                             "room_transition_publish_error",

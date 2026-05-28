@@ -106,10 +106,9 @@ async def test_observation_id_is_not_synthetic():
     obs = _make_observation("cam-1", 42)
     oid = await obs_repo.save(obs, "ph-1")
 
-    # Verify the ID is not synthetic.
+    # Verify the ID is not synthetic (no camera_id in it, no path separators).
     assert "/" not in oid
     assert "cam-1" not in oid
-    assert "42" not in oid
     # UUID4 format: 8-4-4-4-12 hex chars
     parts = oid.split("-")
     assert len(parts) == 5

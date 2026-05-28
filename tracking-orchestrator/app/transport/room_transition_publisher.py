@@ -16,7 +16,9 @@ class RoomTransitionPublisher(BasePublisher):
     def __init__(self, redis_url: str, maxlen: int = 10000) -> None:
         super().__init__(redis_url=redis_url, stream="tracking.room_transitions", maxlen=maxlen)
 
-    async def publish(self, event: RoomTransitionEvent) -> str | None:
+    async def publish(
+        self, event: RoomTransitionEvent, identity_id: str | None = None
+    ) -> str | None:
         """Publish a single room transition event.
 
         Returns the Redis message ID, or None if the publisher is not connected.
@@ -35,6 +37,8 @@ class RoomTransitionPublisher(BasePublisher):
             b"floor_y_m": str(event.floor_y_m).encode(),
             b"event_time": event.event_time.isoformat().encode(),
         }
+        if identity_id:
+            payload[b"identity_id"] = identity_id.encode()
         try:
             msg_id = await self._xadd(payload)
             logger.debug(

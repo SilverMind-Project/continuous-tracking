@@ -1,7 +1,11 @@
-"""Detects PH crossing transit zones (M2).
+"""Detects PH crossing transit zones (M2, updated WTR5).
 
 Pure function: no I/O, no DB. Called by the world tracker or a pipeline
 stage when a PH's floor point updates.
+
+WTR5: Uses shapely.geometry.Polygon for point-in-polygon containment
+instead of hand-rolled ray-casting. TransitZone and RoomTransitionEvent
+are imported from the domain.
 """
 
 from __future__ import annotations
@@ -9,30 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from shapely.geometry import Point, Polygon
 
-@dataclass(frozen=True)
-class TransitZone:
-    """A door/threshold zone (mirrors domain type for this module)."""
-
-    zone_id: str
-    name: str
-    kind: str
-    polygon: list[tuple[float, float]]
-    inside_room_id: str
-    outside_room_id: str
-    direction_vec: tuple[float, float]
-
-
-@dataclass(frozen=True)
-class RoomTransitionEvent:
-    ph_id: str
-    transit_zone_id: str
-    direction: str  # "enter" | "exit"
-    inside_room_id: str
-    outside_room_id: str
-    floor_x_m: float
-    floor_y_m: float
-    event_time: datetime
+from ...domain import RoomTransitionEvent, TransitZone
 
 
 @dataclass
@@ -49,11 +32,20 @@ class TransitDetector:
 
     Maintains per-PH in-memory state to debounce repeated crossings and
     enforce a minimum directional displacement (>= 0.2 m) before firing.
+    Uses shapely.geometry.Polygon for containment tests.
     """
 
     def __init__(self, min_displacement_m: float = 0.2) -> None:
         self._min_displacement_m = min_displacement_m
         self._states: dict[str, _PHCrossingState] = {}
+        # Cache shapely prepared geometries per zone for performance.
+        self._zone_polygons: dict[str, Polygon] = {}
+
+    def _get_zone_polygon(self, zone: TransitZone) -> Polygon:
+        """Return a cached shapely Polygon for *zone*."""
+        if zone.zone_id not in self._zone_polygons:
+            self._zone_polygons[zone.zone_id] = Polygon(zone.polygon)
+        return self._zone_polygons[zone.zone_id]
 
     def check(
         self,
@@ -72,13 +64,14 @@ class TransitDetector:
         prev = state.last_floor
         state.last_floor = (floor_x_m, floor_y_m)
 
+        point = Point(floor_x_m, floor_y_m)
         events: list[RoomTransitionEvent] = []
         for zone in zones:
-            inside_now = self._point_in_polygon(floor_x_m, floor_y_m, zone.polygon)
+            poly = self._get_zone_polygon(zone)
+            inside_now = poly.contains(point)
             was_inside = zone.zone_id in state.inside_zone_ids
 
             if inside_now and not was_inside:
-                # Entered the zone.
                 direction = self._resolve_direction(floor_x_m, floor_y_m, prev, zone.direction_vec)
                 state.inside_zone_ids.add(zone.zone_id)
                 events.append(
@@ -94,7 +87,6 @@ class TransitDetector:
                     )
                 )
             elif not inside_now and was_inside:
-                # Exited the zone.
                 state.inside_zone_ids.discard(zone.zone_id)
                 events.append(
                     RoomTransitionEvent(
@@ -129,25 +121,9 @@ class TransitDetector:
         dy = fy - prev[1]
         disp = (dx * dx + dy * dy) ** 0.5
         if disp < self._min_displacement_m:
-            return "enter"  # not enough displacement; default
+            return "enter"
         dot = dx * direction_vec[0] + dy * direction_vec[1]
         return "enter" if dot >= 0 else "exit"
-
-    @staticmethod
-    def _point_in_polygon(x: float, y: float, polygon: list[tuple[float, float]]) -> bool:
-        """Ray-casting point-in-polygon test."""
-        n = len(polygon)
-        if n < 3:
-            return False
-        inside = False
-        j = n - 1
-        for i in range(n):
-            xi, yi = polygon[i]
-            xj, yj = polygon[j]
-            if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
-                inside = not inside
-            j = i
-        return inside
 
     def remove_ph(self, ph_id: str) -> None:
         """Remove per-PH state when a PH is closed."""

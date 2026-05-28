@@ -599,6 +599,56 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Wire CameraRoomMap into the pipeline so stages read room bindings.
     _pipeline.set_camera_room_map(camera_room_map)
 
+    # WTR5: load transit zones from CC and wire into the world tracker.
+    from .domain import TransitZone as _TransitZone
+    from .tracking.world.transit_detector import TransitDetector as _TransitDetector
+    from .transport.room_transition_publisher import (
+        RoomTransitionPublisher as _RoomTransitionPublisher,
+    )
+
+    _transit_zones: list[_TransitZone] = []
+    try:
+        _tz_data = await cc_client.get("/api/v1/cts/transit-zones")
+        if isinstance(_tz_data, list):
+            for tz in _tz_data:
+                if not isinstance(tz, dict):
+                    continue
+                _poly_raw = tz.get("polygon", [])
+                _polygon: list[tuple[float, float]] = [
+                    (float(p[0]), float(p[1])) for p in _poly_raw if isinstance(p, list) and len(p) >= 2
+                ]
+                if len(_polygon) < 3:
+                    continue
+                _dir_raw = tz.get("direction_vec", [0.0, 0.0])
+                _transit_zones.append(
+                    _TransitZone(
+                        zone_id=str(tz.get("id", "")),
+                        name=str(tz.get("name", "")),
+                        kind=str(tz.get("kind", "door")),
+                        polygon=_polygon,
+                        inside_room_id=str(tz.get("inside_room_id", "")),
+                        outside_room_id=str(tz.get("outside_room_id", "")),
+                        direction_vec=(
+                            float(_dir_raw[0]) if len(_dir_raw) > 0 else 0.0,
+                            float(_dir_raw[1]) if len(_dir_raw) > 1 else 0.0,
+                        ),
+                    )
+                )
+        logger.info("transit_zones_loaded", count=len(_transit_zones))
+    except Exception:
+        logger.exception("transit_zone_load_failed")
+
+    _transit_detector = _TransitDetector()
+    _room_transition_pub = _RoomTransitionPublisher(
+        redis_url=settings.as_str("redis.url", allow_empty=False),
+    )
+    await _room_transition_pub.connect()
+    _pipeline.set_transit_config(
+        transit_detector=_transit_detector,
+        transit_zones=_transit_zones,
+        room_transition_publisher=_room_transition_pub,
+    )
+
     # WTR2: CC identity assertion subscriber (bidirectional identity flow).
     cc_assertion_cache: object | None = None
     cc_assertion_subscriber: object | None = None
@@ -678,6 +728,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # WTR2: stop CC assertion subscriber.
     if cc_assertion_subscriber is not None:
         await cc_assertion_subscriber.stop()  # type: ignore[union-attr]
+
+    # WTR5: disconnect room transition publisher.
+    if "_room_transition_pub" in dir():
+        await _room_transition_pub.disconnect()  # type: ignore[union-attr]
 
     # M2: stop CC config sync before pipeline.
     _cc_sync = getattr(app.state, "cc_sync_service", None)

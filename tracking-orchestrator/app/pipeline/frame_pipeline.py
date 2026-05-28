@@ -789,6 +789,24 @@ class FrameProcessingPipeline:
         """
         self._camera_room_map = camera_room_map
 
+    def set_transit_config(
+        self,
+        transit_detector: object,
+        transit_zones: list[object],
+        room_transition_publisher: object,
+    ) -> None:
+        """WTR5: Inject transit zone dependencies into WorldTrackingStage.
+
+        Called at startup after transit zones are loaded from CC sync.
+        """
+        if self._stage_runner is not None:
+            for stage in self._stage_runner._stages:
+                if stage.name == "world_tracking":
+                    stage._transit_detector = transit_detector
+                    stage._transit_zones = transit_zones
+                    stage._room_transition_publisher = room_transition_publisher
+                    break
+
     def set_overlap_groups(self, groups: list[OverlapGroup]) -> None:
         """Apply overlap group data from CC.
 

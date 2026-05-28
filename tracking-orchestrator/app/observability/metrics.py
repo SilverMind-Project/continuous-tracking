@@ -68,6 +68,11 @@ class Metrics:
     homography_rejected_total: Counter
     homography_warning_total: Counter
 
+    # ---- WTR5: calibration and transit ----------------------------------
+    uncalibrated_detection_total: Counter
+    transit_event_published_total: Counter
+    transit_event_unknown_identity_total: Counter
+
     # ---- Staleness / backlog -----------------------------------------
     frames_dropped_stale_total: Counter
 
@@ -243,6 +248,21 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_homography_warning_total",
             "Homography matrices accepted with warnings during CC sync.",
             ["reason", "camera_id"],
+        ),
+        # ---- WTR5: calibration and transit -----------------------------------
+        uncalibrated_detection_total=_counter(
+            "cts_uncalibrated_detection_total",
+            "Detections dropped because the source camera lacks a valid homography.",
+            ["camera_id"],
+        ),
+        transit_event_published_total=_counter(
+            "cts_transit_event_published_total",
+            "RoomTransitionEvent messages published to tracking.room_transitions.",
+            ["direction"],
+        ),
+        transit_event_unknown_identity_total=_counter(
+            "cts_transit_event_unknown_identity_total",
+            "RoomTransitionEvent messages where identity_id was unknown.",
         ),
         face_id_cooldown_skips_total=_counter(
             "cts_face_id_cooldown_skips_total",
