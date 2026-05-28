@@ -599,6 +599,41 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Wire CameraRoomMap into the pipeline so stages read room bindings.
     _pipeline.set_camera_room_map(camera_room_map)
 
+    # WTR2: CC identity assertion subscriber (bidirectional identity flow).
+    cc_assertion_cache: object | None = None
+    cc_assertion_subscriber: object | None = None
+    redis_url = settings.as_str("redis.url")
+    if redis_url:
+        try:
+            from .services.cc_identity_assertion_subscriber import (
+                CCIdentityAssertionSubscriber,
+                IdentityAssertionCache,
+            )
+
+            cc_assertion_cache = IdentityAssertionCache()
+            # Use a dedicated Redis client for the subscriber so it does not
+            # share the pipeline's pub/sub connection.
+            import redis.asyncio as aioredis  # type: ignore[import-untyped]
+
+            _cc_redis = aioredis.from_url(redis_url, decode_responses=False)
+            cc_assertion_subscriber = CCIdentityAssertionSubscriber(
+                redis_client=_cc_redis,
+                cache=cc_assertion_cache,  # type: ignore[arg-type]
+            )
+            await cc_assertion_subscriber.start()
+            logger.info("cc_assertion_subscriber_started", stream="cc.identity_assertions")
+        except Exception:
+            logger.exception("cc_assertion_subscriber_init_failed")
+            cc_assertion_cache = None
+            cc_assertion_subscriber = None
+
+    # Inject assertion cache into the WorldTrackingStage for CC identity flow.
+    if cc_assertion_cache is not None and _pipeline._stage_runner is not None:
+        for stage in _pipeline._stage_runner._stages:
+            if stage.name == "world_tracking":
+                stage._assertion_cache = cc_assertion_cache
+                break
+
     # M3: keyframe revalidator background task.
     if bbox_repo is not None:
         from .services.keyframe_revalidator import KeyframeRevalidator
@@ -639,6 +674,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _m3_revalidator = getattr(app.state, "keyframe_revalidator", None)
     if _m3_revalidator is not None:
         await _m3_revalidator.stop()
+
+    # WTR2: stop CC assertion subscriber.
+    if cc_assertion_subscriber is not None:
+        await cc_assertion_subscriber.stop()  # type: ignore[union-attr]
 
     # M2: stop CC config sync before pipeline.
     _cc_sync = getattr(app.state, "cc_sync_service", None)

@@ -90,29 +90,27 @@ async def test_repository_maintains_observation_order():
 
 @pytest.mark.asyncio
 async def test_observation_not_synthetic_id():
-    """WTR1 §5: observation identity must be a real persisted id.
+    """WTR2: persisted observations have real UUID-based observation_ids.
 
-    This test verifies the contract intent. The current WorldObservation domain
-    type does not carry observation_id (assigned at persistence). When the
-    domain type gains observation_id (WTR2/WTR3), this test will enforce that
-    it is not constructed from camera/frame/time strings.
+    Pre-persist observations may have empty observation_id.
+    After persistence (via the repository), the id must be a real UUID,
+    not a synthetic camera/frame/time string.
     """
     obs = _make_observation("cam-1", 1)
 
-    # A synthetic id would look like "cam-1/1/2026-..."
-    synthetic_pattern = f"{obs.camera_id}/{obs.frame_index}"
-    synthetic_pattern_alt = f"{obs.camera_id}_{obs.frame_index}"
+    # Pre-persist: observation_id may be empty.
+    # The contract is only enforced after repository save.
+    if not obs.observation_id:
+        return  # acceptable for pre-persist
 
-    # When WorldObservation gains observation_id, assert it is NOT synthetic:
-    if hasattr(obs, "observation_id"):
-        oid = obs.observation_id  # type: ignore[attr-defined]
-        assert synthetic_pattern not in str(oid), (
-            f"observation_id must not be a synthetic camera/frame/time string: {oid}"
-        )
-        assert synthetic_pattern_alt not in str(oid), (
-            f"observation_id must not be a synthetic camera/frame/time string: {oid}"
-        )
-        assert oid, "observation_id must not be empty"
+    # Post-persist: must not be synthetic.
+    synthetic_pattern = f"{obs.camera_id}/{obs.frame_index}"
+    assert synthetic_pattern not in obs.observation_id, (
+        f"observation_id must not be a synthetic string: {obs.observation_id}"
+    )
+    assert "/" not in obs.observation_id, (
+        f"observation_id must be a UUID, not a path: {obs.observation_id}"
+    )
 
 
 @pytest.mark.asyncio

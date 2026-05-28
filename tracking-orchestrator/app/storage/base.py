@@ -159,7 +159,7 @@ class PHRepositoryProtocol(Protocol):
 class WorldObservationRepositoryProtocol(Protocol):
     """Persist individual world observations linked to a PH."""
 
-    async def save(self, observation: WorldObservation, ph_id: str) -> None: ...
+    async def save(self, observation: WorldObservation, ph_id: str) -> str: ...
     async def list_by_ph(self, ph_id: str, limit: int = 50) -> list[WorldObservation]: ...
 
 
@@ -611,8 +611,25 @@ class InMemoryWorldObservationRepository:
     def __init__(self) -> None:
         self._observations: dict[str, list[WorldObservation]] = {}
 
-    async def save(self, observation: WorldObservation, ph_id: str) -> None:
-        self._observations.setdefault(ph_id, []).append(observation)
+    async def save(self, observation: WorldObservation, ph_id: str) -> str:
+        import uuid as _uuid
+
+        oid = str(_uuid.uuid4())
+        stored = WorldObservation(
+            observation_id=oid,
+            camera_id=observation.camera_id,
+            frame_index=observation.frame_index,
+            captured_at=observation.captured_at,
+            floor_point=observation.floor_point,
+            bbox=observation.bbox,
+            embedding=observation.embedding,
+            detection_confidence=observation.detection_confidence,
+            height_estimate_m=observation.height_estimate_m,
+            face_anchor=observation.face_anchor,
+            detection_id=observation.detection_id,
+        )
+        self._observations.setdefault(ph_id, []).append(stored)
+        return oid
 
     async def list_by_ph(self, ph_id: str, limit: int = 50) -> list[WorldObservation]:
         obs_list = self._observations.get(ph_id, [])

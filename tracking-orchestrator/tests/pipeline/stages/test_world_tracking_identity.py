@@ -119,17 +119,15 @@ class TestWorldTrackingEmitsRevisions:
         await ph_repo.save(ph)
 
         obs = _make_observation("cam1", 1, captured_at=now)
-        await obs_repo.save(obs, ph_id="ph-1")
+        real_obs_id = await obs_repo.save(obs, ph_id="ph-1")
 
-        # The observation ID synthesized by _resolve_identities is
-        # "cam1:1:2026-05-27T12:00:00+00:00".  Set tracklet_id to match
-        # so the resolver associates this face anchor with the PH.
-        obs_id_format = f"cam1:1:{now.isoformat()}"
+        # The resolver matches face anchors to PHs by observation_id.
+        # Use the real observation UUID as the tracklet_id key.
         face_anchor = FaceAnchor(
             person_id="alice",
             confidence=0.95,
             quality=1.0,
-            tracklet_id=obs_id_format,
+            tracklet_id=real_obs_id,
             camera_id="cam1",
             captured_at=now,
         )

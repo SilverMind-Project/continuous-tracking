@@ -105,7 +105,11 @@ PH_COV_LEN = 16  # 4x4 covariance matrix, row-major, in metres^2 and (metres/sec
 
 @dataclass(frozen=True)
 class WorldObservation:
-    """One camera-detection projected to floor coordinates."""
+    """One camera-detection projected to floor coordinates.
+
+    ``observation_id`` is assigned at persistence time by the repository.
+    It is empty before the first save.
+    """
 
     camera_id: str
     frame_index: int
@@ -114,6 +118,7 @@ class WorldObservation:
     bbox: BoundingBox
     embedding: list[float]
     detection_confidence: float
+    observation_id: str = ""
     height_estimate_m: float | None = None
     face_anchor: FaceAnchor | None = None
     detection_id: str = ""
@@ -456,12 +461,17 @@ class FaceAnchor:
     Face anchors are the strongest evidence source in the Bayesian
     posterior. They carry a person_id from the face recognition service
     along with confidence and quality metrics.
+
+    In the PH-native pipeline (WTR2+), detection_id replaces tracklet_id
+    as the primary per-detection key. tracklet_id is kept for backward
+    compatibility with the legacy resolver evidence matching.
     """
 
     person_id: IdentityId
     confidence: float
     quality: float = 1.0
     tracklet_id: TrackletId = ""
+    detection_id: str = ""
     camera_id: CameraId = ""
     captured_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 

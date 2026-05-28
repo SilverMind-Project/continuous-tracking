@@ -61,26 +61,31 @@ class FaceIdentityStage(FrameStage):
             return
         if self._face_id_client is None:
             return
-        if self._tracklet_manager is None:
-            return
 
         eligible_indices: list[int] = []
         eligible_crops: list[npt.NDArray[np.uint8]] = []
         eligible_detections = []
-        sent_tracklet_ids: set[str] = set()
+        sent_ids: set[str] = set()
 
         for idx, det in enumerate(ctx.domain_detections):
-            tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(det.detection_id)  # type: ignore[attr-defined]
-            if not tracklet_id:
-                continue
-            last_call = self._last_face_id_by_tracklet.get(tracklet_id)
+            # Key cooldown by detection_id (PH mode) or tracklet_id (legacy).
+            if self._tracklet_manager is not None:
+                key = self._tracklet_manager.get_tracklet_id_for_detection(det.detection_id)  # type: ignore[attr-defined]
+                if not key:
+                    continue
+            else:
+                key = det.detection_id
+                if not key:
+                    continue
+
+            last_call = self._last_face_id_by_tracklet.get(key)
             if last_call is not None:
                 elapsed = (now - last_call).total_seconds()
                 if elapsed < self._face_id_cooldown_s:
                     _metrics.metrics.face_id_cooldown_skips_total.inc()
                     logger.debug(
                         "face_id_cooldown_skip",
-                        tracklet_id=tracklet_id,
+                        key=key,
                         elapsed_s=round(elapsed, 1),
                         cooldown_s=self._face_id_cooldown_s,
                     )
@@ -88,7 +93,7 @@ class FaceIdentityStage(FrameStage):
             eligible_indices.append(idx)
             eligible_crops.append(ctx.crops[idx])
             eligible_detections.append(det)
-            sent_tracklet_ids.add(tracklet_id)
+            sent_ids.add(key)
 
         if not eligible_crops:
             return
@@ -99,7 +104,7 @@ class FaceIdentityStage(FrameStage):
             frame_width=ctx.effective_width,
             frame_height=ctx.effective_height,
             camera_id=camera_id,
-            sent_tracklet_ids=sent_tracklet_ids,
+            sent_ids=sent_ids,
         )
         if ctx.face_anchors:
             self._build_face_evidence(ctx)
@@ -124,7 +129,7 @@ class FaceIdentityStage(FrameStage):
         frame_width: int,
         frame_height: int,
         camera_id: str,
-        sent_tracklet_ids: set[str] | None = None,
+        sent_ids: set[str] | None = None,
     ) -> list[FaceAnchor]:
         if self._face_id_client is None or not crops:
             return []
@@ -148,9 +153,9 @@ class FaceIdentityStage(FrameStage):
         try:
             crop_face_results = await self._face_id_client.identify_crops(crops, crop_bboxes_norm)
         except Exception:
-            if sent_tracklet_ids:
-                for tl_id in sent_tracklet_ids:
-                    self._last_face_id_by_tracklet[tl_id] = now
+            if sent_ids:
+                for key in sent_ids:
+                    self._last_face_id_by_tracklet[key] = now
             logger.warning(
                 "face_id_service_error",
                 camera_id=camera_id,
@@ -158,11 +163,9 @@ class FaceIdentityStage(FrameStage):
             )
             return []
 
-        if sent_tracklet_ids:
-            for tl_id in sent_tracklet_ids:
-                self._last_face_id_by_tracklet[tl_id] = now
-        elif crops:
-            pass
+        if sent_ids:
+            for key in sent_ids:
+                self._last_face_id_by_tracklet[key] = now
 
         if not crop_face_results:
             return []
@@ -183,17 +186,27 @@ class FaceIdentityStage(FrameStage):
                 if face.confidence < min_conf:
                     continue
 
+                # Build the detection key for tracker anchoring.
                 tracklet_id = ""
+                detection_id = det.detection_id
                 if self._tracklet_manager is not None:
                     tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(  # type: ignore[attr-defined]
                         det.detection_id
                     )
+                    if not tracklet_id:
+                        logger.debug(
+                            "face_anchor_dropped_no_tracklet",
+                            person_id=face.person_id,
+                            detection_id=det.detection_id,
+                            camera_id=camera_id,
+                        )
+                        continue
 
-                if not tracklet_id:
+                # PH mode: anchor by detection_id when no tracklet_manager.
+                if self._tracklet_manager is None and not detection_id:
                     logger.debug(
-                        "face_anchor_dropped_no_tracklet",
+                        "face_anchor_dropped_no_detection_id",
                         person_id=face.person_id,
-                        detection_id=det.detection_id,
                         camera_id=camera_id,
                     )
                     continue
@@ -203,6 +216,7 @@ class FaceIdentityStage(FrameStage):
                         person_id=face.person_id,
                         confidence=face.confidence,
                         tracklet_id=tracklet_id,
+                        detection_id=detection_id,
                         camera_id=camera_id,
                         captured_at=now,
                     )
@@ -214,6 +228,7 @@ class FaceIdentityStage(FrameStage):
                 camera_id=camera_id,
                 anchor_count=len(face_anchors),
                 identities=[fa.person_id for fa in face_anchors],
+                mode="ph" if self._tracklet_manager is None else "tracklet",
             )
         return face_anchors
 
@@ -222,6 +237,8 @@ class FaceIdentityStage(FrameStage):
 
         FaceEvidence carries ``source="direct"`` to distinguish real ArcFace
         matches from synthetic propagated anchors in the identity resolver.
+        In PH mode, detection_id is the primary key for matching evidence
+        to observations.
         """
         evidence: list[FaceEvidence] = []
         for fa in ctx.face_anchors:
@@ -230,6 +247,7 @@ class FaceIdentityStage(FrameStage):
                     person_id=fa.person_id,
                     confidence=fa.confidence,
                     tracklet_id=fa.tracklet_id,
+                    detection_id=fa.detection_id,
                     camera_id=fa.camera_id,
                     frame_index=ctx.frame.frame_index,
                     source="direct",

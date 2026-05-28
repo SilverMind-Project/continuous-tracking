@@ -39,6 +39,10 @@ class WorldTrackingStage(FrameStage):
         transit_detector: TransitDetector | None = None,
         transit_zones: list[TransitZone] | None = None,
         room_transition_publisher: RoomTransitionPublisher | None = None,
+        assertion_cache: object | None = None,
+        anchor_match_window_s: float = 30.0,
+        anchor_match_distance_m: float = 5.0,
+        anchor_min_confidence: float = 0.5,
     ) -> None:
         self._tracker = tracker
         self._config = config or WorldTrackerConfig()
@@ -48,26 +52,24 @@ class WorldTrackingStage(FrameStage):
         self._transit_detector = transit_detector
         self._transit_zones = transit_zones or []
         self._room_transition_publisher = room_transition_publisher
+        self._assertion_cache = assertion_cache
+        self._anchor_match_window_s = anchor_match_window_s
+        self._anchor_match_distance_m = anchor_match_distance_m
+        self._anchor_min_confidence = anchor_min_confidence
 
     async def run(self, ctx: FrameContext) -> None:
         if not self._enabled:
             return
 
         from ...domain import FaceAnchor, WorldObservation
+        from ...tracking.world.assertion_matching import match_assertions_to_face_anchors
 
-        # Build WorldObservation list from this frame's calibrated detections.
-        # Match face anchors by camera_id (per-camera tracklet_id is deprecated
-        # in M1 since the per-camera tracker no longer runs).
-        face_by_camera: dict[str, FaceAnchor] = {}
-        for fa in ctx.face_anchors:
-            key = fa.camera_id if fa.camera_id else fa.tracklet_id
-            if key:
-                face_by_camera[key] = fa
+        # Build observations first (without face anchors), so we can use
+        # their floor positions to match CC assertions.
         observations: list[WorldObservation] = []
         for det in ctx.domain_detections:
             if not det.floor_point.calibrated:
                 continue
-            face_anchor = face_by_camera.get(det.camera_id)
             observations.append(
                 WorldObservation(
                     camera_id=det.camera_id,
@@ -78,18 +80,74 @@ class WorldTrackingStage(FrameStage):
                     embedding=det.embedding,
                     detection_confidence=det.confidence,
                     height_estimate_m=None,
-                    face_anchor=face_anchor,
+                    face_anchor=None,
                     detection_id=det.detection_id,
                 )
             )
 
-        # Run the world tracker.
+        # Match CC assertions to observations (spatial + temporal + confidence gate).
+        cc_face_anchors: list[FaceAnchor] = []
+        if self._assertion_cache is not None:
+            try:
+                recent_assertions = await self._assertion_cache.get_recent()
+                cc_face_anchors = match_assertions_to_face_anchors(
+                    assertions=recent_assertions,
+                    observations=observations,
+                    now=ctx.event_time,
+                    anchor_match_window_s=self._anchor_match_window_s,
+                    anchor_match_distance_m=self._anchor_match_distance_m,
+                    anchor_min_confidence=self._anchor_min_confidence,
+                )
+                if cc_face_anchors:
+                    logger.debug(
+                        "cc_assertions_matched",
+                        matched=len(cc_face_anchors),
+                        assertions_checked=len(recent_assertions),
+                    )
+            except Exception:
+                logger.exception("cc_assertion_matching_failed")
+
+        # Merge direct face anchors (from FaceIdentityStage) with CC assertion anchors.
+        all_face_anchors = list(ctx.face_anchors) + cc_face_anchors
+
+        # Map face anchors to observations (detection_id primary, camera_id fallback).
+        face_by_detection: dict[str, FaceAnchor] = {}
+        face_by_camera: dict[str, FaceAnchor] = {}
+        for fa in all_face_anchors:
+            if fa.detection_id:
+                face_by_detection[fa.detection_id] = fa
+            key = fa.camera_id if fa.camera_id else fa.tracklet_id
+            if key:
+                face_by_camera[key] = fa
+
+        # Rebuild observations with matched face anchors.
+        observations_with_faces: list[WorldObservation] = []
+        for obs in observations:
+            face_anchor = face_by_detection.get(obs.detection_id)
+            if face_anchor is None:
+                face_anchor = face_by_camera.get(obs.camera_id)
+            observations_with_faces.append(
+                WorldObservation(
+                    camera_id=obs.camera_id,
+                    frame_index=obs.frame_index,
+                    captured_at=obs.captured_at,
+                    floor_point=obs.floor_point,
+                    bbox=obs.bbox,
+                    embedding=obs.embedding,
+                    detection_confidence=obs.detection_confidence,
+                    height_estimate_m=obs.height_estimate_m,
+                    face_anchor=face_anchor,
+                    detection_id=obs.detection_id,
+                )
+            )
+
+        # Run the world tracker with combined face anchors.
         result = await self._tracker.step(
-            observations=observations,
+            observations=observations_with_faces,
             now=ctx.event_time,
             room_polygons=self._room_polygons,
             camera_room_map=self._camera_room_map,
-            face_anchors=ctx.face_anchors if ctx.face_anchors else None,
+            face_anchors=all_face_anchors,
         )
 
         # M2: detect transit zone crossings for each active PH.

@@ -734,7 +734,8 @@ class PostgresWorldObservationRepository:
     def __init__(self, pool: Any) -> None:
         self._pool: Any = pool
 
-    async def save(self, observation: WorldObservation, ph_id: str) -> None:
+    async def save(self, observation: WorldObservation, ph_id: str) -> str:
+        oid = str(uuid.uuid4())
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
@@ -743,7 +744,7 @@ class PostgresWorldObservationRepository:
                     floor_x_m, floor_y_m, detection_confidence, bbox, height_m, metadata
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 """,
-                str(uuid.uuid4()),
+                oid,
                 ph_id,
                 observation.camera_id,
                 observation.frame_index,
@@ -762,6 +763,7 @@ class PostgresWorldObservationRepository:
                 observation.height_estimate_m,
                 {},
             )
+        return oid
 
     async def list_by_ph(self, ph_id: str, limit: int = 50) -> list[WorldObservation]:
         async with self._pool.acquire() as conn:
@@ -808,12 +810,13 @@ def _row_to_world_observation(row: Any) -> WorldObservation:
         bbox_raw = json.loads(bbox_raw)
 
     return WorldObservation(
-        camera_id=row["camera_id"],
-        frame_index=row["frame_index"],
+        observation_id=str(row["observation_id"]),
+        camera_id=str(row["camera_id"]),
+        frame_index=int(row["frame_index"]),
         captured_at=row["captured_at"],
         floor_point=FloorPoint(
-            x_mm=int(row["floor_x_m"] * 1000),
-            y_mm=int(row["floor_y_m"] * 1000),
+            x_mm=int(float(row["floor_x_m"]) * 1000),
+            y_mm=int(float(row["floor_y_m"]) * 1000),
             calibrated=True,
         ),
         bbox=BoundingBox(
@@ -824,7 +827,7 @@ def _row_to_world_observation(row: Any) -> WorldObservation:
         ),
         embedding=[],
         detection_confidence=float(row["detection_confidence"]),
-        height_estimate_m=row["height_m"],
+        height_estimate_m=row.get("height_m"),
         face_anchor=None,
     )
 

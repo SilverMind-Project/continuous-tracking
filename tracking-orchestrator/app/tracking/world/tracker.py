@@ -495,17 +495,18 @@ async def _resolve_identities(
     if not resolvable_phs:
         return [], [], identity_by_ph
 
-    # Build resolvable wrappers with real observation IDs.
+    # Build resolvable wrappers with real observation IDs from the repository.
     resolvable: list[IdentityResolvableEntity] = []
     for ph in resolvable_phs:
         obs_list = await obs_repo.list_by_ph(ph.ph_id, limit=20)
-        obs_ids = [str(oid) for oid in range(len(obs_list))]  # placeholder
-        # Use the observation's frame_index as a stable proxy for observation_id
-        # since world_observations uses UUIDs generated at insert time.
-        obs_ids_real = []
+        obs_ids = []
         for obs in obs_list:
-            obs_ids_real.append(f"{obs.camera_id}:{obs.frame_index}:{obs.captured_at.isoformat()}")
-        resolvable.append(_PHResolvable(_ph=ph, _obs_ids=obs_ids_real if obs_ids_real else obs_ids))
+            if obs.observation_id:
+                obs_ids.append(obs.observation_id)
+            else:
+                # Fallback for observations persisted before WTR2.
+                obs_ids.append(f"{obs.camera_id}:{obs.frame_index}:{obs.captured_at.isoformat()}")
+        resolvable.append(_PHResolvable(_ph=ph, _obs_ids=obs_ids))
 
     logger.debug(
         "identity_resolution_start",

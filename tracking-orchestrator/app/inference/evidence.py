@@ -96,9 +96,10 @@ class FaceEvidence:
 
     person_id: str
     confidence: float
-    tracklet_id: str
-    camera_id: str
-    frame_index: int
+    tracklet_id: str = ""
+    detection_id: str = ""
+    camera_id: str = ""
+    frame_index: int = 0
     source: FaceEvidenceSource = "direct"
     quality: float = 1.0
     model_name: str = "arcface"

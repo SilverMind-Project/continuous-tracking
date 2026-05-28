@@ -128,11 +128,23 @@ class CCIdentityAssertionSubscriber:
         except (ValueError, TypeError):
             captured_at = datetime.now(UTC)
 
+        # Floor coordinates (WTR2: now decoded for spatial matching).
+        try:
+            floor_x_m = float(fields.get(b"floor_x_m", b"0.0").decode())
+        except (ValueError, TypeError):
+            floor_x_m = 0.0
+        try:
+            floor_y_m = float(fields.get(b"floor_y_m", b"0.0").decode())
+        except (ValueError, TypeError):
+            floor_y_m = 0.0
+
         assertion = {
             "person_id": person_id,
             "confidence": confidence,
             "camera_id": camera_id,
             "captured_at": captured_at,
+            "floor_x_m": floor_x_m,
+            "floor_y_m": floor_y_m,
             "_received_at": datetime.now(UTC),
         }
         await self._cache.add(assertion)
