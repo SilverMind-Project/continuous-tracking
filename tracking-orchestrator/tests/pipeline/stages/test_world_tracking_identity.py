@@ -138,7 +138,6 @@ class TestWorldTrackingEmitsRevisions:
 
         _decisions, revisions, _identity_by_ph = await _resolve_identities(
             resolver=resolver,
-            revision_publisher=fake_publisher,
             obs_repo=obs_repo,
             ph_repo=ph_repo,
             phs=[ph],
@@ -185,7 +184,6 @@ class TestWorldTrackingEmitsRevisions:
 
         _decisions, revisions, _identity_by_ph = await _resolve_identities(
             resolver=resolver,
-            revision_publisher=fake_publisher,
             obs_repo=obs_repo,
             ph_repo=ph_repo,
             phs=[ph],

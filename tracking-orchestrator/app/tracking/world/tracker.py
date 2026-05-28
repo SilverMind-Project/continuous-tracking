@@ -50,12 +50,6 @@ class ContinuationPublisher(Protocol):
     async def publish(self, candidate: PHContinuationCandidate) -> None: ...
 
 
-class RevisionPublisher(Protocol):
-    """Publishes IdentityRevision events to tracking.revisions."""
-
-    async def publish(self, revision: IdentityRevision) -> str: ...
-
-
 @dataclass
 class _PHResolvable:
     """Thin adapter to supply real observation IDs to the identity resolver.
@@ -124,14 +118,12 @@ class WorldTracker:
         config: WorldTrackerConfig | None = None,
         continuation_publisher: ContinuationPublisher | None = None,
         identity_resolver: IdentityResolver | None = None,
-        revision_publisher: RevisionPublisher | None = None,
     ) -> None:
         self._ph_repo = ph_repo
         self._obs_repo = obs_repo
         self._config = config or WorldTrackerConfig()
         self._continuation_publisher = continuation_publisher
         self._identity_resolver = identity_resolver
-        self._revision_publisher = revision_publisher
 
     async def step(
         self,
@@ -406,7 +398,6 @@ class WorldTracker:
         #    received observations this frame.
         identity_decisions, revisions, identity_by_ph = await _resolve_identities(
             resolver=self._identity_resolver,
-            revision_publisher=self._revision_publisher,
             obs_repo=self._obs_repo,
             ph_repo=self._ph_repo,
             phs=updated_phs,
@@ -476,7 +467,6 @@ class WorldTracker:
 async def _resolve_identities(
     *,
     resolver: IdentityResolver | None,
-    revision_publisher: RevisionPublisher | None,
     obs_repo: WorldObservationRepositoryProtocol,
     ph_repo: PHRepositoryProtocol,
     phs: list[PersonHypothesis],

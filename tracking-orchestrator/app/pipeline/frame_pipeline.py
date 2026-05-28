@@ -84,7 +84,6 @@ from ..storage.base import (
     WorldObservationRepositoryProtocol,
 )
 from ..tracking.floor_projector import FloorProjector
-from ..tracking.identity_committer import IdentityCommitter
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
 from ..tracking.world.config import WorldTrackerConfig
@@ -274,7 +273,6 @@ class FrameProcessingPipeline:
         self._reid_embedder: ReidEmbedderProtocol | None = None
         # M6
         self._trajectory_writer: TrajectoryWriter | None = None
-        self._identity_committer: IdentityCommitter | None = None
         self._keyframe_sampler: KeyframeSampler | None = None
         self._scene_publisher: SceneSamplesPublisher | None = None
         self._running = False
@@ -402,7 +400,6 @@ class FrameProcessingPipeline:
             obs_repo=self._obs_repo,
             config=self._config.world_tracker,
             identity_resolver=self._identity_resolver,
-            revision_publisher=self._revision_publisher,
         )
 
         # ---- Trajectory writer + keyframe sampler ----
@@ -410,13 +407,6 @@ class FrameProcessingPipeline:
         # trajectories written by the writer.
         _traj_repo = deps.trajectory_repo or InMemoryTrajectoryRepository()
         self._trajectory_writer = TrajectoryWriter(repo=_traj_repo)
-
-        # Phase 5: IdentityCommitter buffers per-frame posterior evidence
-        # and emits one commit decision per GT per commit_window_s.
-        self._identity_committer = IdentityCommitter(
-            commit_window_s=self._config.identity_commit_window_s,
-            high_confidence_face_threshold=self._config.identity_high_confidence_face_threshold,
-        )
 
         self._keyframe_sampler = KeyframeSampler(
             repo=deps.keyframe_repo or InMemoryKeyframeRepository(),
@@ -778,14 +768,6 @@ class FrameProcessingPipeline:
             await self._settings_repo.save_camera_config(CameraConfig(camera_id=camera_id))
         self._seen_cameras.add(camera_id)
 
-    def _sync_adjacency(self) -> None:
-        """No-op: CameraAdjacency was deleted in N0.
-
-        The WorldTracker handles camera overlap groups directly.
-        If adjacency-based face propagation is still needed, it is an M1 bug.
-        """
-        return
-
     def set_camera_room_map(self, camera_room_map: object) -> None:
         """M2: Inject the live CameraRoomMap into pipeline stages.
 
@@ -812,8 +794,6 @@ class FrameProcessingPipeline:
         if self._detector is None:
             await self._skeleton_frame(frame)
             return
-
-        self._sync_adjacency()
 
         ctx = self._init_context(frame)
         assert self._stage_runner is not None

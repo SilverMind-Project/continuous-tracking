@@ -23,7 +23,6 @@ if TYPE_CHECKING:
         IdentityDecision,
         IdentityRevision,
         PostureType,
-        Tracklet,
         WorldFrameSnapshot,
     )
     from ..inference.evidence import (
@@ -78,11 +77,6 @@ class FrameContext:
     # --- Stage: face_id ---
     face_anchors: list[FaceAnchor] = field(default_factory=list)
     _face_evidence: list[FaceEvidence] = field(default_factory=list)
-
-    # --- Stage: tracklet_manage (populated by tracklet_manager) ---
-    active_tracklets: list[Tracklet] = field(default_factory=list)
-    # Height estimates per tracklet (tracklet_id -> height_mm).
-    tracklet_heights: dict[str, float] = field(default_factory=dict)
 
     # --- Stage: cross_camera_and_resolve ---
     active_global_tracks: list[GlobalTrack] = field(default_factory=list)

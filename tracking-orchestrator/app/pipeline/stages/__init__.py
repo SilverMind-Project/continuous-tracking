@@ -8,7 +8,7 @@ from .fetch import FetchStage
 from .inference import InferenceStage
 from .keyframes import KeyframeStage
 from .posture_stage import PostureStage
-from .posture_trails import PostureAndTrailsStage, TrailsStage
+from .posture_trails import TrailsStage
 from .privacy import PrivacyStage
 from .publish import PublishStage
 from .revisions import RevisionsStage
@@ -25,7 +25,6 @@ __all__ = [
     "FrameStage",
     "InferenceStage",
     "KeyframeStage",
-    "PostureAndTrailsStage",
     "PostureStage",
     "PrivacyStage",
     "PublishStage",

@@ -1,12 +1,4 @@
-"""Trail maintenance stage.
-
-PostureAndTrailsStage has been split:
-  - PostureStage  (posture_stage.py)  — soft scoring, runs before TrajectoryStage
-  - TrailsStage   (this file)         — trail maintenance, runs after TrajectoryStage
-
-PostureAndTrailsStage is preserved as a loud shim so callers that weren't updated
-get an immediate error instead of silent wrong behavior.
-"""
+"""Trail maintenance stage — maintains per-PH foot-position trails."""
 
 from __future__ import annotations
 
@@ -53,18 +45,3 @@ class TrailsStage(FrameStage):
             del self._trail_by_ph[pid]
 
         ctx.trail_by_tracklet_snapshot = {pid: list(dq) for pid, dq in self._trail_by_ph.items()}
-
-
-class PostureAndTrailsStage(FrameStage):
-    """Removed. Use PostureStage + TrailsStage instead."""
-
-    name = "posture_and_trails"
-
-    def __init__(self, **_kwargs: object) -> None:
-        raise NotImplementedError(
-            "PostureAndTrailsStage has been split into PostureStage and TrailsStage. "
-            "Update frame_pipeline.py to use both new stages."
-        )
-
-    async def run(self, ctx: FrameContext) -> None:  # pragma: no cover
-        raise NotImplementedError
