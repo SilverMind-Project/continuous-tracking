@@ -21,7 +21,7 @@ message TrackingEvent {
   // One entry per detected person in the frame.
   repeated Detection detections = 4;
 
-  // Identity resolution: for each global track that was matched to a known
+  // Identity resolution: for each PH that was matched to a known
   // person, the posterior probability distribution over candidates.
   // DEPRECATED: prefer identity_snapshots (field 8).  This field is kept
   // for one compatibility release and will stop being populated afterward.
@@ -73,11 +73,17 @@ message Detection {
   float confidence = 4;
 
   // Tracklet this detection belongs to (assigned by tracking logic).
-  string tracklet_id = 5;
+  // DEPRECATED: per-camera tracklet ids have no meaning in the world tracker
+  // architecture. Kept for wire compatibility until WTR9. New consumers must
+  // use ph_id from WorldFrameSnapshot, not this field.
+  string tracklet_id = 5 [deprecated = true];
 
   // Global track ID (cross-camera tracking identifier, not an identity).
-  // Empty until a GlobalTrack is formed for this detection.
-  string global_track_id = 6;
+  // DEPRECATED: global_track_id is superseded by ph_id (Person Hypothesis).
+  // Kept for wire compatibility until WTR9. New consumers must use ph_id
+  // from WorldFrameSnapshot. This field is populated with the active PH id
+  // during the transition period; after WTR9 it will stop being set.
+  string global_track_id = 6 [deprecated = true];
 
   // Floor point in the shared floor-plan coordinate system (millimetres).
   // {x_mm=0, y_mm=0, calibrated=false} when the source camera lacks a
@@ -191,11 +197,12 @@ message IdentityRevision {
   string evidence_json = 11;
 }
 
-// IdentitySnapshot is a lightweight per-global-track identity state for live
+// IdentitySnapshot is a lightweight per-PH identity state for live
 // display.  Unlike IdentityRevision, it is not a standalone stream message —
 // it only appears as a sub-message of TrackingEvent.
 message IdentitySnapshot {
-  // The global track this snapshot refers to.
+  // DEPRECATED: use ph_id.  This field still carries the PH id during the
+  // transition period.  Rename to ph_id in WTR9 after all consumers migrate.
   string global_track_id = 1;
 
   // The committed identity for this global track (empty when UNKNOWN).

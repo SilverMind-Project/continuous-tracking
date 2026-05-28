@@ -1,7 +1,10 @@
-"""Pydantic v2 schemas for the Person Hypothesis API (N1).
+"""Pydantic v2 schemas for the Person Hypothesis API.
+
+Contract: WTR1 §1 — ``ph_id`` is the stable physical-track identifier.
+No public schema in this module may expose ``global_track_id`` or ``tracklet_id``.
 
 Every response model has an explicit ``from_domain()`` classmethod
-so the API surface is deliberate and privacy-first (universal rule 16).
+so the API surface is deliberate and privacy-first.
 """
 
 from __future__ import annotations
