@@ -1,4 +1,4 @@
-"""Subscribes to ``cc.identity_assertions`` Redis stream (M4 bidirectional flow).
+"""Subscribes to ``cc.identity_assertions`` Redis stream.
 
 Cognitive-companion publishes face-anchor-equivalent assertions from the
 recamera VLM path.  This subscriber consumes them and caches the most
@@ -128,7 +128,7 @@ class CCIdentityAssertionSubscriber:
         except (ValueError, TypeError):
             captured_at = datetime.now(UTC)
 
-        # Floor coordinates (WTR2: now decoded for spatial matching).
+        # Floor coordinates (decoded for spatial matching).
         try:
             floor_x_m = float(fields.get(b"floor_x_m", b"0.0").decode())
         except (ValueError, TypeError):

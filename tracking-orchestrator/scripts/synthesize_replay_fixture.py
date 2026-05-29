@@ -45,6 +45,8 @@ def _obs(
     floor_y_mm: int,
     embedding: list[float],
 ) -> dict:
+    import uuid as _uuid
+
     return {
         "camera_id": camera_id,
         "frame_index": frame_index,
@@ -54,6 +56,8 @@ def _obs(
         "embedding": embedding,
         "detection_confidence": 0.92,
         "bbox": {"x_min": 100, "y_min": 100, "x_max": 300, "y_max": 400},
+        "detection_id": str(_uuid.uuid4()),
+        "quality": 0.5,
     }
 
 
@@ -136,10 +140,61 @@ def two_rooms_two_people() -> list[list[dict]]:
     return frames
 
 
+def hallway_bathroom_door() -> list[list[dict]]:
+    """One senior at a bathroom door seen by hallway + doorway camera.
+
+    U1 senior-safety proof: the hallway camera and a doorway camera both observe
+    one person standing at the bathroom door.  The cross-camera dedup pass (U1)
+    must resolve them to a single Person Hypothesis.
+
+    Steps 0-9:   hallway camera (cam-hall) only; person drifting toward door.
+    Steps 10-19: both cameras simultaneously; person at the door (hard case).
+    Steps 20-49: camera-blind interval (person inside bathroom, ~15 seconds at
+                 0.5 s/frame ≈ 15 s; use 30 steps to represent ~15 minutes at
+                 30-second intervals, staying within a compact fixture).
+    Steps 50-59: hallway camera (cam-hall) only; person leaving bathroom.
+
+    Embedding cluster is [0.85, 0.15, 0.0] ± small noise (same identity).
+    """
+    emb_hall = [0.85, 0.15, 0.00]
+    emb_door = [0.83, 0.17, 0.00]
+    frames: list[list[dict]] = []
+
+    # Steps 0-9: hallway camera only; person walking toward bathroom door.
+    for i in range(10):
+        fx = 3000 + i * 150  # x_mm 3000-4350
+        frames.append([_obs("cam-hall", i, i, fx, 8000, emb_hall)])
+
+    # Steps 10-19: both cameras simultaneously; person at bathroom door.
+    for i in range(10):
+        step = 10 + i
+        fx = 4500 + i * 20  # x_mm 4500-4680
+        frames.append(
+            [
+                _obs("cam-hall", step, step, fx, 8000, emb_hall),
+                _obs("cam-door", step, step, fx + 30, 8050, emb_door),
+            ]
+        )
+
+    # Steps 20-27: camera-blind interval (no observations — person inside bathroom).
+    # 8 steps x 0.5 s = 4 s < ph_close_grace_s (5 s), so the PH stays open.
+    for _ in range(8):
+        frames.append([])
+
+    # Steps 28-37: hallway camera only; person leaving bathroom.
+    for i in range(10):
+        step = 28 + i
+        fx = 4700 - i * 150  # drift back
+        frames.append([_obs("cam-hall", step, step, fx, 8000, emb_hall)])
+
+    return frames
+
+
 def main() -> None:
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     _write(FIXTURES_DIR / "two_cameras_one_room.bin", two_cameras_one_room())
     _write(FIXTURES_DIR / "two_rooms_two_people.bin", two_rooms_two_people())
+    _write(FIXTURES_DIR / "hallway_bathroom_door.bin", hallway_bathroom_door())
     print("done")
 
 

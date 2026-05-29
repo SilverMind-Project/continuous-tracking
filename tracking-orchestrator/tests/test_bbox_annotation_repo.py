@@ -2,7 +2,7 @@
 
 Tests cover:
 - save_bbox_annotations + retrieve by keyframe
-- retrieve by tracklet
+- retrieve by ph
 - update_identity_id propagates
 - save_override_bbox persists
 - tag_annotation sets/clears identity_id
@@ -20,13 +20,13 @@ from app.storage.base import InMemoryBboxAnnotationRepository
 
 def _bbox(
     keyframe_id: str = "kf1",
-    tracklet_id: str = "tr1",
+    ph_id: str = "tr1",
     camera_id: str = "cam-a",
     identity_id: str | None = None,
 ) -> BboxAnnotation:
     return BboxAnnotation(
         keyframe_id=keyframe_id,
-        tracklet_id=tracklet_id,
+        ph_id=ph_id,
         camera_id=camera_id,
         x1=10.0,
         y1=20.0,
@@ -51,13 +51,13 @@ async def test_save_and_retrieve_by_keyframe(repo: InMemoryBboxAnnotationReposit
     results = await repo.get_bbox_annotations_for_keyframe("kf1")
     assert len(results) == 1
     assert results[0].x1 == ann.x1
-    assert results[0].tracklet_id == ann.tracklet_id
+    assert results[0].ph_id == ann.ph_id
 
 
-async def test_save_and_retrieve_by_tracklet(repo: InMemoryBboxAnnotationRepository) -> None:
-    ann = _bbox(tracklet_id="tr-alpha")
+async def test_save_and_retrieve_by_ph(repo: InMemoryBboxAnnotationRepository) -> None:
+    ann = _bbox(ph_id="tr-alpha")
     await repo.save_bbox_annotations([ann])
-    results = await repo.get_bbox_annotations_for_tracklet("tr-alpha")
+    results = await repo.get_bbox_annotations_for_ph("tr-alpha")
     assert len(results) == 1
     assert results[0].keyframe_id == "kf1"
 
@@ -75,13 +75,13 @@ async def test_update_identity_id_propagates(repo: InMemoryBboxAnnotationReposit
     assert results[0].identity_id == "alice"
 
 
-async def test_update_identity_id_only_matches_target_tracklet(
+async def test_update_identity_id_only_matches_target_ph(
     repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     await repo.save_bbox_annotations(
         [
-            _bbox(keyframe_id="kf1", tracklet_id="tr1"),
-            _bbox(keyframe_id="kf2", tracklet_id="tr2"),
+            _bbox(keyframe_id="kf1", ph_id="tr1"),
+            _bbox(keyframe_id="kf2", ph_id="tr2"),
         ]
     )
     await repo.update_identity_id("tr1", "alice")
@@ -130,8 +130,8 @@ async def test_save_empty_list_no_op(repo: InMemoryBboxAnnotationRepository) -> 
 async def test_multiple_annotations_same_keyframe(repo: InMemoryBboxAnnotationRepository) -> None:
     await repo.save_bbox_annotations(
         [
-            _bbox(keyframe_id="kf1", tracklet_id="tr1"),
-            _bbox(keyframe_id="kf1", tracklet_id="tr2"),
+            _bbox(keyframe_id="kf1", ph_id="tr1"),
+            _bbox(keyframe_id="kf1", ph_id="tr2"),
         ]
     )
     results = await repo.get_bbox_annotations_for_keyframe("kf1")

@@ -12,7 +12,7 @@ from ..domain import BboxAnnotation
 
 
 class BboxBatchOperation:
-    """A single operation in a bbox annotation batch (M3)."""
+    """A single operation in a bbox annotation batch."""
 
     def __init__(
         self,
@@ -32,9 +32,9 @@ class BboxAnnotationRepository(Protocol):
 
     async def get_bbox_annotations_for_keyframe(self, keyframe_id: str) -> list[BboxAnnotation]: ...
 
-    async def get_bbox_annotations_for_tracklet(self, tracklet_id: str) -> list[BboxAnnotation]: ...
+    async def get_bbox_annotations_for_ph(self, ph_id: str) -> list[BboxAnnotation]: ...
 
-    async def update_identity_id(self, tracklet_id: str, identity_id: str) -> None:
+    async def update_identity_id(self, ph_id: str, identity_id: str) -> None:
         """Called by IdentityRewriter when an identity is revised."""
         ...
 
@@ -47,7 +47,7 @@ class BboxAnnotationRepository(Protocol):
         y2: float,
         override_by: str,
     ) -> None:
-        """Persist a user-drawn bbox override (written by M4 frontend path)."""
+        """Persist a user-drawn bbox override."""
         ...
 
     async def get_annotation_by_id(self, annotation_id: str) -> BboxAnnotation | None:
@@ -62,7 +62,7 @@ class BboxAnnotationRepository(Protocol):
         """Delete a single bbox annotation by its UUID."""
         ...
 
-    # --- M3: idempotent delete + batch ops ---
+    # --- Idempotent delete + batch ops ---
 
     async def delete_annotation_if_exists(self, annotation_id: str) -> bool:
         """Delete by ID. Returns True if a row was deleted, False if none existed."""
@@ -91,7 +91,7 @@ class InMemoryBboxAnnotationRepository:
     def __init__(self) -> None:
         self._rows: dict[str, BboxAnnotation] = {}
         self._by_keyframe: dict[str, list[str]] = {}
-        self._by_tracklet: dict[str, list[str]] = {}
+        self._by_ph: dict[str, list[str]] = {}
 
     async def save_bbox_annotations(self, annotations: list[BboxAnnotation]) -> None:
         for ann in annotations:
@@ -99,20 +99,20 @@ class InMemoryBboxAnnotationRepository:
             ann_with_id = BboxAnnotation(**{**ann.__dict__, "id": ann_id})
             self._rows[ann_id] = ann_with_id
             self._by_keyframe.setdefault(ann.keyframe_id, []).append(ann_id)
-            self._by_tracklet.setdefault(ann.tracklet_id, []).append(ann_id)
+            self._by_ph.setdefault(ann.ph_id, []).append(ann_id)
 
     async def get_bbox_annotations_for_keyframe(self, keyframe_id: str) -> list[BboxAnnotation]:
         return [self._rows[i] for i in self._by_keyframe.get(keyframe_id, [])]
 
-    async def get_bbox_annotations_for_tracklet(self, tracklet_id: str) -> list[BboxAnnotation]:
-        return [self._rows[i] for i in self._by_tracklet.get(tracklet_id, [])]
+    async def get_bbox_annotations_for_ph(self, ph_id: str) -> list[BboxAnnotation]:
+        return [self._rows[i] for i in self._by_ph.get(ph_id, [])]
 
     async def get_annotation_by_id(self, annotation_id: str) -> BboxAnnotation | None:
         return self._rows.get(annotation_id)
 
-    async def update_identity_id(self, tracklet_id: str, identity_id: str) -> None:
+    async def update_identity_id(self, ph_id: str, identity_id: str) -> None:
         for ann_id, ann in list(self._rows.items()):
-            if ann.tracklet_id == tracklet_id:
+            if ann.ph_id == ph_id:
                 self._rows[ann_id] = BboxAnnotation(**{**ann.__dict__, "identity_id": identity_id})
 
     async def save_override_bbox(
@@ -152,12 +152,10 @@ class InMemoryBboxAnnotationRepository:
                 self._by_keyframe[ann.keyframe_id] = [
                     i for i in self._by_keyframe[ann.keyframe_id] if i != annotation_id
                 ]
-            if ann.tracklet_id in self._by_tracklet:
-                self._by_tracklet[ann.tracklet_id] = [
-                    i for i in self._by_tracklet[ann.tracklet_id] if i != annotation_id
-                ]
+            if ann.ph_id in self._by_ph:
+                self._by_ph[ann.ph_id] = [i for i in self._by_ph[ann.ph_id] if i != annotation_id]
 
-    # --- M3 methods ---
+    # --- Batch methods ---
 
     async def delete_annotation_if_exists(self, annotation_id: str) -> bool:
         existed = annotation_id in self._rows
@@ -206,7 +204,7 @@ class InMemoryBboxAnnotationRepository:
                 new_id = str(uuid.uuid4())
                 ann = BboxAnnotation(
                     keyframe_id=keyframe_id,
-                    tracklet_id="",
+                    ph_id="",
                     camera_id="",
                     x1=float(op.data.get("x1", 0)),
                     y1=float(op.data.get("y1", 0)),

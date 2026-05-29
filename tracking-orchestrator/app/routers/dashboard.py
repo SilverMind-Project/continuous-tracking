@@ -223,7 +223,7 @@ async def list_keyframes(
     person_id: str | None = Query(None, description="Filter by identity ID"),
     tag_reason: str | None = Query(None, description="Filter by tag reason"),
     signal_type: str | None = Query(None, description="Filter by annotations.signal_type"),
-    global_track_id: str | None = Query(None, description="Filter by global track"),
+    ph_id: str | None = Query(None, description="Filter by PH"),
     strategy: str | None = Query(None, pattern="^lifecycle$"),
     after: str | None = Query(None, description="ISO-8601 start time"),
     limit: int = Query(100, ge=1, le=500),
@@ -244,7 +244,7 @@ async def list_keyframes(
 
     fetch_limit = 500 if strategy == "lifecycle" else limit
     keyframes = await repo.list_keyframes(
-        global_track_id=global_track_id,
+        ph_id=ph_id,
         after=after_dt,
         limit=fetch_limit,
     )
@@ -409,7 +409,7 @@ async def delete_bbox(
 
 
 # ---------------------------------------------------------------------------
-# M3: POST /internal/bboxes/batch
+# POST /internal/bboxes/batch
 # ---------------------------------------------------------------------------
 
 
@@ -468,7 +468,7 @@ def _signal_to_dict(s: Any) -> dict[str, Any]:
 def _point_to_dict(p: Any) -> dict[str, Any]:
     return {
         "identity_id": p.identity_id,
-        "global_track_id": p.global_track_id,
+        "ph_id": p.ph_id,
         "observed_at": p.observed_at.isoformat(),
         "room_name": p.room_name,
         "ground_x": p.ground_x,
@@ -484,8 +484,7 @@ def _keyframe_to_dict(k: Any) -> dict[str, Any]:
     return {
         "sample_id": k.keyframe_id,
         "keyframe_id": k.keyframe_id,
-        "tracklet_id": k.tracklet_id,
-        "global_track_id": k.global_track_id,
+        "ph_id": k.ph_id,
         "camera_id": k.camera_id,
         "minio_key": k.minio_key,
         "captured_at": k.captured_at.isoformat(),
@@ -502,7 +501,7 @@ def _bbox_to_dict(b: Any) -> dict[str, Any]:
     return {
         "id": getattr(b, "id", None),
         "keyframe_id": b.keyframe_id,
-        "tracklet_id": b.tracklet_id,
+        "ph_id": b.ph_id,
         "camera_id": b.camera_id,
         "x1": b.x1,
         "y1": b.y1,

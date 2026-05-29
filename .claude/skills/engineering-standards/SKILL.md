@@ -13,7 +13,7 @@ Every module, class, and function has exactly one reason to change.
 
 - **Pipeline stages** do one thing: fetch, detect, redact, project, infer, track, resolve, write, sample, revise, or publish. A stage that does two unrelated things is a bug.
 - **Services** coordinate; they do not own algorithms. `DementiaSignalWorker` schedules and coordinates; individual detectors own the algorithms.
-- **Domain objects** are pure data — frozen dataclasses with no behavior beyond property accessors.
+- **Domain objects** are pure data -- frozen dataclasses with no behavior beyond property accessors.
 
 ### Dependency Inversion
 
@@ -28,8 +28,8 @@ High-level policy never depends on low-level implementation details. Both depend
 
 Modules are open for extension, closed for modification.
 
-- New signal detectors are added as new classes implementing a detector protocol — never by adding `elif` branches inside `_process_identity`.
-- New pipeline stages are added by creating a new `FrameStage` and inserting it into the stage list — never by adding a private method and a call site inside `_process_frame`.
+- New signal detectors are added as new classes implementing a detector protocol -- never by adding `elif` branches inside `_process_identity`.
+- New pipeline stages are added by creating a new `FrameStage` and inserting it into the stage list -- never by adding a private method and a call site inside `_process_frame`.
 
 ### Composition over inheritance
 
@@ -48,9 +48,9 @@ The goal is backend portability: swap Postgres for a different store by replacin
 
 Every persistent resource gets three artifacts:
 
-1. A `Protocol` in `storage/base.py` — the contract services depend on.
-2. An `InMemory*` class in the same file — fast, zero-dependency, used in all unit tests.
-3. A `Postgres*` class in `storage/postgres/` — the production implementation.
+1. A `Protocol` in `storage/base.py` -- the contract services depend on.
+2. An `InMemory*` class in the same file -- fast, zero-dependency, used in all unit tests.
+3. A `Postgres*` class in `storage/postgres/` -- the production implementation.
 
 Services import only the `Protocol`. Import-linter enforces the layering contract (`core → domain → storage → services → transport → routers`). Nothing above `storage` may import a concrete `Postgres*` class.
 
@@ -65,7 +65,7 @@ Rules:
 
 1. All repository methods are `async`.
 2. Return domain types, never raw DB rows or dicts.
-3. `Protocol` carries no state — it is a pure structural interface.
+3. `Protocol` carries no state -- it is a pure structural interface.
 4. `InMemory` uses plain `dict` / `list`; never touches a database or network.
 5. `Postgres*` receives only an `asyncpg.Pool`; holds no other state.
 
@@ -82,7 +82,7 @@ type Manager interface {
 ```
 
 1. Accept interfaces, return concrete types.
-2. Never pass raw Redis clients across package boundaries — wrap them.
+2. Never pass raw Redis clients across package boundaries -- wrap them.
 3. Define interfaces in the **consumer** package, not the provider.
 
 ---
@@ -94,12 +94,12 @@ type Manager interface {
 Every dependency is a required constructor parameter. No optional service locators, no `if self._foo is not None` guards that silently skip work, no `getattr(self, "_foo", None)` fallbacks.
 
 ```python
-# RIGHT — explicit, testable
+# RIGHT -- explicit, testable
 class TrajectoryWriter:
     def __init__(self, repo: TrajectoryRepository) -> None:
         self._repo = repo
 
-# WRONG — hidden dependency
+# WRONG -- hidden dependency
 class TrajectoryWriter:
     def __init__(self) -> None:
         self._repo = _create_default_repo()  # can't inject a mock
@@ -145,7 +145,7 @@ detection = replace(detection, tracklet_id="tl-1", global_track_id="gt-1")
 
 ### Never mutate frozen instances
 
-`FrozenInstanceError` is a correctness guard. Use `dataclasses.replace()` to create new instances with updated fields. Never use `object.__setattr__` to bypass the freeze — if you need mutability, the type should not be frozen.
+`FrozenInstanceError` is a correctness guard. Use `dataclasses.replace()` to create new instances with updated fields. Never use `object.__setattr__` to bypass the freeze -- if you need mutability, the type should not be frozen.
 
 ### Class-level constants outside the dataclass
 
@@ -170,14 +170,14 @@ class IdentityEvidence:
 Algorithms live in pure functions that take inputs and return outputs. They never read global state, call I/O, or mutate arguments. This makes them trivially testable with table-driven tests.
 
 ```python
-# RIGHT — pure, testable without any fixture
+# RIGHT -- pure, testable without any fixture
 def combine_evidence(
     evidence_list: list[IdentityEvidence],
     known_identities: set[str],
 ) -> EvidencePosterior:
     ...
 
-# WRONG — reads self._config, self._identities, calls self._gallery_repo
+# WRONG -- reads self._config, self._identities, calls self._gallery_repo
 def _from_gallery(self, gt: GlobalTrack) -> PosteriorDist:
     ...
 ```
@@ -190,7 +190,7 @@ Rules based on [Google Python Style Guide](https://google.github.io/styleguide/p
 
 ### All imports at the top of the file
 
-Imports go at the top of the file, after the module docstring, before any executable code. Every import statement is executed at module load time — no exception.
+Imports go at the top of the file, after the module docstring, before any executable code. Every import statement is executed at module load time -- no exception.
 
 ```python
 # RIGHT
@@ -203,7 +203,7 @@ from app.domain import PersonHypothesis
 # THEN executable code
 def process(ph: PersonHypothesis) -> None: ...
 
-# WRONG — conditional import on runtime data
+# WRONG -- conditional import on runtime data
 if adjacency_edges_raw:
     from .calibration.state import calibration_state  # may never execute
 ```
@@ -221,18 +221,18 @@ The only legitimate conditional imports are:
 | TYPE_CHECKING guard | `if TYPE_CHECKING: from ..pipeline import ...` | Avoids circular imports at runtime |
 | Version fallback | `if sys.version_info >= (3, 12): ...` | Polyfill for older Python |
 
-Any other conditional import is a bug. If a module-level import would cause a circular dependency, use `TYPE_CHECKING` or restructure the code — don't bury the import in a function body.
+Any other conditional import is a bug. If a module-level import would cause a circular dependency, use `TYPE_CHECKING` or restructure the code -- don't bury the import in a function body.
 
 ### No import side-effects
 
 Importing a module must not mutate global state, start threads, open connections, register atexit handlers, or modify `sys.path`. If a module needs initialization, expose a factory function or class.
 
 ```python
-# WRONG — side-effect at import time
+# WRONG -- side-effect at import time
 # calibration/state.py
 calibration_state = CalibrationState()  # singleton created on import
 
-# RIGHT — explicit initialization controlled by the caller
+# RIGHT -- explicit initialization controlled by the caller
 # calibration/state.py
 def create_calibration_state() -> CalibrationState:
     return CalibrationState()
@@ -270,7 +270,7 @@ The `tracking <-> pipeline` boundary is the most fragile import path in this cod
 
 2. **Do not eagerly re-export types in `__init__.py` that create cycles.** Package init files should be minimal. Any re-export that triggers a chain back to the importing module is a cycle.
 
-3. **Shared types between packages live in a neutral module.** Types needed by both `frame_pipeline` and `stages/` live in `pipeline/types.py` — imported by both sides without creating a cycle.
+3. **Shared types between packages live in a neutral module.** Types needed by both `frame_pipeline` and `stages/` live in `pipeline/types.py` -- imported by both sides without creating a cycle.
 
 ---
 
@@ -282,17 +282,17 @@ All annotations are strings at runtime (PEP 563). This enables forward reference
 
 ### Exhaustive type annotations
 
-All function signatures have parameter and return types. No bare `def foo(x):` — always `def foo(x: int) -> str:`. `mypy --strict` runs on `domain/`, `storage/`, `services/`, and `transport/`.
+All function signatures have parameter and return types. No bare `def foo(x):` -- always `def foo(x: int) -> str:`. `mypy --strict` runs on `domain/`, `storage/`, `services/`, and `transport/`.
 
 ### Strict Optional
 
 Implicit `None` is a leading source of production bugs. `mypy` strict-optional is enabled. Every value that can be `None` must be annotated as `T | None`.
 
 ```python
-# RIGHT — explicit about nullability
+# RIGHT -- explicit about nullability
 def lookup(key: str) -> PersonHypothesis | None: ...
 
-# WRONG — no annotation, caller doesn't know None is possible
+# WRONG -- no annotation, caller doesn't know None is possible
 def lookup(key: str): ...
 ```
 
@@ -313,7 +313,7 @@ Python 3.10+ union syntax (`T | None`, `int | str`) throughout. No `Optional[T]`
 
 - `# type: ignore` must use the specific mypy error code: `# type: ignore[arg-type]`.
 - Bare `# type: ignore` is deprecated and fails CI.
-- Remove `type: ignore` comments when the underlying issue is resolved — mypy flags unused suppressions with `[unused-ignore]`.
+- Remove `type: ignore` comments when the underlying issue is resolved -- mypy flags unused suppressions with `[unused-ignore]`.
 - `Any` is prohibited in constructor signatures and return types. It is tolerated only in `**kwargs` passthrough to third-party libraries with `cast()` at the boundary.
 
 ### TypedDict for structured dicts, NamedTuple for simple carriers
@@ -353,7 +353,7 @@ The builtin `callable` is a function, not a valid type annotation. Use `Callable
 
 ### Pydantic at boundaries, frozen dataclasses internally
 
-Use Pydantic v2 models for HTTP request/response bodies, Redis payloads, config files, and any data crossing a service boundary. Use frozen dataclasses for internal domain objects. Never leak Pydantic model instances into service or repository layers — convert to domain types at the boundary.
+Use Pydantic v2 models for HTTP request/response bodies, Redis payloads, config files, and any data crossing a service boundary. Use frozen dataclasses for internal domain objects. Never leak Pydantic model instances into service or repository layers -- convert to domain types at the boundary.
 
 ---
 
@@ -367,7 +367,7 @@ Use Pydantic v2 models for HTTP request/response bodies, Redis payloads, config 
 
 ### Concurrency gates
 
-- `asyncio.Semaphore` limits concurrent frame processing. The default is 4 — tuned to GPU batch size and memory.
+- `asyncio.Semaphore` limits concurrent frame processing. The default is 4 -- tuned to GPU batch size and memory.
 - Per-camera `asyncio.Lock` preserves frame ordering within a single camera. Two frames from the same camera never process concurrently.
 
 ### Cancellation and shutdown
@@ -389,13 +389,13 @@ Use Pydantic v2 models for HTTP request/response bodies, Redis payloads, config 
 
 1. Domain errors use the project's `ErrorCode` enum. Never return or raise bare `Exception` for domain failures.
 2. Stack traces never appear in API responses. Log the trace locally (`structlog.exception`); return only the error code and a human-readable message.
-3. Async frame processing lets exceptions propagate to the `_consume_loop` handler, which logs and retries. Individual frames are never silently dropped — failed frames produce a `FrameResponse` with `success=False` and an error code.
+3. Async frame processing lets exceptions propagate to the `_consume_loop` handler, which logs and retries. Individual frames are never silently dropped -- failed frames produce a `FrameResponse` with `success=False` and an error code.
 4. Model failures degrade per model: detector failure fails the frame; ReID/pose/face-ID failure degrades to missing evidence without dropping the frame.
 
 ### Go
 
 1. Wrap errors with context: `fmt.Errorf("streams: register %q: %w", cfg.ID, err)`.
-2. Check every error return — `go vet` and `golangci-lint` flag unchecked returns as compile errors.
+2. Check every error return -- `go vet` and `golangci-lint` flag unchecked returns as compile errors.
 3. `context.Context` is the first parameter of every I/O function. Respect cancellation via `ctx.Err()`.
 
 ---
@@ -404,7 +404,7 @@ Use Pydantic v2 models for HTTP request/response bodies, Redis payloads, config 
 
 ### Typed, frozen config
 
-All configuration is defined as frozen dataclasses with sensible defaults. No raw `dict` access for config values — every setting is a typed field.
+All configuration is defined as frozen dataclasses with sensible defaults. No raw `dict` access for config values -- every setting is a typed field.
 
 ```python
 @dataclass(frozen=True)
@@ -430,7 +430,7 @@ Use Pydantic v2 models to validate configuration at application startup. Fail fa
 ### Request/response models
 
 - Every endpoint has explicit Pydantic request and response models. No `dict[str, Any]` in endpoint signatures.
-- Response models exclude internal fields — the API surface is deliberate and documented.
+- Response models exclude internal fields -- the API surface is deliberate and documented.
 - Use `response_model=` on `@router` decorators, not `response_model_by_alias` or manual dict construction.
 
 ### Error responses
@@ -472,14 +472,14 @@ Use Pydantic v2 models to validate configuration at application startup. Fail fa
 - Do not test Python dataclass constructors (the language tests field assignment).
 - Do not test third-party library behavior (Redis xadd, protobuf serialization).
 - Do not test trivial property accessors or getters.
-- Do not write tests that exist only to hit a coverage percentage — every test must document a real failure mode.
+- Do not write tests that exist only to hit a coverage percentage -- every test must document a real failure mode.
 
 ---
 
 ## Security at Boundaries
 
 1. **Validate at entry points only.** Pydantic v2 for HTTP bodies, Redis payloads, and config files. Internal domain objects must already be valid when constructed.
-2. **Parameterized SQL, always.** asyncpg `$1..$N` — never f-strings or `%` formatting.
+2. **Parameterized SQL, always.** asyncpg `$1..$N` -- never f-strings or `%` formatting.
 3. **No secrets in code.** Environment variables only. `.env` never committed.
 4. **Protobuf for cross-service messages.** Bytes on the wire parse against a typed schema. No raw JSON blobs without Pydantic validation.
 5. **`go vet` + `staticcheck` + `golangci-lint` for Go.** Hard CI gates.
@@ -494,13 +494,13 @@ All timestamps are timezone-aware:
 from datetime import UTC, datetime
 
 now = datetime.now(UTC)          # correct
-now = datetime.now()             # WRONG — naive, breaks TimescaleDB timestamptz
+now = datetime.now()             # WRONG -- naive, breaks TimescaleDB timestamptz
 ```
 
 Pipeline stages must use the correct time for the domain concept:
-- `ctx.capture_time` — physical observation timestamp (from the camera).
-- `ctx.event_time` — pipeline processing timestamp (set once at context init).
-- `datetime.now(UTC)` — only for true wall-clock side effects (e.g., `emitted_at` on a signal).
+- `ctx.capture_time` -- physical observation timestamp (from the camera).
+- `ctx.event_time` -- pipeline processing timestamp (set once at context init).
+- `datetime.now(UTC)` -- only for true wall-clock side effects (e.g., `emitted_at` on a signal).
 
 In Go, use `time.Now().UTC()` for all timestamps written to Redis or Postgres.
 
@@ -508,7 +508,7 @@ In Go, use `time.Now().UTC()` for all timestamps written to Redis or Postgres.
 
 ## Structured Logging
 
-Python — `structlog`, never `print` or `logging.getLogger`:
+Python -- `structlog`, never `print` or `logging.getLogger`:
 
 ```python
 from structlog import get_logger
@@ -518,7 +518,7 @@ logger.info("tracklet created", tracklet_id=tid, camera_id=cam)
 logger.exception("frame processing failed", camera_id=frame.camera_id)
 ```
 
-Go — `zap.L()` or inject `*zap.Logger`:
+Go -- `zap.L()` or inject `*zap.Logger`:
 
 ```go
 zap.L().Info("stream registered", zap.String("stream_id", cfg.ID))
@@ -562,7 +562,89 @@ import cv2
 resized = cv2.resize(img, target, interpolation=cv2.INTER_LINEAR)
 ```
 
-Never import `opencv-python` (GUI dependencies conflict with headless containers). Never hand-roll bilinear resize in NumPy — it's slower and less correct.
+Never import `opencv-python` (GUI dependencies conflict with headless containers). Never hand-roll bilinear resize in NumPy -- it's slower and less correct.
+
+---
+
+## Python Virtual Environment
+
+**Always use the project venv at `tracking-orchestrator/.venv/`; never invoke the system Python.** The Makefile targets activate it automatically. For direct invocation:
+
+```bash
+# Activate for interactive use
+source tracking-orchestrator/.venv/bin/activate
+
+# Run directly without activating (preferred for one-off commands)
+tracking-orchestrator/.venv/bin/python -m pytest tests/...
+tracking-orchestrator/.venv/bin/python -c "from app.domain import PersonHypothesis; print('ok')"
+
+# Sync after pyproject.toml changes
+cd tracking-orchestrator && uv sync --frozen --extra dev
+```
+
+Running bare `python` or `pip` installs into the system interpreter and silently breaks the locked dependency graph. Every command in this skill that shows `python ...` means the venv Python above.
+
+---
+
+## Database Migrations
+
+### Tool split (intentional, not to be unified)
+
+| Service | Tool | Why |
+|---|---|---|
+| `tracking-orchestrator` | Custom `MigrationRunner` + raw SQL | asyncpg + TimescaleDB non-transactional DDL requires the `-- migrate:no-transaction` split path; no SQLAlchemy ORM |
+| `cognitive-companion` | Alembic | SQLAlchemy ORM with `target_metadata` autogenerate support |
+
+### Lifecycle: pre-release vs. post-release
+
+**Pre-release (current state):** A single squashed baseline `0001_NNNN` contains the complete
+final schema. There are no incremental migration files. All changes go directly into the
+baseline. Existing dev databases must be **dropped and recreated** — the `_schema_version`
+table and Alembic `alembic_version` table hold stale entries from any prior chain.
+
+**Post-release:** Each atomic schema change gets its own numbered file:
+`NNNN_description.up.sql` / `NNNN_description.down.sql` (CTS) or `NNNN_description.py`
+(CC). Rollbacks are supported and the `downgrade()` / `.down.sql` must be correct.
+
+### CTS migration conventions
+
+- Files: `migrations/NNNN_description.up.sql` and `migrations/NNNN_description.down.sql`.
+- Zero-pad to 4 digits: `0001`, `0002`, …
+- Every DDL object lives in `continuous_tracking` schema. Open every migration with:
+  `SET search_path = continuous_tracking, public;`
+- Non-transactional DDL (hypertables, continuous aggregates, policies) must declare:
+  `-- migrate:no-transaction` as the **first line** of the file.
+- The baseline down file is a no-op comment directing the operator to drop and recreate.
+- Applied state is tracked in `continuous_tracking._schema_version` (managed by `MigrationRunner`).
+- Advisory lock key `0x4354535F4D4947` ("CTS_MIG") ensures only one replica runs migrations.
+
+### CC migration conventions
+
+- Files: `alembic/versions/NNNN_description.py`.
+- The baseline `downgrade()` is intentionally a no-op (`pass`). Document this in the docstring.
+- Post-release migrations must have a correct `downgrade()` that exactly reverses `upgrade()`.
+- Run `alembic check` against the live models to verify no schema drift before committing.
+
+### Verification (no live DB required)
+
+Grep the new baseline to confirm the fold is complete.
+
+```bash
+# CTS: zero hits -- no surviving FK to the removed legacy tables
+grep -nE "REFERENCES (global_tracks|tracklets)" migrations/0001_init.up.sql
+
+# CTS: zero hits -- legacy tables must not be created
+grep -n "CREATE TABLE.*global_tracks\|CREATE TABLE.*tracklets\b" migrations/0001_init.up.sql
+
+# CC: zero hits for superseded index names
+grep -n "ix_person_location_history_global_track_id\|ix_cts_identity_revision_log_gt_applied" alembic/versions/0001_baseline.py
+
+# CC: single head = 0001_baseline, no dangling revision references
+cd cognitive-companion/backend && .venv/bin/alembic heads && .venv/bin/alembic history
+```
+
+Note: `detections.global_track_id` and its index are intentionally retained as plain columns
+(no FK); they carry historical frame-level data and are exempt from the "zero hits" rule.
 
 ---
 
@@ -582,7 +664,7 @@ make all-check   # Python + Go (golangci-lint + go test -race + go build) + buf 
 - `B007`: unused loop variables → `_i`, `_k`, `_v`.
 - `SIM102`: combine nested `if` with `and` when the body is a single statement.
 - `SIM108`: ternary for simple conditional assignments.
-- `B017`: no `pytest.raises(Exception)` — use the specific exception type.
+- `B017`: no `pytest.raises(Exception)` -- use the specific exception type.
 - `C401`: use set/dict comprehensions, not generator-wrapped constructors.
 
 ### What `make check` does NOT cover
@@ -619,17 +701,17 @@ For every PR affecting `tracking-orchestrator/`:
 | --- | --- |
 | `fastapi` | HTTP router and dependency injection |
 | `pydantic v2` | Validation at all external boundaries |
-| `asyncpg` | Async Postgres driver — `$1..$N` positional params |
-| `redis[hiredis]` | Async Redis Streams — consumer groups + XACK |
+| `asyncpg` | Async Postgres driver -- `$1..$N` positional params |
+| `redis[hiredis]` | Async Redis Streams -- consumer groups + XACK |
 | `aiobotocore` | Async S3-compatible client for MinIO |
-| `structlog` | Structured JSON logging — no `logging.getLogger` |
+| `structlog` | Structured JSON logging -- no `logging.getLogger` |
 | `numpy` | Frame data and embedding arithmetic |
-| `opencv-python-headless` | Image preprocessing — `cv2.resize(INTER_LINEAR)` |
+| `opencv-python-headless` | Image preprocessing -- `cv2.resize(INTER_LINEAR)` |
 | `scipy` | Hungarian assignment, robust statistics (MAD, EWMA) |
 | `shapely>=2.0` | Polygon containment for privacy zones |
-| `protobuf` | Message contracts — generated bindings committed in `app/proto/` |
+| `protobuf` | Message contracts -- generated bindings committed in `app/proto/` |
 | `prometheus-client` | Metrics exposition at `/metrics` |
-| `pytest` + `pytest-asyncio` | Test runner — all repo tests are `async def` |
+| `pytest` + `pytest-asyncio` | Test runner -- all repo tests are `async def` |
 | `mypy` (strict) | Type checking on `domain/`, `storage/`, `services/`, `transport/` |
 | `ruff` | Lint + format |
 | `import-linter` | Layering enforcement at CI time |
@@ -650,13 +732,13 @@ Do not add `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a **test-
 | `golang.org/x/image` | Image format decoding |
 | `gopkg.in/yaml.v3` | Config file parsing |
 
-RTSP ingest uses go2rtc as a sidecar — do not add `gortsplib` or `pion/rtp`.
+RTSP ingest uses go2rtc as a sidecar -- do not add `gortsplib` or `pion/rtp`.
 
 ---
 
 ## Redis Stream Wire Format
 
-**All Redis Streams carry raw protobuf bytes — no JSON, no base64.**
+**All Redis Streams carry raw protobuf bytes -- no JSON, no base64.**
 
 | Stream | Field | Message type |
 | --- | --- | --- |
@@ -667,7 +749,7 @@ RTSP ingest uses go2rtc as a sidecar — do not add `gortsplib` or `pion/rtp`.
 | `scene.samples` | `"sample"` | `SceneSample` |
 
 1. Redis clients use `decode_responses=False`.
-2. No codec discriminator field — consumers know the message type from the stream.
+2. No codec discriminator field -- consumers know the message type from the stream.
 3. No dual-codec shim; protobuf-only is the sole wire format.
 
 ---
@@ -713,6 +795,39 @@ RTSP ingest uses go2rtc as a sidecar — do not add `gortsplib` or `pion/rtp`.
 
 - **Proto changes are two-repo changes.** Update bindings, subscribers, publishers, tests, and docs in both repos in the same milestone.
 - **Do not reuse proto field numbers.** Deprecated fields are reserved. New fields get new numbers. Keep compatibility readers during migration.
-- **Wire-field rename discipline (R3).** When a serialized field is renamed (preferred: finalize the rename in the `.proto` file so the generated `_pb2.py` uses the new name), update the proto, regenerate bindings in both repos (`make proto-py`), and update every producer and consumer in the same milestone. After the rename the deprecated field name must not appear anywhere in source code except: (a) `reserved` declarations in the proto, (b) `Detection.global_track_id` which remains as a deprecated wire alias for older orchestrators until a dedicated cleanup milestone. No business logic, no second module, and no published message may read or emit a deprecated field name once the rename is finalized. Enforce with a name-contract test (`tests/contracts/test_ph_contract_names.py`). The approved-boundary list in that test is the authoritative registry of permitted legacy references. **Completed in R3**: `IdentitySnapshot.global_track_id` was renamed to `ph_id`; `Detection.global_track_id` is the one remaining approved deprecated alias.
+- **Wire-field rename discipline.** When a serialized field is renamed (preferred: finalize the rename in the `.proto` file so the generated `_pb2.py` uses the new name), update the proto, regenerate bindings in both repos (`make proto-py`), and update every producer and consumer in the same milestone. After the rename the deprecated field name must not appear anywhere in source code except: (a) `reserved` declarations in the proto, (b) `Detection.global_track_id` which remains as a deprecated wire alias for older orchestrators until a dedicated cleanup milestone. No business logic, no second module, and no published message may read or emit a deprecated field name once the rename is finalized. Enforce with a name-contract test (`tests/contracts/test_ph_contract_names.py`). The approved-boundary list in that test is the authoritative registry of permitted legacy references.
+- **Decode-boundary rule.** A wire field may carry a deprecated name during a rename, but it must be decoded into its PH-native name at exactly one boundary, and no business logic may read the deprecated name. After decoding, only the canonical name propagates. The `test_ph_contract_names.py` enforcement verifies that no non-approved module reads or emits a deprecated field name.
 - **Redis Streams stay protobuf-only.** No JSON, no base64, no dual-codec.
 - **Shadow before authority.** New tracking, identity, or signal algorithms run in shadow mode with mismatch metrics before becoming authoritative.
+
+### Cross-camera dedup pattern
+
+The pre-association floor-point dedup pass (`app/tracking/world/dedup.py`) runs before `associate()` inside `WorldTracker.step()`. Rules:
+
+1. **Different-camera gate.** Only pairs from different cameras are candidates; same-camera pairs are always separate observations.
+2. **Geometric gate.** Both detections must have `calibrated=True` floor points within `dedup_max_distance_m` (default: 0.6 m) of each other.
+3. **No-face-conflict gate.** When `dedup_require_no_face_conflict=True` (default), pairs where both detections carry committed and conflicting face anchors are not merged.
+
+The union-find algorithm identifies connected components; each cluster elects a representative via `_select_representative()` (highest quality, ties broken deterministically). `associate()` keeps its 1-to-1 contract because only representatives enter it; cluster membership is passed separately so the winning PH can be updated with all contributing camera IDs.
+
+Adding a new dedup gate condition: modify `dedup_observations()` only; do not add gate logic to `associate()` or `WorldTracker.step()`.
+
+### Quality-capture rule
+
+Observation and PH quality is computed by the single `CropQuality` scorer (`app/inference/crop_quality.py`). There is no second scorer. The same scorer is used for:
+- Per-observation quality scores passed to `dedup_observations()` for representative selection.
+- The PH's `mean_quality` field (exponential moving average, updated in `WorldTracker.step()`).
+- Gallery entry quality used by the identity resolver.
+
+`mean_quality` travels to CC via the `IdentitySnapshot` proto field and then through the CC's `PersonLocationEnvelope` as the `quality` field. Do not compute quality on the CC side; read it from the proto.
+
+### No-silent-fallback rule for stream consumers
+
+Stream consumers that cannot process a message must:
+1. XACK the message to keep the pending-entry list clean.
+2. Log at `warning` level with the error details.
+3. Increment the `cts_messages_dead_lettered_total` Prometheus counter.
+
+Never silently drop a message or return a fabricated value. The failure path must be observable.
+
+Ruff `BLE001` (blind-except) is enabled at `error` severity in `pyproject.toml`. The allowlist of permitted catch-all sites is defined there; every new `except Exception` clause outside the allowlist is a CI failure.

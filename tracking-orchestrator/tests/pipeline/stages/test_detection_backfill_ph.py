@@ -1,4 +1,4 @@
-"""WT4: tests for DetectionBackfillStage stamping global_track_id from det_to_ph."""
+"""WT4: tests for DetectionBackfillStage stamping ph_id from det_to_ph."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _make_ctx(
 def _make_det(
     detection_id: str = "det-1",
     camera_id: str = "cam1",
-    global_track_id: str = "",
+    ph_id: str = "",
 ) -> Detection:
     return Detection(
         detection_id=detection_id,
@@ -40,13 +40,13 @@ def _make_det(
         capture_time=datetime.now(UTC),
         event_time=datetime.now(UTC),
         confidence=0.9,
-        global_track_id=global_track_id,
+        ph_id=ph_id,
         floor_point=FloorPoint(0, 0, calibrated=True),
     )
 
 
 class TestDetectionBackfillPh:
-    async def test_backfill_stamps_global_track_id_from_det_to_ph(self) -> None:
+    async def test_backfill_stamps_ph_id_from_det_to_ph(self) -> None:
         det_a = _make_det("det-1")
         det_b = _make_det("det-2")
         det_c = _make_det("det-3")
@@ -57,9 +57,9 @@ class TestDetectionBackfillPh:
         stage = DetectionBackfillStage()
         await stage.run(ctx)
 
-        assert ctx.domain_detections[0].global_track_id == "ph-a"
-        assert ctx.domain_detections[1].global_track_id == "ph-b"
-        assert ctx.domain_detections[2].global_track_id == ""
+        assert ctx.domain_detections[0].ph_id == "ph-a"
+        assert ctx.domain_detections[1].ph_id == "ph-b"
+        assert ctx.domain_detections[2].ph_id == ""
 
     async def test_backfill_no_op_without_det_to_ph(self) -> None:
         det_a = _make_det("det-1")
@@ -71,8 +71,8 @@ class TestDetectionBackfillPh:
         stage = DetectionBackfillStage()
         await stage.run(ctx)
 
-        assert ctx.domain_detections[0].global_track_id == ""
-        assert ctx.domain_detections[1].global_track_id == ""
+        assert ctx.domain_detections[0].ph_id == ""
+        assert ctx.domain_detections[1].ph_id == ""
 
     async def test_backfill_no_op_without_detections(self) -> None:
         ctx = _make_ctx(
@@ -85,7 +85,7 @@ class TestDetectionBackfillPh:
         assert ctx.domain_detections == []
 
     async def test_backfill_does_not_overwrite_existing(self) -> None:
-        det_a = _make_det("det-1", global_track_id="existing-gt")
+        det_a = _make_det("det-1", ph_id="existing-gt")
         ctx = _make_ctx(
             detections=[det_a],
             det_to_ph={"det-1": "ph-a"},
@@ -93,5 +93,5 @@ class TestDetectionBackfillPh:
         stage = DetectionBackfillStage()
         await stage.run(ctx)
 
-        # replace() overwrites global_track_id from det_to_ph regardless
-        assert ctx.domain_detections[0].global_track_id == "ph-a"
+        # replace() overwrites ph_id from det_to_ph regardless
+        assert ctx.domain_detections[0].ph_id == "ph-a"

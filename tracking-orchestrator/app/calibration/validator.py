@@ -1,4 +1,4 @@
-"""Server-side calibration validator (orchestrator-side, M2).
+"""Server-side calibration validator.
 
 Mirrors cognitive-companion's ``services/cts/calibration_validator.py``.
 Both must produce identical results for the same inputs.

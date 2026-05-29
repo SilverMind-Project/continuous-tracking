@@ -328,8 +328,7 @@ class TestPublishEventProto:
                 capture_time=datetime.now(UTC),
                 event_time=datetime.now(UTC),
                 confidence=0.92,
-                tracklet_id="tr-1",
-                global_track_id="gt-1",
+                ph_id="gt-1",
                 floor_point=FloorPoint(1234, 5678, calibrated=True),
             ),
         ]

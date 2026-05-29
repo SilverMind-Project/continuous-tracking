@@ -37,6 +37,7 @@ _INPUT_W = 192
 _SIMCC_SPLIT_RATIO = 2.0
 _X_BINS = int(_INPUT_W * _SIMCC_SPLIT_RATIO)  # 384
 _Y_BINS = int(_INPUT_H * _SIMCC_SPLIT_RATIO)  # 512
+_POSE_MAX_BATCH = 8
 
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
 _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
@@ -112,6 +113,12 @@ class PoseEstimator:
         """Estimate pose for a batch of RGB person crops."""
         if not crops:
             return []
+
+        if len(crops) > _POSE_MAX_BATCH:
+            results: list[PoseResult] = []
+            for start in range(0, len(crops), _POSE_MAX_BATCH):
+                results.extend(await self.infer_batch(crops[start : start + _POSE_MAX_BATCH]))
+            return results
 
         preprocessed: list[npt.NDArray[np.float32]] = []
         meta: list[tuple[int, int, int, int, float]] = []

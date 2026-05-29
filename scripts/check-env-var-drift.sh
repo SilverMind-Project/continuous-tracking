@@ -2,9 +2,9 @@
 # CR-1: Env-var drift check between docker-compose.yml and settings.yaml.
 #
 # Every env var referenced in tracking-orchestrator/config/settings.yaml with
-# ${VAR} syntax (no default) MUST be matched by an environment: entry in
-# docker-compose.yml for the tracking-orchestrator service.  Vars with ${VAR:-default}
-# are optional and only generate a warning when missing.
+# ${VAR} syntax MUST be matched by an environment: entry in docker-compose.yml
+# for the tracking-orchestrator service. Defaulted env interpolation
+# is intentionally unsupported so runtime tunables stay literal in settings.yaml.
 #
 # Exit 0 on success, 1 on drift.
 set -euo pipefail
@@ -17,28 +17,24 @@ SETTINGS_FILE="$PROJECT_DIR/tracking-orchestrator/config/settings.yaml"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
 NC='\033[0m'
 
 fail() { echo -e "${RED}ERROR:${NC} $*" >&2; }
-warn() { echo -e "${YELLOW}WARN:${NC} $*" >&2; }
 
 if [ ! -f "$COMPOSE_FILE" ] || [ ! -f "$SETTINGS_FILE" ]; then
     echo "Skipping env-var drift check: required files missing."
     exit 0
 fi
 
-# Extract all env var names from settings.yaml (not comments).
-ALL_SETTINGS_VARS=$(grep -v '^[[:space:]]*#' "$SETTINGS_FILE" 2>/dev/null \
-    | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*(:[-+?][^}]*)?\}' 2>/dev/null \
-    | sed 's/\${//;s/[:].*//;s/}//' \
-    | sort -u || true)
-
-# Extract required vars (no default). These match ${VAR} but not ${VAR:-...}
+# Extract required vars without defaults.
 REQUIRED_VARS=$(grep -v '^[[:space:]]*#' "$SETTINGS_FILE" 2>/dev/null \
     | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' 2>/dev/null \
     | grep -v ':-' 2>/dev/null \
     | sed 's/\${//;s/}//' \
+    | sort -u || true)
+
+DEFAULTED_VARS=$(grep -v '^[[:space:]]*#' "$SETTINGS_FILE" 2>/dev/null \
+    | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*:-[^}]*\}' 2>/dev/null \
     | sort -u || true)
 
 # Collect env var names from the tracking-orchestrator section of docker-compose.
@@ -56,24 +52,17 @@ COMBINED_COMPOSE=$( (echo "$COMPOSE_VARS"; echo "$INTERP_VARS") | sort -u)
 
 DRIFT=0
 
+if [ -n "$DEFAULTED_VARS" ]; then
+    fail "defaulted env interpolation is disabled in settings.yaml: $DEFAULTED_VARS"
+    DRIFT=1
+fi
+
 # Check required vars.
 if [ -n "$REQUIRED_VARS" ] && [ -n "$COMBINED_COMPOSE" ]; then
     for var in $REQUIRED_VARS; do
         if ! echo "$COMBINED_COMPOSE" | grep -qx "$var"; then
             fail "$var — required by settings.yaml (no default), not in docker-compose.yml"
             DRIFT=1
-        fi
-    done
-fi
-
-# Warn about optional vars (have defaults) that are missing.
-if [ -n "$ALL_SETTINGS_VARS" ] && [ -n "$COMBINED_COMPOSE" ]; then
-    for var in $ALL_SETTINGS_VARS; do
-        if echo "$REQUIRED_VARS" | grep -qx "$var" 2>/dev/null; then
-            continue
-        fi
-        if ! echo "$COMBINED_COMPOSE" | grep -qx "$var"; then
-            warn "$var — optional (has default in settings.yaml)"
         fi
     done
 fi

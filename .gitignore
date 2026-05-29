@@ -27,6 +27,9 @@ tracking-orchestrator/.ruff_cache/
 tracking-orchestrator/.mypy_cache/
 tracking-orchestrator/.pytest_cache/
 tracking-orchestrator/*.egg-info/
+# Jetson-generated TensorRT engines are device and TensorRT-version specific.
+triton-models-jetson/**/1/*.plan
+triton-models-jetson/**/1/*.engine
 
 # Compiled Object files, Alias and Private Window files
 *.a

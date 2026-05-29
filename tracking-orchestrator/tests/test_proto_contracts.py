@@ -20,7 +20,7 @@ class TestIdentitySnapshotRoundTrip:
         )
 
         snap = event.identity_snapshots.add()
-        snap.ph_id = "ph-001"  # R3: renamed from global_track_id
+        snap.ph_id = "ph-001"  # R3: renamed from ph_id
         snap.identity_id = "alice"
         snap.top_probability = 0.94
         snap.second_probability = 0.03
@@ -39,7 +39,7 @@ class TestIdentitySnapshotRoundTrip:
 
         assert len(parsed.identity_snapshots) == 1
         s = parsed.identity_snapshots[0]
-        assert s.ph_id == "ph-001"  # R3: renamed from global_track_id
+        assert s.ph_id == "ph-001"  # R3: renamed from ph_id
         assert s.identity_id == "alice"
         assert s.top_probability == pytest.approx(0.94)
         assert s.second_probability == pytest.approx(0.03)
@@ -52,7 +52,7 @@ class TestIdentitySnapshotRoundTrip:
 
         for ph_id, identity_id in [("ph-1", "alice"), ("ph-2", "bob"), ("ph-3", "")]:
             snap = event.identity_snapshots.add()
-            snap.ph_id = ph_id  # R3: renamed from global_track_id
+            snap.ph_id = ph_id  # R3: renamed from ph_id
             snap.identity_id = identity_id
 
         data = event.SerializeToString()
@@ -63,7 +63,7 @@ class TestIdentitySnapshotRoundTrip:
         assert parsed.identity_snapshots[2].identity_id == ""
 
     def test_legacy_identity_revisions_still_present(self) -> None:
-        """Field 5 (identity_revisions) uses ph_id (N0 rename from global_track_id)."""
+        """Field 5 (identity_revisions) uses ph_id (N0 rename from ph_id)."""
         event = tracking_pb2.TrackingEvent(camera_id="cam-1", event_id="ev-1")
 
         rev = event.identity_revisions.add()

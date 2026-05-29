@@ -47,7 +47,7 @@ from ..domain import (
 )
 from ..inference.evidence import FaceEvidence
 from ..observability import metrics
-from ..storage.base import GalleryRepository, GlobalTrackRepository, TrackingRepository
+from ..storage.base import GalleryRepository
 from .identity.evidence import IdentityEvidence
 from .identity.posterior import EvidencePosterior
 
@@ -208,14 +208,12 @@ class IdentityResolver:
     Usage::
 
         resolver = IdentityResolver(
-            tracking_repo=tracking_repo,
             gallery_repo=gallery_repo,
-            global_track_repo=global_track_repo,
             config=ResolverConfig(),
         )
 
         outcome = await resolver.resolve(
-            global_tracks=active_gts,
+            hypotheses=active_phs,
             new_face_anchors=face_anchors,
             captured_at=datetime.now(UTC),
         )
@@ -231,16 +229,12 @@ class IdentityResolver:
 
     def __init__(
         self,
-        tracking_repo: TrackingRepository,
         gallery_repo: GalleryRepository,
-        global_track_repo: GlobalTrackRepository,
         identities: list[Identity] | None = None,
         config: ResolverConfig | None = None,
         gallery_cache: GalleryCache | None = None,
     ) -> None:
-        self._tracking_repo = tracking_repo
         self._gallery_repo = gallery_repo
-        self._global_track_repo = global_track_repo
         self._config = config or ResolverConfig()
         self._gallery_cache = gallery_cache
         # Known identities for display names
@@ -327,7 +321,7 @@ class IdentityResolver:
                 },
             )
             decision = IdentityDecision(
-                global_track_id=decision.global_track_id,
+                ph_id=decision.ph_id,
                 identity_id=decision.identity_id,
                 posterior=decision.posterior,
                 revises_previous=decision.revises_previous,
@@ -411,7 +405,13 @@ class IdentityResolver:
         entity_obs_ids = set(entity.observation_ids)
 
         # Find face anchors whose tracklet belongs to this entity.
-        relevant_anchors = [fa for fa in face_anchors if fa.tracklet_id in entity_obs_ids]
+        # In PH mode the anchor carries entity_id (ph_id) as its tracklet_id
+        # after the tracker remaps it; the entity_id fallback handles that case
+        # without polluting observation_ids with ph_ids.
+        relevant_anchors = [
+            fa for fa in face_anchors
+            if fa.tracklet_id in entity_obs_ids or fa.tracklet_id == entity.entity_id
+        ]
 
         if not relevant_anchors:
             logger.debug(
@@ -496,7 +496,7 @@ class IdentityResolver:
                 tracklet_ids=set(entity.observation_ids),
                 limit=20,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning(
                 "reid_gallery_lookup_failed",
                 entity_id=entity.entity_id,
@@ -538,7 +538,7 @@ class IdentityResolver:
                 embedding=query,
                 limit=20,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning(
                 "reid_search_failed",
                 entity_id=entity.entity_id,
@@ -906,7 +906,7 @@ class IdentityResolver:
             )
 
         return IdentityDecision(
-            global_track_id=entity.entity_id,
+            ph_id=entity.entity_id,
             identity_id=new_id,
             posterior=posterior,
             revises_previous=revises,
@@ -990,8 +990,11 @@ class IdentityResolver:
         items: list[IdentityEvidence] = []
 
         # Face evidence.
+        entity_obs_ids_set = set(entity.observation_ids)
         for fe in face_evidence:
-            if fe.tracklet_id and fe.tracklet_id in set(entity.observation_ids):
+            if fe.tracklet_id and (
+                fe.tracklet_id in entity_obs_ids_set or fe.tracklet_id == entity.entity_id
+            ):
                 if fe.source == "direct":
                     items.append(
                         IdentityEvidence.direct_face(
@@ -1107,12 +1110,17 @@ class IdentityResolver:
         for entity in hypotheses:
             for oid in entity.observation_ids:
                 entity_by_obs[oid] = entity
+        # Secondary lookup by entity_id so PH-mode anchors (tracklet_id=ph_id)
+        # are found without adding ph_id to observation_ids.
+        entity_by_id: dict[str, IdentityResolvableEntity] = {
+            e.entity_id: e for e in hypotheses
+        }
 
         # Find which entities have direct face evidence and pick the best anchor per entity.
         evidenced_entity_ids: set[str] = set()
         best_anchor_by_entity: dict[str, FaceAnchor] = {}
         for fa in face_anchors:
-            src_entity = entity_by_obs.get(fa.tracklet_id)
+            src_entity = entity_by_obs.get(fa.tracklet_id) or entity_by_id.get(fa.tracklet_id)
             if src_entity is None:
                 continue
             evidenced_entity_ids.add(src_entity.entity_id)

@@ -59,7 +59,7 @@ def _make_ctx(
     )
     ctx.world_snapshots = snapshots or []
     ctx.outcome_decisions = decisions or []
-    ctx.active_global_tracks = []
+    ctx.active_ph_ids = set()
     ctx.domain_detections = []
     ctx.effective_width = 1920
     ctx.effective_height = 1080
@@ -86,7 +86,7 @@ class TestPublishIdentityFromSnapshots:
         await stage.run(ctx)
 
         assert ctx.identities == {"ph-1": ("alice", 0.91)}
-        assert ctx.evidence_by_gt["ph-1"] == (0.91, 0.0, True)
+        assert ctx.evidence_by_ph["ph-1"] == (0.91, 0.0, True)
 
     async def test_publish_skips_unknown_identity(self) -> None:
         """Snapshot with identity_id='UNKNOWN' → not included."""
@@ -101,10 +101,10 @@ class TestPublishIdentityFromSnapshots:
         assert ctx.identities == {}
 
     async def test_publish_decision_top2_augments_snapshot_evidence(self) -> None:
-        """Outcome decision with second probability augments evidence_by_gt."""
+        """Outcome decision with second probability augments evidence_by_ph."""
         snap = _make_snapshot(ph_id="ph-1", identity_id="alice", identity_confidence=0.91)
         decision = IdentityDecision(
-            global_track_id="ph-1",
+            ph_id="ph-1",
             identity_id="alice",
             posterior=PosteriorDist({"alice": 0.8, "bob": 0.15, "UNKNOWN": 0.05}),
             revises_previous=False,
@@ -119,4 +119,4 @@ class TestPublishIdentityFromSnapshots:
 
         assert ctx.identities["ph-1"] == ("alice", 0.8)
         # second_probability from decision: 0.15
-        assert ctx.evidence_by_gt["ph-1"][1] == 0.15
+        assert ctx.evidence_by_ph["ph-1"][1] == 0.15

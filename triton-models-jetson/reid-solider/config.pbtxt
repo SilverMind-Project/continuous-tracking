@@ -1,0 +1,37 @@
+# SOLIDER-REID 768-dim body re-identification model for Jetson Orin Nano Super.
+#
+# TensorRT plan generated from:
+#   triton-models/reid-solider/1/model.onnx
+
+name: "reid-solider"
+platform: "tensorrt_plan"
+default_model_filename: "model.plan"
+max_batch_size: 8
+
+dynamic_batching {
+  preferred_batch_size: [4, 8]
+  max_queue_delay_microseconds: 2000
+}
+
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [3, 384, 128]
+  }
+]
+
+output [
+  {
+    name: "output"
+    data_type: TYPE_FP32
+    dims: [768]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

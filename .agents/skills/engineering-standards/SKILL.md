@@ -266,3 +266,31 @@ def letterbox(img: np.ndarray, target: tuple[int, int]) -> np.ndarray:
 
 The `opencv-python-headless` package (no GUI dependencies) is the canonical choice. Never
 import `opencv-python` (includes GUI libs that conflict with headless containers).
+
+---
+
+## Database Migrations
+
+### Tool split (intentional, not to be unified)
+
+| Service | Tool | Why |
+|---|---|---|
+| `tracking-orchestrator` | Custom `MigrationRunner` + raw SQL | asyncpg + TimescaleDB non-transactional DDL; no SQLAlchemy ORM |
+| `cognitive-companion` | Alembic | SQLAlchemy ORM with `target_metadata` autogenerate support |
+
+### Lifecycle: pre-release vs. post-release
+
+**Pre-release:** A single squashed baseline `0001_init` contains the complete final schema.
+Changes fold directly into the baseline. Existing dev databases must be **dropped and
+recreated** -- the `_schema_version` table holds stale entries from any prior chain.
+
+**Post-release:** Each atomic change gets its own `NNNN_description.up.sql` /
+`NNNN_description.down.sql`. Rollbacks are supported and `.down.sql` must be correct.
+
+### CTS conventions
+
+- Open every migration with `SET search_path = continuous_tracking, public;`
+- Non-transactional DDL (hypertables, continuous aggregates) must declare
+  `-- migrate:no-transaction` as the **first line**.
+- The baseline down file is a no-op comment directing the operator to drop and recreate.
+- Zero-pad migration numbers to 4 digits: `0001`, `0002`, ...

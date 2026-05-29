@@ -409,7 +409,7 @@ class PostureScores:
 
     keypoint_confidence: float = 0.0
     """Mean confidence of visible COCO-17 keypoints. 0.0 when no keypoints are
-    available (e.g., depth-only estimate). Used by M2 quality-weighted fusion."""
+    available (e.g., depth-only estimate). Used by quality-weighted fusion."""
 
 
 @dataclass(frozen=True)

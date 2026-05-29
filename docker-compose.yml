@@ -44,7 +44,7 @@ services:
         aliases:
           - triton
     environment:
-      HF_TOKEN: ${HF_TOKEN:-}
+      HF_TOKEN: ${HF_TOKEN:?err}
     command: >
       tritonserver
       --model-repository=/models
@@ -96,14 +96,17 @@ services:
     networks:
       - nanai
     environment:
-      DATABASE_URL: postgresql+asyncpg://${CTS_DB_USER:-cts_user}:${CTS_DB_PASSWORD:?err}@postgres:5432/continuous_tracking
+      DATABASE_URL: postgresql+asyncpg://${CTS_DB_USER:?err}:${CTS_DB_PASSWORD:?err}@postgres:5432/continuous_tracking
       REDIS_URL: redis://redis:6379/0
-      MINIO_ENDPOINT_URL: ${MINIO_ENDPOINT_URL:-http://${MINIO_ENDPOINT}}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
-      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_ENDPOINT_URL: ${MINIO_ENDPOINT_URL:?err}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?err}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?err}
+      MINIO_BUCKET: ${MINIO_BUCKET:?err}
       MINIO_USE_SSL: "false"
       TRITON_GRPC_URL: triton:8701
+      PERSON_ID_SERVICE_URL: http://person-id:8200
+      CC_API_URL: http://cc-backend:8000
+      CC_INGRESS_API_KEY: ${CC_INGRESS_API_KEY:?err}
       CTS_ENABLED: "true"
       LOG_LEVEL: "DEBUG"
     ports:
@@ -168,11 +171,11 @@ services:
       REDIS_DB: "0"
       REDIS_STREAM: frames.ready
       REDIS_MAXLEN_APPROX: "100000"
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:?err}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?err}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?err}
       MINIO_USE_SSL: "false"
-      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_BUCKET: ${MINIO_BUCKET:?err}
       GO2RTC_ADDR: http://go2rtc:1984
       CAMERAS_JSON: "[]"
       COGNITIVE_BASE_URL: http://cc-backend:8000

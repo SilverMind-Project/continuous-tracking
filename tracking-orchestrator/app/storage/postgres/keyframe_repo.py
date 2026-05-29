@@ -19,21 +19,21 @@ logger = get_logger(__name__)
 
 _SQL_INSERT_KEYFRAME = """
 INSERT INTO continuous_tracking.tagged_keyframes
-    (id, tracklet_id, global_track_id, camera_id,
+    (id, ph_id, camera_id,
      minio_key, captured_at, annotations, tag_reason, expires_at)
-VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9)
+VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (id) DO NOTHING
 """
 
 _SQL_LIST_KEYFRAMES = """
-SELECT id, tracklet_id, global_track_id, camera_id,
+SELECT id, ph_id, camera_id,
        minio_key, captured_at, annotations, tag_reason, expires_at
 FROM continuous_tracking.tagged_keyframes
 WHERE TRUE
 """
 
 _SQL_GET_KEYFRAME = """
-SELECT id, tracklet_id, global_track_id, camera_id,
+SELECT id, ph_id, camera_id,
        minio_key, captured_at, annotations, tag_reason, expires_at
 FROM continuous_tracking.tagged_keyframes
 WHERE id = $1::uuid
@@ -57,8 +57,7 @@ class PostgresKeyframeRepository(KeyframeRepository):
             await conn.execute(
                 _SQL_INSERT_KEYFRAME,
                 keyframe.keyframe_id,
-                keyframe.tracklet_id or None,
-                keyframe.global_track_id or None,
+                keyframe.ph_id or None,
                 keyframe.camera_id,
                 keyframe.minio_key,
                 keyframe.captured_at,
@@ -79,21 +78,16 @@ class PostgresKeyframeRepository(KeyframeRepository):
 
     async def list_keyframes(
         self,
-        tracklet_id: str | None = None,
-        global_track_id: str | None = None,
+        ph_id: str | None = None,
         after: datetime | None = None,
         limit: int = 100,
     ) -> list[TaggedKeyframe]:
         sql = _SQL_LIST_KEYFRAMES
         args: list[Any] = []
         n = 1
-        if tracklet_id is not None:
-            sql += f" AND tracklet_id = ${n}::uuid"
-            args.append(tracklet_id)
-            n += 1
-        if global_track_id is not None:
-            sql += f" AND global_track_id = ${n}::uuid"
-            args.append(global_track_id)
+        if ph_id is not None:
+            sql += f" AND ph_id = ${n}::uuid"
+            args.append(ph_id)
             n += 1
         if after is not None:
             sql += f" AND captured_at >= ${n}"
@@ -116,8 +110,7 @@ def _row_to_keyframe(row: Any) -> TaggedKeyframe:
     )
     return TaggedKeyframe(
         keyframe_id=str(row["id"]),
-        tracklet_id=str(row["tracklet_id"]) if row["tracklet_id"] else "",
-        global_track_id=str(row["global_track_id"]) if row["global_track_id"] else "",
+        ph_id=str(row["ph_id"]) if row["ph_id"] else "",
         camera_id=row["camera_id"],
         minio_key=row["minio_key"],
         captured_at=row["captured_at"],

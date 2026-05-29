@@ -9,7 +9,7 @@ from .base import FrameStage
 
 
 class TrailsStage(FrameStage):
-    """Maintains per-PH foot-position trails and snapshots them into ctx (WTR3)."""
+    """Maintains per-PH foot-position trails and snapshots them into ctx."""
 
     name = "trails"
 
@@ -28,7 +28,7 @@ class TrailsStage(FrameStage):
         frame_w = float(ctx.effective_width) if ctx.effective_width else 1.0
         frame_h = float(ctx.effective_height) if ctx.effective_height else 1.0
         for domain_det in ctx.domain_detections:
-            ph_id = domain_det.global_track_id  # backfilled from det_to_ph (WTR3)
+            ph_id = domain_det.ph_id
             if not ph_id:
                 continue
             foot_x = (domain_det.bbox.x_min + domain_det.bbox.x_max) / 2.0 / frame_w
@@ -39,11 +39,11 @@ class TrailsStage(FrameStage):
                 self._trail_by_ph[ph_id] = trail_dq
             trail_dq.append((float(foot_x), float(foot_y)))
 
-        active_phs = {d.global_track_id for d in ctx.domain_detections if d.global_track_id}
+        active_phs = {d.ph_id for d in ctx.domain_detections if d.ph_id}
         stale_phs = set(self._trail_by_ph) - active_phs
         for pid in stale_phs:
             del self._trail_by_ph[pid]
 
         ctx.trail_by_tracklet_snapshot = {pid: list(dq) for pid, dq in self._trail_by_ph.items()}
-        # WTR3: PH-native alias (trail_by_tracklet_snapshot kept for PublishStage compat).
+        # PH-native alias (trail_by_tracklet_snapshot kept for PublishStage compat).
         ctx.trail_by_ph_snapshot = ctx.trail_by_tracklet_snapshot

@@ -1,4 +1,4 @@
-"""Publishes RoomTransitionEvent to tracking.room_transitions (M2)."""
+"""Publishes RoomTransitionEvent to tracking.room_transitions."""
 
 from __future__ import annotations
 

@@ -51,7 +51,7 @@ def set_context(trajectory_repo: TrajectoryRepository) -> None:
 @router.get("/internal/trajectory/recent")
 async def list_recent_trajectory(
     identity_id: str | None = Query(None, description="Filter by identity"),
-    global_track_id: str | None = Query(None, description="Filter by global track"),
+    ph_id: str | None = Query(None, description="Filter by PH"),
     since: str | None = Query(
         None,
         description="ISO-8601 UTC datetime; defaults to 30 minutes ago",
@@ -68,7 +68,7 @@ async def list_recent_trajectory(
 
     points = await ctx.trajectory_repo.list_trajectory_points(
         identity_id=identity_id,
-        global_track_id=global_track_id,
+        ph_id=ph_id,
         after=since_dt,
         limit=limit,
     )
@@ -78,7 +78,7 @@ async def list_recent_trajectory(
             {
                 "observed_at": p.observed_at.isoformat(),
                 "identity_id": p.identity_id,
-                "global_track_id": p.global_track_id,
+                "ph_id": p.ph_id,
                 "room_name": p.room_name,
                 "ground_x": p.ground_x,
                 "ground_y": p.ground_y,

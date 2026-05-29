@@ -35,7 +35,7 @@ type TrackingEvent struct {
 	FrameRef *FrameRef `protobuf:"bytes,3,opt,name=frame_ref,json=frameRef,proto3" json:"frame_ref,omitempty"`
 	// One entry per detected person in the frame.
 	Detections []*Detection `protobuf:"bytes,4,rep,name=detections,proto3" json:"detections,omitempty"`
-	// Identity resolution: for each global track that was matched to a known
+	// Identity resolution: for each PH that was matched to a known
 	// person, the posterior probability distribution over candidates.
 	// DEPRECATED: prefer identity_snapshots (field 8).  This field is kept
 	// for one compatibility release and will stop being populated afterward.
@@ -236,11 +236,6 @@ type Detection struct {
 	Embedding []float32 `protobuf:"fixed32,3,rep,packed,name=embedding,proto3" json:"embedding,omitempty"`
 	// Confidence score from the detection model (0.0 to 1.0).
 	Confidence float32 `protobuf:"fixed32,4,opt,name=confidence,proto3" json:"confidence,omitempty"`
-	// Tracklet this detection belongs to (assigned by tracking logic).
-	TrackletId string `protobuf:"bytes,5,opt,name=tracklet_id,json=trackletId,proto3" json:"tracklet_id,omitempty"`
-	// Global track ID (cross-camera tracking identifier, not an identity).
-	// Empty until a GlobalTrack is formed for this detection.
-	GlobalTrackId string `protobuf:"bytes,6,opt,name=global_track_id,json=globalTrackId,proto3" json:"global_track_id,omitempty"`
 	// Floor point in the shared floor-plan coordinate system (millimetres).
 	// {x_mm=0, y_mm=0, calibrated=false} when the source camera lacks a
 	// homography or the projection is degenerate.
@@ -258,7 +253,9 @@ type Detection struct {
 	FloorX float32 `protobuf:"fixed32,12,opt,name=floor_x,json=floorX,proto3" json:"floor_x,omitempty"`
 	FloorY float32 `protobuf:"fixed32,13,opt,name=floor_y,json=floorY,proto3" json:"floor_y,omitempty"`
 	// Classified posture: standing | sitting | walking | lying | unknown.
-	Posture       string `protobuf:"bytes,14,opt,name=posture,proto3" json:"posture,omitempty"`
+	Posture string `protobuf:"bytes,14,opt,name=posture,proto3" json:"posture,omitempty"`
+	// Person Hypothesis ID assigned by the world-coordinate tracker.
+	PhId          string `protobuf:"bytes,15,opt,name=ph_id,json=phId,proto3" json:"ph_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -321,20 +318,6 @@ func (x *Detection) GetConfidence() float32 {
 	return 0
 }
 
-func (x *Detection) GetTrackletId() string {
-	if x != nil {
-		return x.TrackletId
-	}
-	return ""
-}
-
-func (x *Detection) GetGlobalTrackId() string {
-	if x != nil {
-		return x.GlobalTrackId
-	}
-	return ""
-}
-
 func (x *Detection) GetFloorPoint() *FloorPoint {
 	if x != nil {
 		return x.FloorPoint
@@ -380,6 +363,13 @@ func (x *Detection) GetFloorY() float32 {
 func (x *Detection) GetPosture() string {
 	if x != nil {
 		return x.Posture
+	}
+	return ""
+}
+
+func (x *Detection) GetPhId() string {
+	if x != nil {
+		return x.PhId
 	}
 	return ""
 }
@@ -830,13 +820,15 @@ func (x *IdentityRevision) GetEvidenceJson() string {
 	return ""
 }
 
-// IdentitySnapshot is a lightweight per-global-track identity state for live
+// IdentitySnapshot is a lightweight per-PH identity state for live
 // display.  Unlike IdentityRevision, it is not a standalone stream message —
 // it only appears as a sub-message of TrackingEvent.
 type IdentitySnapshot struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The global track this snapshot refers to.
-	GlobalTrackId string `protobuf:"bytes,1,opt,name=global_track_id,json=globalTrackId,proto3" json:"global_track_id,omitempty"`
+	// R3: canonical field name.  Field number 1 is unchanged; binary wire is
+	// compatible.  The old name "global_track_id" is reserved to prevent
+	// accidental JSON/text-format reuse.
+	PhId string `protobuf:"bytes,1,opt,name=ph_id,json=phId,proto3" json:"ph_id,omitempty"`
 	// The committed identity for this global track (empty when UNKNOWN).
 	IdentityId string `protobuf:"bytes,2,opt,name=identity_id,json=identityId,proto3" json:"identity_id,omitempty"`
 	// Probability of the top identity from the posterior.
@@ -849,7 +841,11 @@ type IdentitySnapshot struct {
 	DirectFaceEvidence bool `protobuf:"varint,6,opt,name=direct_face_evidence,json=directFaceEvidence,proto3" json:"direct_face_evidence,omitempty"`
 	// Evidence source summary serialised as JSON:
 	// {"sources": {"direct_face": 1, "reid": 3}, "direct_face_confidence": 0.95, ...}
-	EvidenceJson  string `protobuf:"bytes,7,opt,name=evidence_json,json=evidenceJson,proto3" json:"evidence_json,omitempty"`
+	EvidenceJson string `protobuf:"bytes,7,opt,name=evidence_json,json=evidenceJson,proto3" json:"evidence_json,omitempty"`
+	// Exponential moving average of crop-quality scores for this PH (U1/U2).
+	// Range [0, 1]; 0.0 means no quality data yet.  Consumed by CC to populate
+	// PersonLocationEnvelope.quality without client-side inference (design rule D5).
+	MeanQuality   float32 `protobuf:"fixed32,8,opt,name=mean_quality,json=meanQuality,proto3" json:"mean_quality,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -884,9 +880,9 @@ func (*IdentitySnapshot) Descriptor() ([]byte, []int) {
 	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *IdentitySnapshot) GetGlobalTrackId() string {
+func (x *IdentitySnapshot) GetPhId() string {
 	if x != nil {
-		return x.GlobalTrackId
+		return x.PhId
 	}
 	return ""
 }
@@ -931,6 +927,13 @@ func (x *IdentitySnapshot) GetEvidenceJson() string {
 		return x.EvidenceJson
 	}
 	return ""
+}
+
+func (x *IdentitySnapshot) GetMeanQuality() float32 {
+	if x != nil {
+		return x.MeanQuality
+	}
+	return 0
 }
 
 // IdentityCandidate is one candidate identity with its posterior probability.
@@ -1019,17 +1022,14 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\x06height\x18\x03 \x01(\x05R\x06height\x12\x1f\n" +
 	"\vframe_index\x18\x04 \x01(\x03R\n" +
 	"frameIndex\x12/\n" +
-	"\x14capture_time_unix_ns\x18\x05 \x01(\x06R\x11captureTimeUnixNs\"\xc8\x04\n" +
+	"\x14capture_time_unix_ns\x18\x05 \x01(\x06R\x11captureTimeUnixNs\"\xbe\x04\n" +
 	"\tDetection\x12!\n" +
 	"\fdetection_id\x18\x01 \x01(\tR\vdetectionId\x126\n" +
 	"\x04bbox\x18\x02 \x01(\v2\".continuoustracking.v1.BoundingBoxR\x04bbox\x12\x1c\n" +
 	"\tembedding\x18\x03 \x03(\x02R\tembedding\x12\x1e\n" +
 	"\n" +
 	"confidence\x18\x04 \x01(\x02R\n" +
-	"confidence\x12\x1f\n" +
-	"\vtracklet_id\x18\x05 \x01(\tR\n" +
-	"trackletId\x12&\n" +
-	"\x0fglobal_track_id\x18\x06 \x01(\tR\rglobalTrackId\x12B\n" +
+	"confidence\x12B\n" +
 	"\vfloor_point\x18\a \x01(\v2!.continuoustracking.v1.FloorPointR\n" +
 	"floorPoint\x12J\n" +
 	"\x0epose_keypoints\x18\t \x03(\v2#.continuoustracking.v1.PoseKeypointR\rposeKeypoints\x127\n" +
@@ -1038,7 +1038,8 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\bevidence\x18\v \x01(\v2(.continuoustracking.v1.PosteriorEvidenceR\bevidence\x12\x17\n" +
 	"\afloor_x\x18\f \x01(\x02R\x06floorX\x12\x17\n" +
 	"\afloor_y\x18\r \x01(\x02R\x06floorY\x12\x18\n" +
-	"\aposture\x18\x0e \x01(\tR\aposture\"@\n" +
+	"\aposture\x18\x0e \x01(\tR\aposture\x12\x13\n" +
+	"\x05ph_id\x18\x0f \x01(\tR\x04phIdJ\x04\b\x05\x10\x06J\x04\b\x06\x10\aR\vtracklet_idR\x0fglobal_track_id\"@\n" +
 	"\fPoseKeypoint\x12\f\n" +
 	"\x01x\x18\x01 \x01(\x02R\x01x\x12\f\n" +
 	"\x01y\x18\x02 \x01(\x02R\x01y\x12\x14\n" +
@@ -1077,16 +1078,17 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\x0fnew_identity_id\x18\t \x01(\tR\rnewIdentityId\x12\x16\n" +
 	"\x06reason\x18\n" +
 	" \x01(\tR\x06reason\x12#\n" +
-	"\revidence_json\x18\v \x01(\tR\fevidenceJsonJ\x04\b\a\x10\b\"\xb7\x02\n" +
-	"\x10IdentitySnapshot\x12&\n" +
-	"\x0fglobal_track_id\x18\x01 \x01(\tR\rglobalTrackId\x12\x1f\n" +
+	"\revidence_json\x18\v \x01(\tR\fevidenceJsonJ\x04\b\a\x10\b\"\xd8\x02\n" +
+	"\x10IdentitySnapshot\x12\x13\n" +
+	"\x05ph_id\x18\x01 \x01(\tR\x04phId\x12\x1f\n" +
 	"\videntity_id\x18\x02 \x01(\tR\n" +
 	"identityId\x12'\n" +
 	"\x0ftop_probability\x18\x03 \x01(\x02R\x0etopProbability\x12-\n" +
 	"\x12second_probability\x18\x04 \x01(\x02R\x11secondProbability\x12+\n" +
 	"\x11posterior_entropy\x18\x05 \x01(\x02R\x10posteriorEntropy\x120\n" +
 	"\x14direct_face_evidence\x18\x06 \x01(\bR\x12directFaceEvidence\x12#\n" +
-	"\revidence_json\x18\a \x01(\tR\fevidenceJson\"y\n" +
+	"\revidence_json\x18\a \x01(\tR\fevidenceJson\x12!\n" +
+	"\fmean_quality\x18\b \x01(\x02R\vmeanQualityR\x0fglobal_track_id\"y\n" +
 	"\x11IdentityCandidate\x12\x1f\n" +
 	"\videntity_id\x18\x01 \x01(\tR\n" +
 	"identityId\x12!\n" +

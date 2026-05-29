@@ -182,41 +182,109 @@ class MigrationRunner:
         import re
 
         stmts = []
-        pos = 0
         n = len(sql)
-        while pos < n:
-            # Find the next semicolon that is NOT inside a dollar-quoted block
-            semicolon = -1
-            i = pos
-            while i < n:
-                ch = sql[i]
-                if ch == "$":
-                    # Check for dollar-quote start: $tag$
-                    m = re.match(r"\$([^$]*?)\$", sql[i:])
-                    if m:
-                        tag = m.group(0)  # e.g. $$ or $func$
-                        # Find matching close tag
-                        close = sql.find(tag, i + len(tag))
-                        if close != -1:
-                            i = close + len(tag)
-                            continue
-                if ch == ";":
-                    semicolon = i
-                    break
+        i = 0
+        stmt_start = 0
+
+        in_single_line_comment = False
+        in_multi_line_comment = False
+        in_single_quote = False
+        in_double_quote = False
+        dollar_tag = None
+
+        while i < n:
+            ch = sql[i]
+
+            # If inside a single-line comment
+            if in_single_line_comment:
+                if ch == "\n":
+                    in_single_line_comment = False
                 i += 1
+                continue
 
-            stmt = sql[pos:].strip() if semicolon == -1 else sql[pos:semicolon].strip()
+            # If inside a multi-line comment
+            if in_multi_line_comment:
+                if sql[i : i + 2] == "*/":
+                    in_multi_line_comment = False
+                    i += 2
+                else:
+                    i += 1
+                continue
 
-            # Drop pure-comment blocks that have no executable SQL
-            non_comment = "\n".join(
-                line for line in stmt.splitlines() if not line.strip().startswith("--")
-            ).strip()
-            if non_comment:
-                stmts.append(stmt)
+            # If inside a single-quoted string
+            if in_single_quote:
+                if ch == "'":
+                    in_single_quote = False
+                i += 1
+                continue
 
-            if semicolon == -1:
-                break
-            pos = semicolon + 1
+            # If inside a double-quoted identifier
+            if in_double_quote:
+                if ch == '"':
+                    in_double_quote = False
+                i += 1
+                continue
+
+            # If inside a dollar-quoted string
+            if dollar_tag is not None:
+                tag_len = len(dollar_tag)
+                if sql[i : i + tag_len] == dollar_tag:
+                    dollar_tag = None
+                    i += tag_len
+                else:
+                    i += 1
+                continue
+
+            # We are in plain SQL. Check for start of comments, quotes, or dollar quotes.
+            if sql[i : i + 2] == "--":
+                in_single_line_comment = True
+                i += 2
+                continue
+            elif sql[i : i + 2] == "/*":
+                in_multi_line_comment = True
+                i += 2
+                continue
+            elif ch == "'":
+                in_single_quote = True
+                i += 1
+                continue
+            elif ch == '"':
+                in_double_quote = True
+                i += 1
+                continue
+            elif ch == "$":
+                m = re.match(r"\$([^$]*?)\$", sql[i:])
+                if m:
+                    dollar_tag = m.group(0)
+                    i += len(dollar_tag)
+                    continue
+                else:
+                    i += 1
+                    continue
+            elif ch == ";":
+                # Split statement
+                stmt = sql[stmt_start:i].strip()
+                # Drop pure-comment blocks that have no executable SQL
+                non_comment = "\n".join(
+                    line for line in stmt.splitlines() if not line.strip().startswith("--")
+                ).strip()
+                if non_comment:
+                    stmts.append(stmt)
+                stmt_start = i + 1
+                i += 1
+                continue
+
+            i += 1
+
+        # Add the remaining block if any
+        if stmt_start < n:
+            stmt = sql[stmt_start:].strip()
+            if stmt:
+                non_comment = "\n".join(
+                    line for line in stmt.splitlines() if not line.strip().startswith("--")
+                ).strip()
+                if non_comment:
+                    stmts.append(stmt)
 
         return stmts
 

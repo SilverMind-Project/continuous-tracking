@@ -37,7 +37,7 @@ def test_round_trip_preserves_ph_id() -> None:
     revision = _make_revision()
     pb = _to_proto(revision)
 
-    # Field 1 (global_track_id in proto) carries ph_id.
+    # Field 1 (ph_id in proto) carries ph_id.
     assert pb.ph_id == "ph-abc-123"
 
 

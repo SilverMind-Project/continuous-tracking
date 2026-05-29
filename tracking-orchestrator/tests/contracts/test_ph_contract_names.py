@@ -3,25 +3,26 @@
 Asserts that public Pydantic schemas expose ``ph_id``, not ``global_track_id``
 or ``tracklet_id``, except in explicitly approved boundary files.
 
-R3 update: IdentitySnapshot.global_track_id was renamed to ph_id in the proto.
-The only remaining approved use of global_track_id in source code is:
-- app/domain/__init__.py: internal domain types (IdentityDecision et al.)
-- app/proto/: generated bindings for Detection.global_track_id (deprecated wire field)
-The transport layer (redis_streams.py) and CC subscribers now use ph_id directly.
+R3 state: GlobalTrackRepository, CloseTerminatedStage, and the dead tracking/hints
+storage modules are removed. Generated protobuf bindings and public router
+schemas must expose PH-native names only.
+The transport snapshot (IdentitySnapshot) uses ph_id directly.
 """
 
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
 import pytest
 
+from app.transport.redis_streams import _build_tracking_event_pb
+
 # -- Approved boundary files that may still reference legacy names -----------
 # These files are grandfathered until their respective WTR milestones.
 _APPROVED_LEGACY_FILES: set[str] = {
-    "app/domain/__init__.py",  # WTR3: IdentityDecision, GlobalTrack, Tracklet types
-    "app/proto/",  # generated protobuf bindings (Detection.global_track_id deprecated wire field)
+    "app/domain/__init__.py",
 }
 
 # -- Forbidden field names in public Pydantic schemas ------------------------
@@ -29,6 +30,7 @@ _FORBIDDEN_FIELDS: set[str] = {"global_track_id", "tracklet_id"}
 
 # -- Directories to scan for Pydantic schemas ---------------------------------
 _SCHEMA_DIRS: list[str] = ["app/routers"]
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _is_approved(file_path: str) -> bool:
@@ -40,12 +42,12 @@ def _is_approved(file_path: str) -> bool:
 
 def _find_schema_files() -> list[Path]:
     """Find all Python files in schema directories."""
-    root = Path(__file__).resolve().parents[1]
     files: list[Path] = []
     for schema_dir in _SCHEMA_DIRS:
-        target = root / schema_dir
-        if target.exists():
-            files.extend(target.rglob("*.py"))
+        target = _PROJECT_ROOT / schema_dir
+        if not target.exists():
+            raise RuntimeError(f"Schema directory does not exist: {target}")
+        files.extend(sorted(target.rglob("*.py")))
     return files
 
 
@@ -84,7 +86,7 @@ def _extract_pydantic_field_names(file_path: Path) -> dict[str, list[str]]:
 @pytest.mark.parametrize(
     "file_path",
     _find_schema_files(),
-    ids=lambda p: str(p.relative_to(p.parents[1])),
+    ids=lambda p: str(p.relative_to(_PROJECT_ROOT)),
 )
 def test_ph_api_schemas_use_ph_id_not_global_track_id(file_path: Path):
     """PH API response and request models must expose ph_id, not global_track_id."""
@@ -168,16 +170,12 @@ def test_identity_snapshot_proto_uses_ph_id():
     assert snap.ph_id == "ph-test-1"
     assert not hasattr(snap, "global_track_id"), (
         "IdentitySnapshot must not expose global_track_id (R3 rename); "
-        "the proto still has Detection.global_track_id (approved deprecated alias) "
-        "but IdentitySnapshot.global_track_id was renamed to ph_id"
+        "IdentitySnapshot.global_track_id was renamed to ph_id"
     )
 
 
-def test_transport_identity_snapshot_sets_ph_id_not_global_track_id():
+def test_transport_identity_snapshot_sets_ph_id_not_global_track_id() -> None:
     """R3: _build_tracking_event_pb must set ph_id on IdentitySnapshot, not global_track_id."""
-    import inspect
-    from app.transport.redis_streams import _build_tracking_event_pb
-
     source = inspect.getsource(_build_tracking_event_pb)
     assert "s.ph_id" in source, "transport must set s.ph_id on IdentitySnapshot"
     assert "s.global_track_id" not in source, (

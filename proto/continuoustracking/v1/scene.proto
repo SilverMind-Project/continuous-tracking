@@ -12,9 +12,8 @@ message SceneSample {
   // Unique keyframe ID (ULID or UUID).
   string keyframe_id = 1;
 
-  // Originating tracklet and global track. Both required.
-  string tracklet_id = 2;
-  string global_track_id = 3;
+  reserved 2, 3;
+  reserved "tracklet_id", "global_track_id";
 
   // Originating camera.
   string camera_id = 4;
@@ -34,6 +33,9 @@ message SceneSample {
 
   // Retention deadline in unix nanoseconds.
   fixed64 expires_at_unix_ns = 9;
+
+  // Person Hypothesis for the person shown in this sampled frame.
+  string ph_id = 10;
 }
 
 enum TagReason {

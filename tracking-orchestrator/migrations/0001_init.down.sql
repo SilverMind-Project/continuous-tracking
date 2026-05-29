@@ -1,3 +1,5 @@
--- Consolidated baseline rollback.
--- Dev-stage app: rollback not supported. Drop the database and recreate instead.
--- DROP SCHEMA continuous_tracking CASCADE;
+-- Rollback not supported for the baseline migration.
+-- Drop the database and recreate from 0001_init.up.sql instead:
+--
+--   psql -c "DROP SCHEMA continuous_tracking CASCADE;"
+--   cts-db migrate

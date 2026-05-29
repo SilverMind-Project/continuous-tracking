@@ -92,7 +92,7 @@ IP Cameras (RTSP)
 │   ├── internal/streams/          Stream lifecycle management
 │   └── internal/supervisor/       Runtime supervisor
 ├── tracking-orchestrator/         Python ML orchestration service
-│   ├── app/domain/                Frozen dataclasses (Detection, Tracklet, GlobalTrack, …)
+│   ├── app/domain/                Frozen dataclasses (Detection, WorldObservation, PersonHypothesis, …)
 │   ├── app/inference/             Triton gRPC client (delegates to triton_shared) + ReID/Pose wrappers
 │   ├── app/tracking/              BoT-SORT, identity resolver, cross-camera association
 │   ├── app/trajectory/            Trajectory writer, dementia signal detectors, posture classifier, motion energy, robust stats
@@ -105,7 +105,7 @@ IP Cameras (RTSP)
 │   ├── app/sampling/              Keyframe sampler
 │   ├── app/pipeline/              Frame processing pipeline (detection, tracking, pose, ReID, privacy enforcement)
 │   ├── app/proto/                 Generated protobuf Python bindings (committed)
-│   └── migrations/                SQL migrations (0001–0006, .up.sql/.down.sql pairs)
+│   └── migrations/                SQL migrations (0001_init baseline; .up.sql/.down.sql pairs)
 ├── triton-models/                 Triton model configs + export/download scripts
 │   ├── person-detector/           YOLO26L ONNX (FP32)
 │   ├── clip-vision/               CLIP ViT-L/14 ONNX (FP32)
@@ -114,7 +114,7 @@ IP Cameras (RTSP)
 │   ├── pose-rtmpose/              RTMPose-m ONNX
 │   └── scripts/                   export, download
 ├── proto/                         Protobuf contracts (frame, tracking, signals, scene)
-├── cognitive-companion/           BFF gateway (sibling repo — see its own CLAUDE.md)
+├── cognitive-companion/           BFF gateway (sibling repo -- see its own CLAUDE.md)
 ├── k8s/                           Legacy K8s (migrated to ../kubernetes/continuous-tracking/)
 ├── docs/                          Runbook, wire-format spec
 ├── ../kubernetes/                 Unified K8s manifests (nanai namespace)
@@ -137,11 +137,11 @@ Nothing above `storage` may import a concrete `Postgres*` class. Services depend
 
 Every persistent resource in `tracking-orchestrator` has three artifacts:
 
-1. **`Protocol`** in `storage/base.py` — the contract services depend on
-2. **`InMemory*`** in the same file — zero-dependency, used in all unit tests
-3. **`Postgres*`** in `storage/postgres/` — production asyncpg implementation
+1. **`Protocol`** in `storage/base.py` -- the contract services depend on
+2. **`InMemory*`** in the same file -- zero-dependency, used in all unit tests
+3. **`Postgres*`** in `storage/postgres/` -- production asyncpg implementation
 
-The shared PostgreSQL instance (`timescale/timescaledb-ha:pg18`) hosts the `continuous_tracking` database alongside `cognitive_companion` and `semantic_memory`. The database and a dedicated `continuous_tracking` schema are created by `../db/db/init-databases.sh` (mounted at `/docker-entrypoint-initdb.d/`). Every table, index, trigger, and function lives in the `continuous_tracking` schema — nothing goes to `public`. Per-app SQL migrations are managed by `MigrationRunner` (`app/storage/migrations.py`), which uses `pg_try_advisory_lock` for multi-replica safety and an `.up.sql` / `.down.sql` convention for explicit rollback.
+The shared PostgreSQL instance (`timescale/timescaledb-ha:pg18`) hosts the `continuous_tracking` database alongside `cognitive_companion` and `semantic_memory`. The database and a dedicated `continuous_tracking` schema are created by `../db/db/init-databases.sh` (mounted at `/docker-entrypoint-initdb.d/`). Every table, index, trigger, and function lives in the `continuous_tracking` schema -- nothing goes to `public`. Per-app SQL migrations are managed by `MigrationRunner` (`app/storage/migrations.py`), which uses `pg_try_advisory_lock` for multi-replica safety and an `.up.sql` / `.down.sql` convention for explicit rollback.
 
 ```python
 # storage/base.py
@@ -160,7 +160,7 @@ Rules:
 
 ### Domain objects: frozen dataclasses
 
-Internal domain objects are `@dataclass(frozen=True)`. They carry no validation logic — validation happens at service boundaries via Pydantic v2. Never mutate a frozen dataclass; use a side-channel dict keyed by `id(obj)` for transport metadata (e.g., Redis message IDs).
+Internal domain objects are `@dataclass(frozen=True)`. They carry no validation logic -- validation happens at service boundaries via Pydantic v2. Never mutate a frozen dataclass; use a side-channel dict keyed by `id(obj)` for transport metadata (e.g., Redis message IDs).
 
 ### Go: interface contracts
 
@@ -171,11 +171,11 @@ Each subsystem in `rtsp-ingress/internal/` exports an interface as its public AP
 `rtsp-ingress` does **not** manage RTSP sessions directly. go2rtc owns all RTSP sessions. The flow per camera:
 
 1. `reconciler` fetches the enabled camera list from `GET /api/v1/cts/cameras` on cognitive-companion (polled every 60 s)
-2. `Supervisor.Reconcile()` calls `go2rtc.RegisterStream(ctx, cameraID, rtspURL)` — idempotent HTTP PUT to go2rtc `/api/streams`; heals go2rtc restarts
-3. `poll.Worker` ticks every `frame_interval_ms` ms and calls `go2rtc.FetchJPEG(ctx, cameraID)` — HTTP GET `/api/frame.jpeg`
+2. `Supervisor.Reconcile()` calls `go2rtc.RegisterStream(ctx, cameraID, rtspURL)` -- idempotent HTTP PUT to go2rtc `/api/streams`; heals go2rtc restarts
+3. `poll.Worker` ticks every `frame_interval_ms` ms and calls `go2rtc.FetchJPEG(ctx, cameraID)` -- HTTP GET `/api/frame.jpeg`
 4. Frame passes motion gate, uploads to MinIO, publishes to `frames.ready`
 
-`rtsp-ingress/config/go2rtc.yaml` has **no `streams:` section** — all registrations are dynamic. Do not add `gortsplib` or `pion/rtp` to this codebase.
+`rtsp-ingress/config/go2rtc.yaml` has **no `streams:` section** -- all registrations are dynamic. Do not add `gortsplib` or `pion/rtp` to this codebase.
 
 ### Identity resolution: Bayesian posterior
 
@@ -185,7 +185,7 @@ The identity resolver maintains a posterior probability distribution over `{know
 - **ReID gallery** (SOLIDER-REID embedding → pgvector HNSW nearest-neighbour search)
 - **Temporal prior** (continuity from prior frame's assignment)
 
-A commit fires only when `prob ≥ threshold AND margin ≥ min_margin AND sensory_evidence_present`. The temporal prior alone cannot trigger a commit — face or ReID evidence must be present. Parameter: `commit_prob = 0.65`.
+A commit fires only when `prob ≥ threshold AND margin ≥ min_margin AND sensory_evidence_present`. The temporal prior alone cannot trigger a commit -- face or ReID evidence must be present. Parameter: `commit_prob = 0.65`.
 
 Retroactive revision: when a committed identity is later overturned, an `IdentityRevision` is published to `tracking.revisions`, the `PersonLocationHistory` row in cognitive-companion is soft-deleted (`superseded_by_revision_id` stamped), and a replacement row is inserted.
 
@@ -199,12 +199,12 @@ Retroactive revision: when a committed identity is later overturned, an `Identit
 | --- | --- |
 | `fastapi` | HTTP router and dependency injection |
 | `pydantic v2` | Validation at all external boundaries (HTTP, config, Redis payloads) |
-| `asyncpg` | Async Postgres driver — `$1..$N` positional params always |
-| `redis[hiredis]` | Async Redis Streams client — consumer groups + XACK |
+| `asyncpg` | Async Postgres driver -- `$1..$N` positional params always |
+| `redis[hiredis]` | Async Redis Streams client -- consumer groups + XACK |
 | `aiobotocore` | Async S3-compatible client for MinIO |
-| `structlog` | Structured JSON logging — never `logging.getLogger` or `print` |
+| `structlog` | Structured JSON logging -- never `logging.getLogger` or `print` |
 | `numpy` | Frame data and embedding arithmetic |
-| `opencv-python-headless` | Image preprocessing — `cv2.resize(INTER_LINEAR)` for all letterbox/crop resizing |
+| `opencv-python-headless` | Image preprocessing -- `cv2.resize(INTER_LINEAR)` for all letterbox/crop resizing |
 | `scipy` | Hungarian assignment (`linear_sum_assignment`) for tracking; robust statistics for baselines |
 | `shapely>=2.0` | Polygon containment for privacy zone enforcement |
 | `protobuf` | Message contracts; generated bindings committed in `app/proto/` |
@@ -224,18 +224,18 @@ Do not introduce `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a *
 | `minio/minio-go/v7` | S3-compatible object storage client |
 | `redis/go-redis/v9` | Redis Streams producer |
 | `prometheus/client_golang` | Metrics exposition |
-| `go.uber.org/zap` | Structured logging — `zap.L()` for global logger |
+| `go.uber.org/zap` | Structured logging -- `zap.L()` for global logger |
 | `google.golang.org/protobuf` | Protobuf runtime |
 | `golang.org/x/image` | Image format decoding in media processing |
 | `gopkg.in/yaml.v3` | Config file parsing |
 
-Do not add `bluenviron/gortsplib` or `pion/rtp` — RTSP is delegated to go2rtc.
+Do not add `bluenviron/gortsplib` or `pion/rtp` -- RTSP is delegated to go2rtc.
 
 ---
 
 ## Redis Stream Wire Format
 
-All streams carry raw protobuf bytes — no JSON, no base64. Use `transport/codec.py`:
+All streams carry raw protobuf bytes -- no JSON, no base64. Use `transport/codec.py`:
 
 ```python
 from app.transport.codec import encode, decode
@@ -275,12 +275,11 @@ cts-db status           # show applied / pending
 
 | File | Contents |
 | --- | --- |
-| `0001_init` | All transactional DDL: tables, hypertables, indexes, triggers |
-| `0002_continuous_aggregates` | `continuous_tracking.dementia_signals_daily` continuous aggregate + refresh policy (non-transactional) |
-| `0003_schema_move` | Schema reorganization |
-| `0004_identity_id_text` | Change identity_id columns to TEXT |
-| `0005_pose_columns` | `motion_energy` on person_trajectories; `min_motion_energy`, `still_seconds` on room_dwells |
-| `0006_signal_algo_version` | `algorithm_version` on dementia_signals |
+| `0001_init` | Complete baseline schema: all tables, hypertables, indexes, triggers, continuous aggregate, and retention policy. Squashes 20+ prior migrations plus U1 quality capture and PH-native cleanup. Drop and recreate the database to migrate from an older chain. |
+
+**Pre-release lifecycle:** All schema changes fold into `0001_init.up.sql`. No incremental files exist. Existing dev databases must be dropped and recreated.
+
+**Post-release lifecycle:** Each atomic change gets its own `NNNN_description.up.sql` / `NNNN_description.down.sql`. Rollbacks are supported.
 
 **DATABASE_URL**: asyncpg expects a plain `postgresql://` DSN. If a `postgresql+asyncpg://` (SQLAlchemy-style) URL is provided, the `_normalize_dsn()` helper strips the `+asyncpg` prefix automatically.
 
@@ -292,7 +291,7 @@ These rules come from bugs caught during implementation and are non-negotiable.
 
 ### Python / asyncpg
 
-**`$N` placeholders always.** asyncpg uses `$1, $2, …` positional params. Never use `%s` or `?`. `executemany` also requires `$N` style — one row's worth of placeholders per statement.
+**`$N` placeholders always.** asyncpg uses `$1, $2, …` positional params. Never use `%s` or `?`. `executemany` also requires `$N` style -- one row's worth of placeholders per statement.
 
 **`datetime.now(UTC)` always.** `from datetime import UTC`. Bare `datetime.now()` produces timezone-naive objects that break TimescaleDB `timestamptz` columns.
 
@@ -304,11 +303,11 @@ These rules come from bugs caught during implementation and are non-negotiable.
 
 ### SQL correctness
 
-**Schema-qualify every table reference.** All tables, views, and materialized views live in the `continuous_tracking` schema. Every SQL statement in `storage/postgres/` must write `continuous_tracking.<table>` (e.g. `FROM continuous_tracking.dementia_signals`, `INSERT INTO continuous_tracking.global_tracks`). Never rely on `search_path` to resolve unqualified names — the Python application queries span many sessions and the search_path is only set during migration execution.
+**Schema-qualify every table reference.** All tables, views, and materialized views live in the `continuous_tracking` schema. Every SQL statement in `storage/postgres/` must write `continuous_tracking.<table>` (e.g. `FROM continuous_tracking.dementia_signals`, `INSERT INTO continuous_tracking.person_hypotheses`). Never rely on `search_path` to resolve unqualified names; the Python application queries span many sessions and the search_path is only set during migration execution.
 
-**PostgreSQL array concatenation is `||`.** In `ON CONFLICT DO UPDATE SET`, write `col = EXCLUDED.col || table.col`. The `array[...]` constructor is for array literals only — wrapping a `||` expression in it is a syntax error.
+**PostgreSQL array concatenation is `||`.** In `ON CONFLICT DO UPDATE SET`, write `col = EXCLUDED.col || table.col`. The `array[...]` constructor is for array literals only -- wrapping a `||` expression in it is a syntax error.
 
-**Anchor conditional SQL replacements.** When adding `AND extra_clause` to a query via `str.replace`, replace a unique substring that includes the insertion point. Never replace a trailing keyword like `LIMIT 100` and prepend `AND …` — that produces invalid SQL (predicate after `ORDER BY`).
+**Anchor conditional SQL replacements.** When adding `AND extra_clause` to a query via `str.replace`, replace a unique substring that includes the insertion point. Never replace a trailing keyword like `LIMIT 100` and prepend `AND …` -- that produces invalid SQL (predicate after `ORDER BY`).
 
 **Match bind parameter count exactly.** Count `$1..$N` placeholders and verify the argument tuple has the same arity. Off-by-one raises `ValueError: bind parameter $N not found` at runtime.
 
@@ -320,17 +319,17 @@ These rules come from bugs caught during implementation and are non-negotiable.
 
 **One increment per code path.** An unconditional increment followed by a conditional second increment silently doubles the count on the non-threshold branch.
 
-**Prefer method parameters over placeholder fields.** If a helper receives `embedding` as a parameter and the detection also has a placeholder `detection.embedding`, use the parameter — it carries the live Triton value.
+**Prefer method parameters over placeholder fields.** If a helper receives `embedding` as a parameter and the detection also has a placeholder `detection.embedding`, use the parameter -- it carries the live Triton value.
 
 **Sort trajectory windows ascending.** Dementia signal detectors need time-ordered points to compute distances and direction changes correctly.
 
 ### Go
 
-**go2rtc owns all RTSP sessions.** Use `go2rtc.Client` — `RegisterStream`, `DeregisterStream`, `FetchJPEG`. Never open raw RTSP connections in Go.
+**go2rtc owns all RTSP sessions.** Use `go2rtc.Client` -- `RegisterStream`, `DeregisterStream`, `FetchJPEG`. Never open raw RTSP connections in Go.
 
 **Wrap every error with context.** `fmt.Errorf("streams: register %q: %w", cfg.ID, err)`.
 
-**Check every error.** `go vet` and `golangci-lint` flag unchecked returns — treat them as compile errors.
+**Check every error.** `go vet` and `golangci-lint` flag unchecked returns -- treat them as compile errors.
 
 **`context.Context` first.** Every function that does I/O takes `ctx context.Context` as its first parameter and respects cancellation via `ctx.Err()`.
 
@@ -345,12 +344,12 @@ These rules come from bugs caught during implementation and are non-negotiable.
 | Go version | 1.24+ (toolchain pinned in `.tool-versions`; install with `make go-install`) |
 | Go safety | `-race` mandatory in all test runs; `go vet`; `golangci-lint` |
 | Protobuf | `buf lint`; `buf breaking` against last merged commit; generated bindings committed |
-| Logging | `structlog` in Python (`get_logger(__name__)`); `zap.L()` in Go. Include `camera_id`, `tracklet_id`, `global_track_id` in every relevant log line. |
+| Logging | `structlog` in Python (`get_logger(__name__)`); `zap.L()` in Go. Include `camera_id`, `ph_id` in every relevant log line. |
 | Timestamps | Always timezone-aware. Python: `datetime.now(UTC)`. Go: `time.Now().UTC()`. |
 | Image resize | `opencv-python-headless` `cv2.resize(INTER_LINEAR)`. Never hand-roll bilinear in NumPy. |
 | Secrets | In environment variables or `.env` files (never committed). YAML holds defaults; env overrides. |
 | SQL injection | asyncpg `$N` params only. Never build SQL with f-strings or `%`. |
-| Error taxonomy | Domain errors use the project's `ErrorCode` enum. No stack traces in API responses — log locally, return only code + message. |
+| Error taxonomy | Domain errors use the project's `ErrorCode` enum. No stack traces in API responses -- log locally, return only code + message. |
 | Metrics | Prometheus via `prometheus-client` (Python) and `prometheus/client_golang` (Go). Register in the respective `metrics.py` / `metrics.go` files. |
 
 ---
@@ -359,17 +358,17 @@ These rules come from bugs caught during implementation and are non-negotiable.
 
 ### Python
 
-- Unit tests inject `InMemory*` implementations directly — never mock `asyncpg.Pool` or Redis.
+- Unit tests inject `InMemory*` implementations directly -- never mock `asyncpg.Pool` or Redis.
 - All tests touching a repository are `async def` (configured with `asyncio_mode = "auto"`).
-- Triton calls are mocked via `TritonClientProtocol` — all inference tests run without a GPU.
+- Triton calls are mocked via `TritonClientProtocol` -- all inference tests run without a GPU.
 - Use `pytest.fixture` for shared domain objects; do not construct the same frozen dataclass inline in multiple tests.
-- Test only through the public API of the class under test — never assert on private `_attributes`.
+- Test only through the public API of the class under test -- never assert on private `_attributes`.
 - Integration tests (real Postgres + Redis) are in `tests/integration/` and skipped by default.
 
 ### Go (rtsp-ingress tests)
 
 - Table-driven tests (`t.Run`) for functions with multiple input/output cases.
-- Inject interfaces in constructors — tests replace the real implementation.
+- Inject interfaces in constructors -- tests replace the real implementation.
 - Always run with `-race`: `go test -race ./...`. Hard CI gate.
 - HTTP handler tests use `httptest.NewRecorder()`.
 - go2rtc calls are tested with `httptest.Server` serving mock responses.
@@ -404,7 +403,7 @@ cd tracking-orchestrator && uv sync --frozen --extra dev
 
 ## Proto Codegen
 
-Generated bindings are **committed to the repo** — do not gitignore them. Regenerate after changing `.proto` files:
+Generated bindings are **committed to the repo** -- do not gitignore them. Regenerate after changing `.proto` files:
 
 ```bash
 make proto          # Go (buf generate) + Python (protoc --python_out --pyi_out)
@@ -426,7 +425,7 @@ rtsp-ingress polls `GET /api/v1/cts/cameras` on cognitive-companion every 60 s (
 | Field | Source |
 | --- | --- |
 | `ID` | `cts_cameras.id` |
-| `RTSPURL` | `cts_cameras.rtsp_url` — full RTSP URL stored in the database |
+| `RTSPURL` | `cts_cameras.rtsp_url` -- full RTSP URL stored in the database |
 | `RoomName` | `cts_cameras.location` |
 | `Enabled` | only enabled cameras are included (filtered Go-side) |
 | `FrameIntervalMs` | falls back to `defaults.frame_interval_ms` from settings.yaml |
@@ -442,7 +441,7 @@ The CLAUDE.md for the `rtsp-ingress` architecture note:
 ```text
 RTSP ingest: go2rtc sidecar
   1. reconciler fetches CameraConfig list from cognitive-companion API
-  2. Supervisor.Reconcile() calls go2rtc.RegisterStream() — idempotent PUT, heals restarts
+  2. Supervisor.Reconcile() calls go2rtc.RegisterStream() -- idempotent PUT, heals restarts
   3. poll.Worker ticks every frame_interval_ms and calls go2rtc.FetchJPEG()
   4. Frame passes motion gate, uploads to MinIO, publishes to frames.ready
 ```

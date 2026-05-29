@@ -20,8 +20,9 @@ from app.inference.triton_client import TritonClientProtocol
 _MODEL_NAME = "reid-solider"
 _CROP_H = 384
 _CROP_W = 128
-# reid-solider/config.pbtxt max_batch_size: 16 — chunk larger batches.
-_REID_MAX_BATCH = 16
+# Jetson and CTS default model configs cap ReID batches at 8. Chunk larger
+# detection sets so crowded frames do not exceed Triton's advertised max batch.
+_REID_MAX_BATCH = 8
 
 # ImageNet statistics for ReID normalisation
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
@@ -53,7 +54,7 @@ class ReidEmbedder:
         """Embed a batch of RGB person crops.  Returns L2-normalised embeddings.
 
         Chunks into groups of at most _REID_MAX_BATCH to respect the Triton
-        model's max_batch_size: 16 limit.
+        model's max_batch_size limit.
         """
         if not crops:
             return []

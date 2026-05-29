@@ -26,9 +26,7 @@ from app.pipeline.frame_pipeline import (
     SignalConfig,
 )
 from app.storage.base import (
-    InMemoryGlobalTrackRepository,
     InMemoryPHRepository,
-    InMemoryTrackingRepository,
     InMemoryWorldObservationRepository,
 )
 from app.storage.gallery import InMemoryGalleryRepository
@@ -104,9 +102,7 @@ class TestWorldTrackingEmitsRevisions:
         await gallery_repo.upsert_identity(identity)
 
         resolver = IdentityResolver(
-            tracking_repo=InMemoryTrackingRepository(),
             gallery_repo=gallery_repo,
-            global_track_repo=InMemoryGlobalTrackRepository(),
             identities=[identity],
             config=ResolverConfig(),
         )
@@ -141,6 +137,8 @@ class TestWorldTrackingEmitsRevisions:
             phs=[ph],
             ph_obs_meta=ph_obs_meta,
             face_anchors=[face_anchor],
+            det_to_ph={},
+            face_evidence=None,
             now=now,
             config=WorldTrackerConfig(),
         )
@@ -161,9 +159,7 @@ class TestWorldTrackingEmitsRevisions:
         await gallery_repo.upsert_identity(identity)
 
         resolver = IdentityResolver(
-            tracking_repo=InMemoryTrackingRepository(),
             gallery_repo=gallery_repo,
-            global_track_repo=InMemoryGlobalTrackRepository(),
             identities=[identity],
             config=ResolverConfig(),
         )
@@ -187,12 +183,84 @@ class TestWorldTrackingEmitsRevisions:
             phs=[ph],
             ph_obs_meta=ph_obs_meta,
             face_anchors=[],  # no face evidence
+            det_to_ph={},
+            face_evidence=None,
             now=now,
             config=WorldTrackerConfig(),
         )
 
         assert len(revisions) == 0, f"expected 0 revisions, got {len(revisions)}"
         assert len(fake_publisher.published) == 0
+
+    async def test_ph_mode_face_anchor_commits_to_existing_ph(self) -> None:
+        """Existing PH + PH-mode face anchor (tracklet_id='', detection_id mapped via
+        det_to_ph) → identity commits on the correct PH.
+
+        This is the regression test for the PH-mode resolver bug:
+        FaceIdentityStage runs before WorldTrackingStage so detection_id is the
+        only per-detection key at anchor-build time.  The remap in
+        _resolve_identities fills tracklet_id=ph_id so the resolver can match.
+        """
+        now = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
+        gallery_repo = InMemoryGalleryRepository()
+        identity = _make_identity("grandma")
+        await gallery_repo.upsert_identity(identity)
+
+        resolver = IdentityResolver(
+            gallery_repo=gallery_repo,
+            identities=[identity],
+            config=ResolverConfig(),
+        )
+
+        ph_repo = InMemoryPHRepository()
+        obs_repo = InMemoryWorldObservationRepository()
+
+        ph = _make_ph("ph-existing", now=now)
+        await ph_repo.save(ph)
+
+        obs = _make_observation("cam1", 5, captured_at=now)
+        await obs_repo.save(obs, ph_id="ph-existing")
+
+        ph_obs_meta = {"ph-existing": (5, BoundingBox(10, 20, 110, 220), 0.9)}
+
+        # PH-mode anchor: tracklet_id="" (as produced by FaceIdentityStage),
+        # detection_id is an ephemeral UUID assigned by DetectStage.
+        detection_uuid = "aaaa-bbbb-cccc-dddd"
+        face_anchor = FaceAnchor(
+            person_id="grandma",
+            confidence=0.92,
+            quality=1.0,
+            tracklet_id="",           # empty — PH mode
+            detection_id=detection_uuid,
+            camera_id="cam1",
+            captured_at=now,
+        )
+
+        # det_to_ph maps the detection_uuid to the existing PH — exactly what
+        # WorldTracker.step() builds during the association step.
+        det_to_ph = {detection_uuid: "ph-existing"}
+
+        _decisions, revisions, identity_by_ph = await _resolve_identities(
+            resolver=resolver,
+            obs_repo=obs_repo,
+            ph_repo=ph_repo,
+            phs=[ph],
+            ph_obs_meta=ph_obs_meta,
+            face_anchors=[face_anchor],
+            det_to_ph=det_to_ph,
+            face_evidence=None,
+            now=now,
+            config=WorldTrackerConfig(),
+        )
+
+        # The existing PH must be identified as grandma.
+        assert len(revisions) == 1, (
+            f"Expected identity commit revision, got {len(revisions)}.  "
+            "If 0: the remap did not fire — check that det_to_ph wiring and "
+            "entity_id matching in _from_face_anchors are both in place."
+        )
+        assert revisions[0].new_identity_id == "grandma"
+        assert identity_by_ph.get("ph-existing", {}).get("identity_id") == "grandma"
 
 
 class TestPipelineWiring:

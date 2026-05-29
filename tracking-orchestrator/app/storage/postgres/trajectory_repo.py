@@ -20,14 +20,14 @@ logger = get_logger(__name__)
 
 _SQL_INSERT_TRAJECTORY = """
 INSERT INTO continuous_tracking.person_trajectories
-    (observed_at, identity_id, global_track_id, room_name,
+    (observed_at, identity_id, ph_id, room_name,
      ground_x, ground_y, posture, identity_confidence, motion_energy)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 """
 
 _SQL_INSERT_DWELL = """
 INSERT INTO continuous_tracking.room_dwells
-    (identity_id, global_track_id, room_name, entered_at,
+    (identity_id, ph_id, room_name, entered_at,
      entry_confidence, primary_posture, activity_summary,
      min_motion_energy, still_seconds)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -46,25 +46,25 @@ WHERE id = $5
 """
 
 _SQL_GET_OPEN_DWELL = """
-SELECT id, identity_id, global_track_id, room_name,
+SELECT id, identity_id, ph_id, room_name,
        entered_at, entry_confidence, primary_posture, activity_summary
 FROM continuous_tracking.room_dwells
 WHERE identity_id = $1
-  AND global_track_id = $2::uuid
+  AND ph_id = $2::uuid
   AND exited_at IS NULL
 ORDER BY entered_at DESC
 LIMIT 1
 """
 
 _SQL_LIST_TRAJECTORY = """
-SELECT identity_id, global_track_id, observed_at, room_name,
+SELECT identity_id, ph_id, observed_at, room_name,
        ground_x, ground_y, posture, identity_confidence, motion_energy
 FROM continuous_tracking.person_trajectories
 WHERE TRUE
 """
 
 _SQL_LIST_DWELLS = """
-SELECT id, identity_id, global_track_id, room_name,
+SELECT id, identity_id, ph_id, room_name,
        entered_at, exited_at, duration_seconds,
        entry_confidence, primary_posture, activity_summary,
        min_motion_energy, still_seconds
@@ -81,7 +81,7 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
 
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
-        # In-memory cache of open dwell row IDs, keyed by (identity_id, global_track_id).
+        # In-memory cache of open dwell row IDs, keyed by (identity_id, ph_id).
         # Used to find the DB row id for update_room_dwell without an extra SELECT.
         self._open_dwell_db_id: dict[tuple[str | None, str], int] = {}
 
@@ -91,7 +91,7 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
                 _SQL_INSERT_TRAJECTORY,
                 point.observed_at,
                 point.identity_id,
-                point.global_track_id,
+                point.ph_id,
                 point.room_name,
                 point.ground_x,
                 point.ground_y,
@@ -105,7 +105,7 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
             row = await conn.fetchrow(
                 _SQL_INSERT_DWELL,
                 dwell.identity_id,
-                dwell.global_track_id,
+                dwell.ph_id,
                 dwell.room_name,
                 dwell.entered_at,
                 dwell.entry_confidence,
@@ -116,16 +116,16 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
             )
             if row is not None:
                 db_id: int = row["id"]
-                self._open_dwell_db_id[(dwell.identity_id, dwell.global_track_id)] = db_id
+                self._open_dwell_db_id[(dwell.identity_id, dwell.ph_id)] = db_id
 
     async def update_room_dwell(self, dwell: RoomDwell) -> None:
-        key = (dwell.identity_id, dwell.global_track_id)
+        key = (dwell.identity_id, dwell.ph_id)
         db_id = self._open_dwell_db_id.pop(key, None)
         if db_id is None:
             logger.warning(
                 "update_room_dwell: no DB row id for dwell",
                 identity_id=dwell.identity_id,
-                global_track_id=dwell.global_track_id,
+                ph_id=dwell.ph_id,
             )
             return
 
@@ -141,9 +141,9 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
                 dwell.still_seconds,
             )
 
-    async def get_open_dwell(self, identity_id: str, global_track_id: str) -> RoomDwell | None:
+    async def get_open_dwell(self, identity_id: str, ph_id: str) -> RoomDwell | None:
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(_SQL_GET_OPEN_DWELL, identity_id, global_track_id)
+            row = await conn.fetchrow(_SQL_GET_OPEN_DWELL, identity_id, ph_id)
         if row is None:
             return None
         return _row_to_dwell(row)
@@ -151,7 +151,7 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
     async def list_trajectory_points(
         self,
         identity_id: str | None = None,
-        global_track_id: str | None = None,
+        ph_id: str | None = None,
         after: datetime | None = None,
         limit: int = 100,
     ) -> list[PersonTrajectoryPoint]:
@@ -162,9 +162,9 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
             sql += f" AND identity_id = ${n}"
             args.append(identity_id)
             n += 1
-        if global_track_id is not None:
-            sql += f" AND global_track_id = ${n}::uuid"
-            args.append(global_track_id)
+        if ph_id is not None:
+            sql += f" AND ph_id = ${n}::uuid"
+            args.append(ph_id)
             n += 1
         if after is not None:
             sql += f" AND observed_at >= ${n}"
@@ -210,7 +210,7 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
 def _row_to_point(row: Any) -> PersonTrajectoryPoint:
     return PersonTrajectoryPoint(
         identity_id=row["identity_id"],
-        global_track_id=str(row["global_track_id"]),
+        ph_id=str(row["ph_id"]),
         observed_at=row["observed_at"],
         room_name=row["room_name"],
         ground_x=float(row["ground_x"]),
@@ -230,7 +230,7 @@ def _row_to_dwell(row: Any) -> RoomDwell:
     return RoomDwell(
         dwell_id=str(db_id),
         identity_id=row["identity_id"],
-        global_track_id=str(row["global_track_id"]),
+        ph_id=str(row["ph_id"]),
         room_name=row["room_name"],
         entered_at=row["entered_at"],
         exited_at=row.get("exited_at"),

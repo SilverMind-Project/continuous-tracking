@@ -1,0 +1,35 @@
+# Depth Anything v2 ViT-S Metric Indoor for Jetson Orin Nano Super.
+#
+# TensorRT plan generated from:
+#   triton-models/depth-anything-v2/1/model.onnx
+#
+# The ONNX export has static batch=1 output dimensions. CTS calls depth as a
+# low-frequency slow path, so keep the exact explicit shape and avoid batching.
+
+name: "depth-anything-v2"
+platform: "tensorrt_plan"
+default_model_filename: "model.plan"
+max_batch_size: 0
+
+input [
+  {
+    name: "pixel_values"
+    data_type: TYPE_FP32
+    dims: [1, 3, 518, 518]
+  }
+]
+
+output [
+  {
+    name: "predicted_depth"
+    data_type: TYPE_FP32
+    dims: [1, 518, 518]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

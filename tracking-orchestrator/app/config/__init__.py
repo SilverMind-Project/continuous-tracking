@@ -1,9 +1,9 @@
 """Configuration loader for the tracking orchestrator.
 
-Reads a single YAML file with ``${ENV_VAR}`` and ``${ENV_VAR:-default}``
-interpolation, exposed as a dot-notation dict. Runtime configuration should
-use :meth:`Settings.require` so defaults live in ``settings.yaml`` rather than
-being duplicated at call sites.
+Reads a single YAML file with explicit ``${ENV_VAR}`` interpolation for
+deployment-provided values, exposed as a dot-notation dict. Defaults live as
+literal values in ``settings.yaml`` so tunables do not become hidden env-var
+override surfaces.
 
 Usage::
 
@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -68,14 +68,15 @@ def _as_bool(value: object, key: str) -> bool:
 class SettingsSection:
     """Typed access to a required mapping-valued config section."""
 
-    def __init__(self, prefix: str, data: Mapping[str, Any]) -> None:
+    def __init__(self, prefix: str, data: Mapping[str, Any], env: Mapping[str, str]) -> None:
         self._prefix = prefix
         self._data = data
+        self._env = env
 
     def require(self, key: str) -> Any:
         if key not in self._data:
             raise SettingNotFoundError(self._qualify(key))
-        return self._data[key]
+        return _interpolate(self._data[key], self._env)
 
     def as_str(self, key: str) -> str:
         return str(self.require(key))
@@ -94,10 +95,10 @@ class SettingsSection:
 
 
 def _resolve_string(value: str, env: Mapping[str, str]) -> str:
-    """Replace ``${VAR}`` and ``${VAR:-default}`` placeholders.
+    """Replace explicit ``${VAR}`` placeholders.
 
-    Brace depth is counted so nested ``${}`` in fallback values are matched
-    correctly.  Fallback values are themselves resolved recursively.
+    Missing or empty variables are errors. Optional integrations should use a
+    literal empty string in settings.yaml rather than an env fallback.
     """
     result: list[str] = []
     i = 0
@@ -115,11 +116,14 @@ def _resolve_string(value: str, env: Mapping[str, str]) -> str:
                 j += 1
             content = value[i + 2 : j - 1]
             if ":-" in content:
-                var_name, fallback = content.split(":-", 1)
-                val = env.get(var_name, "")
-                result.append(val if val else _resolve_string(fallback, env))
-            else:
-                result.append(env.get(content, ""))
+                raise ValueError(
+                    "Env fallback interpolation is disabled; use a literal "
+                    f"settings.yaml value instead: {content!r}"
+                )
+            val = env.get(content, "")
+            if not val:
+                raise ValueError(f"Required environment variable is not set: {content}")
+            result.append(val)
             i = j
         else:
             result.append(value[i])
@@ -128,11 +132,7 @@ def _resolve_string(value: str, env: Mapping[str, str]) -> str:
 
 
 def _interpolate(value: Any, env: Mapping[str, str]) -> Any:
-    """Recursively replace ``${VAR}`` and ``${VAR:-default}`` placeholders.
-
-    A bare ``${VAR}`` with a missing variable becomes an empty string.
-    ``${VAR:-fallback}`` uses the fallback when VAR is missing or empty.
-    """
+    """Recursively replace explicit ``${VAR}`` placeholders."""
     if isinstance(value, str):
         return _resolve_string(value, env)
     if isinstance(value, dict):
@@ -143,7 +143,7 @@ def _interpolate(value: Any, env: Mapping[str, str]) -> Any:
 
 
 class Settings:
-    """YAML-backed settings with dot-notation access and env-var interpolation.
+    """YAML-backed settings with dot-notation access and explicit env interpolation.
 
     Tests can bypass the filesystem with :meth:`from_dict`::
 
@@ -174,7 +174,7 @@ class Settings:
             raise FileNotFoundError(f"Config file not found: {self._path}")
         with open(self._path) as f:
             raw = yaml.safe_load(f) or {}
-        self._data = _interpolate(raw, self._env)
+        self._data = raw
         self._loaded = True
 
     def get(self, dotted_key: str, default: Any = None) -> Any:
@@ -183,19 +183,21 @@ class Settings:
         Returns *default* if any segment is missing or traverses through
         a non-dict value.
         """
-        return self._lookup(dotted_key, default)
+        value = self._lookup(dotted_key, _MISSING)
+        if value is _MISSING:
+            return default
+        return _interpolate(value, self._env)
 
     def require(self, dotted_key: str) -> Any:
         """Retrieve a required nested value using dot notation.
 
         Missing keys raise :class:`SettingNotFoundError`. Empty strings are
-        valid values because several optional integrations are represented in
-        ``settings.yaml`` as ``${ENV_VAR:-}``.
+        valid only when written literally in ``settings.yaml``.
         """
         value = self._lookup(dotted_key, _MISSING)
         if value is _MISSING:
             raise SettingNotFoundError(dotted_key)
-        return value
+        return _interpolate(value, self._env)
 
     def as_str(self, dotted_key: str) -> str:
         return str(self.require(dotted_key))
@@ -214,7 +216,7 @@ class Settings:
         value = self.require(dotted_key)
         if not isinstance(value, dict):
             raise TypeError(f"Setting section must be a mapping: {dotted_key}")
-        return SettingsSection(dotted_key, value)
+        return SettingsSection(dotted_key, value, self._env)
 
     def _lookup(self, dotted_key: str, default: Any) -> Any:
         self._ensure_loaded()
@@ -226,9 +228,9 @@ class Settings:
         return node
 
     def raw(self) -> dict[str, Any]:
-        """Return the full merged config dict (for debugging)."""
+        """Return the full interpolated config dict (for debugging)."""
         self._ensure_loaded()
-        return self._data
+        return cast(dict[str, Any], _interpolate(self._data, self._env))
 
     def _ensure_loaded(self) -> None:
         if not self._loaded:

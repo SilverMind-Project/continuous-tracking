@@ -1,4 +1,4 @@
-"""Background task that drops historical low-confidence bbox annotations (M3).
+"""Background task that drops historical low-confidence bbox annotations.
 
 Scheduled nightly via the orchestrator lifespan. Scans annotations written
 in the last 7 days and removes any whose detection_confidence is below

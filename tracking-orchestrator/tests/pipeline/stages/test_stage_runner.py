@@ -134,3 +134,34 @@ class TestDetectStage:
         assert 0.95 in confidences, "highest-confidence box must be kept"
         assert 0.80 in confidences, "isolated box must be kept"
         assert 0.60 not in confidences, "overlapping lower-confidence box must be suppressed"
+
+    @pytest.mark.asyncio
+    async def test_detect_stage_run_batch_uses_one_detector_call(self) -> None:
+        """run_batch should send multiple frame images through one detector request."""
+        from app.inference.schemas import DetectionBox
+        from app.pipeline.stages.detect import DetectStage
+
+        class FakeDetector:
+            def __init__(self) -> None:
+                self.batch_sizes: list[int] = []
+
+            async def detect_batch(self, images: list[np.ndarray]) -> list[list[DetectionBox]]:
+                self.batch_sizes.append(len(images))
+                return [
+                    [DetectionBox(x1=0.1, y1=0.1, x2=0.4, y2=0.8, confidence=0.9)] for _ in images
+                ]
+
+        ctx1 = _make_ctx("cam-1", 1)
+        ctx2 = _make_ctx("cam-2", 1)
+        ctx1.image = np.zeros((480, 640, 3), dtype=np.uint8)
+        ctx2.image = np.zeros((480, 640, 3), dtype=np.uint8)
+        detector = FakeDetector()
+        stage = DetectStage(detector=detector)  # type: ignore[arg-type]
+
+        await stage.run_batch([ctx1, ctx2])
+
+        assert detector.batch_sizes == [2]
+        assert len(ctx1.raw_detections) == 1
+        assert len(ctx2.raw_detections) == 1
+        assert len(ctx1._detection_ids) == 1
+        assert len(ctx2._detection_ids) == 1

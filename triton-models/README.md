@@ -140,7 +140,7 @@ uv run --with onnxruntime --with onnx --with sympy \
 # Verify output shape: [batch, 300, 6]
 python -c "import onnx; m=onnx.load('triton-models/person-detector/1/model_qdq.onnx'); \
   print([d.dim_value for d in m.graph.output[0].type.tensor_type.shape.dim])"
-# Expected: [16, 300, 6]
+# Expected: [8, 300, 6]
 ```
 
 YOLO26L is NMS-Free: NMS is baked into the ONNX graph. No post-processing

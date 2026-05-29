@@ -15,11 +15,7 @@ from app.domain import (
     PosteriorDist,
     ResolveOutcome,
 )
-from app.storage.base import (
-    InMemoryGalleryRepository,
-    InMemoryGlobalTrackRepository,
-    InMemoryTrackingRepository,
-)
+from app.storage.base import InMemoryGalleryRepository
 from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 
 # ---------------------------------------------------------------------------
@@ -85,14 +81,14 @@ class TestPosteriorDist:
 
 
 def _make_gt(
-    global_track_id: str = "gt-1",
+    ph_id: str = "gt-1",
     current_identity_id: str | None = None,
     camera_ids: list[str] | None = None,
     tracklet_ids: list[str] | None = None,
 ) -> GlobalTrack:
     now = datetime.now(UTC)
     return GlobalTrack(
-        global_track_id=global_track_id,
+        global_track_id=ph_id,
         camera_ids=camera_ids or ["cam_a"],
         tracklet_ids=tracklet_ids or ["t1"],
         started_at=now,
@@ -132,9 +128,7 @@ def _make_resolver(
     gallery_repo: InMemoryGalleryRepository | None = None,
 ) -> IdentityResolver:
     return IdentityResolver(
-        tracking_repo=InMemoryTrackingRepository(),
         gallery_repo=gallery_repo or InMemoryGalleryRepository(),
-        global_track_repo=InMemoryGlobalTrackRepository(),
         identities=identities or [],
         config=config or ResolverConfig(),
     )
@@ -173,7 +167,7 @@ class TestIdentityResolver:
 
         assert len(outcome.decisions) == 1
         decision = outcome.decisions[0]
-        assert decision.global_track_id == "gt-1"
+        assert decision.ph_id == "gt-1"
         assert decision.identity_id == "grandma"
         assert decision.revises_previous is True
 
@@ -311,7 +305,7 @@ class TestIdentityResolver:
 
         decision = outcome.decisions[0]
         assert isinstance(decision, IdentityDecision)
-        assert decision.global_track_id == "gt-1"
+        assert decision.ph_id == "gt-1"
         assert isinstance(decision.posterior, PosteriorDist)
         assert isinstance(decision.revises_previous, bool)
         assert isinstance(decision.reason, str)
@@ -339,8 +333,8 @@ class TestIdentityResolver:
         identities = [_make_identity("grandma", "Grandma")]
         resolver = _make_resolver(identities=identities)
 
-        gt1 = _make_gt(global_track_id="gt-1", current_identity_id=None)
-        gt2 = _make_gt(global_track_id="gt-2", current_identity_id=None)
+        gt1 = _make_gt(ph_id="gt-1", current_identity_id=None)
+        gt2 = _make_gt(ph_id="gt-2", current_identity_id=None)
 
         outcome = await resolver.resolve(
             hypotheses=[gt1, gt2],
@@ -349,7 +343,7 @@ class TestIdentityResolver:
         )
 
         assert len(outcome.decisions) == 2
-        decision_ids = {d.global_track_id for d in outcome.decisions}
+        decision_ids = {d.ph_id for d in outcome.decisions}
         assert decision_ids == {"gt-1", "gt-2"}
 
     @pytest.mark.asyncio
@@ -373,7 +367,7 @@ class TestIdentityResolver:
             quality=0.8,
             tracklet_id="t1",
         )
-        gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
+        gt = _make_gt(ph_id="gt-1", current_identity_id=None)
 
         outcome1 = await resolver.resolve(
             hypotheses=[gt],
@@ -385,7 +379,7 @@ class TestIdentityResolver:
         assert len(outcome1.revisions) == 1
 
         # Simulate pipeline applying the decision to the GT
-        gt = _make_gt(global_track_id="gt-1", current_identity_id="grandma")
+        gt = _make_gt(ph_id="gt-1", current_identity_id="grandma")
 
         # Second: assign dad via face anchor -> should produce revision
         face_anchor2 = FaceAnchor(
@@ -432,7 +426,7 @@ class TestIdentityResolver:
             config=ResolverConfig(commit_prob=0.65, prior_weight=0.3),
         )
 
-        gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
+        gt = _make_gt(ph_id="gt-1", current_identity_id=None)
 
         outcome = await resolver.resolve(
             hypotheses=[gt],
@@ -469,7 +463,7 @@ class TestIdentityResolver:
             config=ResolverConfig(commit_prob=0.65, prior_weight=0.3),
         )
 
-        gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
+        gt = _make_gt(ph_id="gt-1", current_identity_id=None)
         outcome = await resolver.resolve(
             hypotheses=[gt],
             new_face_anchors=[],
@@ -499,7 +493,7 @@ class TestIdentityResolver:
             quality=0.8,
             tracklet_id="t1",
         )
-        gt = _make_gt(global_track_id="gt-1", current_identity_id=None)
+        gt = _make_gt(ph_id="gt-1", current_identity_id=None)
 
         t1 = datetime.now(UTC)
         outcome1 = await resolver.resolve(
@@ -838,7 +832,7 @@ class TestGalleryBoost:
         resolver = _make_resolver(identities=identities, config=config, gallery_repo=gallery)
 
         new_gt = _make_gt(
-            global_track_id="gt-new",
+            ph_id="gt-new",
             current_identity_id=None,
             tracklet_ids=["t2"],
         )
@@ -906,7 +900,7 @@ class TestGalleryBoost:
         resolver = _make_resolver(identities=identities, config=config, gallery_repo=gallery)
 
         new_gt = _make_gt(
-            global_track_id="gt-ambiguous",
+            ph_id="gt-ambiguous",
             current_identity_id=None,
             tracklet_ids=["t_new"],
         )
@@ -935,7 +929,7 @@ class TestFaceLock:
         config = ResolverConfig(face_commit_min_confidence=0.60)
         resolver = _make_resolver(identities=identities, config=config)
 
-        gt = _make_gt(global_track_id="gt-1", tracklet_ids=["t1"])
+        gt = _make_gt(ph_id="gt-1", tracklet_ids=["t1"])
         anchor = _make_face_anchor("alice", confidence=0.90, tracklet_id="t1")
 
         await resolver.resolve(
@@ -954,7 +948,7 @@ class TestFaceLock:
         config = ResolverConfig(face_commit_min_confidence=0.80)
         resolver = _make_resolver(identities=identities, config=config)
 
-        gt = _make_gt(global_track_id="gt-1", tracklet_ids=["t1"])
+        gt = _make_gt(ph_id="gt-1", tracklet_ids=["t1"])
         anchor = _make_face_anchor("alice", confidence=0.50, tracklet_id="t1")
 
         await resolver.resolve(
@@ -974,7 +968,7 @@ class TestFaceLock:
         resolver = _make_resolver(identities=identities, config=config)
 
         # First: alice face lock set.
-        gt = _make_gt(global_track_id="gt-1", tracklet_ids=["t1"])
+        gt = _make_gt(ph_id="gt-1", tracklet_ids=["t1"])
         await resolver.resolve(
             hypotheses=[gt],
             new_face_anchors=[_make_face_anchor("alice", confidence=0.90, tracklet_id="t1")],
@@ -984,7 +978,7 @@ class TestFaceLock:
 
         # Second: bob face anchor displaces alice's lock.
         gt = _make_gt(
-            global_track_id="gt-1",
+            ph_id="gt-1",
             current_identity_id="alice",
             tracklet_ids=["t1"],
         )
@@ -1017,7 +1011,7 @@ class TestFaceLock:
         now = datetime.now(UTC)
 
         # First: commit alice via face anchor.
-        gt = _make_gt(global_track_id="gt-1", tracklet_ids=["t1"])
+        gt = _make_gt(ph_id="gt-1", tracklet_ids=["t1"])
         await resolver.resolve(
             hypotheses=[gt],
             new_face_anchors=[_make_face_anchor("alice", confidence=0.95, tracklet_id="t1")],
@@ -1097,8 +1091,8 @@ class TestCrossGtFacePropagation:
         )
         resolver = _make_resolver(identities=identities, gallery_repo=gallery_repo, config=config)
 
-        gt_a = _make_gt(global_track_id="gt-a", tracklet_ids=["t-a"], camera_ids=["cam-a"])
-        gt_b = _make_gt(global_track_id="gt-b", tracklet_ids=["t-b"], camera_ids=["cam-b"])
+        gt_a = _make_gt(ph_id="gt-a", tracklet_ids=["t-a"], camera_ids=["cam-a"])
+        gt_b = _make_gt(ph_id="gt-b", tracklet_ids=["t-b"], camera_ids=["cam-b"])
 
         anchor = _make_face_anchor("alice", confidence=0.95, tracklet_id="t-a")
 
@@ -1109,7 +1103,7 @@ class TestCrossGtFacePropagation:
         )
 
         # GT-B should have received a synthetic face anchor and committed alice.
-        decisions_by_gt = {d.global_track_id: d for d in outcome.decisions}
+        decisions_by_gt = {d.ph_id: d for d in outcome.decisions}
         assert decisions_by_gt["gt-a"].identity_id == "alice"
         assert decisions_by_gt["gt-b"].identity_id == "alice"
 
@@ -1155,8 +1149,8 @@ class TestCrossGtFacePropagation:
         config = ResolverConfig(cross_gt_face_propagation_threshold=0.70)
         resolver = _make_resolver(identities=identities, gallery_repo=gallery_repo, config=config)
 
-        gt_a = _make_gt(global_track_id="gt-a", tracklet_ids=["t-a"], camera_ids=["cam-a"])
-        gt_b = _make_gt(global_track_id="gt-b", tracklet_ids=["t-b"], camera_ids=["cam-b"])
+        gt_a = _make_gt(ph_id="gt-a", tracklet_ids=["t-a"], camera_ids=["cam-a"])
+        gt_b = _make_gt(ph_id="gt-b", tracklet_ids=["t-b"], camera_ids=["cam-b"])
 
         anchor = _make_face_anchor("alice", confidence=0.95, tracklet_id="t-a")
 
@@ -1166,7 +1160,7 @@ class TestCrossGtFacePropagation:
             captured_at=datetime.now(UTC),
         )
 
-        decisions_by_gt = {d.global_track_id: d for d in outcome.decisions}
+        decisions_by_gt = {d.ph_id: d for d in outcome.decisions}
         # GT-A gets alice; GT-B stays UNKNOWN (no propagation, no evidence).
         assert decisions_by_gt["gt-a"].identity_id == "alice"
         assert decisions_by_gt["gt-b"].identity_id is None
@@ -1184,7 +1178,7 @@ class TestResolveOutcome:
         outcome = ResolveOutcome()
         outcome.decisions.append(
             IdentityDecision(
-                global_track_id="gt-1",
+                ph_id="gt-1",
                 identity_id="grandma",
                 posterior=PosteriorDist({"grandma": 0.9, "UNKNOWN": 0.1}),
                 revises_previous=True,

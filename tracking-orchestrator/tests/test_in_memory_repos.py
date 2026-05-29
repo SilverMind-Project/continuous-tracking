@@ -7,19 +7,13 @@ import pytest
 from app.domain import (
     BoundingBox,
     CameraConfig,
-    Detection,
-    FrameRef,
     GalleryEmbedding,
-    GlobalTrack,
     Identity,
     IdentityCorrection,
-    IdentityRevision,
     PersonActivity,
     PrivacyZone,
     StreamAssignment,
     StreamConfig,
-    TrackingEvent,
-    Tracklet,
 )
 from app.storage import (
     InMemoryActivityRepository,
@@ -28,23 +22,10 @@ from app.storage import (
     InMemoryGalleryRepository,
     InMemoryPrivacyRepository,
     InMemorySettingsRepository,
-    InMemoryTrackingRepository,
 )
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 BOX = BoundingBox(0, 0, 10, 20)
-FRAME_REF = FrameRef(
-    minio_key="frames/cam1/2026/01/01/12/00000000000000000042-1.jpg",
-    width=640,
-    height=480,
-    frame_index=42,
-    capture_time=NOW,
-)
-
-
-@pytest.fixture
-def tracking_repo() -> InMemoryTrackingRepository:
-    return InMemoryTrackingRepository()
 
 
 @pytest.fixture
@@ -75,122 +56,6 @@ def correction_repo() -> InMemoryCorrectionRepository:
 @pytest.fixture
 def privacy_repo() -> InMemoryPrivacyRepository:
     return InMemoryPrivacyRepository()
-
-
-# -----------------------------------------------------------------------
-# TrackingRepository
-# -----------------------------------------------------------------------
-
-
-async def test_save_and_get_tracking_event(
-    tracking_repo: InMemoryTrackingRepository,
-) -> None:
-    event = TrackingEvent(
-        event_id="event-1",
-        camera_id="cam1",
-        event_time=NOW,
-        frame_index=42,
-        frame_ref=FRAME_REF,
-    )
-    eid = await tracking_repo.save_tracking_event(event)
-    assert eid == event.event_id
-    fetched = await tracking_repo.get_tracking_event(eid)
-    assert fetched is not None
-    assert fetched.event_id == event.event_id
-
-
-async def test_save_detections(tracking_repo: InMemoryTrackingRepository) -> None:
-    detections = [
-        Detection(
-            detection_id="d1",
-            camera_id="cam1",
-            bbox=BOX,
-            embedding=[0.1] * 768,
-            capture_time=NOW,
-            event_time=NOW,
-        )
-    ]
-    await tracking_repo.save_detections("event-1", detections)
-    assert tracking_repo._detections["event-1"][0].detection_id == "d1"
-
-
-async def test_save_and_get_tracklet(tracking_repo: InMemoryTrackingRepository) -> None:
-    t = Tracklet(
-        tracklet_id="tracklet-1",
-        camera_id="cam1",
-        detection_ids=["d1"],
-        started_at=NOW,
-    )
-    await tracking_repo.save_tracklet(t)
-    fetched = await tracking_repo.get_tracklet(t.tracklet_id)
-    assert fetched is not None
-    assert fetched.camera_id == "cam1"
-
-
-async def test_save_tracklet_merges_growth(tracking_repo: InMemoryTrackingRepository) -> None:
-    original = Tracklet(
-        tracklet_id="tracklet-merge",
-        camera_id="cam1",
-        detection_ids=["d1"],
-        started_at=NOW,
-    )
-    updated = Tracklet(
-        tracklet_id="tracklet-merge",
-        camera_id="cam1",
-        detection_ids=["d1", "d2"],
-        started_at=NOW,
-        ended_at=NOW + timedelta(seconds=5),
-        state="terminated",
-    )
-
-    await tracking_repo.save_tracklet(original)
-    await tracking_repo.save_tracklet(updated)
-
-    fetched = await tracking_repo.get_tracklet("tracklet-merge")
-    assert fetched is not None
-    assert fetched.detection_ids == ["d1", "d2"]
-    assert fetched.state == "terminated"
-    assert fetched.ended_at == NOW + timedelta(seconds=5)
-
-
-async def test_save_global_track(tracking_repo: InMemoryTrackingRepository) -> None:
-    track_id = "gt-merge-test"
-    t1 = GlobalTrack(
-        global_track_id=track_id,
-        camera_ids=["cam1"],
-        tracklet_ids=["t1"],
-        started_at=NOW,
-        last_seen_at=NOW,
-    )
-    t2 = GlobalTrack(
-        global_track_id=track_id,
-        camera_ids=["cam2"],
-        tracklet_ids=["t2"],
-        started_at=NOW,
-        last_seen_at=NOW + timedelta(seconds=10),
-    )
-    await tracking_repo.save_global_track(t1)
-    await tracking_repo.save_global_track(t2)
-    fetched = await tracking_repo.get_global_track(track_id)
-    assert fetched is not None
-    assert set(fetched.camera_ids) == {"cam1", "cam2"}
-
-
-async def test_identity_revision(tracking_repo: InMemoryTrackingRepository) -> None:
-    rev = IdentityRevision(
-        revision_id="revision-1",
-        ph_id="ph1",
-        previous_identity_id=None,
-        new_identity_id="i1",
-        actor="resolver",
-        reason="initial_assignment",
-        applied_at=NOW,
-        rewritten_rows=1,
-    )
-    await tracking_repo.save_identity_revision(rev)
-    results = await tracking_repo.list_identity_revisions("ph1")
-    assert len(results) == 1
-    assert results[0].new_identity_id == "i1"
 
 
 # -----------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Polls cognitive-companion for camera + room + homography state (M2).
+"""Polls cognitive-companion for camera, room, and homography state.
 
 Replaces the static ``settings.yaml.camera_room_map`` and makes CC the
 single source of truth for calibration data.
@@ -58,7 +58,7 @@ class CCConfigSyncService:
             cameras = await self._client.get(  # type: ignore[attr-defined]
                 "/api/v1/cts/cameras?include_calibration=true"
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("cc_config_sync_fetch_failed")
             return
 
@@ -135,7 +135,7 @@ class CCConfigSyncService:
                         matrix=matrix,
                         max_residual_m=float(residual_m) if residual_m is not None else 0.0,
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001
                     logger.warning(
                         "cc_config_sync_homography_set_failed",
                         camera_id=camera_id,

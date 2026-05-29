@@ -1,4 +1,4 @@
-"""R1: WorldTracker end-to-end replay tests (C1, C2).
+"""R1 + U1: WorldTracker end-to-end replay tests (C1, C2) + hallway-bathroom proof.
 
 Replays synthetic WorldObservation fixtures through the real WorldTracker
 pipeline (Postgres-backed repos) and asserts correct PH lifecycle.
@@ -9,16 +9,9 @@ See scripts/synthesize_replay_fixture.py for generation.
 Marked @pytest.mark.integration; CI selects this marker. Testcontainer
 Postgres is started by the session fixture in tests/conftest.py.
 
-**C1 architectural finding (R1-tracked):** T1 and T2 are marked
-xfail(strict=True).  The ``two_cameras_one_room.bin`` fixture includes a
-phase (steps 10-19) where both cam-1 and cam-2 observe the same person in
-the same frame.  The WorldTracker uses a 1-to-1 Hungarian assignment; with
-two simultaneous observations and one active PH, one observation matches the
-PH and the other is unmatched, spawning a second PH.  A pre-assignment
-cross-camera dedup pass (observing that two observations from different
-cameras share the same projected floor point and embedding cluster) would
-resolve this, but that is outside R1 scope.  These tests stay xfail so the
-gap stays visible; they will flip to pass when the dedup pass lands.
+U1: C1 (test_single_ph_covers_both_cameras) is now a normal passing test.
+The cross-camera dedup pass lands in U1 and collapses the two simultaneous
+observations from overlapping cameras into one PH before the association step.
 """
 
 from __future__ import annotations
@@ -71,28 +64,18 @@ def _load_fixture(path: Path) -> list[list[WorldObservation]]:
                         ),
                         embedding=o["embedding"],
                         detection_confidence=o["detection_confidence"],
+                        detection_id=o.get("detection_id", ""),
+                        quality=float(o.get("quality", 0.5)),
                     )
                 )
             steps.append(frame_obs)
     return steps
 
 
-_C1_XFAIL = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "C1 architectural gap: WorldTracker 1-to-1 Hungarian assignment cannot resolve "
-        "two simultaneous observations from overlapping cameras to one PH without an "
-        "upstream cross-camera dedup pass. Follow-up: implement floor-point dedup before "
-        "the association step. This test stays xfail so the gap stays visible."
-    ),
-)
-
-
 @pytest.mark.integration
 class TestWorldTrackerE2EOnePersonTwoCameras:
     """C1: one person under two overlapping cameras produces exactly one PH."""
 
-    @_C1_XFAIL
     @pytest.mark.asyncio
     async def test_single_ph_covers_both_cameras(self, db_pool: Any) -> None:
         """After replaying the two-camera fixture, exactly one PH exists."""
@@ -224,3 +207,55 @@ class TestWorldTrackerE2ETwoPeopleTwoRooms:
             assert len(cam_ids) == 1, (
                 f"C2: PH {ph.ph_id} should observe only one camera, got {cam_ids}"
             )
+
+
+@pytest.mark.integration
+class TestHallwayBathroomDoor:
+    """U1: senior-safety proof — hallway + doorway camera at a bathroom door."""
+
+    @pytest.mark.asyncio
+    async def test_hallway_bathroom_one_person(self, db_pool: Any) -> None:
+        """Exactly one PH throughout the visible phases of the hallway-bathroom fixture.
+
+        The hallway camera and the doorway camera both see one senior at the bathroom
+        door simultaneously (steps 10-19). The cross-camera dedup pass (U1) must
+        collapse those observations to a single PH. The bathroom-blind interval
+        (steps 20-49, empty frames) does not spawn a phantom second PH.
+        """
+        fixture = FIXTURES_DIR / "hallway_bathroom_door.bin"
+        assert fixture.exists(), "Fixture missing: run scripts/synthesize_replay_fixture.py"
+
+        from app.storage.postgres.ph_repo import (
+            PostgresPHRepository,
+            PostgresWorldObservationRepository,
+        )
+        from app.tracking.world.tracker import WorldTracker
+
+        ph_repo = PostgresPHRepository(db_pool)
+        obs_repo = PostgresWorldObservationRepository(db_pool)
+        tracker = WorldTracker(ph_repo=ph_repo, obs_repo=obs_repo)
+
+        steps = _load_fixture(fixture)
+        base_time = datetime(2026, 5, 28, 9, 0, 0, tzinfo=UTC)
+        for i, frame_obs in enumerate(steps):
+            now = base_time + timedelta(seconds=i * 0.5)
+            await tracker.step(observations=frame_obs, now=now, room_polygons=_ROOM_POLYGONS)
+
+        phs, total = await ph_repo.list_active(include_transient=True)
+        assert total == 1, (
+            f"U1 hallway-bathroom: expected exactly 1 PH, got {total}. "
+            "The dedup pass must collapse overlapping camera observations."
+        )
+
+        # The single PH must have observations from both cameras.
+        ph = phs[0]
+        obs_list, _ = await ph_repo.get_observations(ph.ph_id, limit=1000)
+        cam_ids = {o.camera_id for o in obs_list}
+        assert "cam-hall" in cam_ids, "hallway camera observations must be on the PH"
+        assert "cam-door" in cam_ids, "doorway camera observations must be on the PH"
+
+        # T9 Postgres: quality field round-trips through the DB (all fixture observations
+        # have quality=0.5; they must not silently revert to 0.0 after save+load).
+        assert all(o.quality > 0.0 for o in obs_list), (
+            "T9-Postgres: quality must survive a Postgres save+load (fixture sets quality=0.5)"
+        )

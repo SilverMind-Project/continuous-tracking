@@ -11,8 +11,8 @@ The pipeline runs as a background task in the FastAPI lifespan.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
-import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -22,10 +22,8 @@ from structlog import get_logger
 from ..calibration.state import calibration_state
 from ..domain import (
     CameraConfig,
-    FrameRef,
     Identity,
     OverlapGroup,
-    TrackingEvent,
 )
 from ..inference.detector import PersonDetector
 from ..inference.face_id_client import FaceIdentificationClient
@@ -36,7 +34,6 @@ from ..pipeline.frame_context import FrameContext
 from ..pipeline.gallery_cache import GalleryCache
 from ..pipeline.stages import (
     ClosePHStage,
-    CloseTerminatedStage,
     DetectionBackfillStage,
     DetectStage,
     FaceIdentityStage,
@@ -63,24 +60,19 @@ from ..storage.base import (
     BboxAnnotationRepository,
     BehaviorBaselineRepository,
     DementiaSignalRepository,
-    DoNotFuseRepository,
     GalleryRepository,
-    GlobalTrackRepository,
     InMemoryBboxAnnotationRepository,
     InMemoryBehaviorBaselineRepository,
     InMemoryDementiaSignalRepository,
     InMemoryGalleryRepository,
-    InMemoryGlobalTrackRepository,
     InMemoryKeyframeRepository,
     InMemoryPHRepository,
     InMemorySettingsRepository,
-    InMemoryTrackingRepository,
     InMemoryTrajectoryRepository,
     InMemoryWorldObservationRepository,
     KeyframeRepository,
     PHRepositoryProtocol,
     SettingsRepository,
-    TrackingRepository,
     TrajectoryRepository,
     WorldObservationRepositoryProtocol,
 )
@@ -110,6 +102,16 @@ from ..transport.signal_publisher import SignalPublisher
 _MAX_FRAME_AGE_S: float = 30.0
 
 logger = get_logger(__name__)
+
+
+def _group_frames_by_camera(frames: list[FrameReady]) -> dict[str, list[FrameReady]]:
+    """Group frames by camera and sort each camera stream by frame_index."""
+    grouped: dict[str, list[FrameReady]] = {}
+    for frame in frames:
+        grouped.setdefault(frame.camera_id, []).append(frame)
+    for camera_frames in grouped.values():
+        camera_frames.sort(key=lambda f: f.frame_index)
+    return grouped
 
 
 # ---------------------------------------------------------------------------
@@ -156,9 +158,7 @@ class PipelineDependencies:
     """
 
     detector: PersonDetector | None = None
-    tracking_repo: TrackingRepository | None = None
     gallery_repo: GalleryRepository | None = None
-    global_track_repo: GlobalTrackRepository | None = None
     trajectory_repo: TrajectoryRepository | None = None
     keyframe_repo: KeyframeRepository | None = None
     signal_repo: DementiaSignalRepository | None = None
@@ -169,8 +169,7 @@ class PipelineDependencies:
     posture_strategy: PostureStrategy | None = None
     identity_rewriter: IdentityRewriter | None = None
     bbox_repo: BboxAnnotationRepository | None = None
-    dnf_repo: DoNotFuseRepository | None = None
-    # M1 world tracker repositories
+    # World tracker repositories
     ph_repo: PHRepositoryProtocol | None = None
     obs_repo: WorldObservationRepositoryProtocol | None = None
 
@@ -189,6 +188,7 @@ class PipelineConfig:
     shutdown_timeout: float = 5.0
     batch_window_s: float = 0.0
     max_batch_size: int = 4
+    cross_camera_detector_batching: bool = True
     allow_skeleton: bool = False
     pose_enabled: bool = True
 
@@ -255,10 +255,8 @@ class FrameProcessingPipeline:
         self._config = config or PipelineConfig()
         self._transport: RedisStreamsTransport | None = None
         self._detector: PersonDetector | None = None
-        self._repo: TrackingRepository | None = None
         self._gallery_repo: GalleryRepository | None = None
         self._gallery_cache: GalleryCache | None = None
-        self._global_track_repo: GlobalTrackRepository | None = None
         self._settings_repo: SettingsRepository | None = None
         # Cameras whose FK row we've already ensured this process lifetime.
         self._seen_cameras: set[str] = set()
@@ -266,7 +264,7 @@ class FrameProcessingPipeline:
         self._revision_publisher: RevisionPublisher | None = None
         # Overlap groups fetched from CC at startup.
         self._overlap_groups: list[OverlapGroup] = []
-        # M1 world tracker
+        # World tracker
         self._world_tracker: WorldTracker | None = None
         self._ph_repo: PHRepositoryProtocol | None = None
         self._obs_repo: WorldObservationRepositoryProtocol | None = None
@@ -281,10 +279,8 @@ class FrameProcessingPipeline:
         self._frame_tasks: set[asyncio.Task[None]] = set()
         self._frame_semaphore: asyncio.Semaphore | None = None
         self._camera_locks: dict[str, asyncio.Lock] = {}
-        # Track previously active PH ids for ClosePHStage (WTR3).
+        # Track previously active PH ids for ClosePHStage.
         self._prev_active_ph_ids: set[str] = set()
-        # Legacy: previously active GT ids for CloseTerminatedStage (deprecated).
-        self._prev_active_gt_ids: set[str] = set()
         # Dementia signal worker
         self._signal_publisher: SignalPublisher | None = None
         self._signal_worker: DementiaSignalWorker | None = None
@@ -306,7 +302,7 @@ class FrameProcessingPipeline:
         self._spatial_projection: SpatialProjectionService | None = None
         # Phase 1: cross-table identity rewriter (orchestrator side).
         self._identity_rewriter: IdentityRewriter | None = None
-        # M3: Bbox annotation repository for per-keyframe bbox persistence.
+        # Bbox annotation repository for per-keyframe bbox persistence.
         self._bbox_repo: BboxAnnotationRepository | None = None
         # Phase 7: per-PH trail deque (last 12 normalised foot-points).
         _trail_maxlen = 12
@@ -315,20 +311,13 @@ class FrameProcessingPipeline:
         # Frame batcher (optional; None when batch_window_s=0).
         self._batcher: FrameBatcher | None = None
         self._stage_runner: StageRunner | None = None
+        self._post_detect_runner: StageRunner | None = None
+        self._fetch_stage: FetchStage | None = None
+        self._detect_stage: DetectStage | None = None
 
     @property
     def is_running(self) -> bool:
         return self._running
-
-    @property
-    def tracking_repo(self) -> TrackingRepository | None:
-        """Public accessor for the tracking repository."""
-        return self._repo
-
-    @property
-    def global_track_repo(self) -> GlobalTrackRepository | None:
-        """Public accessor for the global track repository."""
-        return self._global_track_repo
 
     @property
     def revision_publisher(self) -> RevisionPublisher | None:
@@ -349,11 +338,9 @@ class FrameProcessingPipeline:
 
         # Repositories — use in-memory defaults for skeleton/test mode.
         # In production, concrete Postgres implementations are injected.
-        self._repo = deps.tracking_repo or InMemoryTrackingRepository()
         gallery = deps.gallery_repo or InMemoryGalleryRepository()
         self._gallery_repo = gallery
         self._gallery_cache = GalleryCache(gallery)
-        self._global_track_repo = deps.global_track_repo or InMemoryGlobalTrackRepository()
         self._settings_repo = deps.settings_repo or InMemorySettingsRepository()
         self._seen_cameras = set()
 
@@ -376,7 +363,7 @@ class FrameProcessingPipeline:
         # Bbox annotation repository
         self._bbox_repo = deps.bbox_repo or InMemoryBboxAnnotationRepository()  # type: ignore[assignment]
 
-        # M1: World-coordinate person tracker replaces per-camera + cross-camera.
+        # World-coordinate person tracker (replaces per-camera + cross-camera).
         self._ph_repo = deps.ph_repo or InMemoryPHRepository()
         self._obs_repo = deps.obs_repo or InMemoryWorldObservationRepository()
 
@@ -385,9 +372,7 @@ class FrameProcessingPipeline:
         self._spatial_projection = SpatialProjectionService(calibration_state)
 
         self._identity_resolver = IdentityResolver(
-            tracking_repo=self._repo,
             gallery_repo=gallery,
-            global_track_repo=self._global_track_repo,
             identities=self._config.known_identities,
             config=self._config.resolver,
             gallery_cache=self._gallery_cache,
@@ -457,11 +442,17 @@ class FrameProcessingPipeline:
                 batch_window_s=self._config.batch_window_s,
                 max_batch_size=self._config.max_batch_size,
                 handler=self._handle_batch,
+                batch_handler=(
+                    self._handle_cross_camera_batch
+                    if self._config.cross_camera_detector_batching and self._detector is not None
+                    else None
+                ),
             )
             logger.info(
                 "Frame batcher enabled",
                 batch_window_s=self._config.batch_window_s,
                 max_batch_size=self._config.max_batch_size,
+                cross_camera_detector_batching=self._config.cross_camera_detector_batching,
             )
 
         # Face identification client — calls person-identification-service.
@@ -474,82 +465,79 @@ class FrameProcessingPipeline:
             await self._face_id_client.connect()
 
         # ---- Build the stage runner (order matters) ----
-        self._stage_runner = StageRunner(
-            [
-                FetchStage(frame_fetcher=self._frame_fetcher),
-                DetectStage(
-                    detector=self._detector,  # type: ignore[arg-type]
-                    iou_dedup_threshold=self._config.detection_iou_dedup_threshold,
-                ),
-                PrivacyStage(),
-                SpatialProjectionStage(projection_service=self._spatial_projection),
-                InferenceStage(
-                    reid_embedder=self._reid_embedder,
-                    pose_estimator=self._pose_estimator,
-                    pose_enabled=self._config.pose_enabled,
-                ),
-                FaceIdentityStage(
-                    face_id_client=self._face_id_client,
-                    tracklet_manager=None,  # tracklets removed in M1
-                    gallery_repo=self._gallery_repo,
-                    face_id_cooldown_s=self._config.face_id.cooldown_s,
-                    face_id_min_confidence=self._config.face_id.min_confidence,
-                    face_id_camera_configs=self._config.face_id.camera_configs,
-                    last_face_id_by_tracklet=self._last_face_id_by_tracklet,
-                ),
-                WorldTrackingStage(
-                    tracker=self._world_tracker,
-                    config=self._config.world_tracker,
-                    camera_room_map=self._config.camera_room_map,
-                ),
-                DetectionBackfillStage(),
-                ClosePHStage(
-                    trajectory_writer=self._trajectory_writer,
-                    motion_energy_tracker=self._motion_energy_tracker,
-                    posture_tracker=self._posture_tracker,
-                    prev_active_ph_ids=self._prev_active_ph_ids,
-                ),
-                CloseTerminatedStage(
-                    global_track_repo=self._global_track_repo,
-                    trajectory_writer=self._trajectory_writer,
-                    motion_energy_tracker=self._motion_energy_tracker,
-                    posture_tracker=self._posture_tracker,
-                    prev_active_gt_ids=self._prev_active_gt_ids,
-                ),
-                PostureStage(
-                    posture_strategy=self._posture_strategy,
-                    camera_room_map=self._config.camera_room_map,
-                ),
-                TrajectoryStage(
-                    trajectory_writer=self._trajectory_writer,
-                    floor_projector=self._floor_projector,
-                    motion_energy_tracker=self._motion_energy_tracker,
-                    posture_tracker=self._posture_tracker,
-                    tracklet_manager=None,  # tracklets removed in M1
-                    camera_room_map=self._config.camera_room_map,
-                ),
-                KeyframeStage(
-                    keyframe_sampler=self._keyframe_sampler,
-                    scene_publisher=self._scene_publisher,
-                    min_keyframe_detection_confidence=self._config.min_keyframe_detection_confidence,
-                ),
-                RevisionsStage(
-                    revision_publisher=self._revision_publisher,
-                    repo=self._repo,
-                    identity_rewriter=self._identity_rewriter,
-                    bbox_repo=self._bbox_repo,
-                    identity_rewrite_on_face_commit=self._config.identity_rewrite_on_face_commit,
-                ),
-                TrailsStage(
-                    trail_by_tracklet=self._trail_by_ph,
-                    trail_maxlen=self._TRAIL_MAXLEN,
-                ),
-                PublishStage(
-                    transport=self._transport,
-                    camera_room_map=self._config.camera_room_map,
-                ),
-            ]
+        fetch_stage = FetchStage(frame_fetcher=self._frame_fetcher)
+        detect_stage = DetectStage(
+            detector=self._detector,  # type: ignore[arg-type]
+            iou_dedup_threshold=self._config.detection_iou_dedup_threshold,
         )
+        stages = [
+            fetch_stage,
+            detect_stage,
+            PrivacyStage(),
+            SpatialProjectionStage(projection_service=self._spatial_projection),
+            InferenceStage(
+                reid_embedder=self._reid_embedder,
+                pose_estimator=self._pose_estimator,
+                pose_enabled=self._config.pose_enabled,
+            ),
+            FaceIdentityStage(
+                face_id_client=self._face_id_client,
+                tracklet_manager=None,  # tracklets not used in world-coordinate tracker
+                gallery_repo=self._gallery_repo,
+                face_id_cooldown_s=self._config.face_id.cooldown_s,
+                face_id_min_confidence=self._config.face_id.min_confidence,
+                face_id_camera_configs=self._config.face_id.camera_configs,
+                last_face_id_by_tracklet=self._last_face_id_by_tracklet,
+            ),
+            WorldTrackingStage(
+                tracker=self._world_tracker,
+                config=self._config.world_tracker,
+                camera_room_map=self._config.camera_room_map,
+            ),
+            DetectionBackfillStage(),
+            ClosePHStage(
+                trajectory_writer=self._trajectory_writer,
+                motion_energy_tracker=self._motion_energy_tracker,
+                posture_tracker=self._posture_tracker,
+                prev_active_ph_ids=self._prev_active_ph_ids,
+            ),
+            PostureStage(
+                posture_strategy=self._posture_strategy,
+                camera_room_map=self._config.camera_room_map,
+            ),
+            TrajectoryStage(
+                trajectory_writer=self._trajectory_writer,
+                floor_projector=self._floor_projector,
+                motion_energy_tracker=self._motion_energy_tracker,
+                posture_tracker=self._posture_tracker,
+                tracklet_manager=None,  # tracklets not used in world-coordinate tracker
+                camera_room_map=self._config.camera_room_map,
+            ),
+            KeyframeStage(
+                keyframe_sampler=self._keyframe_sampler,
+                scene_publisher=self._scene_publisher,
+                min_keyframe_detection_confidence=self._config.min_keyframe_detection_confidence,
+            ),
+            RevisionsStage(
+                revision_publisher=self._revision_publisher,
+                identity_rewriter=self._identity_rewriter,
+                bbox_repo=self._bbox_repo,
+                identity_rewrite_on_face_commit=self._config.identity_rewrite_on_face_commit,
+            ),
+            TrailsStage(
+                trail_by_tracklet=self._trail_by_ph,
+                trail_maxlen=self._TRAIL_MAXLEN,
+            ),
+            PublishStage(
+                transport=self._transport,
+                camera_room_map=self._config.camera_room_map,
+            ),
+        ]
+
+        self._fetch_stage = fetch_stage
+        self._detect_stage = detect_stage
+        self._stage_runner = StageRunner(stages)
+        self._post_detect_runner = StageRunner(stages[2:])
 
         logger.info(
             "Pipeline initialized",
@@ -563,7 +551,7 @@ class FrameProcessingPipeline:
             if not self._config.allow_skeleton:
                 raise RuntimeError(
                     "Detector not configured and pipeline.allow_skeleton is False. "
-                    "Set PIPELINE_ALLOW_SKELETON=true to run without a detector (tests only)."
+                    "Set pipeline.allow_skeleton=true in settings.yaml for skeleton-only tests."
                 )
             logger.warning(
                 "Detector not configured; running in SKELETON mode — no bboxes will be produced. "
@@ -723,6 +711,121 @@ class FrameProcessingPipeline:
                     error_code="processing_error",
                 )
 
+    async def _handle_cross_camera_batch(self, frames: list[FrameReady]) -> None:
+        """Fetch and detect a mixed-camera frame batch with one Triton request.
+
+        Per-camera locks are still held while downstream stages run, preserving
+        frame order for tracker state. The detector call is shared across all
+        frames in the flush, so a static batch-8 detector can be filled with
+        real camera frames instead of duplicate padding.
+        """
+        assert self._transport is not None
+        if not frames:
+            return
+        if (
+            self._fetch_stage is None
+            or self._detect_stage is None
+            or self._post_detect_runner is None
+        ):
+            for camera_id, camera_frames in _group_frames_by_camera(frames).items():
+                await self._handle_batch(camera_id, camera_frames)
+            return
+        if self._frame_semaphore is None:
+            self._frame_semaphore = asyncio.Semaphore(max(1, self._config.max_concurrent_frames))
+
+        frames_by_camera = _group_frames_by_camera(frames)
+        async with self._frame_semaphore, contextlib.AsyncExitStack() as stack:
+            for camera_id in sorted(frames_by_camera):
+                lock = self._camera_locks.setdefault(camera_id, asyncio.Lock())
+                await stack.enter_async_context(lock)
+
+            contexts: list[FrameContext] = []
+            for camera_frames in frames_by_camera.values():
+                for frame in camera_frames:
+                    if self._is_stale(frame):
+                        await self._transport.ack_frame(frame)
+                        continue
+                    contexts.append(self._init_context(frame))
+
+            if not contexts:
+                return
+
+            fetch_results = await asyncio.gather(
+                *(self._fetch_stage.run(ctx) for ctx in contexts),
+                return_exceptions=True,
+            )
+            fetched_contexts: list[FrameContext] = []
+            for ctx, result in zip(contexts, fetch_results, strict=True):
+                if isinstance(result, Exception):
+                    logger.warning(
+                        "Frame fetch failed in detector batch",
+                        camera_id=ctx.frame.camera_id,
+                        frame_index=ctx.frame.frame_index,
+                        error=str(result),
+                    )
+                    await self._transport.publish_response(
+                        ctx.frame,
+                        success=False,
+                        error_code="fetch_error",
+                    )
+                else:
+                    fetched_contexts.append(ctx)
+
+            if not fetched_contexts:
+                return
+
+            try:
+                await self._detect_stage.run_batch(fetched_contexts)
+            except Exception:
+                logger.exception(
+                    "Batched detector inference failed",
+                    count=len(fetched_contexts),
+                )
+                for ctx in fetched_contexts:
+                    await self._transport.publish_response(
+                        ctx.frame,
+                        success=False,
+                        error_code="detector_error",
+                    )
+                return
+
+            post_groups: dict[str, list[FrameContext]] = {}
+            for ctx in fetched_contexts:
+                post_groups.setdefault(ctx.frame.camera_id, []).append(ctx)
+            await asyncio.gather(
+                *(self._process_post_detect_batch(ctxs) for ctxs in post_groups.values()),
+                return_exceptions=True,
+            )
+
+    async def _process_post_detect_batch(self, contexts: list[FrameContext]) -> None:
+        """Run stages after detection for one camera ordered context group."""
+        assert self._transport is not None
+        assert self._post_detect_runner is not None
+        for ctx in contexts:
+            start = time.monotonic()
+            try:
+                await self._ensure_camera_row(ctx.frame.camera_id)
+                await self._post_detect_runner.run(ctx)
+                await self._transport.ack_frame(ctx.frame)
+                latency_us = int((time.monotonic() - start) * 1e6)
+                logger.debug(
+                    "Frame processed",
+                    camera_id=ctx.frame.camera_id,
+                    frame_index=ctx.frame.frame_index,
+                    latency_us=latency_us,
+                )
+            except Exception:
+                logger.exception(
+                    "Frame processing failed",
+                    camera_id=ctx.frame.camera_id,
+                    frame_index=ctx.frame.frame_index,
+                )
+                await self._transport.publish_response(
+                    ctx.frame,
+                    success=False,
+                    error_code="processing_error",
+                )
+
     async def _handle_batch(self, camera_id: str, frames: list[FrameReady]) -> None:
         """Process a batch of frames for one camera (called by FrameBatcher).
 
@@ -781,7 +884,7 @@ class FrameProcessingPipeline:
         self._seen_cameras.add(camera_id)
 
     def set_camera_room_map(self, camera_room_map: object) -> None:
-        """M2: Inject the live CameraRoomMap into pipeline stages.
+        """Inject the live CameraRoomMap into pipeline stages.
 
         Called at startup after the CCConfigSyncService is created.
         Stages that need room attribution read from this map instead of
@@ -795,7 +898,7 @@ class FrameProcessingPipeline:
         transit_zones: list[object],
         room_transition_publisher: object,
     ) -> None:
-        """WTR5: Inject transit zone dependencies into WorldTrackingStage.
+        """Inject transit zone dependencies into WorldTrackingStage.
 
         Called at startup after transit zones are loaded from CC sync.
         """
@@ -863,25 +966,6 @@ class FrameProcessingPipeline:
         This allows the pipeline to run end-to-end without Triton.
         """
         event_time = datetime.now(UTC)
-
-        # Build a minimal tracking event
-        event = TrackingEvent(
-            event_id=str(uuid.uuid4()),
-            camera_id=frame.camera_id,
-            event_time=event_time,
-            frame_index=frame.frame_index,
-            frame_ref=FrameRef(
-                minio_key=frame.minio_key,
-                width=frame.width,
-                height=frame.height,
-                frame_index=frame.frame_index,
-                capture_time=datetime.fromtimestamp(frame.capture_time_unix_ns / 1e9, tz=UTC),
-            ),
-            detections=[],
-        )
-
-        if self._repo:
-            await self._repo.save_tracking_event(event)
 
         assert self._transport is not None
         await self._transport.publish_event(

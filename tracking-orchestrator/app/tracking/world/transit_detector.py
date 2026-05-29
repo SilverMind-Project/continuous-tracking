@@ -1,9 +1,9 @@
-"""Detects PH crossing transit zones (M2, updated WTR5).
+"""Detects PH crossing transit zones.
 
 Pure function: no I/O, no DB. Called by the world tracker or a pipeline
 stage when a PH's floor point updates.
 
-WTR5: Uses shapely.geometry.Polygon for point-in-polygon containment
+Uses shapely.geometry.Polygon for point-in-polygon containment
 instead of hand-rolled ray-casting. TransitZone and RoomTransitionEvent
 are imported from the domain.
 """

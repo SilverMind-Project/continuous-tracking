@@ -1,14 +1,14 @@
 """World tracking stage: single floor-plane Kalman tracker for all cameras.
 
-Replaces LocalTrackingStage + GlobalTrackingStage (M1 refactor).
-Wires TransitDetector and RoomTransitionPublisher (M2).
+Replaces LocalTrackingStage + GlobalTrackingStage.
+Wires TransitDetector and RoomTransitionPublisher.
 """
 
 from __future__ import annotations
 
 from structlog import get_logger
 
-from ...domain import GlobalTrack, PersonHypothesis, TransitZone
+from ...domain import BoundingBox, FloorPoint, TransitZone
 from ...tracking.world.config import WorldTrackerConfig
 from ...tracking.world.tracker import WorldTracker
 from ...tracking.world.transit_detector import TransitDetector
@@ -17,6 +17,56 @@ from ..frame_context import FrameContext
 from .base import FrameStage
 
 logger = get_logger(__name__)
+
+# Virtual room dimensions for cameras without homography calibration.
+# Detections are mapped from normalised image coordinates to a 4m x 4m
+# virtual floor.  Each camera occupies a distinct 200m x 200m tile so that
+# cross-camera dedup (threshold: ~0.6 m) never confuses separate cameras.
+_VIRTUAL_ROOM_M: float = 4.0
+_CAMERA_TILE_M: float = 200.0
+
+
+def _stable_camera_hash(camera_id: str) -> int:
+    """Return a stable non-negative integer for any camera_id string.
+
+    Uses a simple polynomial hash (not Python's built-in hash which is
+    randomised per process via PYTHONHASHSEED).
+    """
+    h = 5381
+    for ch in camera_id:
+        h = ((h << 5) + h) ^ ord(ch)
+    return h & 0xFFFF  # 16-bit, 0-65535
+
+
+def _synthetic_floor_point(
+    bbox: BoundingBox,
+    frame_w: int,
+    frame_h: int,
+    camera_id: str,
+) -> FloorPoint:
+    """Build a virtual floor point for an uncalibrated camera detection.
+
+    Maps the detection's bbox centre into a 4m x 4m virtual room and
+    offsets the entire room by a deterministic per-camera tile so that
+    different cameras never share the same virtual floor region.
+
+    The returned FloorPoint carries calibrated=False to preserve the domain
+    invariant, but x_mm/y_mm are non-zero virtual coordinates that keep the
+    WorldTracker's Kalman filter and dedup logic working correctly until real
+    homography is configured.
+    """
+    cam_h = _stable_camera_hash(camera_id)
+    tile_x = (cam_h % 256) * _CAMERA_TILE_M
+    tile_y = (cam_h >> 8) * _CAMERA_TILE_M
+
+    cx = (bbox.x_min + bbox.x_max) / 2.0
+    cy = (bbox.y_min + bbox.y_max) / 2.0
+    norm_x = cx / max(frame_w, 1)
+    norm_y = cy / max(frame_h, 1)
+
+    x_m = tile_x + norm_x * _VIRTUAL_ROOM_M
+    y_m = tile_y + norm_y * _VIRTUAL_ROOM_M
+    return FloorPoint(x_mm=int(x_m * 1000), y_mm=int(y_m * 1000), calibrated=False)
 
 
 class WorldTrackingStage(FrameStage):
@@ -66,23 +116,38 @@ class WorldTrackingStage(FrameStage):
 
         # Build observations first (without face anchors), so we can use
         # their floor positions to match CC assertions.
+        # For cameras without homography calibration, generate a synthetic
+        # virtual floor point from the bbox centre so that the WorldTracker
+        # can still create PersonHypotheses and commit face-based identities.
         observations: list[WorldObservation] = []
+        uncalibrated_count = 0
         for det in ctx.domain_detections:
-            if not det.floor_point.calibrated:
-                continue
+            fp = det.floor_point
+            if not fp.calibrated:
+                fp = _synthetic_floor_point(
+                    det.bbox, ctx.effective_width, ctx.effective_height, ctx.frame.camera_id
+                )
+                uncalibrated_count += 1
             observations.append(
                 WorldObservation(
                     camera_id=det.camera_id,
                     frame_index=ctx.frame.frame_index,
                     captured_at=det.capture_time if det.capture_time else ctx.event_time,
-                    floor_point=det.floor_point,
+                    floor_point=fp,
                     bbox=det.bbox,
                     embedding=det.embedding,
                     detection_confidence=det.confidence,
                     height_estimate_m=None,
                     face_anchor=None,
                     detection_id=det.detection_id,
+                    quality=det.crop_quality,
                 )
+            )
+        if uncalibrated_count:
+            logger.debug(
+                "world_tracking_synthetic_floor_points",
+                camera_id=ctx.frame.camera_id,
+                uncalibrated_count=uncalibrated_count,
             )
 
         # Match CC assertions to observations (spatial + temporal + confidence gate).
@@ -138,6 +203,7 @@ class WorldTrackingStage(FrameStage):
                     height_estimate_m=obs.height_estimate_m,
                     face_anchor=face_anchor,
                     detection_id=obs.detection_id,
+                    quality=obs.quality,
                 )
             )
 
@@ -148,9 +214,10 @@ class WorldTrackingStage(FrameStage):
             room_polygons=self._room_polygons,
             camera_room_map=self._camera_room_map,
             face_anchors=all_face_anchors,
+            face_evidence=ctx._face_evidence or None,
         )
 
-        # M2: detect transit zone crossings for each active PH (WTR5).
+        # Detect transit zone crossings for each active PH.
         if (
             self._transit_detector is not None
             and self._transit_zones
@@ -184,14 +251,13 @@ class WorldTrackingStage(FrameStage):
                 if ph.closed_at is not None:
                     self._transit_detector.remove_ph(ph.ph_id)
 
-        # Populate frame context for downstream stages (PH-native, WTR3).
+        # Populate frame context for downstream stages (PH-native).
         ctx.active_ph_ids = {ph.ph_id for ph in result.updated_phs if ph.closed_at is None}
-        # Legacy bridge: build GlobalTrack views from open PHs for stages
-        # not yet migrated (deprecated — remove in WTR9).
-        ctx.active_global_tracks = _phs_to_global_tracks(result.updated_phs)
         ctx.outcome_decisions = list(result.identity_decisions)
         ctx.new_revisions = list(result.revisions)
         ctx.committed_ids = {ph.ph_id: ph.current_identity_id for ph in result.updated_phs}
+        # born_at per PH so RevisionsStage can set applies_from to track start.
+        ctx.ph_born_at_by_id = {ph.ph_id: ph.born_at for ph in result.updated_phs}
 
         # Store snapshots on the context for downstream stages.
         ctx.world_snapshots = list(result.snapshots)
@@ -206,29 +272,3 @@ class WorldTrackingStage(FrameStage):
             snapshots=len(result.snapshots),
             continuations=len(result.continuations),
         )
-
-
-def _phs_to_global_tracks(phs: list[PersonHypothesis]) -> list[GlobalTrack]:
-    """Build a transitional GlobalTrack view for legacy stages.
-
-    Open PHs (closed_at is None) only — closed PHs must not appear in
-    the active list, otherwise CloseTerminatedStage cannot detect them as
-    terminated next frame.
-    """
-    out: list[GlobalTrack] = []
-    for ph in phs:
-        if ph.closed_at is not None:
-            continue
-        out.append(
-            GlobalTrack(
-                global_track_id=ph.ph_id,
-                tracklet_ids=[],
-                camera_ids=list(ph.active_cameras),
-                started_at=ph.born_at,
-                last_seen_at=ph.last_seen_at,
-                current_identity_id=ph.current_identity_id,
-                current_identity_committed_at=ph.current_identity_committed_at,
-                state="active",
-            )
-        )
-    return out

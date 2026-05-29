@@ -6,7 +6,6 @@ from structlog import get_logger
 
 from ...domain import FloorPoint, PostureType
 from ...inference.schemas import PoseResult
-from ...storage.base import GlobalTrackRepository
 from ...tracking.floor_projector import FloorProjector
 from ...trajectory.motion_energy import MotionEnergyTracker
 from ...trajectory.posture import GlobalPostureTracker
@@ -17,54 +16,8 @@ from .base import FrameStage
 logger = get_logger(__name__)
 
 
-class CloseTerminatedStage(FrameStage):
-    """DEPRECATED (WTR3): replaced by ClosePHStage.
-
-    Close global tracks that have disappeared from the active set.
-    Kept for backward compat with tests referencing the class name.
-    """
-
-    name = "close_terminated"
-
-    def __init__(
-        self,
-        global_track_repo: GlobalTrackRepository | None = None,
-        trajectory_writer: TrajectoryWriter | None = None,
-        motion_energy_tracker: MotionEnergyTracker | None = None,
-        posture_tracker: GlobalPostureTracker | None = None,
-        prev_active_gt_ids: set[str] | None = None,
-    ) -> None:
-        self._global_track_repo = global_track_repo
-        self._trajectory_writer = trajectory_writer
-        self._motion_energy_tracker = motion_energy_tracker
-        self._posture_tracker = posture_tracker
-        self._prev_active_gt_ids: set[str] = (
-            prev_active_gt_ids if prev_active_gt_ids is not None else set()
-        )
-
-    async def run(self, ctx: FrameContext) -> None:
-        current_gt_ids = {gt.global_track_id for gt in ctx.active_global_tracks}
-        terminated_gt_ids = self._prev_active_gt_ids - current_gt_ids
-        if not terminated_gt_ids:
-            self._prev_active_gt_ids = current_gt_ids
-            return
-
-        traj_close_time = ctx.event_time
-        for gt_id in terminated_gt_ids:
-            logger.debug("Closing terminated global track", global_track_id=gt_id)
-            if self._global_track_repo is not None:
-                await self._global_track_repo.close_global_track(gt_id)
-            if self._trajectory_writer:
-                await self._trajectory_writer.close_track(gt_id, closed_at=traj_close_time)
-            if self._motion_energy_tracker is not None:
-                self._motion_energy_tracker.evict_track(gt_id)
-            if self._posture_tracker is not None:
-                self._posture_tracker.evict_track(gt_id)
-        self._prev_active_gt_ids = current_gt_ids
-
-
 class ClosePHStage(FrameStage):
-    """Close PHs that have disappeared from the active set (WTR3).
+    """Close PHs that have disappeared from the active set.
 
     Uses ``ctx.active_ph_ids`` directly. No GlobalTrackRepository dependency.
     Closes trajectory, motion energy, and posture state by PH id.
@@ -106,7 +59,7 @@ class ClosePHStage(FrameStage):
 
 
 class TrajectoryStage(FrameStage):
-    """Writes trajectory points from WorldFrameSnapshots (WTR3)."""
+    """Writes trajectory points from WorldFrameSnapshots."""
 
     name = "trajectory"
 
@@ -131,7 +84,7 @@ class TrajectoryStage(FrameStage):
             return
 
         traj_time = ctx.event_time
-        decision_by_ph = {d.global_track_id: d for d in ctx.outcome_decisions}
+        decision_by_ph = {d.ph_id: d for d in ctx.outcome_decisions}
 
         for snap in ctx.world_snapshots:
             if snap.camera_id != ctx.frame.camera_id:
@@ -171,7 +124,7 @@ class TrajectoryStage(FrameStage):
 
             await self._trajectory_writer.write(
                 identity_id=snap.identity_id,
-                global_track_id=snap.ph_id,
+                ph_id=snap.ph_id,
                 room_name=snap.room_name,
                 floor_point=floor_point,
                 captured_at=traj_time,
@@ -183,8 +136,8 @@ class TrajectoryStage(FrameStage):
     def _find_pose_for_ph(
         self, ctx: FrameContext, ph_id: str
     ) -> tuple[PoseResult | None, str | None]:
-        """Match pose to PH via backfilled global_track_id (WTR3)."""
+        """Match pose to PH via backfilled ph_id."""
         for det in ctx.domain_detections:
-            if det.global_track_id == ph_id:
+            if det.ph_id == ph_id:
                 return ctx.det_pose_result.get(det.detection_id), det.detection_id
         return None, None

@@ -26,7 +26,7 @@ class PostgresBboxAnnotationRepository:
             await conn.executemany(
                 """
                 INSERT INTO continuous_tracking.keyframe_bbox_annotations
-                    (keyframe_id, tracklet_id, camera_id,
+                    (keyframe_id, ph_id, camera_id,
                      x1, y1, x2, y2, detection_confidence,
                      frame_width, frame_height, identity_id, created_at,
                      bbox_age_frames)
@@ -36,7 +36,7 @@ class PostgresBboxAnnotationRepository:
                 [
                     (
                         ann.keyframe_id,
-                        ann.tracklet_id,
+                        ann.ph_id,
                         ann.camera_id,
                         ann.x1,
                         ann.y1,
@@ -57,7 +57,7 @@ class PostgresBboxAnnotationRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT id, keyframe_id, tracklet_id::text, camera_id,
+                SELECT id, keyframe_id, ph_id::text, camera_id,
                        x1, y1, x2, y2, detection_confidence,
                        frame_width, frame_height, identity_id, created_at,
                        bbox_age_frames,
@@ -71,34 +71,34 @@ class PostgresBboxAnnotationRepository:
             )
         return [_row_to_domain(r) for r in rows]
 
-    async def get_bbox_annotations_for_tracklet(self, tracklet_id: str) -> list[BboxAnnotation]:
+    async def get_bbox_annotations_for_ph(self, ph_id: str) -> list[BboxAnnotation]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT id, keyframe_id, tracklet_id::text, camera_id,
+                SELECT id, keyframe_id, ph_id::text, camera_id,
                        x1, y1, x2, y2, detection_confidence,
                        frame_width, frame_height, identity_id, created_at,
                        bbox_age_frames,
                        override_x1, override_y1, override_x2, override_y2,
                        override_by, override_at
                 FROM continuous_tracking.keyframe_bbox_annotations
-                WHERE tracklet_id = $1::uuid
+                WHERE ph_id = $1::uuid
                 ORDER BY created_at
                 """,
-                tracklet_id,
+                ph_id,
             )
         return [_row_to_domain(r) for r in rows]
 
-    async def update_identity_id(self, tracklet_id: str, identity_id: str) -> None:
+    async def update_identity_id(self, ph_id: str, identity_id: str) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
                 UPDATE continuous_tracking.keyframe_bbox_annotations
                 SET identity_id = $1
-                WHERE tracklet_id = $2::uuid
+                WHERE ph_id = $2::uuid
                 """,
                 identity_id,
-                tracklet_id,
+                ph_id,
             )
 
     async def save_override_bbox(
@@ -132,7 +132,7 @@ class PostgresBboxAnnotationRepository:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, keyframe_id, tracklet_id::text, camera_id,
+                SELECT id, keyframe_id, ph_id::text, camera_id,
                        x1, y1, x2, y2, detection_confidence,
                        frame_width, frame_height, identity_id, created_at,
                        bbox_age_frames,
@@ -167,7 +167,7 @@ class PostgresBboxAnnotationRepository:
                 annotation_id,
             )
 
-    # --- M3 methods ---
+    # --- Batch methods ---
 
     async def delete_annotation_if_exists(self, annotation_id: str) -> bool:
         async with self._pool.acquire() as conn:
@@ -226,7 +226,7 @@ class PostgresBboxAnnotationRepository:
                     d = op.data
                     await conn.execute(
                         """INSERT INTO continuous_tracking.keyframe_bbox_annotations
-                            (id, keyframe_id, tracklet_id, camera_id,
+                            (id, keyframe_id, ph_id, camera_id,
                              x1, y1, x2, y2, detection_confidence,
                              frame_width, frame_height, identity_id, created_at)
                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
@@ -264,7 +264,7 @@ class PostgresBboxAnnotationRepository:
 def _row_to_domain(row: asyncpg.Record) -> BboxAnnotation:
     return BboxAnnotation(
         keyframe_id=row["keyframe_id"],
-        tracklet_id=row["tracklet_id"],
+        ph_id=row["ph_id"],
         camera_id=row["camera_id"],
         x1=row["x1"],
         y1=row["y1"],

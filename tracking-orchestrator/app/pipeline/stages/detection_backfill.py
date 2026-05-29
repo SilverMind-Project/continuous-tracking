@@ -1,9 +1,4 @@
-"""Detection backfill stage: stamps PH id onto detections via ctx.det_to_ph.
-
-WTR3: PH id is written to det.global_track_id (legacy field name) for
-backward compat with downstream stages that read that field. The field
-carries a PH id, not a GlobalTrack id.
-"""
+"""Detection backfill stage: stamps PH id onto detections via ctx.det_to_ph."""
 
 from __future__ import annotations
 
@@ -24,7 +19,7 @@ class DetectionBackfillStage(FrameStage):
         updated = [
             replace(
                 det,
-                global_track_id=ctx.det_to_ph.get(det.detection_id, ""),
+                ph_id=ctx.det_to_ph.get(det.detection_id, ""),
             )
             for det in ctx.domain_detections
         ]

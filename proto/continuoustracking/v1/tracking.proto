@@ -72,18 +72,8 @@ message Detection {
   // Confidence score from the detection model (0.0 to 1.0).
   float confidence = 4;
 
-  // Tracklet this detection belongs to (assigned by tracking logic).
-  // DEPRECATED: per-camera tracklet ids have no meaning in the world tracker
-  // architecture. Kept for wire compatibility until WTR9. New consumers must
-  // use ph_id from WorldFrameSnapshot, not this field.
-  string tracklet_id = 5 [deprecated = true];
-
-  // Global track ID (cross-camera tracking identifier, not an identity).
-  // DEPRECATED: global_track_id is superseded by ph_id (Person Hypothesis).
-  // Kept for wire compatibility until WTR9. New consumers must use ph_id
-  // from WorldFrameSnapshot. This field is populated with the active PH id
-  // during the transition period; after WTR9 it will stop being set.
-  string global_track_id = 6 [deprecated = true];
+  reserved 5, 6;
+  reserved "tracklet_id", "global_track_id";
 
   // Floor point in the shared floor-plan coordinate system (millimetres).
   // {x_mm=0, y_mm=0, calibrated=false} when the source camera lacks a
@@ -108,6 +98,9 @@ message Detection {
 
   // Classified posture: standing | sitting | walking | lying | unknown.
   string posture = 14;
+
+  // Person Hypothesis ID assigned by the world-coordinate tracker.
+  string ph_id = 15;
 }
 
 // PoseKeypoint is one of the 17 COCO body keypoints.
@@ -225,6 +218,11 @@ message IdentitySnapshot {
   // Evidence source summary serialised as JSON:
   // {"sources": {"direct_face": 1, "reid": 3}, "direct_face_confidence": 0.95, ...}
   string evidence_json = 7;
+
+  // Exponential moving average of crop-quality scores for this PH (U1/U2).
+  // Range [0, 1]; 0.0 means no quality data yet.  Consumed by CC to populate
+  // PersonLocationEnvelope.quality without client-side inference (design rule D5).
+  float mean_quality = 8;
 }
 
 // IdentityCandidate is one candidate identity with its posterior probability.

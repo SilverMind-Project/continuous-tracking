@@ -244,13 +244,13 @@ class DementiaSignalWorker:
         identities = await self._get_tracked_identities(now)
         sem = asyncio.Semaphore(max(1, self._cfg.max_concurrent_identities))
 
-        # Collect metrics
+        # Collect metrics (observability side-channel; failure must not suppress signals)
         try:
             from ..observability import metrics as m
 
             m.metrics.signal_worker_identities.set(len(identities))
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001  # metrics are non-required side-channel
+            logger.warning("signal_worker_metrics_update_failed", exc_info=True)
 
         all_signals: list[DementiaSignal] = []
 
@@ -286,8 +286,8 @@ class DementiaSignalWorker:
                 m.metrics.signal_worker_emitted_total.labels(
                     kind=s.signal_kind, severity=s.severity
                 ).inc()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001  # metrics are non-required side-channel
+            logger.warning("signal_worker_run_metrics_failed", exc_info=True)
 
         return all_signals
 
@@ -324,9 +324,9 @@ class DementiaSignalWorker:
             rolling_pts = [p for p in rolling_pts if p.observed_at >= cutoff]
             rolling_dwells = [d for d in rolling_dwells if d.entered_at >= cutoff]
             # Add new data.
-            seen_pt_ids = {(p.identity_id, p.global_track_id, p.observed_at) for p in rolling_pts}
+            seen_pt_ids = {(p.identity_id, p.ph_id, p.observed_at) for p in rolling_pts}
             for pt in new_points:
-                key = (pt.identity_id, pt.global_track_id, pt.observed_at)
+                key = (pt.identity_id, pt.ph_id, pt.observed_at)
                 if key not in seen_pt_ids:
                     rolling_pts.append(pt)
                     seen_pt_ids.add(key)
@@ -1115,8 +1115,8 @@ class DementiaSignalWorker:
                         from ..observability import metrics as m
 
                         m.metrics.signal_baseline_cache_hits_total.inc()
-                    except Exception:
-                        pass
+                    except Exception:  # noqa: BLE001  # metrics are non-required side-channel
+                        logger.warning("signal_baseline_cache_metric_failed", exc_info=True)
 
             # Fetch if no cache hit.
             if samples is None:
@@ -1137,7 +1137,13 @@ class DementiaSignalWorker:
                 signal_kind=signal_kind,
                 limit=100,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "signal_legacy_baseline_lookup_failed",
+                identity_id=identity_id,
+                signal_kind=signal_kind,
+                exc_info=True,
+            )
             return ZScoreResult(baseline=None, z_score=None)
 
         if len(historical) < 2:

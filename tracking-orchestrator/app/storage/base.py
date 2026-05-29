@@ -1,8 +1,4 @@
-"""Storage protocols — Protocol + InMemory implementations.
-
-Import directly from the sub-module for new code:
-    from app.storage.tracking import TrackingRepository, InMemoryTrackingRepository
-"""
+"""Storage protocols — Protocol + InMemory implementations."""
 
 from __future__ import annotations
 
@@ -20,8 +16,6 @@ from ..domain import (
 )
 from .annotations import BboxAnnotationRepository, InMemoryBboxAnnotationRepository
 from .gallery import GalleryRepository, InMemoryGalleryRepository
-from .global_track import GlobalTrackRepository, InMemoryGlobalTrackRepository
-from .hints import DoNotFuseRepository, InMemoryDoNotFuseRepository
 from .misc import (
     ActivityRepository,
     AssignmentRepository,
@@ -42,7 +36,6 @@ from .signals import (
     InMemoryDementiaSignalRepository,
     StillnessEpisode,
 )
-from .tracking import InMemoryTrackingRepository, TrackingRepository
 from .trajectory import (
     InMemoryKeyframeRepository,
     InMemoryTrajectoryRepository,
@@ -230,6 +223,7 @@ class InMemoryPHRepository:
                     last_floor_speed_m_s=ph.last_floor_speed_m_s,
                     last_posture=ph.last_posture,
                     metadata=ph.metadata,
+                    mean_quality=ph.mean_quality,
                 )
 
     # -- list_active --
@@ -383,7 +377,7 @@ class InMemoryPHRepository:
             ph = self._phs.get(ph_id)
             if ph is None:
                 raise ValueError(f"PH not found: {ph_id}")
-            # WTR6: cannot correct a closed PH.
+            # Cannot correct a closed PH.
             if ph.closed_at is not None:
                 raise ValueError(
                     f"Cannot correct closed PH {ph_id} (closed at {ph.closed_at.isoformat()})"
@@ -407,6 +401,7 @@ class InMemoryPHRepository:
                 last_floor_speed_m_s=ph.last_floor_speed_m_s,
                 last_posture=ph.last_posture,
                 metadata=ph.metadata,
+                mean_quality=ph.mean_quality,
             )
         revision = IdentityRevision(
             revision_id=str(uuid.uuid4()),
@@ -440,7 +435,7 @@ class InMemoryPHRepository:
             target = self._phs.get(target_ph_id)
             if source is None or target is None:
                 raise ValueError("Source or target PH not found")
-            # WTR6: cannot merge PHs with overlapping same-camera observations.
+            # Cannot merge PHs with overlapping same-camera observations.
             if source.active_cameras & target.active_cameras:
                 overlap_cams = source.active_cameras & target.active_cameras
                 raise ValueError(
@@ -466,6 +461,7 @@ class InMemoryPHRepository:
                 last_floor_speed_m_s=source.last_floor_speed_m_s,
                 last_posture=source.last_posture,
                 metadata={**source.metadata, "merged_into_ph_id": target_ph_id},
+                mean_quality=source.mean_quality,
             )
             self._merges[source_ph_id] = target_ph_id
         revision = IdentityRevision(
@@ -528,6 +524,7 @@ class InMemoryPHRepository:
                 last_floor_speed_m_s=ph.last_floor_speed_m_s,
                 last_posture=ph.last_posture,
                 metadata=ph.metadata,
+                mean_quality=ph.mean_quality,
             )
             later_ph = PersonHypothesis(
                 ph_id=new_ph_id,
@@ -546,6 +543,7 @@ class InMemoryPHRepository:
                 last_floor_speed_m_s=ph.last_floor_speed_m_s,
                 last_posture=ph.last_posture,
                 metadata=ph.metadata,
+                mean_quality=ph.mean_quality,
             )
             self._phs[new_ph_id] = later_ph
             self._observations[ph_id] = earlier_obs
@@ -599,6 +597,7 @@ class InMemoryPHRepository:
                     last_floor_speed_m_s=ph.last_floor_speed_m_s,
                     last_posture=ph.last_posture,
                     metadata=ph.metadata,
+                    mean_quality=ph.mean_quality,
                 )
                 revision = IdentityRevision(
                     revision_id=str(uuid.uuid4()),
@@ -655,6 +654,7 @@ class InMemoryWorldObservationRepository:
             height_estimate_m=observation.height_estimate_m,
             face_anchor=observation.face_anchor,
             detection_id=observation.detection_id,
+            quality=observation.quality,
         )
         self._observations.setdefault(ph_id, []).append(stored)
         return oid
@@ -675,9 +675,7 @@ __all__ = [
     "BehaviorBaselineRepository",
     "CorrectionRepository",
     "DementiaSignalRepository",
-    "DoNotFuseRepository",
     "GalleryRepository",
-    "GlobalTrackRepository",
     "HourlyActivitySummary",
     "InMemoryActivityRepository",
     "InMemoryAssignmentRepository",
@@ -685,14 +683,11 @@ __all__ = [
     "InMemoryBehaviorBaselineRepository",
     "InMemoryCorrectionRepository",
     "InMemoryDementiaSignalRepository",
-    "InMemoryDoNotFuseRepository",
     "InMemoryGalleryRepository",
-    "InMemoryGlobalTrackRepository",
     "InMemoryKeyframeRepository",
     "InMemoryPHRepository",
     "InMemoryPrivacyRepository",
     "InMemorySettingsRepository",
-    "InMemoryTrackingRepository",
     "InMemoryTrajectoryRepository",
     "InMemoryWorldObservationRepository",
     "KeyframeRepository",
@@ -700,7 +695,6 @@ __all__ = [
     "PrivacyRepository",
     "SettingsRepository",
     "StillnessEpisode",
-    "TrackingRepository",
     "TrajectoryRepository",
     "WorldObservationRepositoryProtocol",
 ]

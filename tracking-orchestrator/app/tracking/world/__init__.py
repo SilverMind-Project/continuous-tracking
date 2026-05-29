@@ -1,4 +1,4 @@
-"""World-coordinate person tracker (M1).
+"""World-coordinate person tracker.
 
 Replaces per-camera BoT-SORT + cross-camera Hungarian with a single
 floor-plane Kalman tracker keyed by Person Hypothesis (PH).

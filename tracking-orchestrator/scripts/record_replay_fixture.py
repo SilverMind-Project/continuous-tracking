@@ -20,6 +20,7 @@ import struct
 import sys
 import time
 
+from google.protobuf.message import DecodeError
 from structlog import get_logger
 
 logger = get_logger(__name__)
@@ -65,6 +66,7 @@ async def _main() -> None:
 
     try:
         import redis.asyncio as aioredis
+        from redis.exceptions import RedisError
     except ImportError:
         logger.error("redis_not_installed", hint="uv sync --extra dev")
         sys.exit(1)
@@ -80,7 +82,7 @@ async def _main() -> None:
         while (time.monotonic() - start_time) < duration:
             try:
                 messages = await client.xread({stream: last_id}, count=10, block=1000)
-            except Exception as exc:
+            except RedisError as exc:
                 logger.warning("redis_read_error", error=str(exc))
                 await asyncio.sleep(1)
                 continue
@@ -105,7 +107,7 @@ async def _main() -> None:
                         from app.proto.continuoustracking.v1 import frame_pb2
 
                         frame_msg = frame_pb2.FrameReady.FromString(frame_bytes)
-                    except Exception:
+                    except DecodeError:
                         # Not a valid FrameReady protobuf; skip.
                         continue
 

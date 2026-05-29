@@ -243,6 +243,21 @@ async def test_detector_empty_batch() -> None:
     client.infer.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_detector_chunks_over_static_batch_size() -> None:
+    raw = _make_yolo_output(8)
+    client = _MockTritonClient({"output0": raw})
+    detector = PersonDetector(client, static_batch_size=8)
+    imgs = [_make_image() for _ in range(9)]
+
+    results = await detector.detect_batch(imgs)
+
+    assert len(results) == 9
+    assert client.infer.await_count == 2
+    sent_batches = [call.kwargs["inputs"][0][1].shape[0] for call in client.infer.await_args_list]
+    assert sent_batches == [8, 8]
+
+
 # ---------------------------------------------------------------------------
 # ReidEmbedder (mocked Triton)
 # ---------------------------------------------------------------------------

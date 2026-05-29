@@ -135,7 +135,7 @@ def _make_det(camera_id: str = "cam-1") -> Detection:
         event_time=datetime.now(UTC),
         confidence=0.8,
         tracklet_id="",
-        global_track_id=None,
+        ph_id=None,
     )
 
 

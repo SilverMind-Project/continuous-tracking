@@ -42,7 +42,7 @@ def _det(det_id: str) -> Detection:
         event_time=datetime.now(UTC),
         confidence=0.9,
         tracklet_id="",
-        global_track_id=None,
+        ph_id=None,
     )
 
 

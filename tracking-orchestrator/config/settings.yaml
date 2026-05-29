@@ -1,63 +1,64 @@
 # Tracking Orchestrator — settings
-# Environment variables are interpolated with ${VAR} or ${VAR:-default} syntax.
+# Deployment-only values are interpolated with ${VAR}. Runtime tunables are
+# literal values in this file to avoid hidden env-var override surfaces.
 
 # Deployment timezone — must match cognitive-companion's app.timezone so that
 # time-of-day signals (sundowning, nighttime movement) are computed in local
 # time rather than UTC.  IANA tz database name, e.g. "America/New_York".
 app:
-  timezone: "${CTS_TIMEZONE:-America/New_York}"
+  timezone: America/New_York
 
 # Redis Streams transport
 redis:
-  url: "${REDIS_URL:-redis://localhost:6379/0}"
-  consumer_group: "${CTS_CONSUMER_GROUP:-cts-orchestrator}"
-  consumer_name: "${CTS_CONSUMER_NAME:-orchestrator-1}"
-  frames_stream: "${CTS_FRAMES_STREAM:-frames.ready}"
-  events_stream: "${CTS_EVENTS_STREAM:-tracking.events}"
-  responses_stream: "${CTS_RESPONSES_STREAM:-tracking.responses}"
-  revisions_stream: "${CTS_REVISIONS_STREAM:-tracking.revisions}"
-  signals_stream: "${CTS_SIGNALS_STREAM:-tracking.signals}"
-  scene_samples_stream: "${CTS_SCENE_SAMPLES_STREAM:-scene.samples}"
-  batch_max_wait_ms: "${CTS_BATCH_MAX_WAIT_MS:-100}"
-  batch_max_size: "${CTS_BATCH_MAX_SIZE:-8}"
-  xack_timeout_ms: "${CTS_XACK_TIMEOUT_MS:-5000}"
-  ack_ttl_seconds: "${CTS_ACK_TTL_SECONDS:-300}"
+  url: "${REDIS_URL}"
+  consumer_group: cts-orchestrator
+  consumer_name: orchestrator-1
+  frames_stream: frames.ready
+  events_stream: tracking.events
+  responses_stream: tracking.responses
+  revisions_stream: tracking.revisions
+  signals_stream: tracking.signals
+  scene_samples_stream: scene.samples
+  batch_max_wait_ms: 100
+  batch_max_size: 8
+  xack_timeout_ms: 5000
+  ack_ttl_seconds: 300
 
 # PostgreSQL database
 database:
-  url: "${DATABASE_URL:-}"
+  url: "${DATABASE_URL}"
 
 # Triton Inference Server
 triton:
-  url: "${TRITON_GRPC_URL:-}"
-  person_detector_model: "${TRITON_DETECTOR_MODEL:-person-detector}"
-  reid_model: "${TRITON_REID_MODEL:-reid-solider}"
-  pose_model: "${TRITON_POSE_MODEL:-pose-rtmpose}"
-  pose_enabled: "${TRITON_POSE_ENABLED:-true}"
-  depth_enabled: "${TRITON_DEPTH_ENABLED:-true}"
-  depth_model: "${TRITON_DEPTH_MODEL:-depth-anything-v2}"
-  timeout_ms: "${TRITON_TIMEOUT_MS:-5000}"
-  startup_wait_s: "${TRITON_STARTUP_WAIT_S:-120}"
-  startup_retry_interval_s: "${TRITON_STARTUP_RETRY_INTERVAL_S:-5}"
+  url: "${TRITON_GRPC_URL}"
+  person_detector_model: person-detector
+  detector_static_batch_size: 8
+  reid_model: reid-solider
+  pose_model: pose-rtmpose
+  pose_enabled: true
+  depth_enabled: true
+  depth_model: depth-anything-v2
+  timeout_ms: 5000
+  startup_wait_s: 120
+  startup_retry_interval_s: 5
 
 # MinIO / S3-compatible object storage
 minio:
-  endpoint: "${MINIO_ENDPOINT_URL:-}"
-  bucket: "${MINIO_BUCKET:-ai-media}"
-  access_key: "${MINIO_ACCESS_KEY:-}"
-  secret_key: "${MINIO_SECRET_KEY:-}"
-  region: "${AWS_REGION:-us-east-1}"
-  secure: "${MINIO_SECURE:-false}"
+  endpoint: "${MINIO_ENDPOINT_URL}"
+  bucket: "${MINIO_BUCKET}"
+  access_key: "${MINIO_ACCESS_KEY}"
+  secret_key: "${MINIO_SECRET_KEY}"
+  region: us-east-1
+  secure: false
 
 # Face identification via person-identification-service (ArcFace)
 # Per-camera overrides (enabled/disabled, min_confidence) are fetched from
-# cognitive-companion at startup.  FACE_ID_CAMERA_CONFIDENCE env var
-# provides a deployment-level fallback for cameras not in CC.
+# cognitive-companion at startup.
 face_id:
-  url: "${PERSON_ID_SERVICE_URL:-}"
-  cooldown_s: "${FACE_ID_COOLDOWN_S:-5.0}"
-  timeout_s: "${FACE_ID_TIMEOUT_S:-2.0}"
-  min_confidence: "${FACE_ID_MIN_CONFIDENCE:-0.6}"
+  url: "${PERSON_ID_SERVICE_URL}"
+  cooldown_s: 5.0
+  timeout_s: 2.0
+  min_confidence: 0.6
 
 # Dementia signal computation
 #
@@ -89,131 +90,136 @@ face_id:
 #   Cold-start fallback before 5+ baseline samples exist. Constipation (common with
 #   dementia medications) and slow mobility routinely extend bathroom time beyond 30 min.
 signal:
-  interval_s: "${SIGNAL_INTERVAL_S:-60}"
-  enabled: "${SIGNAL_ENABLED:-true}"
-  stillness_threshold_minutes: "${SIGNAL_STILLNESS_THRESHOLD_MINUTES:-60}"
-  stillness_emergency_minutes: "${SIGNAL_STILLNESS_EMERGENCY_MINUTES:-120}"
-  stillness_motion_floor: "${SIGNAL_STILLNESS_MOTION_FLOOR:-0.02}"
-  pacing_room_threshold: "${SIGNAL_PACING_ROOM_THRESHOLD:-8}"
-  pacing_window_minutes: "${SIGNAL_PACING_WINDOW_MINUTES:-30}"
-  nighttime_transition_threshold: "${SIGNAL_NIGHTTIME_TRANSITION_THRESHOLD:-3}"
-  absence_threshold_minutes: "${SIGNAL_ABSENCE_THRESHOLD_MINUTES:-90}"
-  bathroom_absolute_threshold_seconds: "${SIGNAL_BATHROOM_COLD_START_S:-2700}"
+  interval_s: 60
+  enabled: true
+  stillness_threshold_minutes: 60
+  stillness_emergency_minutes: 120
+  stillness_motion_floor: 0.02
+  pacing_room_threshold: 8
+  pacing_window_minutes: 30
+  nighttime_transition_threshold: 3
+  absence_threshold_minutes: 90
+  bathroom_absolute_threshold_seconds: 2700
 
 # Pipeline tuning
 pipeline:
   # Read by: main.py → FrameProcessingPipeline(max_concurrent_frames=)
-  max_concurrent_frames: "${MAX_CONCURRENT_FRAMES:-4}"
+  max_concurrent_frames: 4
   # Read by: main.py → PipelineConfig(shutdown_timeout=)
-  shutdown_timeout_s: "${PIPELINE_SHUTDOWN_TIMEOUT_S:-5.0}"
+  shutdown_timeout_s: 5.0
 
   posture:
     # Read by: main.py → DepthPostureStrategy / FusedPostureStrategy
-    depth_slow_path_enabled: "${POSTURE_DEPTH_SLOW_PATH_ENABLED:-false}"
-    depth_slow_path_min_interval_s: "${POSTURE_DEPTH_SLOW_PATH_MIN_INTERVAL_S:-15.0}"
-    depth_slow_path_max_age_s: "${POSTURE_DEPTH_SLOW_PATH_MAX_AGE_S:-60.0}"
+    depth_slow_path_enabled: false
+    depth_slow_path_min_interval_s: 15.0
+    depth_slow_path_max_age_s: 60.0
 
   # Read by: main.py → PersonDetector(conf_threshold=)
   # 0.6 means YOLO must be ≥60% confident to emit a detection box.
   # Below 0.5 causes excessive false positives; above 0.8 misses partial occlusions.
-  detector_confidence: "${DETECTOR_CONFIDENCE:-0.7}"
+  detector_confidence: 0.7
 
   # Read by: main.py → PipelineConfig(allow_skeleton=)
   # True only in unit tests that run without a detector.
-  allow_skeleton: "${PIPELINE_ALLOW_SKELETON:-false}"
+  allow_skeleton: false
 
   # M3: minimum detection confidence for keyframe bbox annotations
-  min_keyframe_detection_confidence: "${M3_MIN_KEYFRAME_DETECTION_CONFIDENCE:-0.5}"
+  min_keyframe_detection_confidence: 0.5
 
   # Read by: main.py → PipelineConfig(batch_window_s=, max_batch_size=)
   # batch_window_s=0 disables frame batching (process each frame immediately).
-  batch_window_s: "${PIPELINE_BATCH_WINDOW_S:-0.5}"
-  max_batch_size: "${PIPELINE_MAX_BATCH_SIZE:-5}"
+  batch_window_s: 0.5
+  max_batch_size: 8
+  cross_camera_detector_batching: true
 
   detection:
     # Read by: main.py → PipelineConfig(detection_iou_dedup_threshold=)
     # Drops near-duplicate YOLO boxes that survived the model's baked NMS.
-    iou_dedup_threshold: "${PIPELINE_DETECTION_IOU_DEDUP:-0.50}"
+    iou_dedup_threshold: 0.50
 
   identity:
     # Read by: main.py → PipelineConfig(identity_commit_window_s=)
     # At most one identity commit per PH per N seconds.
-    commit_window_s: "${PIPELINE_IDENTITY_COMMIT_WINDOW_S:-3.0}"
+    commit_window_s: 3.0
 
     # Read by: main.py → PipelineConfig(identity_high_confidence_face_threshold=)
     # Face anchors above this confidence bypass the commit window and commit
     # immediately with applies_from = track.first_seen_at.
-    high_confidence_face_threshold: "${PIPELINE_IDENTITY_HC_FACE_THRESHOLD:-0.85}"
+    high_confidence_face_threshold: 0.85
 
     # Read by: main.py → PipelineConfig(gallery_identity_backfill_delay_s=)
-    gallery_backfill_delay_s: "${PIPELINE_GALLERY_BACKFILL_DELAY_S:-10.0}"
+    gallery_backfill_delay_s: 10.0
 
     # Read by: main.py → PipelineConfig(identity_rewrite_on_face_commit=)
-    rewrite_on_face_commit: "${PIPELINE_IDENTITY_REWRITE_ON_FACE_COMMIT:-true}"
+    rewrite_on_face_commit: true
 
 # Cognitive Companion — camera config source and API gateway
 cognitive_companion:
-  url: "${CC_API_URL:-}"
-  api_key: "${CC_INGRESS_API_KEY:-}"
+  url: "${CC_API_URL}"
+  api_key: "${CC_INGRESS_API_KEY}"
 
 # CC config sync (M2)
 cc_sync:
-  poll_interval_s: "${CC_SYNC_POLL_INTERVAL_S:-60.0}"
+  poll_interval_s: 60.0
 
 # Identity resolver — Bayesian posterior parameters
 resolver:
-  commit_prob: "${RESOLVER_COMMIT_PROB:-0.65}"
-  commit_margin: "${RESOLVER_COMMIT_MARGIN:-0.15}"
-  reid_decision_sim: "${RESOLVER_REID_DECISION_SIM:-0.70}"
-  revision_horizon_s: "${RESOLVER_REVISION_HORIZON_S:-600.0}"
-  max_revisions_per_ph_per_minute: "${RESOLVER_MAX_REVISIONS_PER_PH_PER_MINUTE:-3}"
-  unknown_mass: "${RESOLVER_UNKNOWN_MASS:-0.05}"
-  prior_weight: "${RESOLVER_PRIOR_WEIGHT:-0.6}"
-  face_weight_multiplier: "${RESOLVER_FACE_WEIGHT_MULTIPLIER:-3.0}"
-  propagated_face_weight_multiplier: "${RESOLVER_PROPAGATED_FACE_WEIGHT_MULTIPLIER:-0.5}"
-  height_weight_multiplier: "${RESOLVER_HEIGHT_WEIGHT_MULTIPLIER:-1.5}"
-  commit_prob_dense: "${RESOLVER_COMMIT_PROB_DENSE:-0.80}"
-  commit_margin_dense: "${RESOLVER_COMMIT_MARGIN_DENSE:-0.20}"
-  prior_maintenance_max_age_s: "${RESOLVER_PRIOR_MAINTENANCE_MAX_AGE_S:-120.0}"
-  identified_entry_boost_min_sim: "${RESOLVER_IDENTIFIED_ENTRY_BOOST_MIN_SIM:-0.65}"
-  identified_entry_min_likelihood: "${RESOLVER_IDENTIFIED_ENTRY_MIN_LIKELIHOOD:-0.80}"
-  enable_embedding_coherence_boost: "${RESOLVER_ENABLE_EMBEDDING_COHERENCE_BOOST:-false}"
-  embedding_coherence_window: "${RESOLVER_EMBEDDING_COHERENCE_WINDOW:-5}"
-  embedding_coherence_min_sim: "${RESOLVER_EMBEDDING_COHERENCE_MIN_SIM:-0.70}"
-  embedding_coherence_boost: "${RESOLVER_EMBEDDING_COHERENCE_BOOST:-2.0}"
-  face_commit_min_confidence: "${RESOLVER_FACE_COMMIT_MIN_CONFIDENCE:-0.70}"
-  face_lock_maintenance_max_age_s: "${RESOLVER_FACE_LOCK_MAINTENANCE_MAX_AGE_S:-300}"
-  cross_gt_face_propagation_threshold: "${RESOLVER_CROSS_GT_FACE_PROPAGATION_THRESHOLD:-0.65}"
-  cross_gt_face_propagation_max_gts: "${RESOLVER_CROSS_GT_FACE_PROPAGATION_MAX_GTS:-4}"
+  commit_prob: 0.65
+  commit_margin: 0.15
+  reid_decision_sim: 0.70
+  revision_horizon_s: 600.0
+  max_revisions_per_ph_per_minute: 3
+  unknown_mass: 0.05
+  prior_weight: 0.6
+  face_weight_multiplier: 3.0
+  propagated_face_weight_multiplier: 0.5
+  height_weight_multiplier: 1.5
+  commit_prob_dense: 0.80
+  commit_margin_dense: 0.20
+  prior_maintenance_max_age_s: 120.0
+  identified_entry_boost_min_sim: 0.65
+  identified_entry_min_likelihood: 0.80
+  enable_embedding_coherence_boost: false
+  embedding_coherence_window: 5
+  embedding_coherence_min_sim: 0.70
+  embedding_coherence_boost: 2.0
+  face_commit_min_confidence: 0.70
+  face_lock_maintenance_max_age_s: 300
+  cross_gt_face_propagation_threshold: 0.65
+  cross_gt_face_propagation_max_gts: 4
 
 # Keyframe sampler
 sampler:
-  keyframe_min_interval_s: "${SAMPLER_KEYFRAME_MIN_INTERVAL_S:-30.0}"
-  periodic_expires_hours: "${SAMPLER_PERIODIC_EXPIRES_HOURS:-72}"
-  trigger_expires_days: "${SAMPLER_TRIGGER_EXPIRES_DAYS:-30}"
+  keyframe_min_interval_s: 30.0
+  periodic_expires_hours: 72
+  trigger_expires_days: 30
 
 # World tracker (M1 floor-plane Kalman tracker)
 world_tracker:
-  gate_chi2: "${WORLD_TRACKER_GATE_CHI2:-9.21}"
-  alpha_geo: "${WORLD_TRACKER_ALPHA_GEO:-0.5}"
-  alpha_app: "${WORLD_TRACKER_ALPHA_APP:-0.4}"
-  alpha_height: "${WORLD_TRACKER_ALPHA_HEIGHT:-0.1}"
-  observation_noise_m: "${WORLD_TRACKER_OBSERVATION_NOISE_M:-0.25}"
-  process_noise_accel_m_s2: "${WORLD_TRACKER_PROCESS_NOISE_ACCEL_M_S2:-0.5}"
-  ph_close_grace_s: "${WORLD_TRACKER_PH_CLOSE_GRACE_S:-5.0}"
-  min_observations_to_publish: "${WORLD_TRACKER_MIN_OBSERVATIONS_TO_PUBLISH:-3}"
-  face_conflict_threshold: "${WORLD_TRACKER_FACE_CONFLICT_THRESHOLD:-0.70}"
-  inferred_handoff_max_s: "${WORLD_TRACKER_INFERRED_HANDOFF_MAX_S:-600}"
-  inferred_handoff_max_distance_m: "${WORLD_TRACKER_INFERRED_HANDOFF_MAX_DISTANCE_M:-5.0}"
-  initial_position_sigma_m: "${WORLD_TRACKER_INITIAL_POSITION_SIGMA_M:-1.0}"
-  initial_velocity_sigma_m_s: "${WORLD_TRACKER_INITIAL_VELOCITY_SIGMA_M_S:-2.0}"
-  velocity_decay_s: "${WORLD_TRACKER_VELOCITY_DECAY_S:-3.0}"
-  height_sigma_m: "${WORLD_TRACKER_HEIGHT_SIGMA_M:-0.15}"
-  evidence_window_s: "${WORLD_TRACKER_EVIDENCE_WINDOW_S:-30.0}"
+  gate_chi2: 9.21
+  alpha_geo: 0.5
+  alpha_app: 0.4
+  alpha_height: 0.1
+  observation_noise_m: 0.25
+  process_noise_accel_m_s2: 0.5
+  ph_close_grace_s: 5.0
+  min_observations_to_publish: 3
+  face_conflict_threshold: 0.70
+  inferred_handoff_max_s: 600
+  inferred_handoff_max_distance_m: 5.0
+  initial_position_sigma_m: 1.0
+  initial_velocity_sigma_m_s: 2.0
+  velocity_decay_s: 3.0
+  height_sigma_m: 0.15
+  evidence_window_s: 30.0
+  # ---- Cross-camera dedup (U1) ----
+  dedup_enabled: true
+  dedup_max_distance_m: 0.6
+  dedup_require_no_face_conflict: true
 
 # Environment label (dev / staging / production)
-env: "${CTS_ENV:-production}"
+env: production
 
 # Logging
 logging:
-  level: "${LOG_LEVEL:-INFO}"
+  level: INFO

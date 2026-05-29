@@ -1,4 +1,4 @@
-"""Thread-safe camera→room mapping (M2).
+"""Thread-safe camera-to-room mapping.
 
 Replaces the static ``settings.yaml.cameras`` dict that was never populated.
 Populated by ``CCConfigSyncService`` on every poll cycle from CC's room

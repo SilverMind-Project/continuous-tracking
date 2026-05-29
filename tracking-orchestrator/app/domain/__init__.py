@@ -94,7 +94,7 @@ class IdentityResolvableEntity(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Person Hypothesis types (M1 world-coordinate tracker)
+# Person Hypothesis types
 # ---------------------------------------------------------------------------
 
 PersonHypothesisId = str
@@ -122,6 +122,7 @@ class WorldObservation:
     height_estimate_m: float | None = None
     face_anchor: FaceAnchor | None = None
     detection_id: str = ""
+    quality: float = 0.0  # composite crop quality [0,1] from CropQuality.quality
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,7 @@ class PersonHypothesis:
     last_floor_speed_m_s: float = 0.0
     last_posture: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
+    mean_quality: float = 0.0  # EMA of observation quality scores
 
     def __post_init__(self) -> None:
         if len(self.state_mean) != PH_MEAN_LEN:
@@ -179,7 +181,7 @@ class PersonHypothesis:
 class PHContinuationCandidate:
     """Emitted when a newly-spawned PH might continue a recently-closed PH.
 
-    Published to ``tracking.continuations`` for M4's inferred-presence consumer.
+    Published to ``tracking.continuations`` for the inferred-presence consumer.
     """
 
     predecessor_ph_id: str
@@ -218,10 +220,11 @@ class WorldFrameSnapshot:
     height_m: float | None = None
     room_id: str = ""
     room_name: str = ""
+    mean_quality: float = 0.0  # PH-level rolling quality from U1 (U2: surfaces on wire)
 
 
 # ---------------------------------------------------------------------------
-# M2: Calibration correctness and transit zones
+# Calibration correctness and transit zones
 # ---------------------------------------------------------------------------
 
 
@@ -315,8 +318,9 @@ class Detection:
     event_time: datetime
     confidence: float = 1.0
     tracklet_id: TrackletId = ""
-    global_track_id: GlobalTrackId = ""
+    ph_id: PHId = ""
     floor_point: FloorPoint = field(default_factory=lambda: FloorPoint(0, 0))
+    crop_quality: float = 0.0  # composite quality from CropQuality.quality
 
 
 # ---------------------------------------------------------------------------
@@ -462,7 +466,7 @@ class FaceAnchor:
     posterior. They carry a person_id from the face recognition service
     along with confidence and quality metrics.
 
-    In the PH-native pipeline (WTR2+), detection_id replaces tracklet_id
+    In the PH-native pipeline, detection_id replaces tracklet_id
     as the primary per-detection key. tracklet_id is kept for backward
     compatibility with the legacy resolver evidence matching.
     """
@@ -558,7 +562,7 @@ class ResolveOutcome:
 class IdentityDecision:
     """A single identity decision for one GlobalTrack."""
 
-    global_track_id: GlobalTrackId
+    ph_id: PHId
     identity_id: IdentityId | None
     posterior: PosteriorDist
     revises_previous: bool
@@ -700,7 +704,7 @@ class PersonTrajectoryPoint:
     """
 
     identity_id: IdentityId | None
-    global_track_id: GlobalTrackId
+    ph_id: PHId
     observed_at: datetime
     room_name: str = ""
     ground_x: float = 0.0  # meters, floor-plan frame
@@ -717,7 +721,7 @@ class RoomDwell:
 
     dwell_id: str
     identity_id: IdentityId | None
-    global_track_id: GlobalTrackId
+    ph_id: PHId
     room_name: str
     entered_at: datetime
     exited_at: datetime | None = None
@@ -734,8 +738,7 @@ class TaggedKeyframe:
     """A periodic or triggered frame sample tagged with tracking annotations."""
 
     keyframe_id: str
-    tracklet_id: TrackletId
-    global_track_id: GlobalTrackId
+    ph_id: PHId
     camera_id: CameraId
     minio_key: str
     captured_at: datetime
@@ -749,7 +752,7 @@ class BboxAnnotation:
     """YOLO bounding box for one tracked person in one keyframe."""
 
     keyframe_id: str  # FK to tagged_keyframes.id
-    tracklet_id: str  # FK to tracklets.id
+    ph_id: str
     camera_id: str
     x1: float  # pixels, top-left x, in original frame resolution
     y1: float  # pixels, top-left y
@@ -761,9 +764,9 @@ class BboxAnnotation:
     identity_id: str | None = None  # None if not yet resolved
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     id: str | None = None  # DB-generated UUID; None for new annotations before persist
-    # M3: frames since the contributing detection. 0 = same-frame.
+    # Frames since the contributing detection. 0 = same-frame.
     bbox_age_frames: int = 0
-    # User-drawn override bbox (M4 will write to these columns)
+    # User-drawn override bbox
     override_x1: float | None = None
     override_y1: float | None = None
     override_x2: float | None = None

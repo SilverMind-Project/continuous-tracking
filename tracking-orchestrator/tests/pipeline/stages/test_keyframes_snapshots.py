@@ -111,18 +111,18 @@ class TestKeyframesFromSnapshots:
         stage = KeyframeStage(keyframe_sampler=sampler)
 
         ctx = _make_ctx(now=now, snapshots=[snap_a, snap_b])
-        # No detections have global_track_id set → det_by_ph empty →
+        # No detections have ph_id set → det_by_ph empty →
         # snapshots are skipped entirely.
-        # To test the sampling path, we need detections with global_track_id.
+        # To test the sampling path, we need detections with ph_id.
         # Using MagicMock to simulate WT4-stamped detections.
         from app.domain import Detection as Det
 
         det_a = MagicMock(spec=Det)
-        det_a.global_track_id = "ph-a"
+        det_a.ph_id = "ph-a"
         det_a.confidence = 0.9
         det_a.bbox = BoundingBox(0, 0, 100, 200)
         det_b = MagicMock(spec=Det)
-        det_b.global_track_id = "ph-b"
+        det_b.ph_id = "ph-b"
         det_b.confidence = 0.85
         det_b.bbox = BoundingBox(50, 50, 150, 250)
         ctx.domain_detections = [det_a, det_b]  # type: ignore[list-item]
@@ -130,7 +130,7 @@ class TestKeyframesFromSnapshots:
         await stage.run(ctx)
 
         keyframes = await repo.list_keyframes()
-        ph_ids = {kf.global_track_id for kf in keyframes}
+        ph_ids = {kf.ph_id for kf in keyframes}
         assert ph_ids == {"ph-a", "ph-b"}, f"expected both PHs sampled, got {ph_ids}"
 
     async def test_trigger_sample_on_revision(self) -> None:
@@ -150,11 +150,11 @@ class TestKeyframesFromSnapshots:
         from app.domain import Detection as Det
 
         det_a = MagicMock(spec=Det)
-        det_a.global_track_id = "ph-a"
+        det_a.ph_id = "ph-a"
         det_a.confidence = 0.9
         det_a.bbox = BoundingBox(10, 10, 120, 220)
         det_b = MagicMock(spec=Det)
-        det_b.global_track_id = "ph-b"
+        det_b.ph_id = "ph-b"
         det_b.confidence = 0.85
         det_b.bbox = BoundingBox(50, 50, 150, 250)
         ctx.domain_detections = [det_a, det_b]  # type: ignore[list-item]
@@ -164,7 +164,7 @@ class TestKeyframesFromSnapshots:
         keyframes = await repo.list_keyframes()
         rev_keyframes = [kf for kf in keyframes if kf.tag_reason == "identity_changed"]
         assert len(rev_keyframes) == 1
-        assert rev_keyframes[0].global_track_id == "ph-a"
+        assert rev_keyframes[0].ph_id == "ph-a"
 
     async def test_skipped_for_low_confidence_detection(self) -> None:
         """Detection below min_keyframe_detection_confidence → dropped."""
@@ -181,7 +181,7 @@ class TestKeyframesFromSnapshots:
         from app.domain import Detection as Det
 
         det = MagicMock(spec=Det)
-        det.global_track_id = "ph-1"
+        det.ph_id = "ph-1"
         det.confidence = 0.3  # below threshold
         det.bbox = BoundingBox(0, 0, 100, 200)
         ctx.domain_detections = [det]  # type: ignore[list-item]
@@ -221,7 +221,7 @@ class TestKeyframesFromSnapshots:
         from app.domain import Detection as Det
 
         det_a = MagicMock(spec=Det)
-        det_a.global_track_id = "ph-a"
+        det_a.ph_id = "ph-a"
         det_a.confidence = 0.9
         det_a.bbox = BoundingBox(0, 0, 100, 200)
         ctx.domain_detections = [det_a]  # type: ignore[list-item]
@@ -230,4 +230,4 @@ class TestKeyframesFromSnapshots:
 
         keyframes = await repo.list_keyframes()
         assert len(keyframes) == 1
-        assert keyframes[0].global_track_id == "ph-a"
+        assert keyframes[0].ph_id == "ph-a"

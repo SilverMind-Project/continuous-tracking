@@ -199,6 +199,45 @@ class TestFrameBatcher:
         await batcher.close()
 
     @pytest.mark.asyncio
+    async def test_cross_camera_batch_handler_receives_all_frames_sorted_per_camera(
+        self, fake_frame: Callable[[], _FakeFrame]
+    ) -> None:
+        """Optional batch_handler receives one mixed-camera flush for model batching."""
+        per_camera_calls: list[tuple[str, list[_FakeFrame]]] = []
+        mixed_calls: list[list[_FakeFrame]] = []
+
+        async def handler(camera_id: str, frames: list[_FakeFrame]) -> None:
+            per_camera_calls.append((camera_id, list(frames)))
+
+        async def batch_handler(frames: list[_FakeFrame]) -> None:
+            mixed_calls.append(list(frames))
+
+        batcher = FrameBatcher(
+            batch_window_s=2.0,
+            max_batch_size=4,
+            handler=handler,
+            batch_handler=batch_handler,
+        )
+
+        await batcher.push(fake_frame("cam2", 2))
+        await batcher.push(fake_frame("cam1", 3))
+        await batcher.push(fake_frame("cam1", 1))
+        await batcher.push(fake_frame("cam2", 4))
+
+        await asyncio.sleep(0.05)
+
+        assert per_camera_calls == []
+        assert len(mixed_calls) == 1
+        assert [(f.camera_id, f.frame_index) for f in mixed_calls[0]] == [
+            ("cam2", 2),
+            ("cam2", 4),
+            ("cam1", 1),
+            ("cam1", 3),
+        ]
+
+        await batcher.close()
+
+    @pytest.mark.asyncio
     async def test_close_flushes_remaining(self, fake_frame: Callable[[], _FakeFrame]) -> None:
         """Closing the batcher should flush any remaining buffered frames."""
         handlers: list[tuple[str, list[_FakeFrame]]] = []
@@ -273,7 +312,7 @@ class TestFrameBatcher:
 
     @pytest.mark.asyncio
     async def test_max_batch_size_clamping(self) -> None:
-        """max_batch_size should be clamped to [1, 16]."""
+        """max_batch_size should be clamped to [1, 8]."""
         handlers: list[tuple[str, list[_FakeFrame]]] = []
 
         async def handler(camera_id: str, frames: list[_FakeFrame]) -> None:
@@ -293,7 +332,7 @@ class TestFrameBatcher:
             max_batch_size=100,
             handler=handler,
         )
-        assert batcher2._max_batch_size == 16
+        assert batcher2._max_batch_size == 8
 
         await batcher.close()
         await batcher2.close()

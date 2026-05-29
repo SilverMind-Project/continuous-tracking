@@ -47,8 +47,8 @@ class PostgresPHRepository:
                     observation_count, current_identity_id,
                     current_identity_committed_at,
                     state_mean, state_cov, gallery_mean, height_m,
-                    active_cameras, metadata
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    active_cameras, metadata, mean_quality
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 ON CONFLICT (ph_id) DO UPDATE SET
                     closed_at = COALESCE(EXCLUDED.closed_at, ph.closed_at),
                     last_seen_at = GREATEST(EXCLUDED.last_seen_at, ph.last_seen_at),
@@ -66,7 +66,8 @@ class PostgresPHRepository:
                     gallery_mean = EXCLUDED.gallery_mean,
                     height_m = EXCLUDED.height_m,
                     active_cameras = EXCLUDED.active_cameras,
-                    metadata = EXCLUDED.metadata
+                    metadata = EXCLUDED.metadata,
+                    mean_quality = EXCLUDED.mean_quality
                 """,
                 ph.ph_id,
                 ph.born_at,
@@ -82,6 +83,7 @@ class PostgresPHRepository:
                 ph.height_estimate_m,
                 list(ph.active_cameras),
                 json.dumps(ph.metadata),
+                ph.mean_quality,
             )
 
     async def get(self, ph_id: str) -> PersonHypothesis | None:
@@ -569,8 +571,8 @@ class PostgresPHRepository:
                     observation_count, current_identity_id,
                     current_identity_committed_at,
                     state_mean, state_cov, gallery_mean, height_m,
-                    active_cameras, metadata
-                ) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    active_cameras, metadata, mean_quality
+                ) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 """,
                 new_ph_id,
                 obs_rows[split_idx]["captured_at"],
@@ -585,6 +587,7 @@ class PostgresPHRepository:
                 ph_row["height_m"],
                 ph_row["active_cameras"],
                 ph_row["metadata"],
+                float(ph_row.get("mean_quality") or 0.0),
             )
 
             await conn.execute(
@@ -741,8 +744,9 @@ class PostgresWorldObservationRepository:
                 """
                 INSERT INTO continuous_tracking.world_observations (
                     observation_id, ph_id, camera_id, frame_index, captured_at,
-                    floor_x_m, floor_y_m, detection_confidence, bbox, height_m, metadata
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    floor_x_m, floor_y_m, detection_confidence, bbox, height_m, quality, metadata
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (observation_id, captured_at) DO NOTHING
                 """,
                 oid,
                 ph_id,
@@ -761,6 +765,7 @@ class PostgresWorldObservationRepository:
                     }
                 ),
                 observation.height_estimate_m,
+                observation.quality,
                 json.dumps({}),
             )
         return oid
@@ -801,6 +806,7 @@ def _row_to_ph(row: Any) -> PersonHypothesis:
         last_floor_speed_m_s=0.0,
         last_posture=None,
         metadata=row.get("metadata") or {},
+        mean_quality=float(row.get("mean_quality") or 0.0),
     )
 
 
@@ -829,6 +835,7 @@ def _row_to_world_observation(row: Any) -> WorldObservation:
         detection_confidence=float(row["detection_confidence"]),
         height_estimate_m=row.get("height_m"),
         face_anchor=None,
+        quality=float(row.get("quality") or 0.0),
     )
 
 

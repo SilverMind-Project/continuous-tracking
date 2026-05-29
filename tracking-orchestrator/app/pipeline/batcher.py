@@ -50,7 +50,7 @@ class FrameBatcher:
         Must be in ``[0.1, 2.0]``.
     max_batch_size:
         Maximum total frames to accumulate before forcing a flush.
-        Must be in ``[1, 16]``.
+        Must be in ``[1, 8]``.
     handler:
         Async callable invoked per camera with its batch of frames.
         Receives ``(camera_id, frames)`` where *frames* is a list
@@ -58,6 +58,7 @@ class FrameBatcher:
     """
 
     handler: Callable[[str, list[FrameReady]], Coroutine[None, None, None]]
+    batch_handler: Callable[[list[FrameReady]], Coroutine[None, None, None]] | None = None
 
     batch_window_s: float = 0.5
     max_batch_size: int = 4
@@ -69,7 +70,7 @@ class FrameBatcher:
     def __post_init__(self) -> None:
         # Clamp / validate config.
         self._batch_window_s = max(0.1, min(2.0, float(self.batch_window_s)))
-        self._max_batch_size = max(1, min(16, int(self.max_batch_size)))
+        self._max_batch_size = max(1, min(8, int(self.max_batch_size)))
 
     # ------------------------------------------------------------------
     # Public API
@@ -135,7 +136,12 @@ class FrameBatcher:
         if not batches:
             return
 
-        # Run each camera's handler concurrently.
+        if self.batch_handler is not None:
+            flattened = [frame for _cam_id, frames in batches for frame in frames]
+            await self.batch_handler(flattened)
+            return
+
+        # Run each camera handler concurrently.
         coros = [self.handler(cam_id, frames) for cam_id, frames in batches]
         await asyncio.gather(*coros, return_exceptions=True)
 

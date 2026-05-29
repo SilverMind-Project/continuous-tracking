@@ -21,7 +21,7 @@ input [
   {
     name: "images"
     data_type: TYPE_FP32
-    dims: [16, 3, 640, 640]
+    dims: [8, 3, 640, 640]
   }
 ]
 
@@ -29,7 +29,7 @@ output [
   {
     name: "output0"
     data_type: TYPE_FP32
-    dims: [16, 300, 6]
+    dims: [8, 300, 6]
   }
 ]
 

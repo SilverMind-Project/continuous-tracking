@@ -1,10 +1,10 @@
-"""Person Hypothesis HTTP API (N1, updated WTR6).
+"""Person Hypothesis HTTP API.
 
 Provides read, correction, merge, split, and audit endpoints for
 Person Hypotheses.  Replaces the deleted ``/identity/global_tracks*``
 and ``/identity/decisions*`` surfaces.
 
-WTR6: Actor extracted from X-Actor-Subject header. Idempotency keys
+Actor extracted from X-Actor-Subject header. Idempotency keys
 enforced for all mutation endpoints.
 """
 
@@ -63,7 +63,7 @@ def set_ph_repository(repo: PHRepositoryProtocol) -> None:
 
 
 def set_revision_publisher(publisher: object) -> None:
-    """WTR6: Inject RevisionPublisher for manual correction publishing."""
+    """Inject RevisionPublisher for manual correction publishing."""
     global _revision_publisher
     _revision_publisher = publisher
 
@@ -78,7 +78,7 @@ async def get_repo() -> PHRepositoryProtocol:
 
 
 async def _publish_manual_revision(revision: IdentityRevision, kind: str) -> None:
-    """Publish a manual correction revision through the same revision stream (WTR6)."""
+    """Publish a manual correction revision through the same revision stream."""
     if _revision_publisher is not None:
         try:
             await _revision_publisher.publish(revision)  # type: ignore[attr-defined]
@@ -346,7 +346,7 @@ async def get_co_present(
 
 
 def _actor_from_request(request: Request) -> str:
-    """Extract actor identity from request headers (WTR6)."""
+    """Extract actor identity from request headers."""
     actor = request.headers.get("X-Actor-Subject", "").strip()
     if actor:
         return actor
@@ -423,7 +423,7 @@ async def split_ph(
             detail={"code": "ph.split.invalid", "message": msg},
         ) from exc
     metrics.cts_ph_splits_total.labels(actor="operator").inc()
-    # WTR6: publish a split revision (same stream as automatic corrections).
+    # Publish a split revision (same stream as automatic corrections).
     split_revision = IdentityRevision(
         revision_id=f"manual-split-{original_id}-{new_id}",
         ph_id=original_id,

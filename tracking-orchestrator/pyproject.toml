@@ -53,7 +53,11 @@ line-length = 100
 extend-exclude = ["app/proto"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP", "B", "A", "C4", "SIM", "RUF", "FA"]
+# U6b: BLE001 (blind-except) guard — no silent fallbacks (rule 15).
+# Allowlist: app/trajectory/dementia_signals.py and app/trajectory/depth_posture_strategy.py
+# carry per-site # noqa: BLE001 annotations with documented reasons for the metrics
+# side-channel passes.  All other broad-excepts in app/ must log + raise or log + dead-letter.
+select = ["E", "F", "I", "N", "W", "UP", "B", "BLE", "A", "C4", "SIM", "RUF", "FA"]
 ignore = ["B008"]  # Depends() in FastAPI param defaults is idiomatic
 per-file-ignores = { "app/main.py" = ["E402"] }  # configure_logging before logger-using imports
 
@@ -88,6 +92,7 @@ warn_return_any = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+empty_parameter_set_mark = "fail_at_collect"
 filterwarnings = ["error::DeprecationWarning"]
 markers = [
     "integration: integration tests requiring testcontainers (skipped by default)",
@@ -150,21 +155,12 @@ source_modules = ["app"]
 forbidden_modules = ["scripts"]
 
 # R3: The following storage modules are deprecated and pending removal.
-# app.storage.base re-exports their symbols for the existing consumers
-# (identity_resolver, frame_pipeline, corrections, live); those consumers
-# are a cleanup follow-up and are not covered here.
-# This contract prevents NEW code in services and transport from taking
-# a direct dependency on the deprecated modules.
+# R3: global_track, tracking, hints modules are deleted. This contract
+# prevents them from being re-introduced anywhere in the codebase.
 [[tool.importlinter.contracts]]
-name = "R3: deprecated storage modules must not be imported by services or transport"
+name = "R3: deleted storage modules must never be re-imported"
 type = "forbidden"
-source_modules = [
-    "app.services",
-    "app.transport",
-    "app.trajectory",
-    "app.sampling",
-    "app.calibration",
-]
+source_modules = ["app"]
 forbidden_modules = [
     "app.storage.global_track",
     "app.storage.tracking",

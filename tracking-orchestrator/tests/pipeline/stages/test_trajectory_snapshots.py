@@ -97,7 +97,7 @@ class TestTrajectoryWritesFromSnapshots:
         await stage.run(ctx)
 
         assert len(repo._points) == 2
-        written_ph_ids = {p.global_track_id for p in repo._points}
+        written_ph_ids = {p.ph_id for p in repo._points}
         assert written_ph_ids == {"ph-a1", "ph-a2"}
 
     async def test_floor_point_matches_snapshot(self) -> None:
@@ -154,7 +154,7 @@ class TestTrajectoryWritesFromSnapshots:
         await stage.run(ctx)
 
         assert len(repo._points) == 1
-        assert repo._points[0].global_track_id == "ph-a"
+        assert repo._points[0].ph_id == "ph-a"
 
     async def test_no_snapshots_no_write(self) -> None:
         """Empty world_snapshots → no trajectory points written."""

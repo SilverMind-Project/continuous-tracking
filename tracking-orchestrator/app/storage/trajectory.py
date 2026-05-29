@@ -24,14 +24,14 @@ class TrajectoryRepository(ABC):
         """Close (or update) an existing room dwell interval."""
 
     @abstractmethod
-    async def get_open_dwell(self, identity_id: str, global_track_id: str) -> RoomDwell | None:
+    async def get_open_dwell(self, identity_id: str, ph_id: str) -> RoomDwell | None:
         """Return the open (not-yet-exited) dwell for a track, if any."""
 
     @abstractmethod
     async def list_trajectory_points(
         self,
         identity_id: str | None = None,
-        global_track_id: str | None = None,
+        ph_id: str | None = None,
         after: datetime | None = None,
         limit: int = 100,
     ) -> list[PersonTrajectoryPoint]:
@@ -66,8 +66,7 @@ class KeyframeRepository(ABC):
     @abstractmethod
     async def list_keyframes(
         self,
-        tracklet_id: str | None = None,
-        global_track_id: str | None = None,
+        ph_id: str | None = None,
         after: datetime | None = None,
         limit: int = 100,
     ) -> list[TaggedKeyframe]:
@@ -86,29 +85,29 @@ class InMemoryTrajectoryRepository(TrajectoryRepository):
         self._points.append(point)
 
     async def save_room_dwell(self, dwell: RoomDwell) -> None:
-        key = (dwell.identity_id, dwell.global_track_id)
+        key = (dwell.identity_id, dwell.ph_id)
         self._open_dwells[key] = dwell
 
     async def update_room_dwell(self, dwell: RoomDwell) -> None:
-        key = (dwell.identity_id, dwell.global_track_id)
+        key = (dwell.identity_id, dwell.ph_id)
         self._open_dwells.pop(key, None)
         self._closed_dwells.append(dwell)
 
-    async def get_open_dwell(self, identity_id: str, global_track_id: str) -> RoomDwell | None:
-        return self._open_dwells.get((identity_id, global_track_id))
+    async def get_open_dwell(self, identity_id: str, ph_id: str) -> RoomDwell | None:
+        return self._open_dwells.get((identity_id, ph_id))
 
     async def list_trajectory_points(
         self,
         identity_id: str | None = None,
-        global_track_id: str | None = None,
+        ph_id: str | None = None,
         after: datetime | None = None,
         limit: int = 100,
     ) -> list[PersonTrajectoryPoint]:
         results = list(self._points)
         if identity_id is not None:
             results = [p for p in results if p.identity_id == identity_id]
-        if global_track_id is not None:
-            results = [p for p in results if p.global_track_id == global_track_id]
+        if ph_id is not None:
+            results = [p for p in results if p.ph_id == ph_id]
         if after is not None:
             results = [p for p in results if p.observed_at >= after]
         results.sort(key=lambda p: p.observed_at, reverse=True)
@@ -150,8 +149,7 @@ class InMemoryKeyframeRepository(KeyframeRepository):
             return False
         self._keyframes[keyframe_id] = TaggedKeyframe(
             keyframe_id=keyframe.keyframe_id,
-            tracklet_id=keyframe.tracklet_id,
-            global_track_id=keyframe.global_track_id,
+            ph_id=keyframe.ph_id,
             camera_id=keyframe.camera_id,
             minio_key=keyframe.minio_key,
             captured_at=keyframe.captured_at,
@@ -163,16 +161,13 @@ class InMemoryKeyframeRepository(KeyframeRepository):
 
     async def list_keyframes(
         self,
-        tracklet_id: str | None = None,
-        global_track_id: str | None = None,
+        ph_id: str | None = None,
         after: datetime | None = None,
         limit: int = 100,
     ) -> list[TaggedKeyframe]:
         results = list(self._keyframes.values())
-        if tracklet_id is not None:
-            results = [k for k in results if k.tracklet_id == tracklet_id]
-        if global_track_id is not None:
-            results = [k for k in results if k.global_track_id == global_track_id]
+        if ph_id is not None:
+            results = [k for k in results if k.ph_id == ph_id]
         if after is not None:
             results = [k for k in results if k.captured_at >= after]
         results.sort(key=lambda k: k.captured_at, reverse=True)

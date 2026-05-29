@@ -39,6 +39,7 @@ Expected::
 from __future__ import annotations
 
 import argparse
+import inspect
 from pathlib import Path
 
 
@@ -48,6 +49,7 @@ def export_onnx(
     height: int = 518,
     width: int = 518,
     opset_version: int = 17,
+    dynamic_axes: bool = False,
 ) -> None:
     import torch
     from transformers import DepthAnythingForDepthEstimation
@@ -78,19 +80,25 @@ def export_onnx(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Exporting ONNX to {output_path} ...")
-    torch.onnx.export(
-        wrapped,
-        dummy,
-        str(output_path),
-        input_names=["pixel_values"],
-        output_names=["predicted_depth"],
-        dynamic_axes={
+    export_kwargs = {
+        "input_names": ["pixel_values"],
+        "output_names": ["predicted_depth"],
+        "opset_version": opset_version,
+        "do_constant_folding": True,
+    }
+    # PyTorch 2.12's dynamo exporter emits symbolic shape-runtime math that
+    # TensorRT 10.3 rejects (integer POW). The legacy exporter with static
+    # 518x518 shapes produces a TensorRT-friendly graph. Older torch releases
+    # do not expose this kwarg, so gate it by signature.
+    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+        export_kwargs["dynamo"] = False
+    if dynamic_axes:
+        export_kwargs["dynamic_axes"] = {
             "pixel_values": {0: "batch", 2: "height", 3: "width"},
             "predicted_depth": {0: "batch", 2: "height", 3: "width"},
-        },
-        opset_version=opset_version,
-        do_constant_folding=True,
-    )
+        }
+
+    torch.onnx.export(wrapped, dummy, str(output_path), **export_kwargs)
 
     file_mb = output_path.stat().st_size / (1024 * 1024)
     print(f"Exported: {output_path} ({file_mb:.1f} MB)")
@@ -124,6 +132,11 @@ def main() -> None:
     parser.add_argument("--height", type=int, default=518)
     parser.add_argument("--width", type=int, default=518)
     parser.add_argument("--opset", type=int, default=17)
+    parser.add_argument(
+        "--dynamic-axes",
+        action="store_true",
+        help="Export dynamic batch/height/width axes. Default is static TensorRT-friendly export.",
+    )
     args = parser.parse_args()
     export_onnx(
         checkpoint=args.checkpoint,
@@ -131,6 +144,7 @@ def main() -> None:
         height=args.height,
         width=args.width,
         opset_version=args.opset,
+        dynamic_axes=args.dynamic_axes,
     )
 
 

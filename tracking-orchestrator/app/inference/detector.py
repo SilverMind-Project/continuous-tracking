@@ -18,8 +18,9 @@ from triton_shared.inference.detection import (
 )
 from triton_shared.inference.schemas import DetectionBox
 
-# person-detector/config.pbtxt dims are [16,3,640,640] — static batch baked into the ONNX export.
-_DETECTOR_BATCH_SIZE = 16
+# CTS detector exports are static batch-8 by default. Set this to 0 only
+# for a truly dynamic-batch export.
+_DEFAULT_DETECTOR_STATIC_BATCH_SIZE = 8
 
 
 class PersonDetector:
@@ -30,10 +31,12 @@ class PersonDetector:
         client: TritonClientProtocol,
         model_name: str = DETECTOR_MODEL_NAME,
         conf_threshold: float = DETECTOR_CONF_THRESHOLD,
+        static_batch_size: int = _DEFAULT_DETECTOR_STATIC_BATCH_SIZE,
     ) -> None:
         self._client = client
         self._model_name = model_name
         self._conf = conf_threshold
+        self._static_batch_size = static_batch_size
 
     async def detect_batch(
         self,
@@ -43,6 +46,19 @@ class PersonDetector:
         if not images:
             return []
 
+        if self._static_batch_size > 0 and len(images) > self._static_batch_size:
+            results: list[list[DetectionBox]] = []
+            for start in range(0, len(images), self._static_batch_size):
+                chunk = images[start : start + self._static_batch_size]
+                results.extend(await self._detect_model_batch(chunk))
+            return results
+
+        return await self._detect_model_batch(images)
+
+    async def _detect_model_batch(
+        self,
+        images: list[npt.NDArray[np.uint8]],
+    ) -> list[list[DetectionBox]]:
         preprocessed: list[npt.NDArray[np.float32]] = []
         meta: list[tuple[int, int, int, int, float]] = []
         for img in images:
@@ -51,17 +67,18 @@ class PersonDetector:
             meta.append((img.shape[0], img.shape[1], px, py, scale))
 
         n = len(preprocessed)
-        pad = _DETECTOR_BATCH_SIZE - n
-        if pad > 0:
-            preprocessed.extend([preprocessed[0]] * pad)
+        if self._static_batch_size > 0:
+            pad = self._static_batch_size - n
+            if pad > 0:
+                preprocessed.extend([preprocessed[0]] * pad)
 
-        batch = np.stack(preprocessed)  # (_DETECTOR_BATCH_SIZE, 3, 640, 640)
+        batch = np.stack(preprocessed)
         outputs = await self._client.infer(
             model_name=self._model_name,
             inputs=[("images", batch)],
             output_names=["output0"],
         )
-        raw_batch = outputs["output0"]  # (_DETECTOR_BATCH_SIZE, 300, 6) — YOLO26L NMS-free format
+        raw_batch = outputs["output0"]  # (N, 300, 6) — YOLO26L NMS-free format
 
         return [decode_output(raw_batch[i], *meta[i], conf_threshold=self._conf) for i in range(n)]
 

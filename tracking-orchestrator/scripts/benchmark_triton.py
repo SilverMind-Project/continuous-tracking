@@ -1,7 +1,7 @@
 """Benchmark p50/p99 latency for all three Triton CTS models.
 
 Measures wall-clock latency (client-side, including gRPC overhead) for each
-model at batch sizes 1, 4, 8, 16.  Run this after materialising model files
+model at batch sizes 1, 4, 8.  Run this after materialising model files
 and starting Triton (docker compose up triton).
 
 Usage:
@@ -39,7 +39,7 @@ MODEL_SPECS: list[tuple[str, str, tuple[int, ...], list[str]]] = [
     ("pose-rtmpose", "input", (3, 256, 192), ["simcc_x", "simcc_y"]),
 ]
 
-BATCH_SIZES = [1, 4, 8, 16]
+BATCH_SIZES = [1, 4, 8]
 
 
 @dataclass
@@ -132,7 +132,9 @@ async def run(url: str, warmup: int, iters: int) -> list[LatencyStats]:
                     )
                     results.append(stat)
                     print(f"p50={stat.p50_ms:.1f}ms  p99={stat.p99_ms:.1f}ms")
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
+                    # Benchmarking continues across models so one unavailable
+                    # backend does not hide the latency for the rest.
                     print(f"ERROR: {exc}")
 
     return results

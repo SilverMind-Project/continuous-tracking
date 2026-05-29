@@ -40,8 +40,7 @@ async def test_maybe_sample_saves_bbox_annotation(
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     kf = await sampler.maybe_sample(
-        tracklet_id="tl-001",
-        global_track_id="gt-001",
+        ph_id="ph-001",
         camera_id="cam-a",
         minio_key="frame.jpg",
         captured_at=_T0,
@@ -57,7 +56,7 @@ async def test_maybe_sample_saves_bbox_annotation(
     results = await bbox_repo.get_bbox_annotations_for_keyframe(kf.keyframe_id)
     assert len(results) == 1
     ann = results[0]
-    assert ann.tracklet_id == "tl-001"
+    assert ann.ph_id == "ph-001"
     assert ann.camera_id == "cam-a"
     assert ann.x1 == 10.0
     assert ann.y1 == 20.0
@@ -74,8 +73,7 @@ async def test_trigger_sample_saves_bbox_annotation(
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     kf = await sampler.trigger_sample(
-        tracklet_id="tl-001",
-        global_track_id="gt-001",
+        ph_id="ph-001",
         camera_id="cam-a",
         minio_key="frame.jpg",
         captured_at=_T0,
@@ -102,8 +100,7 @@ async def test_maybe_sample_no_bbox_when_within_interval(
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     await sampler.maybe_sample(
-        tracklet_id="tl-001",
-        global_track_id="gt-001",
+        ph_id="ph-001",
         camera_id="cam-a",
         minio_key="f1.jpg",
         captured_at=_T0,
@@ -114,8 +111,7 @@ async def test_maybe_sample_no_bbox_when_within_interval(
     )
     t2 = _T0 + timedelta(seconds=15)
     kf = await sampler.maybe_sample(
-        tracklet_id="tl-001",
-        global_track_id="gt-001",
+        ph_id="ph-001",
         camera_id="cam-a",
         minio_key="f2.jpg",
         captured_at=t2,
@@ -126,7 +122,7 @@ async def test_maybe_sample_no_bbox_when_within_interval(
     )
     assert kf is None
 
-    all_anns = await bbox_repo.get_bbox_annotations_for_tracklet("tl-001")
+    all_anns = await bbox_repo.get_bbox_annotations_for_ph("ph-001")
     assert len(all_anns) == 1
 
 
@@ -135,8 +131,7 @@ async def test_no_bbox_saved_when_detection_bbox_is_none(
     bbox_repo: InMemoryBboxAnnotationRepository,
 ) -> None:
     kf = await sampler.maybe_sample(
-        tracklet_id="tl-001",
-        global_track_id="gt-001",
+        ph_id="ph-001",
         camera_id="cam-a",
         minio_key="frame.jpg",
         captured_at=_T0,
@@ -155,8 +150,7 @@ async def test_no_bbox_saved_when_bbox_repo_not_configured() -> None:
         bbox_repo=None,
     )
     kf = await sampler_no_bbox.maybe_sample(
-        tracklet_id="tl-001",
-        global_track_id="gt-001",
+        ph_id="ph-001",
         camera_id="cam-a",
         minio_key="frame.jpg",
         captured_at=_T0,

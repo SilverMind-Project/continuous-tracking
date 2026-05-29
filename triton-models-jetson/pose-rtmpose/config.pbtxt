@@ -1,0 +1,45 @@
+# RTMPose-m 2D pose estimator for Jetson Orin Nano Super.
+#
+# TensorRT plan generated from:
+#   triton-models/pose-rtmpose/1/model.onnx
+#
+# CTS sends variable crop batches. The TensorRT plan is built with a dynamic
+# batch profile [1,8], so Triton keeps normal batching semantics here.
+
+name: "pose-rtmpose"
+platform: "tensorrt_plan"
+default_model_filename: "model.plan"
+max_batch_size: 8
+
+dynamic_batching {
+  preferred_batch_size: [4, 8]
+  max_queue_delay_microseconds: 2000
+}
+
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [3, 256, 192]
+  }
+]
+
+output [
+  {
+    name: "simcc_x"
+    data_type: TYPE_FP32
+    dims: [17, 384]
+  },
+  {
+    name: "simcc_y"
+    data_type: TYPE_FP32
+    dims: [17, 512]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

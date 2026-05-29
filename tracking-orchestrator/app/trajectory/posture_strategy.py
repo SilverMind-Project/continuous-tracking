@@ -78,7 +78,7 @@ class RTMPosePostureStrategy:
             if pose_result is None:
                 return "unknown"
             return classify_posture(pose_result, detection.bbox)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return "unknown"
 
     async def score(
@@ -91,7 +91,7 @@ class RTMPosePostureStrategy:
             if pose_result is None:
                 return PostureScores(lying=0.0, sitting=0.0, standing_walking=0.0)
             return score_posture(pose_result)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return PostureScores(lying=0.0, sitting=0.0, standing_walking=0.0)
 
     def evict_tracklet(self, tracklet_id: str) -> None:

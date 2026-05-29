@@ -90,9 +90,6 @@ type SceneSample struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Unique keyframe ID (ULID or UUID).
 	KeyframeId string `protobuf:"bytes,1,opt,name=keyframe_id,json=keyframeId,proto3" json:"keyframe_id,omitempty"`
-	// Originating tracklet and global track. Both required.
-	TrackletId    string `protobuf:"bytes,2,opt,name=tracklet_id,json=trackletId,proto3" json:"tracklet_id,omitempty"`
-	GlobalTrackId string `protobuf:"bytes,3,opt,name=global_track_id,json=globalTrackId,proto3" json:"global_track_id,omitempty"`
 	// Originating camera.
 	CameraId string `protobuf:"bytes,4,opt,name=camera_id,json=cameraId,proto3" json:"camera_id,omitempty"`
 	// MinIO object key for the JPEG.
@@ -106,8 +103,10 @@ type SceneSample struct {
 	AnnotationsJson string `protobuf:"bytes,8,opt,name=annotations_json,json=annotationsJson,proto3" json:"annotations_json,omitempty"`
 	// Retention deadline in unix nanoseconds.
 	ExpiresAtUnixNs uint64 `protobuf:"fixed64,9,opt,name=expires_at_unix_ns,json=expiresAtUnixNs,proto3" json:"expires_at_unix_ns,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Person Hypothesis for the person shown in this sampled frame.
+	PhId          string `protobuf:"bytes,10,opt,name=ph_id,json=phId,proto3" json:"ph_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SceneSample) Reset() {
@@ -143,20 +142,6 @@ func (*SceneSample) Descriptor() ([]byte, []int) {
 func (x *SceneSample) GetKeyframeId() string {
 	if x != nil {
 		return x.KeyframeId
-	}
-	return ""
-}
-
-func (x *SceneSample) GetTrackletId() string {
-	if x != nil {
-		return x.TrackletId
-	}
-	return ""
-}
-
-func (x *SceneSample) GetGlobalTrackId() string {
-	if x != nil {
-		return x.GlobalTrackId
 	}
 	return ""
 }
@@ -203,24 +188,30 @@ func (x *SceneSample) GetExpiresAtUnixNs() uint64 {
 	return 0
 }
 
+func (x *SceneSample) GetPhId() string {
+	if x != nil {
+		return x.PhId
+	}
+	return ""
+}
+
 var File_continuoustracking_v1_scene_proto protoreflect.FileDescriptor
 
 const file_continuoustracking_v1_scene_proto_rawDesc = "" +
 	"\n" +
-	"!continuoustracking/v1/scene.proto\x12\x15continuoustracking.v1\"\xf9\x02\n" +
+	"!continuoustracking/v1/scene.proto\x12\x15continuoustracking.v1\"\xef\x02\n" +
 	"\vSceneSample\x12\x1f\n" +
 	"\vkeyframe_id\x18\x01 \x01(\tR\n" +
-	"keyframeId\x12\x1f\n" +
-	"\vtracklet_id\x18\x02 \x01(\tR\n" +
-	"trackletId\x12&\n" +
-	"\x0fglobal_track_id\x18\x03 \x01(\tR\rglobalTrackId\x12\x1b\n" +
+	"keyframeId\x12\x1b\n" +
 	"\tcamera_id\x18\x04 \x01(\tR\bcameraId\x12\x1b\n" +
 	"\tminio_key\x18\x05 \x01(\tR\bminioKey\x12-\n" +
 	"\x13captured_at_unix_ns\x18\x06 \x01(\x06R\x10capturedAtUnixNs\x12?\n" +
 	"\n" +
 	"tag_reason\x18\a \x01(\x0e2 .continuoustracking.v1.TagReasonR\ttagReason\x12)\n" +
 	"\x10annotations_json\x18\b \x01(\tR\x0fannotationsJson\x12+\n" +
-	"\x12expires_at_unix_ns\x18\t \x01(\x06R\x0fexpiresAtUnixNs*\xc9\x01\n" +
+	"\x12expires_at_unix_ns\x18\t \x01(\x06R\x0fexpiresAtUnixNs\x12\x13\n" +
+	"\x05ph_id\x18\n" +
+	" \x01(\tR\x04phIdJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\vtracklet_idR\x0fglobal_track_id*\xc9\x01\n" +
 	"\tTagReason\x12\x1a\n" +
 	"\x16TAG_REASON_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13TAG_REASON_PERIODIC\x10\x01\x12\x1f\n" +

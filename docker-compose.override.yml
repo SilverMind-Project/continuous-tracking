@@ -1,5 +1,0 @@
-services:
-  tracking-orchestrator:
-    volumes:
-      - ./tracking-orchestrator/app:/app/app
-      - ./tracking-orchestrator/migrations:/app/migrations

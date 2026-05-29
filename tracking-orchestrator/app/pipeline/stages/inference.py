@@ -148,7 +148,8 @@ class InferenceStage(FrameStage):
                     )
                 )
 
-            # Domain Detection (existing contract, preserved).
+            # Domain Detection — carry crop_quality so WorldTrackingStage can set
+            # WorldObservation.quality without recomputing the composite scorer.
             domain_det = Detection(
                 detection_id=det_id,
                 camera_id=ctx.frame.camera_id,
@@ -158,6 +159,7 @@ class InferenceStage(FrameStage):
                 event_time=ctx.event_time,
                 confidence=det.confidence,
                 floor_point=fp if fp is not None else FloorPoint(0, 0),
+                crop_quality=cq.quality,
             )
             ctx.domain_detections.append(domain_det)
             if pose_result is not None:

@@ -67,3 +67,19 @@ class TestSplitStatements:
         )
         assert len(stmts) == 1
         assert "CREATE MATERIALIZED VIEW" in stmts[0]
+
+    def test_semicolon_in_comments_and_quotes(self) -> None:
+        # Semicolon in single-line comment
+        stmts1 = _split("-- comment; with semicolon\nSELECT 1;")
+        assert len(stmts1) == 1
+        assert stmts1[0] == "-- comment; with semicolon\nSELECT 1"
+
+        # Semicolon in block comment
+        stmts2 = _split("/* comment; with semicolon */\nSELECT 2;")
+        assert len(stmts2) == 1
+        assert stmts2[0] == "/* comment; with semicolon */\nSELECT 2"
+
+        # Semicolon in single-quoted string
+        stmts3 = _split("SELECT 'abc;def';")
+        assert len(stmts3) == 1
+        assert stmts3[0] == "SELECT 'abc;def'"

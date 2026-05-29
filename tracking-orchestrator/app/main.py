@@ -3,9 +3,9 @@
 Mirrors the cognitive-companion pattern: create_app() returns the app,
 lifespan manages service lifecycle (pipeline start/stop, DB migrations).
 
-Configuration is read from ``config/settings.yaml`` (overridable via
-``ORCHESTRATOR_CONFIG_PATH``) with ``${VAR}`` / ``${VAR:-default}``
-env-var interpolation — see :mod:`app.config`.
+Configuration is read from ``config/settings.yaml`` (path configurable via
+``ORCHESTRATOR_CONFIG_PATH``). Only deployment endpoints/secrets use explicit
+``${VAR}`` interpolation; tunables are literal YAML values.
 """
 
 from __future__ import annotations
@@ -44,9 +44,11 @@ from .routers import gallery as gallery_router_mod
 from .routers.calibration import router as calibration_router
 from .routers.calibration import set_auto_calibration_context
 from .routers.corrections import router as corrections_router
+from .routers.corrections import set_context as set_corrections_context
 from .routers.dashboard import router as dashboard_router
 from .routers.gallery import router as gallery_router
 from .routers.live import router as live_router
+from .routers.live import set_context as set_live_context
 from .routers.ph import router as ph_router
 from .routers.ph import set_ph_repository, set_revision_publisher
 from .routers.trajectory import router as trajectory_router
@@ -91,16 +93,14 @@ async def _fetch_cc_camera_configs(
 ) -> dict[str, FaceIdCameraConfig]:
     """Fetch per-camera face-id configs from cognitive-companion's camera API.
 
-    Returns an empty dict if CC is unreachable (graceful degradation).
     CC is the primary source for per-camera face-id settings (enabled flag
-    and min_confidence). The ``FACE_ID_CAMERA_CONFIDENCE`` env var provides
-    a deployment-level fallback for cameras not in CC.
+    and min_confidence).
     """
     try:
         cameras: list[dict[str, Any]] = await client.get("/api/v1/cts/cameras")
-    except Exception:
-        logger.warning("Failed to fetch camera configs from CC", exc_info=True)
-        return {}
+    except Exception as exc:
+        logger.exception("cc_camera_config_fetch_failed")
+        raise RuntimeError("Failed to fetch camera configs from CC") from exc
 
     cfgs: dict[str, FaceIdCameraConfig] = {}
     for cam in cameras:
@@ -115,52 +115,8 @@ async def _fetch_cc_camera_configs(
             min_confidence=float(min_conf) if min_conf is not None else None,
         )
 
-    # Apply FACE_ID_CAMERA_CONFIDENCE env var as fallback for cameras
-    # that were not found in CC's camera list.
-    _apply_confidence_fallback(cfgs)
-
     logger.info("Fetched face-id configs from CC", camera_count=len(cfgs))
     return cfgs
-
-
-def _apply_confidence_fallback(cfgs: dict[str, FaceIdCameraConfig]) -> None:
-    """Apply ``FACE_ID_CAMERA_CONFIDENCE`` env var as a fallback.
-
-    Only affects cameras already present in *cfgs* (from CC).  If a camera
-    has no ``min_confidence`` set in CC, the env-var value fills the gap.
-    The env var format is ``cam_id:confidence,cam_id:confidence,...``.
-    """
-    import os
-
-    cam_conf = os.environ.get("FACE_ID_CAMERA_CONFIDENCE", "")
-    if not cam_conf:
-        return
-
-    for pair in cam_conf.split(","):
-        pair = pair.strip()
-        if ":" not in pair:
-            continue
-        cam_id, conf_str = pair.split(":", 1)
-        try:
-            conf = float(conf_str)
-        except ValueError:
-            logger.warning("Invalid FACE_ID_CAMERA_CONFIDENCE entry", entry=pair)
-            continue
-
-        cam_id = cam_id.strip()
-        existing = cfgs.get(cam_id)
-        if existing is not None:
-            # Only fill if CC didn't set a value.
-            if existing.min_confidence is None:
-                cfgs[cam_id] = FaceIdCameraConfig(
-                    enabled=existing.enabled,
-                    min_confidence=conf,
-                )
-        else:
-            logger.info(
-                "FACE_ID_CAMERA_CONFIDENCE ignored for unknown camera",
-                camera_id=cam_id,
-            )
 
 
 def _build_transport_config(s: Settings) -> TransportConfig:
@@ -232,6 +188,9 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         velocity_decay_s=wt.as_float("velocity_decay_s"),
         height_sigma_m=wt.as_float("height_sigma_m"),
         evidence_window_s=wt.as_float("evidence_window_s"),
+        dedup_enabled=wt.as_bool("dedup_enabled"),
+        dedup_max_distance_m=wt.as_float("dedup_max_distance_m"),
+        dedup_require_no_face_conflict=wt.as_bool("dedup_require_no_face_conflict"),
     )
 
 
@@ -336,6 +295,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ),
         batch_window_s=settings.as_float("pipeline.batch_window_s"),
         max_batch_size=settings.as_int("pipeline.max_batch_size"),
+        cross_camera_detector_batching=settings.as_bool("pipeline.cross_camera_detector_batching"),
     )
     _pipeline = FrameProcessingPipeline(config)
 
@@ -386,6 +346,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     env = settings.as_str("env")
     triton_timeout_ms = settings.as_int("triton.timeout_ms")
     detector_model_name = settings.as_str("triton.person_detector_model")
+    detector_static_batch_size = settings.as_int("triton.detector_static_batch_size")
     detector_confidence = settings.as_float("pipeline.detector_confidence")
     reid_model_name = settings.as_str("triton.reid_model")
     pose_enabled = settings.as_bool("triton.pose_enabled")
@@ -405,7 +366,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await _triton_client.__aenter__()
                 connected = True
                 break
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 remaining = deadline - asyncio.get_event_loop().time()
                 logger.warning(
@@ -421,7 +382,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             if env in ("production", "staging"):
                 raise RuntimeError(
                     "Triton Inference Server is required in production/staging. "
-                    "Set PIPELINE_ALLOW_SKELETON=true to override for testing."
+                    "Use env=development in settings.yaml for skeleton-only local testing."
                 ) from None
             _triton_client = None
         else:
@@ -430,6 +391,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 _triton_client,
                 model_name=detector_model_name,
                 conf_threshold=detector_confidence,
+                static_batch_size=detector_static_batch_size,
             )
             reid_embedder = ReidEmbedder(
                 _triton_client,
@@ -522,7 +484,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     set_ph_repository(_ph_repo_n1)  # type: ignore[arg-type]
     deps_ph_repo = _ph_repo_n1
 
-    # WTR6: wire revision publisher for manual PH corrections.
+    # Wire revision publisher for manual PH corrections.
     if _pipeline._revision_publisher is not None:
         set_revision_publisher(_pipeline._revision_publisher)
 
@@ -583,7 +545,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await _pipeline.start()
 
-    # M2: CC config sync service (camera→room map + homography sync).
+    # CC config sync service (camera-to-room map + homography sync).
     from .services.camera_room_map import CameraRoomMap
     from .services.cc_config_sync import CCConfigSyncService
 
@@ -601,7 +563,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Wire CameraRoomMap into the pipeline so stages read room bindings.
     _pipeline.set_camera_room_map(camera_room_map)
 
-    # WTR5: load transit zones from CC and wire into the world tracker.
+    # Load transit zones from CC and wire into the world tracker.
     from .domain import TransitZone as _TransitZone
     from .tracking.world.transit_detector import TransitDetector as _TransitDetector
     from .transport.room_transition_publisher import (
@@ -653,7 +615,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         room_transition_publisher=_room_transition_pub,
     )
 
-    # WTR2: CC identity assertion subscriber (bidirectional identity flow).
+    # CC identity assertion subscriber (bidirectional identity flow).
     cc_assertion_cache: object | None = None
     cc_assertion_subscriber: object | None = None
     redis_url = settings.as_str("redis.url")
@@ -688,7 +650,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 stage._assertion_cache = cc_assertion_cache  # type: ignore[attr-defined]
                 break
 
-    # M3: keyframe revalidator background task.
+    # Keyframe revalidator background task.
     if bbox_repo is not None:
         from .services.keyframe_revalidator import KeyframeRevalidator
 
@@ -699,9 +661,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.keyframe_revalidator = _revalidator
         app.state.keyframe_revalidator_task = asyncio.create_task(_revalidator.run())
 
-    # NOTE(N0): corrections and live router wiring removed since their
-    # Postgres repositories (tracking_repo, global_track_repo, dnf_repo)
-    # were deleted. These routers need PH-native replacements (N1+N2+N3).
+    # Wire corrections and live routers to the PH repository.
+    set_corrections_context(
+        ph_repo=deps_ph_repo,  # type: ignore[arg-type]
+        publisher=_pipeline._revision_publisher,
+    )
+    set_live_context(
+        ph_repo=deps_ph_repo,  # type: ignore[arg-type]
+        keyframe_repo=keyframe_repo,
+        gallery_repo=gallery_repo,
+    )
 
     if trajectory_repo is not None:
         set_trajectory_context(trajectory_repo=trajectory_repo)
@@ -724,20 +693,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # -------------------------------------------------------------------
     # Shutdown
     # -------------------------------------------------------------------
-    # M3: stop keyframe revalidator.
+    # Stop keyframe revalidator.
     _m3_revalidator = getattr(app.state, "keyframe_revalidator", None)
     if _m3_revalidator is not None:
         await _m3_revalidator.stop()
 
-    # WTR2: stop CC assertion subscriber.
+    # Stop CC assertion subscriber.
     if cc_assertion_subscriber is not None:
         await cc_assertion_subscriber.stop()  # type: ignore[attr-defined]
 
-    # WTR5: disconnect room transition publisher.
+    # Disconnect room transition publisher.
     if "_room_transition_pub" in dir():
         await _room_transition_pub.disconnect()
 
-    # M2: stop CC config sync before pipeline.
+    # Stop CC config sync before pipeline.
     _cc_sync = getattr(app.state, "cc_sync_service", None)
     if _cc_sync is not None:
         await _cc_sync.stop()
@@ -778,7 +747,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, object]:
-        """WTR10: Rollout health check — reports subsystem readiness.
+        """Rollout health check — reports subsystem readiness.
 
         Returns 'healthy' only when all required subsystems are operational.
         Returns 'degraded' when optional subsystems are missing.
@@ -840,7 +809,7 @@ def create_app() -> FastAPI:
             "message": "running" if calibration_ok else "not configured",
         }
 
-        # Transit detector (WTR5)
+        # Transit detector
         transit_ok = getattr(app.state, "cc_sync_service", None) is not None
         checks["transit_detector"] = {
             "status": "ok" if transit_ok else "degraded",

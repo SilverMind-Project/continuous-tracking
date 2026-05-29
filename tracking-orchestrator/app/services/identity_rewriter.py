@@ -7,8 +7,8 @@ This implements the orchestrator side of CR-13 (the CC side handles
 PersonLocationHistory).
 
 Tables rewritten (all in continuous_tracking schema):
-  - person_trajectories  — UPDATE identity_id WHERE global_track_id + observed_at range
-  - room_dwells          — UPDATE identity_id WHERE global_track_id + entered_at range
+  - person_trajectories  — UPDATE identity_id WHERE ph_id + observed_at range
+  - room_dwells          — UPDATE identity_id WHERE ph_id + entered_at range
   - dementia_signals     — DELETE old signal + INSERT new signal with new uuid5 PK
                             (PK is derived from identity_id so UPDATE is not viable)
 
@@ -44,7 +44,7 @@ class IdentityRewriter(ABC):
     async def rewrite(
         self,
         revision_id: str,
-        global_track_id: str,
+        ph_id: str,
         old_identity_id: str | None,
         new_identity_id: str,
         applies_from: datetime,
@@ -70,7 +70,7 @@ class InMemoryIdentityRewriter(IdentityRewriter):
     async def rewrite(
         self,
         revision_id: str,
-        global_track_id: str,
+        ph_id: str,
         old_identity_id: str | None,
         new_identity_id: str,
         applies_from: datetime,
@@ -94,7 +94,7 @@ class PostgresIdentityRewriter(IdentityRewriter):
     async def rewrite(
         self,
         revision_id: str,
-        global_track_id: str,
+        ph_id: str,
         old_identity_id: str | None,
         new_identity_id: str,
         applies_from: datetime,
@@ -109,12 +109,12 @@ class PostgresIdentityRewriter(IdentityRewriter):
                 """
                     UPDATE continuous_tracking.person_trajectories
                     SET identity_id = $1
-                    WHERE global_track_id = $2
+                    WHERE ph_id = $2
                       AND identity_id IS DISTINCT FROM $1
                       AND observed_at BETWEEN $3 AND $4
                     """,
                 new_identity_id,
-                global_track_id,
+                ph_id,
                 applies_from,
                 applies_to,
             )
@@ -129,12 +129,12 @@ class PostgresIdentityRewriter(IdentityRewriter):
                 """
                     UPDATE continuous_tracking.room_dwells
                     SET identity_id = $1
-                    WHERE global_track_id = $2
+                    WHERE ph_id = $2
                       AND identity_id IS DISTINCT FROM $1
                       AND entered_at BETWEEN $3 AND $4
                     """,
                 new_identity_id,
-                global_track_id,
+                ph_id,
                 applies_from,
                 applies_to,
             )

@@ -18,8 +18,7 @@ def _sample_event() -> tracking_pb2.TrackingEvent:
     det = ev.detections.add(
         detection_id="d1",
         confidence=0.9,
-        tracklet_id="tr-1",
-        global_track_id="gt-1",
+        ph_id="gt-1",
     )
     det.bbox.x_min, det.bbox.y_min = 10, 20
     det.bbox.x_max, det.bbox.y_max = 30, 40

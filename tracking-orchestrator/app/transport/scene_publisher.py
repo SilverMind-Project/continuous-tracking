@@ -61,8 +61,7 @@ class SceneSamplesPublisher(BasePublisher):
 def _to_proto(keyframe: TaggedKeyframe) -> scene_pb2.SceneSample:
     pb = scene_pb2.SceneSample()
     pb.keyframe_id = keyframe.keyframe_id
-    pb.tracklet_id = keyframe.tracklet_id
-    pb.global_track_id = keyframe.global_track_id
+    pb.ph_id = keyframe.ph_id
     pb.camera_id = keyframe.camera_id
     pb.minio_key = keyframe.minio_key
     pb.captured_at_unix_ns = int(keyframe.captured_at.timestamp() * 1e9)

@@ -7,19 +7,16 @@ low-rate reads live here (the hot tracking-event path is the Redis stream).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from structlog import get_logger
 
 from ..storage.base import (
     GalleryRepository,
-    GlobalTrackRepository,
     InMemoryGalleryRepository,
-    InMemoryGlobalTrackRepository,
-    InMemoryKeyframeRepository,
-    KeyframeRepository,
+    InMemoryPHRepository,
+    PHRepositoryProtocol,
 )
 
 logger = get_logger(__name__)
@@ -34,8 +31,7 @@ router = APIRouter(tags=["live-internal"])
 
 @dataclass
 class _LiveContext:
-    global_track_repo: GlobalTrackRepository
-    keyframe_repo: KeyframeRepository
+    ph_repo: PHRepositoryProtocol
     gallery_repo: GalleryRepository
     feature_flags: dict[str, bool] = field(
         default_factory=lambda: {
@@ -47,8 +43,7 @@ class _LiveContext:
 
 
 _ctx: _LiveContext = _LiveContext(
-    global_track_repo=InMemoryGlobalTrackRepository(),
-    keyframe_repo=InMemoryKeyframeRepository(),
+    ph_repo=InMemoryPHRepository(),
     gallery_repo=InMemoryGalleryRepository(),
 )
 
@@ -58,117 +53,18 @@ def get_context() -> _LiveContext:
 
 
 def set_context(
-    global_track_repo: GlobalTrackRepository,
-    keyframe_repo: KeyframeRepository | None = None,
+    ph_repo: PHRepositoryProtocol,
+    keyframe_repo: object | None = None,
     gallery_repo: GalleryRepository | None = None,
     feature_flags: dict[str, bool] | None = None,
 ) -> None:
+    _ = keyframe_repo
     global _ctx
     _ctx = _LiveContext(
-        global_track_repo=global_track_repo,
-        keyframe_repo=keyframe_repo or InMemoryKeyframeRepository(),
+        ph_repo=ph_repo,
         gallery_repo=gallery_repo or InMemoryGalleryRepository(),
         feature_flags=feature_flags or _ctx.feature_flags,
     )
-
-
-# ---------------------------------------------------------------------------
-# GET /internal/global_tracks
-# ---------------------------------------------------------------------------
-
-
-@router.get("/internal/global_tracks")
-async def list_global_tracks(
-    open_only: bool = Query(True, description="Only return tracks with state='active'"),
-    since: str | None = Query(
-        None,
-        description=(
-            "ISO-8601 timestamp; return tracks last seen at or after this "
-            "time (enables closed-track history)"
-        ),
-    ),
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    camera_id: str | None = Query(None),
-    identity_id: str | None = Query(None, description="Filter to tracks assigned this identity"),
-    status: str | None = Query(None, pattern="^(committed|UNKNOWN)$"),
-    search: str | None = Query(None),
-    min_duration_s: float = Query(
-        0.0, ge=0.0, description="Exclude tracks shorter than this many seconds"
-    ),
-    ctx: _LiveContext = Depends(get_context),
-) -> dict[str, Any]:
-    """Return a summary of global tracks for the Live and Corrections views."""
-    if since is not None:
-        try:
-            since_dt = datetime.fromisoformat(since)
-            if since_dt.tzinfo is None:
-                since_dt = since_dt.replace(tzinfo=UTC)
-        except ValueError:
-            since_dt = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        tracks = await ctx.global_track_repo.list_since(
-            since_dt, open_only=open_only, limit=limit + offset + 500
-        )
-    elif open_only:
-        tracks = await ctx.global_track_repo.list_active()
-    else:
-        # open_only=False without since: return today's tracks
-        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        tracks = await ctx.global_track_repo.list_since(
-            today_start, open_only=False, limit=limit + offset + 500
-        )
-    if min_duration_s > 0:
-        tracks = [
-            t for t in tracks if (t.last_seen_at - t.started_at).total_seconds() >= min_duration_s
-        ]
-    if camera_id:
-        tracks = [t for t in tracks if camera_id in t.camera_ids]
-    if identity_id:
-        tracks = [t for t in tracks if t.current_identity_id == identity_id]
-    if status == "committed":
-        tracks = [t for t in tracks if t.current_identity_id is not None]
-    elif status == "UNKNOWN":
-        tracks = [t for t in tracks if t.current_identity_id is None]
-    if search:
-        needle = search.casefold()
-        identities = await ctx.gallery_repo.list_identities(active_only=True)
-        display_by_id = {i.identity_id: i.display_name for i in identities}
-        tracks = [
-            t
-            for t in tracks
-            if t.current_identity_id is not None
-            and (
-                needle in t.current_identity_id.casefold()
-                or needle in display_by_id.get(t.current_identity_id, "").casefold()
-            )
-        ]
-
-    tracks.sort(key=lambda t: t.last_seen_at, reverse=True)
-    total = len(tracks)
-    page = tracks[offset : offset + limit]
-
-    result = []
-    for t in page:
-        result.append(await _track_to_dict(t, ctx.keyframe_repo))
-    return {"tracks": result, "count": total, "limit": limit, "offset": offset}
-
-
-@router.get("/internal/global_tracks/{global_track_id}")
-async def get_global_track(
-    global_track_id: str,
-    ctx: _LiveContext = Depends(get_context),
-) -> dict[str, Any]:
-    """Return details for a single global track."""
-    track = await ctx.global_track_repo.get(global_track_id)
-    if track is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "global_track.not_found",
-                "message": f"GlobalTrack {global_track_id} not found.",
-            },
-        )
-    return await _track_to_dict(track, ctx.keyframe_repo)
 
 
 # ---------------------------------------------------------------------------
@@ -181,11 +77,7 @@ async def list_identities(
     active_only: bool = Query(True, description="Only return active identities"),
     ctx: _LiveContext = Depends(get_context),
 ) -> dict[str, Any]:
-    """Return all known named identities from the ReID gallery.
-
-    Used by the CC identity-corrections UI to populate the identity picker
-    so caregivers select from names rather than typing raw UUIDs.
-    """
+    """Return all known named identities from the ReID gallery."""
     identities = await ctx.gallery_repo.list_identities(active_only=active_only)
     return {
         "identities": [
@@ -208,8 +100,7 @@ async def list_identities(
 
 @router.get("/internal/health")
 async def get_health() -> dict[str, Any]:
-    """Lightweight liveness ping. Distinct from ``/health`` which reflects
-    the pipeline run state; this endpoint is what the CC BFF polls."""
+    """Lightweight liveness ping."""
     return {"status": "ok"}
 
 
@@ -224,24 +115,3 @@ async def get_feature_flags(
 ) -> dict[str, Any]:
     """Return boolean feature flags for the orchestrator."""
     return {"flags": dict(ctx.feature_flags)}
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-async def _track_to_dict(track: Any, keyframe_repo: KeyframeRepository) -> dict[str, Any]:
-    keyframes = await keyframe_repo.list_keyframes(global_track_id=track.global_track_id, limit=1)
-    latest_minio_key: str | None = keyframes[0].minio_key if keyframes else None
-    return {
-        "global_track_id": track.global_track_id,
-        "camera_ids": list(track.camera_ids),
-        "tracklet_ids": list(track.tracklet_ids),
-        "current_identity_id": track.current_identity_id,
-        "started_at": track.started_at.isoformat(),
-        "last_seen_at": track.last_seen_at.isoformat(),
-        "state": track.state,
-        "latest_keyframe_minio_key": latest_minio_key,
-        "last_posterior_jsonb": track.last_posterior_jsonb,
-    }

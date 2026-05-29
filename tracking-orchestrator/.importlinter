@@ -34,3 +34,28 @@ forbidden_modules =
     app.pipeline
     app.sampling
     app.calibration
+
+
+[importlinter:contract:r3-no-global-track-repo]
+name = R3: GlobalTrackRepository must not be reintroduced
+# R3 deleted the GlobalTrackRepository and InMemoryGlobalTrackRepository from
+# app.storage.postgres.global_track_repo.  This contract fails the build if
+# that module (or a re-added equivalent path) is ever re-imported, ensuring
+# the R3 cleanup is permanent.  The GlobalTrack *domain class* in app.domain
+# is intentionally retained as a data carrier; only the storage layer was removed.
+type = forbidden
+source_modules =
+    app
+forbidden_modules =
+    app.storage.postgres.global_track_repo
+
+
+[importlinter:contract:r3-no-close-terminated-stage]
+name = R3: CloseTerminatedStage must not be reintroduced
+# R3 deleted CloseTerminatedStage from the pipeline.  This contract prevents
+# it being re-added under its original or any new module path in app.pipeline.stages.
+type = forbidden
+source_modules =
+    app
+forbidden_modules =
+    app.pipeline.stages.close_terminated

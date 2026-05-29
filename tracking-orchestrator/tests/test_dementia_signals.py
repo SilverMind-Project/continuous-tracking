@@ -33,7 +33,7 @@ def _point(
 ) -> PersonTrajectoryPoint:
     return PersonTrajectoryPoint(
         identity_id=_IDENTITY,
-        global_track_id=_GT,
+        ph_id=_GT,
         observed_at=now - timedelta(minutes=offset_minutes),
         room_name=room,
         posture=posture,  # type: ignore[arg-type]
@@ -55,7 +55,7 @@ def _dwell(
     return RoomDwell(
         dwell_id=str(uuid.uuid4()),
         identity_id=_IDENTITY,
-        global_track_id=_GT,
+        ph_id=_GT,
         room_name=room,
         entered_at=entered_at,
         exited_at=exited_at,
@@ -310,7 +310,7 @@ class TestStillnessAnomalyDetector:
         open_dwell = RoomDwell(
             dwell_id=str(uuid.uuid4()),
             identity_id=_IDENTITY,
-            global_track_id=_GT,
+            ph_id=_GT,
             room_name="kitchen",
             entered_at=entered_at,
             still_seconds=30 * 60,  # 30 minutes of actual stillness
@@ -459,7 +459,7 @@ class TestRunOnce:
         for i, room in enumerate(rooms):
             pt = PersonTrajectoryPoint(
                 identity_id="alice",
-                global_track_id="gt-a",
+                ph_id="gt-a",
                 observed_at=_NOW - timedelta(minutes=20 - i * 2),
                 room_name=room,
                 identity_confidence=0.9,
@@ -469,7 +469,7 @@ class TestRunOnce:
         # Identity B: no pacing.
         pt_b = PersonTrajectoryPoint(
             identity_id="bob",
-            global_track_id="gt-b",
+            ph_id="gt-b",
             observed_at=_NOW - timedelta(minutes=5),
             room_name="bedroom",
             identity_confidence=0.9,

@@ -24,11 +24,14 @@ import time
 
 import numpy as np
 import numpy.typing as npt
+from structlog import get_logger
 
 from ..domain import Detection, PostureType
 from ..inference.depth import DepthEstimator
 from ..observability import metrics as _metrics
 from .posture import _MIN_EVIDENCE, PostureScores
+
+logger = get_logger(__name__)
 
 # Angle thresholds (degrees from horizontal)
 _VERTICAL_DEG = 60.0
@@ -85,7 +88,12 @@ class DepthPostureStrategy:
             elapsed = time.monotonic() - t0
             _metrics.metrics.cts_posture_slow_path_latency_seconds.observe(elapsed)
             return self._score_from_depth(depth_map, detection)
-        except Exception:
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "depth_posture_slow_path_failed",
+                camera_id=detection.camera_id,
+                exc_info=True,
+            )
             return PostureScores(lying=0.0, sitting=0.0, standing_walking=0.0)
 
     def _score_from_depth(

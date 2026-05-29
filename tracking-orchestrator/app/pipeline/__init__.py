@@ -1,4 +1,4 @@
-"""Frame processing pipeline for M4.
+"""Frame processing pipeline.
 
 Wires together:
 1. Transport (Redis Streams consumer)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import uuid
 
+import numpy as np
+import numpy.typing as npt
 from structlog import get_logger
 
 from ...inference.detector import PersonDetector
@@ -74,21 +76,45 @@ class DetectStage(FrameStage):
         self._iou_dedup_threshold = iou_dedup_threshold
 
     async def run(self, ctx: FrameContext) -> None:
-        image = ctx.require_image()
-        detections = await self._detector.detect(image)
-        logger.debug(
-            "detections_raw",
-            camera_id=ctx.frame.camera_id,
-            frame_index=ctx.frame.frame_index,
-            count=len(detections),
-            image_shape=f"{image.shape[0]}x{image.shape[1]}",
-        )
-        if detections:
-            detections = _filter_small_bboxes(detections)
-        if detections and self._iou_dedup_threshold < 1.0:
-            detections = _iou_dedup_detections(detections, self._iou_dedup_threshold)
-        ctx.raw_detections = detections
+        await self.run_batch([ctx])
 
-        # Assign a stable detection_id to each kept detection so evidence
-        # records from later stages can cross-reference by the same ID.
-        ctx._detection_ids = {idx: str(uuid.uuid4()) for idx in range(len(detections))}
+    async def run_batch(self, contexts: list[FrameContext]) -> None:
+        if not contexts:
+            return
+
+        images: list[npt.NDArray[np.uint8]] = [ctx.require_image() for ctx in contexts]
+        detections_by_frame = await self._detect_images(images)
+
+        for ctx, image, detections in zip(contexts, images, detections_by_frame, strict=True):
+            logger.debug(
+                "detections_raw",
+                camera_id=ctx.frame.camera_id,
+                frame_index=ctx.frame.frame_index,
+                count=len(detections),
+                image_shape=f"{image.shape[0]}x{image.shape[1]}",
+            )
+            if detections:
+                detections = _filter_small_bboxes(detections)
+            if detections and self._iou_dedup_threshold < 1.0:
+                detections = _iou_dedup_detections(detections, self._iou_dedup_threshold)
+            ctx.raw_detections = detections
+
+            # Assign a stable detection_id to each kept detection so evidence
+            # records from later stages can cross-reference by the same ID.
+            ctx._detection_ids = {idx: str(uuid.uuid4()) for idx in range(len(detections))}
+
+    async def _detect_images(
+        self,
+        images: list[npt.NDArray[np.uint8]],
+    ) -> list[list[DetectionBox]]:
+        detect_batch = getattr(self._detector, "detect_batch", None)
+        if detect_batch is not None:
+            detections_by_frame = await detect_batch(images)
+            if isinstance(detections_by_frame, list) and len(detections_by_frame) == len(images):
+                return detections_by_frame
+
+        detect = getattr(self._detector, "detect", None)
+        if detect is None:
+            msg = "detector must provide detect_batch(images) or detect(image)"
+            raise TypeError(msg)
+        return [await detect(image) for image in images]

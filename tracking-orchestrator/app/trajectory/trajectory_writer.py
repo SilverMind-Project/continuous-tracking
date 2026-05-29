@@ -33,7 +33,7 @@ class TrajectoryWriter:
         # Called once per committed identity decision per frame.
         await writer.write(
             identity_id="alice",
-            global_track_id="gt-001",
+            ph_id="gt-001",
             room_name="kitchen",
             floor_point=FloorPoint(3500, 2100),
             captured_at=datetime.now(UTC),
@@ -42,27 +42,27 @@ class TrajectoryWriter:
             motion_energy=0.012,
         )
 
-        # Called when a global track is closed.
+        # Called when a PH is closed.
         await writer.close_track("gt-001", closed_at=datetime.now(UTC))
     """
 
     def __init__(self, repo: TrajectoryRepository) -> None:
         self._repo = repo
-        # In-memory room state per global_track_id.
+        # In-memory room state per ph_id.
         self._current_room: dict[str, str] = {}
-        # Open dwell per global_track_id (not yet closed/exited).
+        # Open dwell per ph_id (not yet closed/exited).
         self._open_dwell: dict[str, RoomDwell] = {}
         # Per-dwell posture counts for modal calculation.
         self._dwell_posture_counts: dict[str, dict[str, int]] = {}
         # Contiguous still-second accumulator per dwell.
         self._dwell_still_acc: dict[str, float] = {}
-        # Last observation time per global_track_id (for elapsed-time stillness).
+        # Last observation time per ph_id (for elapsed-time stillness).
         self._last_obs_time: dict[str, datetime] = {}
 
     async def write(
         self,
         identity_id: str | None,
-        global_track_id: str,
+        ph_id: str,
         room_name: str,
         floor_point: FloorPoint,
         captured_at: datetime,
@@ -75,7 +75,7 @@ class TrajectoryWriter:
         Args:
             identity_id: committed identity for this track, or None when
                 the Bayesian resolver has not yet committed.
-            global_track_id: the GlobalTrack this person belongs to.
+            ph_id: the PH this person belongs to.
             room_name: current room (resolved from camera to stream assignment).
             floor_point: ground-plane position in millimeters.
             captured_at: wall-clock time of the observation.
@@ -88,7 +88,7 @@ class TrajectoryWriter:
         """
         point = PersonTrajectoryPoint(
             identity_id=identity_id,
-            global_track_id=global_track_id,
+            ph_id=ph_id,
             observed_at=captured_at,
             room_name=room_name,
             ground_x=floor_point.x_mm / 1000.0,
@@ -101,7 +101,7 @@ class TrajectoryWriter:
 
         await self._handle_dwell(
             identity_id,
-            global_track_id,
+            ph_id,
             room_name,
             captured_at,
             identity_confidence,
@@ -111,19 +111,19 @@ class TrajectoryWriter:
 
         return point
 
-    async def close_track(self, global_track_id: str, closed_at: datetime) -> None:
-        """Close the open dwell for a terminated global track."""
-        dwell = self._open_dwell.pop(global_track_id, None)
+    async def close_track(self, ph_id: str, closed_at: datetime) -> None:
+        """Close the open dwell for a terminated PH."""
+        dwell = self._open_dwell.pop(ph_id, None)
         if dwell is not None:
             duration = int((closed_at - dwell.entered_at).total_seconds())
-            posture_counts = self._dwell_posture_counts.pop(global_track_id, {})
+            posture_counts = self._dwell_posture_counts.pop(ph_id, {})
             modal_posture = _modal_posture(posture_counts)
-            still_seconds = self._dwell_still_acc.pop(global_track_id, 0.0)
-            self._last_obs_time.pop(global_track_id, None)
+            still_seconds = self._dwell_still_acc.pop(ph_id, 0.0)
+            self._last_obs_time.pop(ph_id, None)
             closed = RoomDwell(
                 dwell_id=dwell.dwell_id,
                 identity_id=dwell.identity_id,
-                global_track_id=dwell.global_track_id,
+                ph_id=dwell.ph_id,
                 room_name=dwell.room_name,
                 entered_at=dwell.entered_at,
                 exited_at=closed_at,
@@ -135,7 +135,7 @@ class TrajectoryWriter:
                 activity_summary={},
             )
             await self._repo.update_room_dwell(closed)
-            self._current_room.pop(global_track_id, None)
+            self._current_room.pop(ph_id, None)
 
     async def close_all(self, closed_at: datetime) -> None:
         """Close all open dwells and clear per-track state.
@@ -143,8 +143,8 @@ class TrajectoryWriter:
         Called on pipeline shutdown to prevent unbounded memory growth from
         per-track state that is never cleared otherwise.
         """
-        for global_track_id in list(self._open_dwell):
-            await self.close_track(global_track_id, closed_at)
+        for ph_id in list(self._open_dwell):
+            await self.close_track(ph_id, closed_at)
         self._current_room.clear()
         self._dwell_posture_counts.clear()
         self._dwell_still_acc.clear()
@@ -152,20 +152,20 @@ class TrajectoryWriter:
     async def _handle_dwell(
         self,
         identity_id: str | None,
-        global_track_id: str,
+        ph_id: str,
         room_name: str,
         captured_at: datetime,
         identity_confidence: float,
         posture: PostureType = "unknown",
         motion_energy: float | None = None,
     ) -> None:
-        prev_room = self._current_room.get(global_track_id)
+        prev_room = self._current_room.get(ph_id)
         if prev_room == room_name:
             # Same room: update posture counts and motion energy for open dwell.
-            open_dwell = self._open_dwell.get(global_track_id)
+            open_dwell = self._open_dwell.get(ph_id)
             if open_dwell is not None:
                 # Accumulate posture count for modal calculation.
-                pc = self._dwell_posture_counts.setdefault(global_track_id, {})
+                pc = self._dwell_posture_counts.setdefault(ph_id, {})
                 pc[posture] = pc.get(posture, 0) + 1
                 # Track minimum motion energy.
                 if motion_energy is not None:
@@ -177,30 +177,28 @@ class TrajectoryWriter:
                     object.__setattr__(open_dwell, "min_motion_energy", new_min)
                 # Accumulate still seconds using elapsed time since last observation.
                 if motion_energy is not None and motion_energy < _STILL_ENERGY_FLOOR:
-                    last_time = self._last_obs_time.get(global_track_id)
+                    last_time = self._last_obs_time.get(ph_id)
                     if last_time is not None:
                         elapsed = (captured_at - last_time).total_seconds()
                         elapsed = min(elapsed, _MAX_STILL_ACCUMULATION_PER_GAP_S)
                     else:
                         elapsed = 0.0
-                    self._dwell_still_acc[global_track_id] = (
-                        self._dwell_still_acc.get(global_track_id, 0.0) + elapsed
-                    )
-                self._last_obs_time[global_track_id] = captured_at
+                    self._dwell_still_acc[ph_id] = self._dwell_still_acc.get(ph_id, 0.0) + elapsed
+                self._last_obs_time[ph_id] = captured_at
             return
 
         # Room changed (or first observation for this track).
-        existing = self._open_dwell.get(global_track_id)
+        existing = self._open_dwell.get(ph_id)
         if existing is not None:
             duration = int((captured_at - existing.entered_at).total_seconds())
-            posture_counts = self._dwell_posture_counts.pop(global_track_id, {})
+            posture_counts = self._dwell_posture_counts.pop(ph_id, {})
             modal_posture = _modal_posture(posture_counts)
-            still_seconds = self._dwell_still_acc.pop(global_track_id, 0.0)
-            self._last_obs_time.pop(global_track_id, None)
+            still_seconds = self._dwell_still_acc.pop(ph_id, 0.0)
+            self._last_obs_time.pop(ph_id, None)
             closed = RoomDwell(
                 dwell_id=existing.dwell_id,
                 identity_id=existing.identity_id,
-                global_track_id=existing.global_track_id,
+                ph_id=existing.ph_id,
                 room_name=existing.room_name,
                 entered_at=existing.entered_at,
                 exited_at=captured_at,
@@ -216,7 +214,7 @@ class TrajectoryWriter:
         new_dwell = RoomDwell(
             dwell_id=str(uuid.uuid4()),
             identity_id=identity_id,
-            global_track_id=global_track_id,
+            ph_id=ph_id,
             room_name=room_name,
             entered_at=captured_at,
             entry_confidence=identity_confidence,
@@ -224,12 +222,12 @@ class TrajectoryWriter:
             still_seconds=0,  # accumulated per observation in _handle_dwell
         )
         # Track first observation time for elapsed-time stillness.
-        self._last_obs_time[global_track_id] = captured_at
+        self._last_obs_time[ph_id] = captured_at
         await self._repo.save_room_dwell(new_dwell)
-        self._open_dwell[global_track_id] = new_dwell
-        self._current_room[global_track_id] = room_name
+        self._open_dwell[ph_id] = new_dwell
+        self._current_room[ph_id] = room_name
         # Initialize posture count for the new dwell.
-        self._dwell_posture_counts[global_track_id] = {posture: 1}
+        self._dwell_posture_counts[ph_id] = {posture: 1}
 
 
 def _modal_posture(counts: dict[str, int]) -> PostureType:

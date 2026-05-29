@@ -1,6 +1,6 @@
 """KeyframeSampler: periodic and triggered keyframe selection.
 
-Selects at most one keyframe per tracklet per keyframe_min_interval_s
+Selects at most one keyframe per PH per keyframe_min_interval_s
 (periodic) and forces a sample on trigger events (identity_changed,
 hazard, dwell_start).
 
@@ -22,7 +22,7 @@ from ..storage.base import BboxAnnotationRepository, KeyframeRepository
 class SamplerConfig:
     """Configuration for the keyframe sampler."""
 
-    # Minimum seconds between periodic samples per tracklet.
+    # Minimum seconds between periodic samples per PH.
     keyframe_min_interval_s: float = 30.0
 
     # Retention for periodic samples (hours).
@@ -41,8 +41,7 @@ class KeyframeSampler:
 
         # Periodic sampling — returns None if the interval hasn't elapsed.
         frame = await sampler.maybe_sample(
-            tracklet_id="tl-001",
-            global_track_id="gt-001",
+            ph_id="ph-001",
             camera_id="cam-a",
             minio_key="frames/cam-a/001.jpg",
             captured_at=datetime.now(UTC),
@@ -51,8 +50,7 @@ class KeyframeSampler:
 
         # Forced trigger sample (identity changed, hazard, dwell_start).
         frame = await sampler.trigger_sample(
-            tracklet_id="tl-001",
-            global_track_id="gt-001",
+            ph_id="ph-001",
             camera_id="cam-a",
             minio_key="frames/cam-a/002.jpg",
             captured_at=datetime.now(UTC),
@@ -70,13 +68,11 @@ class KeyframeSampler:
         self._repo = repo
         self._config = config or SamplerConfig()
         self._bbox_repo = bbox_repo
-        # Last time a periodic sample was taken per tracklet_id.
+        # Last time a periodic sample was taken per PH.
         self._last_sample: dict[str, datetime] = {}
 
     async def maybe_sample(
         self,
-        tracklet_id: str = "",
-        global_track_id: str = "",
         *,
         ph_id: str = "",
         camera_id: str = "",
@@ -89,17 +85,14 @@ class KeyframeSampler:
         detection_frame_height: int = 0,
         detection_identity_id: str | None = None,
     ) -> TaggedKeyframe | None:
-        """Sample a periodic keyframe if the interval has elapsed (WTR3).
-
-        ``ph_id`` is the canonical key (supersedes ``tracklet_id``).
-        Callers should pass ``ph_id``; ``tracklet_id`` is kept for
-        backward compat.
-        """
+        """Sample a periodic keyframe if the interval has elapsed."""
         if captured_at is None:
             captured_at = datetime.now(UTC)
         if annotations is None:
             annotations = {}
-        entity_key = ph_id or tracklet_id
+        entity_key = ph_id
+        if not entity_key:
+            raise ValueError("ph_id is required for keyframe sampling")
 
         last = self._last_sample.get(entity_key)
         if last is not None:
@@ -111,8 +104,7 @@ class KeyframeSampler:
         keyframe_id = str(uuid.uuid4())
         keyframe = TaggedKeyframe(
             keyframe_id=keyframe_id,
-            tracklet_id=entity_key,
-            global_track_id=global_track_id or entity_key,
+            ph_id=entity_key,
             camera_id=camera_id,
             minio_key=minio_key,
             captured_at=captured_at,
@@ -128,7 +120,7 @@ class KeyframeSampler:
                 [
                     BboxAnnotation(
                         keyframe_id=keyframe_id,
-                        tracklet_id=entity_key,
+                        ph_id=entity_key,
                         camera_id=camera_id,
                         x1=detection_bbox[0],
                         y1=detection_bbox[1],
@@ -147,8 +139,6 @@ class KeyframeSampler:
 
     async def trigger_sample(
         self,
-        tracklet_id: str = "",
-        global_track_id: str = "",
         *,
         ph_id: str = "",
         camera_id: str = "",
@@ -162,23 +152,24 @@ class KeyframeSampler:
         detection_frame_height: int = 0,
         detection_identity_id: str | None = None,
     ) -> TaggedKeyframe:
-        """Force a keyframe sample outside the periodic schedule (WTR3).
+        """Force a keyframe sample outside the periodic schedule.
 
-        ``ph_id`` is the canonical key. Valid tag_reason values:
+        Valid tag_reason values:
         'identity_changed', 'hazard', 'dwell_start'.
         """
         if captured_at is None:
             captured_at = datetime.now(UTC)
         if annotations is None:
             annotations = {}
-        entity_key = ph_id or tracklet_id
+        entity_key = ph_id
+        if not entity_key:
+            raise ValueError("ph_id is required for keyframe sampling")
 
         expires_at = captured_at + timedelta(days=self._config.trigger_expires_days)
         keyframe_id = str(uuid.uuid4())
         keyframe = TaggedKeyframe(
             keyframe_id=keyframe_id,
-            tracklet_id=entity_key,
-            global_track_id=global_track_id or entity_key,
+            ph_id=entity_key,
             camera_id=camera_id,
             minio_key=minio_key,
             captured_at=captured_at,
@@ -193,7 +184,7 @@ class KeyframeSampler:
                 [
                     BboxAnnotation(
                         keyframe_id=keyframe_id,
-                        tracklet_id=entity_key,
+                        ph_id=entity_key,
                         camera_id=camera_id,
                         x1=detection_bbox[0],
                         y1=detection_bbox[1],
@@ -210,10 +201,6 @@ class KeyframeSampler:
 
         return keyframe
 
-    def reset_tracklet(self, tracklet_id: str) -> None:
-        """Remove the periodic timer for a terminated entity."""
-        self._last_sample.pop(tracklet_id, None)
-
     def reset_ph(self, ph_id: str) -> None:
-        """Remove the periodic timer for a terminated PH (WTR3)."""
+        """Remove the periodic timer for a terminated PH."""
         self._last_sample.pop(ph_id, None)

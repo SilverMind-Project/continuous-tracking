@@ -27,13 +27,13 @@ class PublishStage(FrameStage):
 
     async def run(self, ctx: FrameContext) -> None:
         identities: dict[str, tuple[str, float]] = {}
-        evidence_by_gt: dict[str, tuple[float, float, bool]] = {}
+        evidence_by_ph: dict[str, tuple[float, float, bool]] = {}
 
-        # Primary source: WorldFrameSnapshots from this frame (WTR3).
+        # Primary source: WorldFrameSnapshots from this frame.
         for snap in ctx.world_snapshots:
             if snap.identity_id and snap.identity_id != "UNKNOWN":
                 identities[snap.ph_id] = (snap.identity_id, snap.identity_confidence)
-                evidence_by_gt[snap.ph_id] = (
+                evidence_by_ph[snap.ph_id] = (
                     snap.identity_confidence,
                     0.0,
                     snap.direct_face_evidence,
@@ -47,14 +47,14 @@ class PublishStage(FrameStage):
                     continue
                 top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
                 top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
-                ph_id = decision.global_track_id  # WTR3: entity_id is the PH id
+                ph_id = decision.ph_id
                 identities[ph_id] = (top_id, top_prob)
-                evidence_by_gt[ph_id] = (top_prob, top2_prob, False)
+                evidence_by_ph[ph_id] = (top_prob, top2_prob, False)
 
         ctx.identities = identities
-        ctx.evidence_by_gt = evidence_by_gt
+        ctx.evidence_by_ph = evidence_by_ph
 
-        # Build identity_snapshots from WorldFrameSnapshots (WTR3).
+        # Build identity_snapshots from WorldFrameSnapshots.
         identity_snapshots: list[dict[str, object]] = []
         seen_ph_ids: set[str] = set()
         for snap in ctx.world_snapshots:
@@ -67,13 +67,14 @@ class PublishStage(FrameStage):
                 "posterior_entropy": snap.posterior_entropy,
                 "direct_face_evidence": snap.direct_face_evidence,
                 "evidence_json": "{}",
+                "mean_quality": snap.mean_quality,
             }
             identity_snapshots.append(id_snap)
 
         # Include outcome decisions for PHs not yet in snapshots.
         if ctx.outcome_decisions:
             for decision in ctx.outcome_decisions:
-                ph_id = decision.global_track_id
+                ph_id = decision.ph_id
                 if ph_id in seen_ph_ids:
                     continue
                 top_id, top_prob = decision.posterior.top_identity()
@@ -109,8 +110,8 @@ class PublishStage(FrameStage):
             frame_height=ctx.effective_height,
             capture_time_unix_ns=ctx.frame.capture_time_unix_ns,
             pose_results=ctx.det_pose_result if ctx.det_pose_result else None,
-            trail_by_tracklet=ctx.trail_by_tracklet_snapshot or None,
-            evidence_by_gt=evidence_by_gt or None,
+            trail_by_ph=ctx.trail_by_ph_snapshot or None,
+            evidence_by_ph=evidence_by_ph or None,
             det_posture=cast("dict[str, str] | None", ctx.det_posture) if ctx.det_posture else None,
             identity_snapshots=identity_snapshots or None,
         )

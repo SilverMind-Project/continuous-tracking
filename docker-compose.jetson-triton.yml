@@ -1,0 +1,47 @@
+# Jetson Orin Nano Super Triton deployment for CTS only.
+#
+# This compose file intentionally serves a separate TensorRT-plan model repo
+# from triton-models-jetson/ and does not alter the DGX docker-compose.yml.
+
+services:
+  triton:
+    image: nvcr.io/nvidia/tritonserver:24.08-py3-igpu
+    container_name: cts-triton-jetson
+    runtime: nvidia
+    restart: unless-stopped
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      CUDA_MODULE_LOADING: LAZY
+    command: >
+      tritonserver
+      --model-repository=/models
+      --backend-directory=/opt/tritonserver/backends
+      --model-control-mode=explicit
+      --load-model=person-detector
+      --load-model=pose-rtmpose
+      --load-model=reid-solider
+      --load-model=depth-anything-v2
+      --strict-model-config=true
+      --exit-on-error=true
+      --grpc-port=8701
+      --http-port=8700
+      --metrics-port=8702
+      --pinned-memory-pool-byte-size=134217728
+      --cuda-memory-pool-byte-size=0:1073741824
+    ports:
+      - "8700:8700"
+      - "8701:8701"
+      - "8702:8702"
+    shm_size: "1gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    volumes:
+      - ./triton-models-jetson:/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8700/v2/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s

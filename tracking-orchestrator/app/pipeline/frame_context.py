@@ -19,7 +19,6 @@ if TYPE_CHECKING:
         Detection,
         FaceAnchor,
         FloorPoint,
-        GlobalTrack,
         IdentityDecision,
         IdentityRevision,
         PostureType,
@@ -78,13 +77,13 @@ class FrameContext:
     face_anchors: list[FaceAnchor] = field(default_factory=list)
     _face_evidence: list[FaceEvidence] = field(default_factory=list)
 
-    # --- Stage: cross_camera_and_resolve (legacy: replaced by world_tracking) ---
-    # DEPRECATED (WTR3): populated from PH ids for backward compat during
-    # transition.  New stages must use ``active_ph_ids`` instead.
-    active_global_tracks: list[GlobalTrack] = field(default_factory=list)
+    # --- Stage: world_tracking resolve output ---
     outcome_decisions: list[IdentityDecision] = field(default_factory=list)
     new_revisions: list[IdentityRevision] = field(default_factory=list)
     committed_ids: dict[str, str | None] = field(default_factory=dict)
+    # Producer: WorldTrackingStage. Consumer: RevisionsStage.
+    # Maps ph_id -> born_at so RevisionsStage can set applies_from correctly.
+    ph_born_at_by_id: dict[str, datetime] = field(default_factory=dict)
 
     # --- Stage: posture ---
     det_posture_scores: dict[str, PostureScores] = field(default_factory=dict)
@@ -92,7 +91,7 @@ class FrameContext:
     # --- Stage: trajectory ---
     det_posture: dict[str, PostureType] = field(default_factory=dict)
 
-    # --- Stage: world_tracking (M1) ---
+    # --- Stage: world_tracking ---
     # Producer: WorldTrackingStage. Consumers: ClosePHStage, TrajectoryStage,
     # KeyframeStage, PublishStage, TrailsStage.
     world_snapshots: list[WorldFrameSnapshot] = field(default_factory=list)
@@ -103,9 +102,9 @@ class FrameContext:
 
     # --- Stage: publish ---
     identities: dict[str, tuple[str, float]] = field(default_factory=dict)
-    evidence_by_gt: dict[str, tuple[float, float, bool]] = field(default_factory=dict)
+    evidence_by_ph: dict[str, tuple[float, float, bool]] = field(default_factory=dict)
     trail_by_tracklet_snapshot: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
-    # WTR3: PH-native trail alias (TrailsStage populates both).
+    # PH-native trail alias (TrailsStage populates both).
     trail_by_ph_snapshot: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
 
     # --- Diagnostics (CI / observability, not business logic) ---

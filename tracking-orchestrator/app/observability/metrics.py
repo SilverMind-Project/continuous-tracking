@@ -68,7 +68,7 @@ class Metrics:
     homography_rejected_total: Counter
     homography_warning_total: Counter
 
-    # ---- WTR5: calibration and transit ----------------------------------
+    # ---- Calibration and transit metrics -----------------------------------
     uncalibrated_detection_total: Counter
     transit_event_published_total: Counter
     transit_event_unknown_identity_total: Counter
@@ -91,7 +91,7 @@ class Metrics:
     signal_worker_emitted_total: Counter
     signal_baseline_cache_hits_total: Counter
 
-    # ---- M1 world tracker ----------------------------------------------
+    # ---- World tracker -------------------------------------------------
     world_tracker_ph_open: Gauge
     world_tracker_ph_spawned_total: Counter
     world_tracker_ph_closed_total: Counter
@@ -100,7 +100,12 @@ class Metrics:
     world_tracker_continuations_total: Counter
     world_tracker_clock_skew_ms: Histogram
 
-    # ---- M3 keyframe quality -------------------------------------------
+    # ---- U1 cross-camera dedup -----------------------------------------
+    worldtracker_observations_deduped_total: Counter
+    worldtracker_dedup_clusters_total: Counter
+    worldtracker_observation_missing_floorpoint_total: Counter
+
+    # ---- Keyframe quality ----------------------------------------------
     keyframe_dropped_low_confidence_total: Counter
 
     # ---- Latency -----------------------------------------------------
@@ -249,7 +254,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Homography matrices accepted with warnings during CC sync.",
             ["reason", "camera_id"],
         ),
-        # ---- WTR5: calibration and transit -----------------------------------
+        # ---- Calibration and transit metrics ------------------------------------
         uncalibrated_detection_total=_counter(
             "cts_uncalibrated_detection_total",
             "Detections dropped because the source camera lacks a valid homography.",
@@ -317,7 +322,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "DB rows retroactively relabelled by the identity rewriter.",
             ["table"],
         ),
-        # ---- M1 world tracker ------------------------------------------------
+        # ---- World tracker ---------------------------------------------------
         world_tracker_ph_open=_gauge(
             "cts_world_tracker_ph_open",
             "Currently open Person Hypotheses.",
@@ -350,7 +355,20 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             (1, 5, 10, 25, 50, 100, 200, 500),
             ["camera_id"],
         ),
-        # ---- M3 keyframe quality -------------------------------------------
+        # ---- U1 cross-camera dedup -----------------------------------------
+        worldtracker_observations_deduped_total=_counter(
+            "cts_worldtracker_observations_deduped_total",
+            "Source observations merged into a dedup cluster representative (one per collapsed).",
+        ),
+        worldtracker_dedup_clusters_total=_counter(
+            "cts_worldtracker_dedup_clusters_total",
+            "Multi-observation dedup clusters formed (one per cluster with >1 member).",
+        ),
+        worldtracker_observation_missing_floorpoint_total=_counter(
+            "cts_worldtracker_observation_missing_floorpoint_total",
+            "Observations skipped from dedup weighting due to missing calibrated floor point.",
+        ),
+        # ---- Keyframe quality ----------------------------------------------
         keyframe_dropped_low_confidence_total=_counter(
             "cts_keyframe_dropped_low_confidence_total",
             "Keyframe bbox annotations skipped due to low detection confidence.",

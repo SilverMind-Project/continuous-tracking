@@ -1,4 +1,4 @@
-"""WT4: tests for TrailsStage keying on global_track_id (PH id)."""
+"""WT4: tests for TrailsStage keying on ph_id (PH id)."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _make_ctx(
 
 def _make_det(
     detection_id: str = "det-1",
-    global_track_id: str = "",
+    ph_id: str = "",
     x_min: int = 100,
     y_min: int = 200,
     x_max: int = 300,
@@ -44,17 +44,17 @@ def _make_det(
         capture_time=datetime.now(UTC),
         event_time=datetime.now(UTC),
         confidence=0.9,
-        global_track_id=global_track_id,
+        ph_id=ph_id,
         floor_point=FloorPoint(0, 0, calibrated=True),
     )
 
 
 class TestTrailsPh:
-    async def test_trails_keyed_on_global_track_id(self) -> None:
-        """2 detections with global_track_id; 1 without → 2 trail entries."""
-        det_a = _make_det("det-1", global_track_id="ph-a")
-        det_b = _make_det("det-2", global_track_id="ph-b")
-        det_c = _make_det("det-3", global_track_id="")  # no PH
+    async def test_trails_keyed_on_ph_id(self) -> None:
+        """2 detections with ph_id; 1 without → 2 trail entries."""
+        det_a = _make_det("det-1", ph_id="ph-a")
+        det_b = _make_det("det-2", ph_id="ph-b")
+        det_c = _make_det("det-3", ph_id="")  # no PH
 
         stage = TrailsStage()
         ctx = _make_ctx(detections=[det_a, det_b, det_c])
@@ -72,14 +72,14 @@ class TestTrailsPh:
         stage = TrailsStage()
 
         # Frame 1: PH-A and PH-B both detected
-        det_a1 = _make_det("det-1", global_track_id="ph-a")
-        det_b1 = _make_det("det-2", global_track_id="ph-b")
+        det_a1 = _make_det("det-1", ph_id="ph-a")
+        det_b1 = _make_det("det-2", ph_id="ph-b")
         ctx1 = _make_ctx(detections=[det_a1, det_b1])
         await stage.run(ctx1)  # type: ignore[arg-type]
         assert "ph-b" in ctx1.trail_by_tracklet_snapshot
 
         # Frame 2: only PH-A detected
-        det_a2 = _make_det("det-3", global_track_id="ph-a")
+        det_a2 = _make_det("det-3", ph_id="ph-a")
         ctx2 = _make_ctx(detections=[det_a2])
         await stage.run(ctx2)  # type: ignore[arg-type]
 
@@ -93,7 +93,7 @@ class TestTrailsPh:
         stage = TrailsStage(trail_maxlen=12)
 
         for i in range(15):
-            det = _make_det(f"det-{i}", global_track_id="ph-a")
+            det = _make_det(f"det-{i}", ph_id="ph-a")
             ctx = _make_ctx(detections=[det])
             await stage.run(ctx)  # type: ignore[arg-type]
 

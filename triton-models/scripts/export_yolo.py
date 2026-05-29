@@ -31,7 +31,7 @@ IMPORTANT — verify output shape before deploying to Triton:
     m = onnx.load('triton-models/person-detector/1/model.onnx')
     dims = [d.dim_value for d in m.graph.output[0].type.tensor_type.shape.dim]
     print('output0 dims:', dims)
-    # Expected: [0 or batch_size, 300, 6]
+    # Expected: [batch_size, 300, 6]
     # If you see [batch, 84, 8400] the NMS head was not preserved — upgrade
     # ultralytics and retry, or open an issue against the model export.
     "
@@ -69,9 +69,11 @@ def export(weights: Path, out: Path, batch: int, imgsz: int, device: str) -> Non
     print(f"Output: output0 [batch={batch}, 300, 6]  (NMS-free)")
     print()
     print("Verify output shape before deploying:")
-    print(f"  python -c \"import onnx; m=onnx.load('{out}'); "
-          "print([d.dim_value for d in m.graph.output[0].type.tensor_type.shape.dim])\"")
-    print("  Expected: [0, 300, 6]  (0 = dynamic batch)")
+    print(
+        f"  python -c \"import onnx; m=onnx.load('{out}'); "
+        'print([d.dim_value for d in m.graph.output[0].type.tensor_type.shape.dim])"'
+    )
+    print(f"  Expected: [{batch}, 300, 6]")
 
 
 def main() -> None:
@@ -82,7 +84,7 @@ def main() -> None:
         type=Path,
         default=Path("triton-models/person-detector/1/model.onnx"),
     )
-    parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument(
         "--device",

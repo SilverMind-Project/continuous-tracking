@@ -39,14 +39,14 @@ async def test_writes_trajectory_point(
 ) -> None:
     point = await writer.write(
         identity_id="alice",
-        global_track_id="gt-001",
+        ph_id="gt-001",
         room_name="kitchen",
         floor_point=FloorPoint(3500, 2100),
         captured_at=_T0,
         identity_confidence=0.9,
     )
     assert point.identity_id == "alice"
-    assert point.global_track_id == "gt-001"
+    assert point.ph_id == "gt-001"
     assert point.room_name == "kitchen"
     assert abs(point.ground_x - 3.5) < 1e-6
     assert abs(point.ground_y - 2.1) < 1e-6
@@ -63,7 +63,7 @@ async def test_floor_point_converted_to_meters(
 ) -> None:
     await writer.write(
         identity_id="alice",
-        global_track_id="gt-001",
+        ph_id="gt-001",
         room_name="bedroom",
         floor_point=FloorPoint(x_mm=1000, y_mm=2000),
         captured_at=_T0,
@@ -79,7 +79,7 @@ async def test_first_observation_opens_dwell(
 ) -> None:
     await writer.write(
         identity_id="alice",
-        global_track_id="gt-001",
+        ph_id="gt-001",
         room_name="kitchen",
         floor_point=FloorPoint(0, 0),
         captured_at=_T0,
@@ -153,7 +153,7 @@ async def test_close_track_closes_open_dwell(
 async def test_close_track_noop_if_no_open_dwell(
     writer: TrajectoryWriter,
 ) -> None:
-    # Should not raise; idempotent for unknown global_track_id.
+    # Should not raise; idempotent for unknown ph_id.
     await writer.close_track("gt-nonexistent", closed_at=_T0)
 
 

@@ -10,7 +10,7 @@ class WorldTrackerConfig:
     """All tunable parameters for the world-coordinate person tracker.
 
     Defaults are initial values; tune during acceptance testing against
-    the testcontainer scenarios as documented in the M1 appendix.
+    the testcontainer integration scenarios.
     """
 
     # ---- Geometric gate ----
@@ -40,9 +40,18 @@ class WorldTrackerConfig:
     ph_close_grace_s: float = 5.0
     min_observations_to_publish: int = 3
 
-    # ---- Inferred handoff (M4 consumer) ----
+    # ---- Inferred handoff ----
     inferred_handoff_max_s: float = 600.0
     inferred_handoff_max_distance_m: float = 5.0
 
     # ---- Identity evidence window ----
     evidence_window_s: float = 30.0
+
+    # ---- Cross-camera dedup ----
+    # Pre-association floor-point dedup for observations from overlapping cameras.
+    # Two observations from different cameras within this distance on the floor plane
+    # and not in identity conflict are merged into one representative before the
+    # Hungarian assignment runs, preventing one person from spawning two PHs.
+    dedup_enabled: bool = True
+    dedup_max_distance_m: float = 0.6
+    dedup_require_no_face_conflict: bool = True

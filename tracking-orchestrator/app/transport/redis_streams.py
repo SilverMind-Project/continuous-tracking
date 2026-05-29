@@ -230,8 +230,8 @@ class RedisStreamsTransport:
         capture_time_unix_ns: int = 0,
         detection_count: int = 0,
         pose_results: dict[str, PoseResult] | None = None,
-        trail_by_tracklet: dict[str, list[tuple[float, float]]] | None = None,
-        evidence_by_gt: dict[str, tuple[float, float, bool]] | None = None,
+        trail_by_ph: dict[str, list[tuple[float, float]]] | None = None,
+        evidence_by_ph: dict[str, tuple[float, float, bool]] | None = None,
         det_posture: dict[str, str] | None = None,
         identity_snapshots: list[dict[str, object]] | None = None,
     ) -> str:
@@ -273,8 +273,8 @@ class RedisStreamsTransport:
             frame_height=frame_height,
             capture_time_unix_ns=capture_time_unix_ns,
             pose_results=pose_results,
-            trail_by_tracklet=trail_by_tracklet,
-            evidence_by_gt=evidence_by_gt,
+            trail_by_ph=trail_by_ph,
+            evidence_by_ph=evidence_by_ph,
             det_posture=det_posture,
             identity_snapshots=identity_snapshots or [],
         )
@@ -368,8 +368,8 @@ def _build_tracking_event_pb(
     frame_height: int = 0,
     capture_time_unix_ns: int = 0,
     pose_results: dict[str, PoseResult] | None = None,
-    trail_by_tracklet: dict[str, list[tuple[float, float]]] | None = None,
-    evidence_by_gt: dict[str, tuple[float, float, bool]] | None = None,
+    trail_by_ph: dict[str, list[tuple[float, float]]] | None = None,
+    evidence_by_ph: dict[str, tuple[float, float, bool]] | None = None,
     det_posture: dict[str, str] | None = None,
     identity_snapshots: list[dict[str, object]] | None = None,
 ) -> tracking_pb2.TrackingEvent:
@@ -382,8 +382,8 @@ def _build_tracking_event_pb(
 
     Optional enrichment kwargs:
         pose_results: detection_id → PoseResult (17 COCO keypoints).
-        trail_by_tracklet: tracklet_id → list of (x, y) normalised foot-points.
-        evidence_by_gt: ph_id → (top_prob, top2_prob, face_anchor_used).
+        trail_by_ph: ph_id → list of (x, y) normalised foot-points.
+        evidence_by_ph: ph_id → (top_prob, top2_prob, face_anchor_used).
         det_posture: detection_id → posture string (standing|sitting|walking|lying|unknown).
         identity_snapshots: list of dicts with identity snapshot fields.
     """
@@ -403,8 +403,7 @@ def _build_tracking_event_pb(
         d = event.detections.add(
             detection_id=det.detection_id,
             confidence=det.confidence,
-            tracklet_id=det.tracklet_id or "",
-            global_track_id=det.global_track_id or "",
+            ph_id=det.ph_id or "",
         )
         d.bbox.x_min = det.bbox.x_min
         d.bbox.y_min = det.bbox.y_min
@@ -429,19 +428,19 @@ def _build_tracking_event_pb(
         if det_posture and det.detection_id in det_posture:
             d.posture = det_posture[det.detection_id]
 
-        # Historical trail for this tracklet.
-        if trail_by_tracklet and det.tracklet_id and det.tracklet_id in trail_by_tracklet:
-            for tx, ty in trail_by_tracklet[det.tracklet_id]:
+        # Historical trail for this PH.
+        if trail_by_ph and det.ph_id and det.ph_id in trail_by_ph:
+            for tx, ty in trail_by_ph[det.ph_id]:
                 d.trail.add(x=tx, y=ty)
 
         # Posterior evidence from identity resolver.
-        if evidence_by_gt and det.global_track_id and det.global_track_id in evidence_by_gt:
-            top_prob, top2_prob, face_anchor_used = evidence_by_gt[det.global_track_id]
+        if evidence_by_ph and det.ph_id and det.ph_id in evidence_by_ph:
+            top_prob, top2_prob, face_anchor_used = evidence_by_ph[det.ph_id]
             d.evidence.top_prob = top_prob
             d.evidence.top2_prob = top2_prob
             d.evidence.face_anchor_used = face_anchor_used
 
-    # N0/R3: per-detection identity revisions use ph_id.
+    # per-detection identity revisions use ph_id.
     for ph_id, (identity_id, confidence) in identities.items():
         if not ph_id or not identity_id:
             continue
@@ -455,12 +454,13 @@ def _build_tracking_event_pb(
     if identity_snapshots:
         for snap in identity_snapshots:
             s = event.identity_snapshots.add()
-            s.ph_id = str(snap.get("ph_id", ""))  # R3: field renamed from global_track_id
+            s.ph_id = str(snap.get("ph_id", ""))
             s.identity_id = str(snap.get("identity_id", "") or "")
             s.top_probability = float(snap.get("top_probability", 0.0) or 0.0)  # type: ignore[arg-type]
             s.second_probability = float(snap.get("second_probability", 0.0) or 0.0)  # type: ignore[arg-type]
             s.posterior_entropy = float(snap.get("posterior_entropy", 0.0) or 0.0)  # type: ignore[arg-type]
             s.direct_face_evidence = bool(snap.get("direct_face_evidence", False))
             s.evidence_json = str(snap.get("evidence_json", ""))
+            s.mean_quality = float(snap.get("mean_quality", 0.0) or 0.0)  # type: ignore[arg-type]
 
     return event

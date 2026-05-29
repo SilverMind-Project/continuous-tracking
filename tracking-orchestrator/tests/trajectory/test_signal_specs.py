@@ -196,7 +196,7 @@ class TestDataQuality:
         pts = [
             PersonTrajectoryPoint(
                 identity_id="alice",
-                global_track_id="gt-1",
+                ph_id="gt-1",
                 observed_at=_NOW - timedelta(minutes=5),
                 room_name="living_room",
                 identity_confidence=0.1,  # very low
@@ -212,14 +212,14 @@ class TestDataQuality:
         pts = [
             PersonTrajectoryPoint(
                 identity_id="alice",
-                global_track_id="gt-1",
+                ph_id="gt-1",
                 observed_at=_NOW - timedelta(seconds=2),
                 room_name="kitchen",
                 identity_confidence=0.95,
             ),
             PersonTrajectoryPoint(
                 identity_id="alice",
-                global_track_id="gt-1",
+                ph_id="gt-1",
                 observed_at=_NOW,
                 room_name="kitchen",
                 identity_confidence=0.92,
@@ -262,7 +262,7 @@ class TestColdStart:
         for i, room in enumerate(room_sequence):
             pt = PersonTrajectoryPoint(
                 identity_id="alice",
-                global_track_id="gt-1",
+                ph_id="gt-1",
                 observed_at=now - timedelta(minutes=len(room_sequence) - i),
                 room_name=room,
                 identity_confidence=0.95,
