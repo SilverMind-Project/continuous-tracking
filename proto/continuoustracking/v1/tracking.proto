@@ -201,9 +201,11 @@ message IdentityRevision {
 // display.  Unlike IdentityRevision, it is not a standalone stream message —
 // it only appears as a sub-message of TrackingEvent.
 message IdentitySnapshot {
-  // DEPRECATED: use ph_id.  This field still carries the PH id during the
-  // transition period.  Rename to ph_id in WTR9 after all consumers migrate.
-  string global_track_id = 1;
+  // R3: canonical field name.  Field number 1 is unchanged; binary wire is
+  // compatible.  The old name "global_track_id" is reserved to prevent
+  // accidental JSON/text-format reuse.
+  string ph_id = 1;
+  reserved "global_track_id";
 
   // The committed identity for this global track (empty when UNKNOWN).
   string identity_id = 2;

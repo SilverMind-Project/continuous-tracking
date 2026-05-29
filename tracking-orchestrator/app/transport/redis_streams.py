@@ -455,7 +455,7 @@ def _build_tracking_event_pb(
     if identity_snapshots:
         for snap in identity_snapshots:
             s = event.identity_snapshots.add()
-            s.global_track_id = str(snap.get("ph_id", ""))
+            s.ph_id = str(snap.get("ph_id", ""))  # R3: field renamed from global_track_id
             s.identity_id = str(snap.get("identity_id", "") or "")
             s.top_probability = float(snap.get("top_probability", 0.0) or 0.0)  # type: ignore[arg-type]
             s.second_probability = float(snap.get("second_probability", 0.0) or 0.0)  # type: ignore[arg-type]

@@ -149,5 +149,27 @@ type = "forbidden"
 source_modules = ["app"]
 forbidden_modules = ["scripts"]
 
+# R3: The following storage modules are deprecated and pending removal.
+# app.storage.base re-exports their symbols for the existing consumers
+# (identity_resolver, frame_pipeline, corrections, live); those consumers
+# are a cleanup follow-up and are not covered here.
+# This contract prevents NEW code in services and transport from taking
+# a direct dependency on the deprecated modules.
+[[tool.importlinter.contracts]]
+name = "R3: deprecated storage modules must not be imported by services or transport"
+type = "forbidden"
+source_modules = [
+    "app.services",
+    "app.transport",
+    "app.trajectory",
+    "app.sampling",
+    "app.calibration",
+]
+forbidden_modules = [
+    "app.storage.global_track",
+    "app.storage.tracking",
+    "app.storage.hints",
+]
+
 [tool.uv.sources]
 triton-shared = { git = "https://github.com/SilverMind-Project/triton-shared" }

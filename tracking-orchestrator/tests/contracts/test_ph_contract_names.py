@@ -1,7 +1,13 @@
-"""WTR1: Contract name tests — PH-native field names.
+"""WTR1/R3: Contract name tests — PH-native field names.
 
 Asserts that public Pydantic schemas expose ``ph_id``, not ``global_track_id``
 or ``tracklet_id``, except in explicitly approved boundary files.
+
+R3 update: IdentitySnapshot.global_track_id was renamed to ph_id in the proto.
+The only remaining approved use of global_track_id in source code is:
+- app/domain/__init__.py: internal domain types (IdentityDecision et al.)
+- app/proto/: generated bindings for Detection.global_track_id (deprecated wire field)
+The transport layer (redis_streams.py) and CC subscribers now use ph_id directly.
 """
 
 from __future__ import annotations
@@ -14,9 +20,8 @@ import pytest
 # -- Approved boundary files that may still reference legacy names -----------
 # These files are grandfathered until their respective WTR milestones.
 _APPROVED_LEGACY_FILES: set[str] = {
-    "app/domain/__init__.py",  # WTR3: Detection, GlobalTrack, Tracklet types
-    "app/transport/codec.py",  # WTR9: protobuf decode boundary
-    "app/proto/",  # generated protobuf bindings (any file)
+    "app/domain/__init__.py",  # WTR3: IdentityDecision, GlobalTrack, Tracklet types
+    "app/proto/",  # generated protobuf bindings (Detection.global_track_id deprecated wire field)
 }
 
 # -- Forbidden field names in public Pydantic schemas ------------------------
@@ -148,3 +153,33 @@ def test_revision_response_uses_ph_id():
     assert "ph_id" in RevisionResponse.model_fields
     assert "global_track_id" not in RevisionResponse.model_fields
     assert "tracklet_id" not in RevisionResponse.model_fields
+
+
+def test_identity_snapshot_proto_uses_ph_id():
+    """R3: IdentitySnapshot proto message must expose ph_id, not global_track_id.
+
+    This test encodes the rename contract: the generated _pb2 binding for
+    IdentitySnapshot must have a ph_id attribute and must NOT have global_track_id.
+    Binary wire format is unchanged (field number 1 is ph_id).
+    """
+    from app.proto.continuoustracking.v1 import tracking_pb2
+
+    snap = tracking_pb2.IdentitySnapshot(ph_id="ph-test-1", identity_id="alice")
+    assert snap.ph_id == "ph-test-1"
+    assert not hasattr(snap, "global_track_id"), (
+        "IdentitySnapshot must not expose global_track_id (R3 rename); "
+        "the proto still has Detection.global_track_id (approved deprecated alias) "
+        "but IdentitySnapshot.global_track_id was renamed to ph_id"
+    )
+
+
+def test_transport_identity_snapshot_sets_ph_id_not_global_track_id():
+    """R3: _build_tracking_event_pb must set ph_id on IdentitySnapshot, not global_track_id."""
+    import inspect
+    from app.transport.redis_streams import _build_tracking_event_pb
+
+    source = inspect.getsource(_build_tracking_event_pb)
+    assert "s.ph_id" in source, "transport must set s.ph_id on IdentitySnapshot"
+    assert "s.global_track_id" not in source, (
+        "transport must not set s.global_track_id on IdentitySnapshot after R3 rename"
+    )
