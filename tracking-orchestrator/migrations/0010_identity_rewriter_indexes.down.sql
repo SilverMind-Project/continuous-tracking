@@ -1,3 +1,0 @@
-DROP INDEX IF EXISTS continuous_tracking.idx_person_trajectories_gt_observed;
-DROP INDEX IF EXISTS continuous_tracking.idx_room_dwells_gt_entered;
-DROP INDEX IF EXISTS continuous_tracking.idx_dementia_signals_identity_window;
