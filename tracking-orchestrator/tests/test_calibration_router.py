@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -51,6 +54,48 @@ def test_post_homography_invalid_matrix_shape(client: TestClient):
         json={"camera_id": "cam-1", "matrix": [[1.0, 0.0], [0.0, 1.0]]},
     )
     assert resp.status_code == 422
+
+
+def test_auto_calibrate_returns_draft_without_storing_homography(client: TestClient, monkeypatch):
+    class FakeFetcher:
+        async def fetch_rgb(self, key: str):
+            assert key == "frames/cam-1/1.jpg"
+            return np.zeros((480, 640, 3), dtype=np.uint8)
+
+    class FakeAutoCalibrator:
+        async def calibrate(self, image, fov_deg: float):
+            assert image.shape == (480, 640, 3)
+            return SimpleNamespace(
+                draft_matrix=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                suggested_points=[
+                    {"pixel": [100.0, 300.0], "local_floor_m": [-0.5, 0.2]},
+                    {"pixel": [300.0, 420.0], "local_floor_m": [0.4, 1.1]},
+                ],
+                confidence=0.8,
+                inlier_count=200,
+                sample_count=400,
+                fov_deg=fov_deg,
+                method="depth_auto_draft",
+            )
+
+    monkeypatch.setattr(_cal_router_mod, "_auto_calibrator", FakeAutoCalibrator())
+    monkeypatch.setattr(_cal_router_mod, "_frame_fetcher", FakeFetcher())
+
+    resp = client.post(
+        "/internal/calibration/auto/cam-1",
+        json={"minio_key": "frames/cam-1/1.jpg", "fov_deg": 70.0},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["method"] == "depth_auto_draft"
+    assert body["draft_matrix"][0][0] == 1.0
+    assert len(body["suggested_points"]) == 2
+    assert body["image_width"] == 640
+    assert body["image_height"] == 480
+
+    status_resp = client.get("/internal/calibration/status")
+    assert status_resp.json()["cameras_with_homography"] == 0
 
 
 # ---------------------------------------------------------------------------

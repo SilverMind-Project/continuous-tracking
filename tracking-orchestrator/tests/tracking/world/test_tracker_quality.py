@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 
-from app.domain import BoundingBox, FloorPoint, WorldObservation
+from app.domain import BoundingBox, FaceAnchor, FloorPoint, WorldObservation
 from app.storage.base import InMemoryPHRepository, InMemoryWorldObservationRepository
 from app.tracking.world.config import WorldTrackerConfig
 from app.tracking.world.tracker import WorldTracker
@@ -101,3 +102,33 @@ async def test_new_ph_mean_quality_set_from_first_observation():
     phs = await ph_repo.list_open()
     assert len(phs) == 1
     assert abs(phs[0].mean_quality - 0.75) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_no_room_polygons_still_spawns_ph_and_snapshot_identity():
+    """Unconfigured room polygons must not block live PH/identity publication."""
+    cfg = WorldTrackerConfig(dedup_enabled=False, min_observations_to_publish=1)
+    ph_repo = InMemoryPHRepository()
+    obs_repo = InMemoryWorldObservationRepository()
+    tracker = WorldTracker(ph_repo=ph_repo, obs_repo=obs_repo, config=cfg)
+
+    t0 = datetime(2026, 5, 29, 10, 0, 0, tzinfo=UTC)
+    obs = replace(
+        _obs("cam-1", 5.0, 5.0, "det-grandma", t0, quality=0.9),
+        face_anchor=FaceAnchor(
+            person_id="grandma",
+            confidence=0.94,
+            tracklet_id="",
+            detection_id="det-grandma",
+            camera_id="cam-1",
+            captured_at=t0,
+        ),
+    )
+
+    result = await tracker.step([obs], now=t0, room_polygons={})
+
+    phs = await ph_repo.list_open()
+    assert len(phs) == 1
+    assert result.det_to_ph == {"det-grandma": phs[0].ph_id}
+    assert len(result.snapshots) == 1
+    assert result.snapshots[0].identity_id == "grandma"

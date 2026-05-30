@@ -302,7 +302,7 @@ class WorldTracker:
             fx = obs.floor_point.x_mm / 1000.0
             fy = obs.floor_point.y_mm / 1000.0
 
-            if not is_in_any_room_polygon(fx, fy, room_polygons):
+            if room_polygons and not is_in_any_room_polygon(fx, fy, room_polygons):
                 continue
 
             ks = initialize(

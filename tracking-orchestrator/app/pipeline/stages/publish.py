@@ -98,6 +98,25 @@ class PublishStage(FrameStage):
                     }
                 )
 
+        logger.info(
+            "tracking_event_identity_payload",
+            camera_id=ctx.frame.camera_id,
+            frame_index=ctx.frame.frame_index,
+            detection_count=len(ctx.domain_detections),
+            detections_with_ph=sum(1 for det in ctx.domain_detections if det.ph_id),
+            identity_count=len(identities),
+            snapshot_count=len(identity_snapshots),
+            snapshot_identities=[
+                {
+                    "ph_id": str(snap.get("ph_id", ""))[:8],
+                    "identity_id": snap.get("identity_id", ""),
+                    "top_probability": round(float(snap.get("top_probability", 0.0) or 0.0), 3),
+                }
+                for snap in identity_snapshots
+                if snap.get("identity_id")
+            ],
+        )
+
         await self._transport.publish_event(
             camera_id=ctx.frame.camera_id,
             event_time=ctx.event_time,

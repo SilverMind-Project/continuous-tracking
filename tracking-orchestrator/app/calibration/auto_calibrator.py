@@ -26,6 +26,7 @@ from app.calibration.floor_plane import (
     FloorPlaneFitter,
     FloorPlaneResult,
     floor_plane_to_homography,
+    sample_floor_plane_suggestions,
 )
 from app.inference.depth import DepthEstimator
 
@@ -39,8 +40,11 @@ _MIN_CONFIDENCE = 0.10
 class AutoCalibrationResult:
     """Output from :class:`AutoCalibrator`."""
 
-    #: Computed 3x3 homography (row-major nested list).
-    matrix: list[list[float]]
+    #: Local pixel→camera-floor-metres homography (row-major nested list).
+    #: This is not anchored to the shared household floor plan.
+    draft_matrix: list[list[float]]
+    #: Suggested floor inlier camera pixels for manual global anchoring.
+    suggested_points: list[dict[str, list[float]]]
     #: Scalar confidence in [0, 1].  Values below 0.4 indicate a poor fit.
     confidence: float
     #: Number of inlier 3-D points used to compute the homography.
@@ -51,9 +55,8 @@ class AutoCalibrationResult:
     depth_shape: tuple[int, int]
     #: HoV value used for back-projection.
     fov_deg: float
-    #: ``"depth_auto"`` — constant tag so upstream code can distinguish this
-    #: from a manually entered matrix.
-    method: str = "depth_auto"
+    #: ``"depth_auto_draft"`` — must not be treated as committed calibration.
+    method: str = "depth_auto_draft"
 
 
 class AutoCalibrator:
@@ -158,7 +161,8 @@ class AutoCalibrator:
 
         inlier_count = int(plane_result.inlier_mask.sum())
         return AutoCalibrationResult(
-            matrix=matrix,
+            draft_matrix=matrix,
+            suggested_points=sample_floor_plane_suggestions(plane_result, count=9),
             confidence=float(plane_result.confidence),
             inlier_count=inlier_count,
             sample_count=len(plane_result.inlier_mask),

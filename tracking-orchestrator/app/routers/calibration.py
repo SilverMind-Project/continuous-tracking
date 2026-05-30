@@ -189,7 +189,8 @@ class AutoCalibrateResult(BaseModel):
     """Result of depth-based automatic homography estimation."""
 
     camera_id: str
-    matrix: list[list[float]]
+    draft_matrix: list[list[float]]
+    suggested_points: list[dict[str, list[float]]]
     confidence: float = Field(
         ...,
         ge=0.0,
@@ -199,7 +200,9 @@ class AutoCalibrateResult(BaseModel):
     inlier_count: int
     sample_count: int
     fov_deg: float
-    method: str = "depth_auto"
+    image_width: int
+    image_height: int
+    method: str = "depth_auto_draft"
     warning: str | None = None
 
 
@@ -311,11 +314,8 @@ async def post_auto_calibrate(
 
     Downloads *minio_key* from object storage, runs Depth Anything v2 to
     obtain a metric depth map, fits the floor plane with RANSAC, and derives
-    a pixel→floor-metres homography.  The computed matrix is stored in the
-    in-memory calibration state.
-
-    The result is a **draft** — the operator should review it in the
-    calibration UI before committing to the database.
+    a local pixel→camera-floor-metres draft. The result is not anchored to the
+    shared floor plan and is never stored as an active homography.
 
     Returns 503 when the depth model is not loaded (Triton unavailable).
     Returns 409 when no valid floor plane is detected.
@@ -410,25 +410,12 @@ async def post_auto_calibrate(
             },
         )
 
-    # Store the draft in the in-memory calibration state so the pipeline can
-    # use it immediately while the operator reviews and commits to the DB.
-    state = _get_state()
-    await state.set_homography(
-        camera_id=camera_id,
-        matrix=result.matrix,
-        meta={
-            "method": "depth_auto",
-            "confidence": result.confidence,
-            "fov_deg": result.fov_deg,
-            "inlier_count": result.inlier_count,
-        },
-    )
-
     logger.info(
-        "auto_calibration_complete",
+        "auto_calibration_draft_complete",
         camera_id=camera_id,
         confidence=round(result.confidence, 3),
         inlier_count=result.inlier_count,
+        suggested_point_count=len(result.suggested_points),
         fov_deg=result.fov_deg,
     )
 
@@ -446,11 +433,15 @@ async def post_auto_calibrate(
 
     return AutoCalibrateResult(
         camera_id=camera_id,
-        matrix=result.matrix,
+        draft_matrix=result.draft_matrix,
+        suggested_points=result.suggested_points,
         confidence=result.confidence,
         inlier_count=result.inlier_count,
         sample_count=result.sample_count,
         fov_deg=result.fov_deg,
+        image_width=int(image.shape[1]),
+        image_height=int(image.shape[0]),
+        method=result.method,
         warning=warning or None,
     )
 

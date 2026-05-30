@@ -18,6 +18,7 @@ from app.calibration.floor_plane import (
     _fit_plane_3pts,
     _fit_plane_svd,
     floor_plane_to_homography,
+    sample_floor_plane_suggestions,
 )
 from app.calibration.homography import (
     RESIDUAL_ERROR_M,
@@ -187,6 +188,26 @@ def test_floor_plane_to_homography_from_synthetic() -> None:
     assert all(len(row) == 3 for row in hom)
 
 
+def test_sample_floor_plane_suggestions_use_inliers() -> None:
+    """Auto suggestions should come from fitted floor inliers, not an image grid."""
+    depth = _make_synthetic_depth(h=480, w=640)
+    fitter = FloorPlaneFitter(fov_deg=70.0, max_samples=2048)
+    rng = np.random.default_rng(0)
+    result = fitter.fit(depth, rng=rng)
+    assert result is not None
+
+    suggestions = sample_floor_plane_suggestions(result, count=9)
+
+    assert 6 <= len(suggestions) <= 9
+    inlier_pixels = {
+        (round(float(rc[1]), 3), round(float(rc[0]), 3))
+        for rc in result.sample_indices[result.inlier_mask]
+    }
+    for suggestion in suggestions:
+        assert tuple(suggestion["pixel"]) in inlier_pixels
+        assert "local_floor_m" in suggestion
+
+
 # ---------------------------------------------------------------------------
 # AutoCalibrator (mocked DepthEstimator)
 # ---------------------------------------------------------------------------
@@ -216,12 +237,13 @@ async def test_auto_calibrator_returns_result(fake_depth_estimator: DepthEstimat
     result = await calibrator.calibrate(image)
     assert result is not None, "AutoCalibrator returned None on synthetic depth"
     assert isinstance(result, AutoCalibrationResult)
-    assert result.method == "depth_auto"
+    assert result.method == "depth_auto_draft"
     assert 0.0 <= result.confidence <= 1.0
     assert result.inlier_count > 0
     assert result.sample_count >= result.inlier_count
-    assert len(result.matrix) == 3
-    assert all(len(row) == 3 for row in result.matrix)
+    assert len(result.draft_matrix) == 3
+    assert all(len(row) == 3 for row in result.draft_matrix)
+    assert 6 <= len(result.suggested_points) <= 9
 
 
 @pytest.mark.asyncio
