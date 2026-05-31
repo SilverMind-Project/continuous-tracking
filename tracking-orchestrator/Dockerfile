@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Build context is the monorepo root so triton-shared is reachable.
 # We mirror the on-disk layout so uv.sources path "../../triton-shared"
