@@ -44,9 +44,6 @@ class WorldTrackerConfig:
     inferred_handoff_max_s: float = 600.0
     inferred_handoff_max_distance_m: float = 5.0
 
-    # ---- Identity evidence window ----
-    evidence_window_s: float = 30.0
-
     # ---- Cross-camera dedup ----
     # Pre-association floor-point dedup for observations from overlapping cameras.
     # Two observations from different cameras within this distance on the floor plane

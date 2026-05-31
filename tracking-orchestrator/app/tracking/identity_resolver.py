@@ -193,8 +193,8 @@ class ResolverConfig:
 
     # --- Cross-GT face propagation ---
     # Minimum gallery cosine similarity for propagating a face-confirmed identity
-    # to an adjacent GlobalTrack that has no face anchor of its own.  Prevents
-    # false propagation to a different person who happens to be nearby.
+    # to an adjacent GlobalTrack that has no face anchor of its own. The deployed
+    # value is read from settings.yaml; M4 owns the final safety threshold.
     cross_gt_face_propagation_threshold: float = 0.78
 
     # Maximum number of adjacent GlobalTracks to propagate face identity to per

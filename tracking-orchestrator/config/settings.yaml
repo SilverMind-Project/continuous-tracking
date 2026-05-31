@@ -1,6 +1,8 @@
 # Tracking Orchestrator — settings
 # Deployment-only values are interpolated with ${VAR}. Runtime tunables are
 # literal values in this file to avoid hidden env-var override surfaces.
+# Settings blocks are grouped by operator tunables first, advanced or reserved
+# constants second. The loader reads every key explicitly in app/main.py.
 
 # Deployment timezone — must match cognitive-companion's app.timezone so that
 # time-of-day signals (sundowning, nighttime movement) are computed in local
@@ -36,7 +38,9 @@ triton:
   reid_model: reid-solider
   pose_model: pose-rtmpose
   pose_enabled: true
+  # Reserved for M7 (occluded posture); depth slow-path not yet wired. See TD-008.
   depth_enabled: true
+  # Reserved for M7 (occluded posture); depth slow-path not yet wired. See TD-008.
   depth_model: depth-anything-v2
   timeout_ms: 5000
   startup_wait_s: 120
@@ -58,6 +62,9 @@ face_id:
   url: "${PERSON_ID_SERVICE_URL}"
   cooldown_s: 5.0
   timeout_s: 2.0
+  # Face-ID emission gate: service matches below this confidence are dropped
+  # before becoming face anchors. Resolver face_commit_min_confidence is the
+  # stricter identity-lock gate after an anchor exists.
   min_confidence: 0.6
   enabled: true
 
@@ -83,9 +90,10 @@ face_id:
 #   One bathroom trip = 2 transitions (bedroom→bathroom→bedroom). Normal nocturnal
 #   voiding in seniors occurs 1-2x/night. Evaluation starts at 3+ transitions.
 #
-# absence_threshold_minutes (60):
+# absence_threshold_minutes (90):
 #   Cameras do not cover every room. 30 min of no camera coverage is normal (cooking,
-#   porch sitting, bathroom). 60 min triggers initial evaluation.
+#   porch sitting, bathroom). 90 min reduces false alerts from normal off-camera
+#   activity while still triggering same-day evaluation.
 #
 # bathroom_absolute_threshold_seconds (2700 = 45 min):
 #   Cold-start fallback before 5+ baseline samples exist. Constipation (common with
@@ -109,6 +117,7 @@ pipeline:
   # Read by: main.py → PipelineConfig(shutdown_timeout=)
   shutdown_timeout_s: 5.0
 
+  # Reserved for M7 (occluded posture); depth slow-path not yet wired. See TD-008.
   posture:
     # Read by: main.py → DepthPostureStrategy / FusedPostureStrategy
     depth_slow_path_enabled: false
@@ -165,27 +174,35 @@ cc_sync:
 
 # Identity resolver — Bayesian posterior parameters
 resolver:
+  # Operator tunables: review first when field behavior needs adjustment.
   commit_prob: 0.65
   commit_margin: 0.15
+  face_weight_multiplier: 3.0
+  prior_maintenance_max_age_s: 120.0
+  # Identity-lock gate for emitted face anchors. This is intentionally stricter
+  # than face_id.min_confidence, which only controls whether an anchor is emitted.
+  face_commit_min_confidence: 0.70
+  face_lock_maintenance_max_age_s: 300
+
+  # Advanced / rarely changed constants.
   reid_decision_sim: 0.70
   revision_horizon_s: 600.0
   max_revisions_per_ph_per_minute: 3
   unknown_mass: 0.05
   prior_weight: 0.6
-  face_weight_multiplier: 3.0
   propagated_face_weight_multiplier: 0.5
   height_weight_multiplier: 1.5
   commit_prob_dense: 0.80
   commit_margin_dense: 0.20
-  prior_maintenance_max_age_s: 120.0
   identified_entry_boost_min_sim: 0.65
   identified_entry_min_likelihood: 0.80
+  # The embedding_coherence_* keys only take effect when
+  # enable_embedding_coherence_boost is true. M3 evaluates enabling this path.
   enable_embedding_coherence_boost: false
   embedding_coherence_window: 5
   embedding_coherence_min_sim: 0.70
   embedding_coherence_boost: 2.0
-  face_commit_min_confidence: 0.70
-  face_lock_maintenance_max_age_s: 300
+  # M4 owns the final safety threshold. Deployed value remains 0.65 in M2.
   cross_gt_face_propagation_threshold: 0.65
   cross_gt_face_propagation_max_gts: 4
 
@@ -212,7 +229,6 @@ world_tracker:
   initial_velocity_sigma_m_s: 2.0
   velocity_decay_s: 3.0
   height_sigma_m: 0.15
-  evidence_window_s: 30.0
   # ---- Cross-camera dedup (U1) ----
   dedup_enabled: true
   dedup_max_distance_m: 0.6

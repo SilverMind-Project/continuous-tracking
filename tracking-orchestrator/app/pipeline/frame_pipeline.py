@@ -132,7 +132,7 @@ class SignalConfig:
     pacing_room_threshold: int = 8
     pacing_window_minutes: int = 30
     nighttime_transition_threshold: int = 3
-    absence_threshold_minutes: int = 60
+    absence_threshold_minutes: int = 90
     bathroom_absolute_threshold_seconds: int = 2700
 
 
@@ -143,7 +143,7 @@ class FaceIdConfig:
     url: str = ""
     cooldown_s: float = 5.0
     timeout_s: float = 2.0
-    min_confidence: float = 0.5
+    min_confidence: float = 0.6
     enabled: bool = True
     camera_configs: dict[str, FaceIdCameraConfig] = field(default_factory=dict)
 
@@ -199,7 +199,7 @@ class PipelineConfig:
     resolver: ResolverConfig = field(default_factory=ResolverConfig)
     known_identities: list[Identity] = field(default_factory=list)
     identity_commit_window_s: float = 3.0
-    identity_high_confidence_face_threshold: float = 0.80
+    identity_high_confidence_face_threshold: float = 0.85
     # Delay (seconds) after an identity is first committed before backfilling
     # gallery entries with that identity.  Prevents a false identity commit from
     # contaminating the gallery before it has a chance to be revised.  Set to 0

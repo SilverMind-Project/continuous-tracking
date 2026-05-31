@@ -187,7 +187,6 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         initial_velocity_sigma_m_s=wt.as_float("initial_velocity_sigma_m_s"),
         velocity_decay_s=wt.as_float("velocity_decay_s"),
         height_sigma_m=wt.as_float("height_sigma_m"),
-        evidence_window_s=wt.as_float("evidence_window_s"),
         dedup_enabled=wt.as_bool("dedup_enabled"),
         dedup_max_distance_m=wt.as_float("dedup_max_distance_m"),
         dedup_require_no_face_conflict=wt.as_bool("dedup_require_no_face_conflict"),
@@ -231,7 +230,7 @@ def _build_face_id_config(
         cooldown_s=fi.as_float("cooldown_s"),
         timeout_s=fi.as_float("timeout_s"),
         min_confidence=fi.as_float("min_confidence"),
-        enabled=bool(url),
+        enabled=fi.as_bool("enabled"),
         camera_configs=camera_configs,
     )
 
@@ -296,6 +295,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         batch_window_s=settings.as_float("pipeline.batch_window_s"),
         max_batch_size=settings.as_int("pipeline.max_batch_size"),
         cross_camera_detector_batching=settings.as_bool("pipeline.cross_camera_detector_batching"),
+        min_keyframe_detection_confidence=settings.as_float(
+            "pipeline.min_keyframe_detection_confidence"
+        ),
     )
     _pipeline = FrameProcessingPipeline(config)
 

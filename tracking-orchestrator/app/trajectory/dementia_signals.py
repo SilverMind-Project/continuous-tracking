@@ -1309,8 +1309,8 @@ class SignalConfig:
         sundowning_z_threshold: float = 2.5,
         sundowning_min_evening_minutes: int = 30,
         # Absence
-        # 60 min: cameras don't cover every room; 30 min gap is normal (cooking, porch, bathroom)
-        absence_threshold_minutes: int = 60,
+        # 90 min: cameras do not cover every room; reduces false alerts from normal gaps
+        absence_threshold_minutes: int = 90,
         # Phase 4: scalability
         baseline_cache_ttl_minutes: int = 60,
         max_concurrent_identities: int = 4,
