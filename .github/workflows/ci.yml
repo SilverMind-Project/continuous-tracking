@@ -124,3 +124,31 @@ jobs:
         with:
           input: proto
           against: "https://github.com/${{ github.repository }}.git#branch=main,subdir=proto"
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Python: audit tracking-orchestrator dependencies for known CVEs
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          activate-environment: true
+      - name: Install tracking-orchestrator
+        working-directory: tracking-orchestrator
+        run: uv sync --frozen --extra dev
+      - name: pip-audit (Python CVE scan)
+        working-directory: tracking-orchestrator
+        run: uvx pip-audit --desc
+
+      # Go: audit rtsp-ingress for known vulnerabilities
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.5"
+      - name: Pin GOTOOLCHAIN
+        run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+      - name: govulncheck (Go CVE scan)
+        uses: golang/govulncheck-action@v1
+        with:
+          work-dir: rtsp-ingress

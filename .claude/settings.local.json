@@ -81,7 +81,7 @@
       "Bash(.venv/bin/python -m pytest tests/ -x -q --tb=short)",
       "Bash(.venv/bin/python -m pytest tests/ -q --tb=short)",
       "Bash(PGPASSWORD=\"change-me-cts-password\" psql *)",
-      "Bash(make all-check *)",
+      "Bash(make check-all *)",
       "Bash(make format *)",
       "Bash(tracking-orchestrator/.venv/bin/mypy *)",
       "Skill(engineering-standards)",

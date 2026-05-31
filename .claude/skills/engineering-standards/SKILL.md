@@ -652,7 +652,7 @@ Note: `detections.global_track_id` and its index are intentionally retained as p
 
 ```bash
 make check   # Python: ruff check + ruff format --check + mypy + import-linter + pytest
-make all-check   # Python + Go (golangci-lint + go test -race + go build) + buf lint
+make check-all   # Python + Go (golangci-lint + go test -race + go build) + buf lint
 ```
 
 ### ruff rules (non-negotiable)

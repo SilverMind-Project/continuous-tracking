@@ -14,7 +14,7 @@ PROTO_FILES    := \
 	proto/continuoustracking/v1/signals.proto \
 	proto/continuoustracking/v1/scene.proto
 
-.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check all-check go-install go-env-check go-tools go-lint go-test go-build go-check
+.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all go-install go-env-check go-tools go-lint go-test go-build go-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -88,9 +88,9 @@ check: venv ## Run the Python quality gate
 test-integration: venv ## Run integration tests (testcontainer Postgres required)
 	cd tracking-orchestrator && ../$(PY_BIN)/pytest -m integration tests/integration tests/contracts -v
 
-ci: all-check test-integration ## Authoritative CI gate: full check + integration proofs
+ci: check-all test-integration ## Authoritative CI gate: full check + integration proofs
 
-all-check: check go-check proto-lint ## Run the full repo quality gate
+check-all: check go-check proto-lint ## Run the full repo quality gate
 
 go-install: ## Install the pinned Go toolchain into ./tools
 	@sh scripts/install-go.sh

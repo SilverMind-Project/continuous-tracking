@@ -15,7 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git && \
     rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir uv
+
+# Copy the pinned uv binary directly from the official image instead of
+# installing via pip (avoids PyPI as a trust boundary for the build tool).
+COPY --from=ghcr.io/astral-sh/uv:0.11.17 /uv /uvx /usr/local/bin/
 
 COPY triton-shared/ triton-shared/
 COPY continuous-tracking/tracking-orchestrator/ continuous-tracking/tracking-orchestrator/

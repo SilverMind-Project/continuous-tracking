@@ -1,0 +1,78 @@
+version: 2
+updates:
+  # Tracking orchestrator: Python via uv
+  # (tracking-orchestrator/pyproject.toml + tracking-orchestrator/uv.lock)
+  - package-ecosystem: "pip"
+    directory: "/tracking-orchestrator"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+
+  # rtsp-ingress: Go modules
+  - package-ecosystem: "gomod"
+    directory: "/rtsp-ingress"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "go"
+
+  # proto: Go modules (protobuf Go bindings)
+  - package-ecosystem: "gomod"
+    directory: "/proto"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "go"
+      - "proto"
+
+  # Dockerfiles (base images in tracking-orchestrator and triton-models)
+  - package-ecosystem: "docker"
+    directory: "/tracking-orchestrator"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/rtsp-ingress"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/triton-models"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # GitHub Actions (pin action versions to a tag or SHA)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
