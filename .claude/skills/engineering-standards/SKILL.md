@@ -601,6 +601,9 @@ Running bare `python` or `pip` installs into the system interpreter and silently
 final schema. There are no incremental migration files. All changes go directly into the
 baseline. Existing dev databases must be **dropped and recreated**: the `_schema_version`
 table and Alembic `alembic_version` table hold stale entries from any prior chain.
+Shape constraints belong in the baseline too: JSONB columns that the domain treats as objects
+must have `CHECK (jsonb_typeof(column) = 'object')`, and repository mappers must reject invalid
+legacy rows instead of silently coercing them.
 
 **Post-release:** Each atomic schema change gets its own numbered file:
 `NNNN_description.up.sql` / `NNNN_description.down.sql` (CTS) or `NNNN_description.py`
@@ -811,6 +814,10 @@ The pre-association floor-point dedup pass (`app/tracking/world/dedup.py`) runs 
 The union-find algorithm identifies connected components; each cluster elects a representative via `_select_representative()` (highest quality, ties broken deterministically). `associate()` keeps its 1-to-1 contract because only representatives enter it; cluster membership is passed separately so the winning PH can be updated with all contributing camera IDs.
 
 Adding a new dedup gate condition: modify `dedup_observations()` only; do not add gate logic to `associate()` or `WorldTracker.step()`.
+
+`WorldTracker.step()` must receive the same-time observations from overlapping cameras in a single call. If the frame pipeline batches detector inference across cameras but then runs world tracking per camera, cross-camera dedup is bypassed and duplicate unknown PHs will grow quickly. Keep post-detection batching intact through `WorldTrackingStage`, then split only downstream side effects that are camera-local.
+
+PH keyframes are evidence, not synthetic references. `get_keyframes()` reads `continuous_tracking.tagged_keyframes` and returns real `minio_key` values. Never fabricate object keys from observation timestamps; broken images make caregiver correction unsafe.
 
 ### Quality-capture rule
 

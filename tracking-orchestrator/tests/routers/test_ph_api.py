@@ -40,6 +40,8 @@ def _make_ph(
     identity_id: str | None = None,
     active_cameras: frozenset[str] | None = None,
     metadata: dict[str, object] | None = None,
+    closed_at: datetime | None = None,
+    last_seen_at: datetime | None = None,
 ) -> PersonHypothesis:
     now = datetime.now(UTC)
     return PersonHypothesis(
@@ -47,7 +49,7 @@ def _make_ph(
         state_mean=(1.0, 2.0, 0.1, 0.0),
         state_cov=(0.1,) * 16,
         born_at=now - timedelta(minutes=30),
-        last_seen_at=now,
+        last_seen_at=last_seen_at or now,
         last_seen_camera="cam-1",
         observation_count=15,
         current_identity_id=identity_id,
@@ -55,6 +57,7 @@ def _make_ph(
         active_cameras=active_cameras or frozenset(["cam-1", "cam-2"]),
         last_floor_speed_m_s=0.5,
         last_posture="walking",
+        closed_at=closed_at,
         metadata=metadata or {},
     )
 
@@ -280,6 +283,55 @@ class TestPHBatchCorrect:
         assert resp.status_code == 200
         data = resp.json()
         assert data["applied"] == 2
+
+
+class TestPHDelete:
+    @pytest.mark.asyncio
+    async def test_batch_delete(self, client: TestClient, repo: InMemoryPHRepository) -> None:
+        await repo.save(_make_ph("ph-1"))
+        await repo.save(_make_ph("ph-2"))
+
+        resp = client.post(
+            "/ph/batch_delete",
+            json={"ph_ids": ["ph-1", "ph-2"], "reason": "test cleanup"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] == 2
+        assert await repo.get_by_id("ph-1") is None
+
+    @pytest.mark.asyncio
+    async def test_purge_unknown_only_deletes_old_closed_unknown(
+        self, client: TestClient, repo: InMemoryPHRepository
+    ) -> None:
+        now = datetime.now(UTC)
+        await repo.save(
+            _make_ph(
+                "old-unknown",
+                closed_at=now - timedelta(days=8),
+                last_seen_at=now - timedelta(days=8),
+            )
+        )
+        await repo.save(
+            _make_ph(
+                "old-known",
+                identity_id="alice",
+                closed_at=now - timedelta(days=8),
+                last_seen_at=now - timedelta(days=8),
+            )
+        )
+        await repo.save(_make_ph("active-unknown"))
+
+        resp = client.post(
+            "/ph/purge_unknown",
+            json={"older_than_days": 7, "limit": 100},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] == 1
+        assert await repo.get_by_id("old-unknown") is None
+        assert await repo.get_by_id("old-known") is not None
+        assert await repo.get_by_id("active-unknown") is not None
 
 
 # ---------------------------------------------------------------------------

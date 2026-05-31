@@ -71,6 +71,8 @@ The pre-association floor-point dedup runs inside `WorldTrackingStage` by callin
 
 **Do not** add dedup logic in `WorldTrackingStage.run()` or in `associate()`. All dedup changes go in `dedup.py`. The `dedup_observations()` function is pure (no I/O, no DB) and is tested independently.
 
+Cross-camera batches must stay together through `WorldTrackingStage`. Detector batching followed by per-camera world-tracking calls prevents `dedup_observations()` from seeing overlapping-camera observations and causes duplicate unknown PH creation. Split camera-local persistence/publication only after the world step has assigned PH IDs.
+
 The integration proof for the hallway/bathroom case is `tests/integration/test_world_tracker_e2e.py::test_hallway_bathroom_one_person` using `tests/fixtures/frame_replays/hallway_bathroom_door.bin`.
 
 ## Quality capture: where it happens and what travels downstream

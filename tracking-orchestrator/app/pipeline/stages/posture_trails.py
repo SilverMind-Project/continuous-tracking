@@ -39,7 +39,7 @@ class TrailsStage(FrameStage):
                 self._trail_by_ph[ph_id] = trail_dq
             trail_dq.append((float(foot_x), float(foot_y)))
 
-        active_phs = {d.ph_id for d in ctx.domain_detections if d.ph_id}
+        active_phs = ctx.active_ph_ids or {d.ph_id for d in ctx.domain_detections if d.ph_id}
         stale_phs = set(self._trail_by_ph) - active_phs
         for pid in stale_phs:
             del self._trail_by_ph[pid]

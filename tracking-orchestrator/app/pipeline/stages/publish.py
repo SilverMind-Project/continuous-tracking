@@ -28,9 +28,15 @@ class PublishStage(FrameStage):
     async def run(self, ctx: FrameContext) -> None:
         identities: dict[str, tuple[str, float]] = {}
         evidence_by_ph: dict[str, tuple[float, float, bool]] = {}
+        frame_snapshots = [
+            snap for snap in ctx.world_snapshots if snap.camera_id == ctx.frame.camera_id
+        ]
+        frame_ph_ids = {snap.ph_id for snap in frame_snapshots} | {
+            det.ph_id for det in ctx.domain_detections if det.ph_id
+        }
 
         # Primary source: WorldFrameSnapshots from this frame.
-        for snap in ctx.world_snapshots:
+        for snap in frame_snapshots:
             if snap.identity_id and snap.identity_id != "UNKNOWN":
                 identities[snap.ph_id] = (snap.identity_id, snap.identity_confidence)
                 evidence_by_ph[snap.ph_id] = (
@@ -42,6 +48,8 @@ class PublishStage(FrameStage):
         # Augment with outcome_decisions for the second-probability field.
         if ctx.outcome_decisions:
             for decision in ctx.outcome_decisions:
+                if decision.ph_id not in frame_ph_ids:
+                    continue
                 top_id, top_prob = decision.posterior.top_identity()
                 if top_id == "UNKNOWN" or top_prob <= 0.0:
                     continue
@@ -57,7 +65,7 @@ class PublishStage(FrameStage):
         # Build identity_snapshots from WorldFrameSnapshots.
         identity_snapshots: list[dict[str, object]] = []
         seen_ph_ids: set[str] = set()
-        for snap in ctx.world_snapshots:
+        for snap in frame_snapshots:
             seen_ph_ids.add(snap.ph_id)
             id_snap: dict[str, object] = {
                 "ph_id": snap.ph_id,
@@ -75,7 +83,7 @@ class PublishStage(FrameStage):
         if ctx.outcome_decisions:
             for decision in ctx.outcome_decisions:
                 ph_id = decision.ph_id
-                if ph_id in seen_ph_ids:
+                if ph_id in seen_ph_ids or ph_id not in frame_ph_ids:
                     continue
                 top_id, top_prob = decision.posterior.top_identity()
                 top_probs = sorted(decision.posterior.distribution.values(), reverse=True)

@@ -236,7 +236,8 @@ CREATE TABLE IF NOT EXISTS person_hypotheses (
     mean_quality                  REAL         NOT NULL DEFAULT 0,
     metadata                      JSONB        NOT NULL DEFAULT '{}',
     CONSTRAINT person_hypotheses_state_mean_size CHECK (array_length(state_mean, 1) = 4),
-    CONSTRAINT person_hypotheses_state_cov_size  CHECK (array_length(state_cov,  1) = 16)
+    CONSTRAINT person_hypotheses_state_cov_size  CHECK (array_length(state_cov,  1) = 16),
+    CONSTRAINT person_hypotheses_metadata_object CHECK (jsonb_typeof(metadata) = 'object')
 );
 
 CREATE INDEX IF NOT EXISTS idx_ph_last_seen_at_open

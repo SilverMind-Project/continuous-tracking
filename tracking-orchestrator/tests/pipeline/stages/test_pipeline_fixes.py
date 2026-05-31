@@ -17,6 +17,7 @@ from app.storage.base import (
     InMemoryBboxAnnotationRepository,
     InMemoryTrajectoryRepository,
 )
+from app.transport.redis_streams import FrameReady
 
 
 @contextmanager
@@ -106,3 +107,48 @@ class TestKeyframeBboxRepoReuse:
             assert isinstance(sampler_repo, InMemoryBboxAnnotationRepository)
 
             await pipeline.stop()
+
+
+class TestCrossCameraPostDetectBatch:
+    @pytest.mark.asyncio
+    async def test_world_tracking_receives_one_round_from_each_camera(self) -> None:
+        """Detector batching must not split overlapping cameras before world tracking."""
+        pipeline = FrameProcessingPipeline(PipelineConfig(signals=SignalConfig(enabled=False)))
+        pipeline._transport = AsyncMock()
+
+        class FakeRunner:
+            def __init__(self) -> None:
+                self.seen: list[str] = []
+
+            async def run(self, ctx) -> None:
+                self.seen.append(f"{ctx.frame.camera_id}:{ctx.frame.frame_index}")
+
+        class FakeWorldStage:
+            def __init__(self) -> None:
+                self.rounds: list[list[str]] = []
+
+            async def run_many(self, contexts) -> None:
+                self.rounds.append(
+                    [f"{ctx.frame.camera_id}:{ctx.frame.frame_index}" for ctx in contexts]
+                )
+
+        pre_runner = FakeRunner()
+        post_runner = FakeRunner()
+        world_stage = FakeWorldStage()
+        pipeline._pre_world_runner = pre_runner  # type: ignore[assignment]
+        pipeline._post_world_runner = post_runner  # type: ignore[assignment]
+        pipeline._world_tracking_stage = world_stage  # type: ignore[assignment]
+
+        frames = [
+            FrameReady(camera_id="cam-a", frame_index=2, minio_key="a2.jpg"),
+            FrameReady(camera_id="cam-b", frame_index=1, minio_key="b1.jpg"),
+            FrameReady(camera_id="cam-a", frame_index=1, minio_key="a1.jpg"),
+        ]
+        contexts = [pipeline._init_context(frame) for frame in frames]
+
+        await pipeline._process_cross_camera_post_detect_batch(contexts)
+
+        assert world_stage.rounds == [["cam-a:1", "cam-b:1"], ["cam-a:2"]]
+        assert pre_runner.seen == ["cam-a:1", "cam-b:1", "cam-a:2"]
+        assert sorted(post_runner.seen) == ["cam-a:1", "cam-a:2", "cam-b:1"]
+        assert pipeline._transport.ack_frame.await_count == 3  # type: ignore[union-attr]

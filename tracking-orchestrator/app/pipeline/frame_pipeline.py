@@ -314,6 +314,9 @@ class FrameProcessingPipeline:
         self._batcher: FrameBatcher | None = None
         self._stage_runner: StageRunner | None = None
         self._post_detect_runner: StageRunner | None = None
+        self._pre_world_runner: StageRunner | None = None
+        self._post_world_runner: StageRunner | None = None
+        self._world_tracking_stage: WorldTrackingStage | None = None
         self._fetch_stage: FetchStage | None = None
         self._detect_stage: DetectStage | None = None
 
@@ -477,6 +480,11 @@ class FrameProcessingPipeline:
             detector=self._detector,  # type: ignore[arg-type]
             iou_dedup_threshold=self._config.detection_iou_dedup_threshold,
         )
+        world_tracking_stage = WorldTrackingStage(
+            tracker=self._world_tracker,
+            config=self._config.world_tracker,
+            camera_room_map=self._config.camera_room_map,
+        )
         stages = [
             fetch_stage,
             detect_stage,
@@ -496,11 +504,7 @@ class FrameProcessingPipeline:
                 face_id_camera_configs=self._config.face_id.camera_configs,
                 last_face_id_by_tracklet=self._last_face_id_by_tracklet,
             ),
-            WorldTrackingStage(
-                tracker=self._world_tracker,
-                config=self._config.world_tracker,
-                camera_room_map=self._config.camera_room_map,
-            ),
+            world_tracking_stage,
             DetectionBackfillStage(),
             ClosePHStage(
                 trajectory_writer=self._trajectory_writer,
@@ -543,8 +547,11 @@ class FrameProcessingPipeline:
 
         self._fetch_stage = fetch_stage
         self._detect_stage = detect_stage
+        self._world_tracking_stage = world_tracking_stage
         self._stage_runner = StageRunner(stages)
         self._post_detect_runner = StageRunner(stages[2:])
+        self._pre_world_runner = StageRunner(stages[2:6])
+        self._post_world_runner = StageRunner(stages[7:])
 
         logger.info(
             "Pipeline initialized",
@@ -735,7 +742,9 @@ class FrameProcessingPipeline:
         if (
             self._fetch_stage is None
             or self._detect_stage is None
-            or self._post_detect_runner is None
+            or self._pre_world_runner is None
+            or self._world_tracking_stage is None
+            or self._post_world_runner is None
         ):
             for camera_id, camera_frames in _group_frames_by_camera(frames).items():
                 await self._handle_batch(camera_id, camera_frames)
@@ -799,12 +808,102 @@ class FrameProcessingPipeline:
                     )
                 return
 
-            post_groups: dict[str, list[FrameContext]] = {}
-            for ctx in fetched_contexts:
-                post_groups.setdefault(ctx.frame.camera_id, []).append(ctx)
+            await self._process_cross_camera_post_detect_batch(fetched_contexts)
+
+    async def _process_cross_camera_post_detect_batch(
+        self, contexts: list[FrameContext]
+    ) -> None:
+        """Run post-detect stages while preserving cross-camera world tracking.
+
+        Detector batching may include multiple frames per camera. Process one
+        ordered round at a time: the earliest remaining frame from each camera
+        reaches WorldTrackingStage together, so pre-association dedup can see
+        overlapping camera observations in the same tracker step.
+        """
+        assert self._transport is not None
+        assert self._pre_world_runner is not None
+        assert self._world_tracking_stage is not None
+        assert self._post_world_runner is not None
+
+        by_camera: dict[str, list[FrameContext]] = {}
+        for ctx in contexts:
+            by_camera.setdefault(ctx.frame.camera_id, []).append(ctx)
+        for camera_contexts in by_camera.values():
+            camera_contexts.sort(key=lambda ctx: ctx.frame.frame_index)
+
+        while any(by_camera.values()):
+            round_contexts: list[FrameContext] = []
+            for camera_id in sorted(by_camera):
+                camera_contexts = by_camera[camera_id]
+                if camera_contexts:
+                    round_contexts.append(camera_contexts.pop(0))
+
+            ready_contexts: list[FrameContext] = []
+            for ctx in round_contexts:
+                try:
+                    await self._ensure_camera_row(ctx.frame.camera_id)
+                    await self._pre_world_runner.run(ctx)
+                    ready_contexts.append(ctx)
+                except Exception:
+                    logger.exception(
+                        "Frame pre-world processing failed",
+                        camera_id=ctx.frame.camera_id,
+                        frame_index=ctx.frame.frame_index,
+                    )
+                    await self._transport.publish_response(
+                        ctx.frame,
+                        success=False,
+                        error_code="processing_error",
+                    )
+
+            if not ready_contexts:
+                continue
+
+            try:
+                await self._world_tracking_stage.run_many(ready_contexts)
+            except Exception:
+                logger.exception(
+                    "Cross-camera world tracking failed",
+                    count=len(ready_contexts),
+                )
+                for ctx in ready_contexts:
+                    await self._transport.publish_response(
+                        ctx.frame,
+                        success=False,
+                        error_code="processing_error",
+                    )
+                continue
+
             await asyncio.gather(
-                *(self._process_post_detect_batch(ctxs) for ctxs in post_groups.values()),
+                *(self._process_post_world_context(ctx) for ctx in ready_contexts),
                 return_exceptions=True,
+            )
+
+    async def _process_post_world_context(self, ctx: FrameContext) -> None:
+        """Run camera-local stages after a shared world-tracking round."""
+        assert self._transport is not None
+        assert self._post_world_runner is not None
+        start = time.monotonic()
+        try:
+            await self._post_world_runner.run(ctx)
+            await self._transport.ack_frame(ctx.frame)
+            latency_us = int((time.monotonic() - start) * 1e6)
+            logger.debug(
+                "Frame processed",
+                camera_id=ctx.frame.camera_id,
+                frame_index=ctx.frame.frame_index,
+                latency_us=latency_us,
+            )
+        except Exception:
+            logger.exception(
+                "Frame post-world processing failed",
+                camera_id=ctx.frame.camera_id,
+                frame_index=ctx.frame.frame_index,
+            )
+            await self._transport.publish_response(
+                ctx.frame,
+                success=False,
+                error_code="processing_error",
             )
 
     async def _process_post_detect_batch(self, contexts: list[FrameContext]) -> None:

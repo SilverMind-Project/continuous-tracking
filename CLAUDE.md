@@ -276,7 +276,7 @@ cts-db status           # show applied / pending
 | --- | --- |
 | `0001_init` | Complete baseline schema: all tables, hypertables, indexes, triggers, continuous aggregate, and retention policy. Squashes 20+ prior migrations plus U1 quality capture and PH-native cleanup. Drop and recreate the database to migrate from an older chain. |
 
-**Pre-release lifecycle:** All schema changes fold into `0001_init.up.sql`. No incremental files exist. Existing dev databases must be dropped and recreated.
+**Pre-release lifecycle:** All schema changes fold into `0001_init.up.sql`. No incremental files exist. Existing dev databases must be dropped and recreated. Shape constraints belong in this baseline too; JSONB columns that the domain treats as objects must have object-shape `CHECK` constraints.
 
 **Post-release lifecycle:** Each atomic change gets its own `NNNN_description.up.sql` / `NNNN_description.down.sql`. Rollbacks are supported.
 
@@ -307,6 +307,8 @@ These rules come from bugs caught during implementation and are non-negotiable.
 **PostgreSQL array concatenation is `||`.** In `ON CONFLICT DO UPDATE SET`, write `col = EXCLUDED.col || table.col`. The `array[...]` constructor is for array literals only -- wrapping a `||` expression in it is a syntax error.
 
 **Anchor conditional SQL replacements.** When adding `AND extra_clause` to a query via `str.replace`, replace a unique substring that includes the insertion point. Never replace a trailing keyword like `LIMIT 100` and prepend `AND …` -- that produces invalid SQL (predicate after `ORDER BY`).
+
+**JSONB shape is part of the schema.** If application code expects a JSON object, enforce `jsonb_typeof(col) = 'object'` in the baseline migration and validate at repository boundaries. asyncpg may return JSONB as text depending on codec configuration; parse it explicitly, reject non-object values, and do not coerce strings or arrays into empty dicts.
 
 **Match bind parameter count exactly.** Count `$1..$N` placeholders and verify the argument tuple has the same arity. Off-by-one raises `ValueError: bind parameter $N not found` at runtime.
 

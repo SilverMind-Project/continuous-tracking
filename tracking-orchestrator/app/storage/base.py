@@ -144,6 +144,10 @@ class PHRepositoryProtocol(Protocol):
         reasons: list[str],
         idempotency_key: str | None = None,
     ) -> list[IdentityRevision]: ...
+    async def delete_many(self, ph_ids: list[str], *, actor: str, reason: str) -> int: ...
+    async def purge_unknown_older_than(
+        self, cutoff: datetime, *, limit: int = 1000
+    ) -> int: ...
     async def list_revisions(
         self,
         *,
@@ -616,6 +620,33 @@ class InMemoryPHRepository:
                 self._revisions.append(revision)
                 revisions.append(revision)
         return revisions
+
+    async def delete_many(self, ph_ids: list[str], *, actor: str, reason: str) -> int:
+        ph_id_set = set(ph_ids)
+        async with self._lock:
+            deleted = 0
+            for ph_id in list(ph_id_set):
+                if ph_id in self._phs:
+                    deleted += 1
+                    del self._phs[ph_id]
+                    self._observations.pop(ph_id, None)
+            self._revisions = [rev for rev in self._revisions if rev.ph_id not in ph_id_set]
+            for source_ph_id, target_ph_id in list(self._merges.items()):
+                if source_ph_id in ph_id_set or target_ph_id in ph_id_set:
+                    del self._merges[source_ph_id]
+            return deleted
+
+    async def purge_unknown_older_than(
+        self, cutoff: datetime, *, limit: int = 1000
+    ) -> int:
+        candidates = [
+            ph.ph_id
+            for ph in sorted(self._phs.values(), key=lambda p: p.last_seen_at)
+            if ph.current_identity_id is None
+            and ph.closed_at is not None
+            and ph.last_seen_at < cutoff
+        ][:limit]
+        return await self.delete_many(candidates, actor="system", reason="unknown_purge")
 
     async def list_revisions(
         self,

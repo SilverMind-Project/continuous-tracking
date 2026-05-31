@@ -57,6 +57,7 @@ from .sampling.keyframe_sampler import SamplerConfig
 from .services.cc_client import CognitiveCompanionClient
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
 from .services.overlap_group_sync import fetch_adjacency_edges, fetch_overlap_groups
+from .services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
 from .storage.migrations import MigrationRunner
 from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
@@ -224,6 +225,16 @@ def _build_signal_config(s: Settings) -> SignalConfig:
         nighttime_transition_threshold=sig.as_int("nighttime_transition_threshold"),
         absence_threshold_minutes=sig.as_int("absence_threshold_minutes"),
         bathroom_absolute_threshold_seconds=sig.as_int("bathroom_absolute_threshold_seconds"),
+    )
+
+
+def _build_ph_unknown_purge_config(s: Settings) -> PHUnknownPurgeConfig:
+    purge = s.section("person_hypotheses.unknown_purge")
+    return PHUnknownPurgeConfig(
+        enabled=purge.as_bool("enabled"),
+        older_than_days=purge.as_int("older_than_days"),
+        interval_s=purge.as_float("interval_s"),
+        batch_size=purge.as_int("batch_size"),
     )
 
 
@@ -697,6 +708,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if bbox_repo is not None:
         dashboard_router_mod.set_bbox_repo(bbox_repo)  # type: ignore[arg-type]
 
+    ph_maintenance = PHMaintenanceService(
+        repo=deps_ph_repo,  # type: ignore[arg-type]
+        config=_build_ph_unknown_purge_config(settings),
+    )
+    app.state.ph_maintenance = ph_maintenance
+    app.state.ph_maintenance_task = asyncio.create_task(ph_maintenance.run())
+
     yield
 
     # -------------------------------------------------------------------
@@ -706,6 +724,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _m3_revalidator = getattr(app.state, "keyframe_revalidator", None)
     if _m3_revalidator is not None:
         await _m3_revalidator.stop()
+
+    # Stop PH maintenance.
+    _ph_maintenance = getattr(app.state, "ph_maintenance", None)
+    if _ph_maintenance is not None:
+        await _ph_maintenance.stop()
 
     # Stop CC assertion subscriber.
     if cc_assertion_subscriber is not None:

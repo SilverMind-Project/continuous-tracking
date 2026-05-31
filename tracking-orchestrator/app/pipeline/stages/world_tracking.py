@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from structlog import get_logger
 
-from ...domain import BoundingBox, FloorPoint, TransitZone
+from ...domain import BoundingBox, FaceAnchor, FloorPoint, TransitZone, WorldObservation
 from ...tracking.world.config import WorldTrackerConfig
 from ...tracking.world.tracker import WorldTracker
 from ...tracking.world.transit_detector import TransitDetector
@@ -108,12 +108,63 @@ class WorldTrackingStage(FrameStage):
         self._anchor_min_confidence = anchor_min_confidence
 
     async def run(self, ctx: FrameContext) -> None:
+        await self.run_many([ctx])
+
+    async def run_many(self, contexts: list[FrameContext]) -> None:
         if not self._enabled:
             return
+        if not contexts:
+            return
 
-        from ...domain import FaceAnchor, WorldObservation
-        from ...tracking.world.assertion_matching import match_assertions_to_face_anchors
+        observations: list[WorldObservation] = []
+        for ctx in contexts:
+            frame_observations, uncalibrated_count = self._build_observations(ctx)
+            observations.extend(frame_observations)
+            if uncalibrated_count:
+                logger.debug(
+                    "world_tracking_synthetic_floor_points",
+                    camera_id=ctx.frame.camera_id,
+                    uncalibrated_count=uncalibrated_count,
+                )
 
+        batch_time = max((ctx.event_time for ctx in contexts), default=contexts[0].event_time)
+        cc_face_anchors = await self._match_cc_assertions(
+            observations=observations,
+            now=batch_time,
+        )
+        all_face_anchors = [
+            face_anchor for ctx in contexts for face_anchor in ctx.face_anchors
+        ] + cc_face_anchors
+        observations_with_faces = self._attach_face_anchors(observations, all_face_anchors)
+        face_evidence = [
+            face_evidence for ctx in contexts for face_evidence in (ctx._face_evidence or [])
+        ]
+
+        result = await self._tracker.step(
+            observations=observations_with_faces,
+            now=batch_time,
+            room_polygons=self._room_polygons,
+            camera_room_map=self._camera_room_map,
+            face_anchors=all_face_anchors,
+            face_evidence=face_evidence or None,
+        )
+
+        await self._publish_transit_events(result, batch_time)
+
+        primary_context = contexts[0]
+        for ctx in contexts:
+            self._populate_context(ctx, result, include_revisions=ctx is primary_context)
+            logger.debug(
+                "world_tracking_frame",
+                camera_id=ctx.frame.camera_id,
+                frame_index=ctx.frame.frame_index,
+                observations=sum(1 for obs in observations if obs.camera_id == ctx.frame.camera_id),
+                active_phs=len(result.updated_phs),
+                snapshots=len(result.snapshots),
+                continuations=len(result.continuations),
+            )
+
+    def _build_observations(self, ctx: FrameContext) -> tuple[list[WorldObservation], int]:
         # Build observations first (without face anchors), so we can use
         # their floor positions to match CC assertions.
         # For cameras without homography calibration, generate a synthetic
@@ -144,12 +195,15 @@ class WorldTrackingStage(FrameStage):
                     floor_residual_m=det.floor_residual_m if fp.calibrated else None,
                 )
             )
-        if uncalibrated_count:
-            logger.debug(
-                "world_tracking_synthetic_floor_points",
-                camera_id=ctx.frame.camera_id,
-                uncalibrated_count=uncalibrated_count,
-            )
+        return observations, uncalibrated_count
+
+    async def _match_cc_assertions(
+        self,
+        *,
+        observations: list[WorldObservation],
+        now,
+    ) -> list[FaceAnchor]:
+        from ...tracking.world.assertion_matching import match_assertions_to_face_anchors
 
         # Match CC assertions to observations (spatial + temporal + confidence gate).
         cc_face_anchors: list[FaceAnchor] = []
@@ -159,7 +213,7 @@ class WorldTrackingStage(FrameStage):
                 cc_face_anchors = match_assertions_to_face_anchors(
                     assertions=recent_assertions,
                     observations=observations,
-                    now=ctx.event_time,
+                    now=now,
                     anchor_match_window_s=self._anchor_match_window_s,
                     anchor_match_distance_m=self._anchor_match_distance_m,
                     anchor_min_confidence=self._anchor_min_confidence,
@@ -172,10 +226,13 @@ class WorldTrackingStage(FrameStage):
                     )
             except Exception:
                 logger.exception("cc_assertion_matching_failed")
+        return cc_face_anchors
 
-        # Merge direct face anchors (from FaceIdentityStage) with CC assertion anchors.
-        all_face_anchors = list(ctx.face_anchors) + cc_face_anchors
-
+    def _attach_face_anchors(
+        self,
+        observations: list[WorldObservation],
+        all_face_anchors: list[FaceAnchor],
+    ) -> list[WorldObservation]:
         # Map face anchors to observations (detection_id primary, camera_id fallback).
         face_by_detection: dict[str, FaceAnchor] = {}
         face_by_camera: dict[str, FaceAnchor] = {}
@@ -208,17 +265,9 @@ class WorldTrackingStage(FrameStage):
                     floor_residual_m=obs.floor_residual_m,
                 )
             )
+        return observations_with_faces
 
-        # Run the world tracker with combined face anchors.
-        result = await self._tracker.step(
-            observations=observations_with_faces,
-            now=ctx.event_time,
-            room_polygons=self._room_polygons,
-            camera_room_map=self._camera_room_map,
-            face_anchors=all_face_anchors,
-            face_evidence=ctx._face_evidence or None,
-        )
-
+    async def _publish_transit_events(self, result, event_time) -> None:
         # Detect transit zone crossings for each active PH.
         if (
             self._transit_detector is not None
@@ -235,7 +284,7 @@ class WorldTrackingStage(FrameStage):
                     floor_x_m=ph.state_mean[0],
                     floor_y_m=ph.state_mean[1],
                     zones=self._transit_zones,
-                    now=ctx.event_time,
+                    now=event_time,
                 )
                 for event in events:
                     try:
@@ -253,10 +302,12 @@ class WorldTrackingStage(FrameStage):
                 if ph.closed_at is not None:
                     self._transit_detector.remove_ph(ph.ph_id)
 
+    @staticmethod
+    def _populate_context(ctx: FrameContext, result, *, include_revisions: bool) -> None:
         # Populate frame context for downstream stages (PH-native).
         ctx.active_ph_ids = {ph.ph_id for ph in result.updated_phs if ph.closed_at is None}
         ctx.outcome_decisions = list(result.identity_decisions)
-        ctx.new_revisions = list(result.revisions)
+        ctx.new_revisions = list(result.revisions) if include_revisions else []
         ctx.committed_ids = {ph.ph_id: ph.current_identity_id for ph in result.updated_phs}
         # born_at per PH so RevisionsStage can set applies_from to track start.
         ctx.ph_born_at_by_id = {ph.ph_id: ph.born_at for ph in result.updated_phs}
@@ -264,13 +315,3 @@ class WorldTrackingStage(FrameStage):
         # Store snapshots on the context for downstream stages.
         ctx.world_snapshots = list(result.snapshots)
         ctx.det_to_ph = dict(result.det_to_ph)
-
-        logger.debug(
-            "world_tracking_frame",
-            camera_id=ctx.frame.camera_id,
-            frame_index=ctx.frame.frame_index,
-            observations=len(observations),
-            active_phs=len(result.updated_phs),
-            snapshots=len(result.snapshots),
-            continuations=len(result.continuations),
-        )

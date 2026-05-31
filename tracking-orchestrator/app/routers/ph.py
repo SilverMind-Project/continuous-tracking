@@ -23,6 +23,8 @@ from ..storage.base import PHRepositoryProtocol
 from .ph_schemas import (
     BatchCorrectRequest,
     BatchCorrectResponse,
+    BatchDeleteRequest,
+    BatchDeleteResponse,
     CorrectIdentityRequest,
     CorrectIdentityResponse,
     KeyframeResponse,
@@ -36,6 +38,8 @@ from .ph_schemas import (
     PHKeyframesResponse,
     PHObservationsList,
     PHSummary,
+    PurgeUnknownRequest,
+    PurgeUnknownResponse,
     RevisionResponse,
     RevisionsFeedResponse,
     SplitRequest,
@@ -235,6 +239,31 @@ async def batch_correct(
         revisions=[RevisionResponse.from_domain(r, kind="manual_correct") for r in revs],
         applied=len(revs),
         errors=[],
+    )
+
+
+@router.post("/ph/batch_delete", response_model=BatchDeleteResponse)
+async def batch_delete(
+    body: BatchDeleteRequest,
+    request: Request,
+    repo: PHRepositoryProtocol = Depends(get_repo),
+) -> BatchDeleteResponse:
+    actor = _actor_from_request(request)
+    deleted = await repo.delete_many(body.ph_ids, actor=actor, reason=body.reason)
+    return BatchDeleteResponse(deleted=deleted)
+
+
+@router.post("/ph/purge_unknown", response_model=PurgeUnknownResponse)
+async def purge_unknown(
+    body: PurgeUnknownRequest,
+    repo: PHRepositoryProtocol = Depends(get_repo),
+) -> PurgeUnknownResponse:
+    cutoff = datetime.now(UTC) - timedelta(days=body.older_than_days)
+    deleted = await repo.purge_unknown_older_than(cutoff, limit=body.limit)
+    return PurgeUnknownResponse(
+        deleted=deleted,
+        cutoff=cutoff,
+        older_than_days=body.older_than_days,
     )
 
 

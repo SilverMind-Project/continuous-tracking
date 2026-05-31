@@ -34,6 +34,7 @@ Results are streamed via Redis Streams (protobuf) to [Cognitive Companion](../co
 
 - **PersonHypothesis (PH)** is the world-level tracked-person entity. `ph_id` (UUID) is the single cross-camera identifier on the wire.
 - **Cross-camera dedup**: before the Hungarian assignment runs, a pre-association floor-point pass collapses same-person observations from overlapping cameras into one representative, preventing duplicate PHs for a person seen at a hallway/bathroom boundary.
+- **PH evidence is first-class**: caregiver correction UIs consume real `tagged_keyframes` and repository-validated metadata. Do not fabricate image keys or coerce invalid JSONB into empty objects.
 - **Quality capture**: each PH carries a `mean_quality` field (EMA of observation quality scores) that travels to Cognitive Companion for display in location envelopes.
 - **No silent fallbacks**: stream consumers dead-letter unprocessable messages with a metric and warning log; they never silently skip.
 

@@ -219,6 +219,15 @@ sampler:
   periodic_expires_hours: 72
   trigger_expires_days: 30
 
+# Person Hypothesis maintenance
+person_hypotheses:
+  unknown_purge:
+    # Deletes only closed PHs with no committed identity. Active unknown PHs stay visible.
+    enabled: true
+    older_than_days: 7
+    interval_s: 3600.0
+    batch_size: 1000
+
 # World tracker (M1 floor-plane Kalman tracker)
 world_tracker:
   gate_chi2: 9.21

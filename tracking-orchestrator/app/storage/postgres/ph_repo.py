@@ -352,27 +352,28 @@ class PostgresPHRepository:
     ) -> tuple[list[Keyframe], int]:
         async with self._pool.acquire() as conn:
             total: int = await conn.fetchval(
-                "SELECT COUNT(*) FROM continuous_tracking.world_observations WHERE ph_id = $1",
+                "SELECT COUNT(*) FROM continuous_tracking.tagged_keyframes "
+                "WHERE ph_id = $1::uuid",
                 ph_id,
             )
             rows = await conn.fetch(
-                "SELECT observation_id, captured_at, camera_id, "
-                "floor_x_m, floor_y_m, detection_confidence "
-                "FROM continuous_tracking.world_observations "
-                "WHERE ph_id = $1 ORDER BY captured_at DESC LIMIT $2 OFFSET $3",
+                "SELECT id, captured_at, camera_id, minio_key, annotations "
+                "FROM continuous_tracking.tagged_keyframes "
+                "WHERE ph_id = $1::uuid ORDER BY captured_at DESC LIMIT $2 OFFSET $3",
                 ph_id,
                 limit,
                 offset,
             )
         return [
             Keyframe(
-                observation_id=str(row["observation_id"]),
+                observation_id=str(row["id"]),
                 observed_at=row["captured_at"],
                 camera_id=str(row["camera_id"]),
-                minio_key=f"frames/{row['camera_id']}/{row['captured_at'].isoformat()}.jpg",
-                floor_x_mm=float(row["floor_x_m"]) * 1000 if row["floor_x_m"] else None,
-                floor_y_mm=float(row["floor_y_m"]) * 1000 if row["floor_y_m"] else None,
-                reid_confidence=float(row["detection_confidence"]),
+                minio_key=str(row["minio_key"]),
+                floor_x_mm=_annotation_float(row["annotations"], "floor_x_mm"),
+                floor_y_mm=_annotation_float(row["annotations"], "floor_y_mm"),
+                pose_class=_annotation_str(row["annotations"], "pose_class"),
+                reid_confidence=_annotation_float(row["annotations"], "reid_confidence"),
             )
             for row in rows
         ], total
@@ -447,7 +448,9 @@ class PostgresPHRepository:
         target_ph_id: str,
         actor: str,
         reason: str,
+        idempotency_key: str | None = None,
     ) -> IdentityRevision:
+        _ = idempotency_key
         revision_id = str(uuid.uuid4())
         now = datetime.now(UTC)
         async with self._pool.acquire() as conn, conn.transaction():
@@ -531,7 +534,9 @@ class PostgresPHRepository:
         at_observation_id: str,
         actor: str,
         reason: str,
+        idempotency_key: str | None = None,
     ) -> tuple[str, str]:
+        _ = idempotency_key
         revision_id = str(uuid.uuid4())
         new_ph_id = str(uuid.uuid4())
         now = datetime.now(UTC)
@@ -633,12 +638,14 @@ class PostgresPHRepository:
         new_identity_ids: list[str | None],
         actor: str,
         reasons: list[str],
+        idempotency_key: str | None = None,
     ) -> list[IdentityRevision]:
         """Apply identity corrections atomically.
 
         Looks up current identity for each PH within the transaction,
         applies updates, and returns the resulting revisions.
         """
+        _ = idempotency_key
         now = datetime.now(UTC)
         revisions: list[IdentityRevision] = []
 
@@ -699,6 +706,82 @@ class PostgresPHRepository:
                     )
                 )
         return revisions
+
+    async def delete_many(self, ph_ids: list[str], *, actor: str, reason: str) -> int:
+        if not ph_ids:
+            return 0
+        async with self._pool.acquire() as conn, conn.transaction():
+            rows = await conn.fetch(
+                """
+                WITH target AS (
+                    SELECT ph_id
+                    FROM continuous_tracking.person_hypotheses
+                    WHERE ph_id = ANY($1::uuid[])
+                    FOR UPDATE
+                ),
+                deleted_revisions AS (
+                    DELETE FROM continuous_tracking.ph_revisions r
+                    USING target
+                    WHERE r.ph_id = target.ph_id
+                ),
+                deleted_merges AS (
+                    DELETE FROM continuous_tracking.ph_merges m
+                    USING target
+                    WHERE m.source_ph_id = target.ph_id OR m.target_ph_id = target.ph_id
+                )
+                DELETE FROM continuous_tracking.person_hypotheses ph
+                USING target
+                WHERE ph.ph_id = target.ph_id
+                RETURNING ph.ph_id
+                """,
+                ph_ids,
+            )
+        logger.info(
+            "ph_deleted_many",
+            actor=actor,
+            reason=reason,
+            requested=len(ph_ids),
+            deleted=len(rows),
+        )
+        return len(rows)
+
+    async def purge_unknown_older_than(
+        self, cutoff: datetime, *, limit: int = 1000
+    ) -> int:
+        async with self._pool.acquire() as conn, conn.transaction():
+            rows = await conn.fetch(
+                """
+                WITH target AS (
+                    SELECT ph_id
+                    FROM continuous_tracking.person_hypotheses
+                    WHERE current_identity_id IS NULL
+                      AND closed_at IS NOT NULL
+                      AND last_seen_at < $1::timestamptz
+                    ORDER BY last_seen_at ASC
+                    LIMIT $2
+                    FOR UPDATE
+                ),
+                deleted_revisions AS (
+                    DELETE FROM continuous_tracking.ph_revisions r
+                    USING target
+                    WHERE r.ph_id = target.ph_id
+                ),
+                deleted_merges AS (
+                    DELETE FROM continuous_tracking.ph_merges m
+                    USING target
+                    WHERE m.source_ph_id = target.ph_id OR m.target_ph_id = target.ph_id
+                )
+                DELETE FROM continuous_tracking.person_hypotheses ph
+                USING target
+                WHERE ph.ph_id = target.ph_id
+                RETURNING ph.ph_id
+                """,
+                cutoff,
+                limit,
+            )
+        if rows:
+            logger.info("ph_unknown_purged", cutoff=cutoff.isoformat(), deleted=len(rows))
+        return len(rows)
 
     # -- list_revisions --
 
@@ -827,6 +910,32 @@ def _json_object_from_domain(raw: Any, *, column: str) -> dict[str, Any]:
     if isinstance(raw, Mapping):
         return dict(raw)
     raise TypeError(f"{column} must be a mapping, got {type(raw).__name__}")
+
+
+def _annotation_value(raw: Any, key: str) -> Any:
+    annotations = _json_object_from_db(
+        raw, column="tagged_keyframes.annotations", default_empty=True
+    )
+    bbox = annotations.get("bbox")
+    if key in annotations:
+        return annotations[key]
+    if isinstance(bbox, Mapping) and key in bbox:
+        return bbox[key]
+    return None
+
+
+def _annotation_float(raw: Any, key: str) -> float | None:
+    value = _annotation_value(raw, key)
+    if value is None:
+        return None
+    return float(value)
+
+
+def _annotation_str(raw: Any, key: str) -> str | None:
+    value = _annotation_value(raw, key)
+    if value is None:
+        return None
+    return str(value)
 
 
 def _row_to_ph(row: Any) -> PersonHypothesis:
