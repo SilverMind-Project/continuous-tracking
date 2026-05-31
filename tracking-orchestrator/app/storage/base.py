@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -102,7 +103,7 @@ class PHRepositoryProtocol(Protocol):
         self, ph_id: str, *, since: datetime | None = None
     ) -> list[dict[str, Any]]: ...
     async def get_co_present(
-        self, ph_id: str, *, at: datetime | None = None
+        self, ph_id: str, *, at: datetime | None = None, radius_m: float = 5.0
     ) -> list[PersonHypothesis]: ...
     async def get_keyframes(
         self, ph_id: str, *, limit: int = 20, offset: int = 0
@@ -341,18 +342,20 @@ class InMemoryPHRepository:
         ]
 
     async def get_co_present(
-        self, ph_id: str, *, at: datetime | None = None
+        self, ph_id: str, *, at: datetime | None = None, radius_m: float = 5.0
     ) -> list[PersonHypothesis]:
         ph = self._phs.get(ph_id)
         if ph is None:
             return []
         ref_time = at if at is not None else ph.last_seen_at
+        ref_x_m, ref_y_m = ph.state_mean[0], ph.state_mean[1]
         return [
             p
             for p in self._phs.values()
             if p.ph_id != ph_id
             and p.closed_at is None
             and abs((p.last_seen_at - ref_time).total_seconds()) <= 30
+            and math.hypot(p.state_mean[0] - ref_x_m, p.state_mean[1] - ref_y_m) <= radius_m
         ]
 
     async def get_keyframes(

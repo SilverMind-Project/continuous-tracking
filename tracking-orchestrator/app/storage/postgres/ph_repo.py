@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -48,7 +49,10 @@ class PostgresPHRepository:
                     current_identity_committed_at,
                     state_mean, state_cov, gallery_mean, height_m,
                     active_cameras, metadata, mean_quality
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                    $14::jsonb, $15
+                )
                 ON CONFLICT (ph_id) DO UPDATE SET
                     closed_at = COALESCE(EXCLUDED.closed_at, ph.closed_at),
                     last_seen_at = GREATEST(EXCLUDED.last_seen_at, ph.last_seen_at),
@@ -82,7 +86,9 @@ class PostgresPHRepository:
                 ph.gallery_mean,
                 ph.height_estimate_m,
                 list(ph.active_cameras),
-                json.dumps(ph.metadata),
+                json.dumps(
+                    _json_object_from_domain(ph.metadata, column="PersonHypothesis.metadata")
+                ),
                 ph.mean_quality,
             )
 
@@ -310,23 +316,32 @@ class PostgresPHRepository:
     # -- co_present --
 
     async def get_co_present(
-        self, ph_id: str, *, at: datetime | None = None
+        self, ph_id: str, *, at: datetime | None = None, radius_m: float = 5.0
     ) -> list[PersonHypothesis]:
         async with self._pool.acquire() as conn:
             ph = await conn.fetchrow(
-                "SELECT last_seen_at FROM continuous_tracking.person_hypotheses WHERE ph_id = $1",
+                "SELECT last_seen_at, state_mean "
+                "FROM continuous_tracking.person_hypotheses WHERE ph_id = $1",
                 ph_id,
             )
             if ph is None:
                 return []
             ref_time = at if at is not None else ph["last_seen_at"]
+            ref_mean = [float(v) for v in ph["state_mean"]]
             rows = await conn.fetch(
                 "SELECT * FROM continuous_tracking.person_hypotheses "
-                "WHERE ph_id != $1 AND last_seen_at >= $2 - INTERVAL '30 seconds' "
-                "AND last_seen_at <= $2 + INTERVAL '30 seconds' "
+                "WHERE ph_id != $1 AND closed_at IS NULL "
+                "AND last_seen_at >= $2::timestamptz - INTERVAL '30 seconds' "
+                "AND last_seen_at <= $2::timestamptz + INTERVAL '30 seconds' "
+                "AND sqrt(power(state_mean[1]::double precision - $3::double precision, 2) "
+                "+ power(state_mean[2]::double precision - $4::double precision, 2)) "
+                "<= $5::double precision "
                 "ORDER BY last_seen_at DESC",
                 ph_id,
                 ref_time,
+                ref_mean[0],
+                ref_mean[1],
+                radius_m,
             )
         return [_row_to_ph(row) for row in rows]
 
@@ -459,7 +474,7 @@ class PostgresPHRepository:
 
             await conn.execute(
                 "UPDATE continuous_tracking.person_hypotheses "
-                "SET closed_at = $2, metadata = metadata || $3 "
+                "SET closed_at = $2, metadata = metadata || $3::jsonb "
                 "WHERE ph_id = $1",
                 source_ph_id,
                 now,
@@ -786,9 +801,40 @@ class PostgresWorldObservationRepository:
 # ---------------------------------------------------------------------------
 
 
+def _json_object_from_db(
+    raw: Any, *, column: str, default_empty: bool = False
+) -> dict[str, Any]:
+    if raw is None:
+        if default_empty:
+            return {}
+        raise TypeError(f"{column} is required")
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{column} contains invalid JSON") from exc
+        if isinstance(parsed, Mapping):
+            return dict(parsed)
+        raise TypeError(
+            f"{column} must decode to a JSON object, got {type(parsed).__name__}"
+        )
+    raise TypeError(f"{column} must be a JSON object, got {type(raw).__name__}")
+
+
+def _json_object_from_domain(raw: Any, *, column: str) -> dict[str, Any]:
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    raise TypeError(f"{column} must be a mapping, got {type(raw).__name__}")
+
+
 def _row_to_ph(row: Any) -> PersonHypothesis:
     mean_raw: list[float] = [float(v) for v in row["state_mean"]]
     cov_raw: list[float] = [float(v) for v in row["state_cov"]]
+    metadata = _json_object_from_db(
+        row.get("metadata"), column="person_hypotheses.metadata", default_empty=True
+    )
     return PersonHypothesis(
         ph_id=str(row["ph_id"]),
         state_mean=(mean_raw[0], mean_raw[1], mean_raw[2], mean_raw[3]),
@@ -805,18 +851,16 @@ def _row_to_ph(row: Any) -> PersonHypothesis:
         closed_at=row.get("closed_at"),
         last_floor_speed_m_s=0.0,
         last_posture=None,
-        metadata=row.get("metadata") or {},
+        metadata=metadata,
         mean_quality=float(row.get("mean_quality") or 0.0),
     )
 
 
 def _row_to_world_observation(row: Any) -> WorldObservation:
-    bbox_raw = row["bbox"]
-    if isinstance(bbox_raw, str):
-        bbox_raw = json.loads(bbox_raw)
-    metadata = row.get("metadata") or {}
-    if isinstance(metadata, str):
-        metadata = json.loads(metadata)
+    bbox_raw = _json_object_from_db(row["bbox"], column="world_observations.bbox")
+    metadata = _json_object_from_db(
+        row.get("metadata"), column="world_observations.metadata", default_empty=True
+    )
 
     return WorldObservation(
         observation_id=str(row["observation_id"]),

@@ -328,7 +328,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             dsn=_normalize_dsn(database_url),
             min_size=2,
             max_size=20,
-            command_timeout=10.0,
+            command_timeout=120.0,
             server_settings={"search_path": "continuous_tracking, public"},
         )
         runner = MigrationRunner(_pool, MIGRATIONS_DIR)

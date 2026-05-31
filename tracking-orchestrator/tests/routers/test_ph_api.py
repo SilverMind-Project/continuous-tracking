@@ -39,6 +39,7 @@ def _make_ph(
     ph_id: str,
     identity_id: str | None = None,
     active_cameras: frozenset[str] | None = None,
+    metadata: dict[str, object] | None = None,
 ) -> PersonHypothesis:
     now = datetime.now(UTC)
     return PersonHypothesis(
@@ -54,6 +55,7 @@ def _make_ph(
         active_cameras=active_cameras or frozenset(["cam-1", "cam-2"]),
         last_floor_speed_m_s=0.5,
         last_posture="walking",
+        metadata=metadata or {},
     )
 
 
@@ -118,6 +120,19 @@ class TestPHDetail:
         data = resp.json()
         assert data["ph_id"] == "ph-1"
         assert data["current_identity_id"] == "bob"
+
+    @pytest.mark.asyncio
+    async def test_detail_preserves_metadata_dict(
+        self, client: TestClient, repo: InMemoryPHRepository
+    ) -> None:
+        await repo.save(
+            _make_ph("ph-metadata", identity_id="bob", metadata={"display_name": "Bob"})
+        )
+
+        resp = client.get("/ph/ph-metadata")
+
+        assert resp.status_code == 200
+        assert resp.json()["metadata"] == {"display_name": "Bob"}
 
     def test_unknown_ph(self, client: TestClient) -> None:
         resp = client.get("/ph/nonexistent")

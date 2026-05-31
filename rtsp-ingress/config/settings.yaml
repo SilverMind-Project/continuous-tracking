@@ -28,7 +28,7 @@ cognitive_companion:
   reconcile_interval_s: 60
 
 defaults:
-  frame_interval_ms: 500
+  frame_interval_ms: 200
   motion_threshold: 0.02
   reconnect_backoff_s: 2.0
   # static_sample_interval_s forces a frame publish at least every N seconds

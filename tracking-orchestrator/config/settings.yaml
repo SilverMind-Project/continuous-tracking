@@ -150,7 +150,7 @@ pipeline:
   identity:
     # Read by: main.py → PipelineConfig(identity_commit_window_s=)
     # At most one identity commit per PH per N seconds.
-    commit_window_s: 3.0
+    commit_window_s: 5.0
 
     # Read by: main.py → PipelineConfig(identity_high_confidence_face_threshold=)
     # Face anchors above this confidence bypass the commit window and commit
@@ -227,7 +227,7 @@ world_tracker:
   alpha_height: 0.1
   observation_noise_m: 0.25
   process_noise_accel_m_s2: 0.5
-  ph_close_grace_s: 5.0
+  ph_close_grace_s: 15.0
   min_observations_to_publish: 3
   face_conflict_threshold: 0.70
   inferred_handoff_max_s: 600
@@ -238,7 +238,7 @@ world_tracker:
   height_sigma_m: 0.15
   # ---- Cross-camera dedup (U1) ----
   dedup_enabled: true
-  dedup_max_distance_m: 0.6
+  dedup_max_distance_m: 0.9
   dedup_residual_coeff_k: 1.0
   dedup_max_distance_ceiling_m: 1.5
   dedup_require_no_face_conflict: true

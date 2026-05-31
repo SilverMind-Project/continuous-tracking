@@ -31,11 +31,13 @@ def _make_ph(
     *,
     last_seen_offset_s: float = 0,
     closed: bool = False,
+    x_m: float = 1.0,
+    y_m: float = 2.0,
 ) -> PersonHypothesis:
     now = datetime.now(UTC)
     return PersonHypothesis(
         ph_id=ph_id,
-        state_mean=(1.0, 2.0, 0.1, 0.0),
+        state_mean=(x_m, y_m, 0.1, 0.0),
         state_cov=(0.1,) * 16,
         born_at=now - timedelta(minutes=30),
         last_seen_at=now - timedelta(seconds=last_seen_offset_s),
@@ -72,6 +74,19 @@ class TestPHCoPresent:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["co_present"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_co_present_excludes_phs_outside_radius(
+        self, client: TestClient, repo: InMemoryPHRepository
+    ) -> None:
+        await repo.save(_make_ph("ph-1", last_seen_offset_s=0, x_m=1.0, y_m=2.0))
+        await repo.save(_make_ph("ph-2", last_seen_offset_s=5, x_m=20.0, y_m=2.0))
+
+        resp = client.get("/ph/ph-1/co_present?radius_m=5")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["co_present"] == []
 
     @pytest.mark.asyncio
     async def test_co_present_excludes_self(

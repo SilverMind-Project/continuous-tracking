@@ -332,7 +332,7 @@ async def get_co_present(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "ph.not_found", "message": f"PH {ph_id} not found"},
         )
-    co_present = await repo.get_co_present(ph_id)
+    co_present = await repo.get_co_present(ph_id, radius_m=radius_m)
     return PHCoPresentResponse(
         ph_id=ph_id,
         co_present=[PHCoPresentItem.from_domain(p) for p in co_present],
