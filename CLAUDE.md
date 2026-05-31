@@ -9,7 +9,7 @@ Guidance for Claude Code agents working in this repository.
 The **Continuous Tracking System (CTS)** monitors seniors with early dementia via RTSP cameras. It:
 
 - Pulls camera streams via a go2rtc sidecar and uploads JPEG keyframes to MinIO
-- Tracks individuals frame-to-frame with BoT-SORT (Kalman filter + appearance embeddings)
+- Tracks individuals using a single floor-plane Kalman world tracker (PersonHypothesis entities, Hungarian association over calibrated floor positions)
 - Re-identifies people across cameras using a Bayesian posterior over identity candidates (ArcFace face recognition + SOLIDER-REID body appearance)
 - Detects dementia-relevant behavioural patterns: pacing, sundowning, bathroom anomaly, prolonged stillness, nighttime movement, unexplained absence
 - Streams results via Redis Streams (protobuf wire format) to `cognitive-companion`, a BFF gateway that serves the Vue admin UI
@@ -20,52 +20,31 @@ The **Continuous Tracking System (CTS)** monitors seniors with early dementia vi
 
 Design documents are tracked externally. The canonical reference for architecture decisions is this CLAUDE.md and the code itself.
 
+The cross-project architecture reference is [docs/systems-architecture.md](docs/systems-architecture.md): the PersonHypothesis world-tracker model, the frame pipeline, the identity resolver and how priors update, home-camera nuances (synthetic floor points, calibration-aware dedup), the settings coupling rule, and the CTS-to-CC wire contract. The CC-side companion doc is [`../cognitive-companion/docs/systems-architecture.md`](../cognitive-companion/docs/systems-architecture.md).
+
 ---
 
 ## System Architecture
 
-```text
-IP Cameras (RTSP)
-       │
-       ▼
- go2rtc (sidecar, port 1984)
-  ┌──────────────┐    HTTP /api/frame.jpeg
-  │  RTSP proxy  │◀──────────────────────────  rtsp-ingress (Go, port 8090)
-  │  multiplexer │                             ┌────────────────────────┐
-  └──────────────┘                             │  Motion gating         │
-                                               │  MinIO JPEG upload     │
-                                               │  frames.ready publish  │
-                                               └────────────────────────┘
-                                                         │ frames.ready (protobuf)
-                                                         ▼
-                                           tracking-orchestrator (Python, port 8000)
-                                           ┌──────────────────────────────┐
-                                           │ YOLO26L  person detection    │
-                                           │ SOLIDER-REID body embeds     │──▶ Triton (gRPC 8701)
-                                           │ RTMPose  pose estimation     │
-                                           │ BoT-SORT tracker             │    YOLO26L · CLIP · Florence-2
-                                           │ Bayesian identity resolver   │    SOLIDER-REID · RTMPose
-                                           │ Dementia signal worker       │    (all ONNX, FP32)
-                                           └──────────────────────────────┘
-                                                         │ tracking.events
-                                                         │ tracking.revisions
-                                                         │ tracking.signals
-                                                         ▼
-                                            cognitive-companion (Python/FastAPI, port 8080)
-                                            BFF gateway · WebSocket live view
-                                            Vue 3 admin UI · MCP tools
-                                            ┌──────────────────────────────┐
-                                            │ scene-analysis-service       │
-                                            │ (sibling, shares Triton)     │──▶ Triton (gRPC 8701)
-                                            │ YOLO26L · CLIP · Florence-2  │
-                                            └──────────────────────────────┘
-                                                         │ tracking.events
-                                                         │ tracking.revisions
-                                                         │ tracking.signals
-                                                         ▼
-                                            cognitive-companion (Python/FastAPI, port 8080)
-                                            BFF gateway · WebSocket live view
-                                            Vue 3 admin UI · MCP tools
+```mermaid
+flowchart TD
+  cam["IP cameras (RTSP)"] --> go2rtc["go2rtc sidecar :1984\nRTSP proxy"]
+  go2rtc -->|"HTTP /api/frame.jpeg"| ingress["rtsp-ingress (Go) :8090\nmotion gate, MinIO upload"]
+  ingress -->|"frames.ready (protobuf)"| orch
+  subgraph orch["tracking-orchestrator (Python) :8000"]
+    direction TB
+    det["YOLO26L detection"] --> reid["SOLIDER-REID embedding"]
+    reid --> pose["RTMPose pose"]
+    pose --> face["ArcFace face ID"]
+    face --> wt["Floor-plane Kalman world tracker\n(PersonHypothesis + Hungarian association)"]
+    wt --> idr["Bayesian identity resolver"]
+    idr --> sig["Dementia signal worker"]
+  end
+  triton["Triton :8701\nONNX FP32 models"]
+  orch -. gRPC .-> triton
+  orch -->|"tracking.events / .revisions / .signals / scene.samples"| cc
+  cc["cognitive-companion (FastAPI) :8080\nBFF gateway, WebSocket live view,\nVue 3 admin UI, MCP tools"]
+  cc --> ui["Browser admin UI"]
 ```
 
 **Infrastructure**: TimescaleDB + pgvectorscale (StreamingDiskANN) · Redis Streams (AOF) · MinIO · Triton Inference Server
@@ -94,7 +73,7 @@ IP Cameras (RTSP)
 ├── tracking-orchestrator/         Python ML orchestration service
 │   ├── app/domain/                Frozen dataclasses (Detection, WorldObservation, PersonHypothesis, …)
 │   ├── app/inference/             Triton gRPC client (delegates to triton_shared) + ReID/Pose wrappers
-│   ├── app/tracking/              BoT-SORT, identity resolver, cross-camera association
+│   ├── app/tracking/              world tracker (world/: Kalman, association, cost matrix, dedup), identity resolver
 │   ├── app/trajectory/            Trajectory writer, dementia signal detectors, posture classifier, motion energy, robust stats
 │   ├── app/transport/             Redis Streams codec (protobuf), publishers
 │   ├── app/cli.py                 ``cts-db`` migration CLI (migrate / rollback / status)
@@ -145,9 +124,11 @@ The shared PostgreSQL instance (`timescale/timescaledb-ha:pg18`) hosts the `cont
 
 ```python
 # storage/base.py
-class TrackletRepository(Protocol):
-    async def save_tracklet(self, tracklet: Tracklet) -> None: ...
-    async def get_tracklet(self, tracklet_id: str) -> Tracklet | None: ...
+class PHRepositoryProtocol(Protocol):
+    async def save(self, ph: PersonHypothesis) -> None: ...
+    async def get(self, ph_id: str) -> PersonHypothesis | None: ...
+    async def list_open(self) -> list[PersonHypothesis]: ...
+    async def update_identity(self, ph_id: str, identity_id: str, committed_at: datetime) -> None: ...
 ```
 
 Rules:
@@ -177,9 +158,27 @@ Each subsystem in `rtsp-ingress/internal/` exports an interface as its public AP
 
 `rtsp-ingress/config/go2rtc.yaml` has **no `streams:` section** -- all registrations are dynamic. Do not add `gortsplib` or `pion/rtp` to this codebase.
 
+### WorldTracker.step: the 10-step loop
+
+Each frame, `WorldTracker.step` (`app/tracking/world/tracker.py`) runs:
+
+```mermaid
+flowchart TD
+  s1["1. Load open PHs, Kalman predict to now"] --> s2
+  s2["2. dedup_observations()\ncollapse cross-camera duplicates"] --> s3
+  s3["3. associate()\nHungarian over cost matrix with gating"] --> s4
+  s4["4. Update matched PHs\nKalman update + EMAs + expand cameras"] --> s5
+  s5["5. Spawn PHs for unmatched obs"] --> s6
+  s6["6. Emit PHContinuationCandidate for nearby closed PHs"] --> s7
+  s7["7. Close unmatched PHs past ph_close_grace_s"] --> s8
+  s8["8. Persist all updated PHs"] --> s9
+  s9["9. Identity resolution"] --> s10
+  s10["10. Build WorldFrameSnapshot per PH"]
+```
+
 ### Identity resolution: Bayesian posterior
 
-The identity resolver maintains a posterior probability distribution over `{known_identities ∪ UNKNOWN}` for each tracklet. Evidence sources:
+The identity resolver maintains a posterior probability distribution over `{known_identities ∪ UNKNOWN}` for each PersonHypothesis (PH). Evidence sources:
 
 - **Face anchors** (ArcFace similarity → likelihood update)
 - **ReID gallery** (SOLIDER-REID embedding → pgvector HNSW nearest-neighbour search)

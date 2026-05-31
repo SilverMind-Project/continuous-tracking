@@ -387,7 +387,7 @@ def sample_floor_plane_suggestions(
         return []
 
     count = max(1, min(9, count))
-    grid = int(math.ceil(math.sqrt(count)))
+    grid = math.ceil(math.sqrt(count))
     min_x, min_y = src.min(axis=0)
     max_x, max_y = src.max(axis=0)
     selected: list[int] = []

@@ -1,12 +1,14 @@
 # Continuous Tracking System
 
-Multi-camera person tracking and dementia signal detection for senior care. Processes RTSP camera feeds through a 15-stage ML pipeline: YOLO detection, spatial floor projection, SOLIDER-REID and RTMPose inference, cross-camera pre-association dedup, BoT-SORT tracking, Bayesian identity resolution, posture classification, trajectory writing, and event publishing.
+Multi-camera person tracking and dementia signal detection for senior care. Processes RTSP camera feeds through a 15-stage ML pipeline: YOLO detection, spatial floor projection, SOLIDER-REID and RTMPose inference, cross-camera pre-association dedup, floor-plane Kalman world tracker (Hungarian association over PersonHypothesis), Bayesian identity resolution, posture classification, trajectory writing, and event publishing.
 
 Detects clinically relevant behavioral patterns from trajectory and dwell data: pacing, sundowning, bathroom dwell anomalies, prolonged stillness, nighttime movement, and unexplained absence.
 
 Results are streamed via Redis Streams (protobuf) to [Cognitive Companion](../cognitive-companion), the BFF gateway that serves the Vue admin UI and MCP tools.
 
 **Documentation:** [silvermind-project.github.io](https://silvermind-project.github.io)
+
+**Architecture reference:** [docs/systems-architecture.md](docs/systems-architecture.md) covers the PersonHypothesis world-tracker model, the identity resolver, home-camera nuances, and how CTS feeds Cognitive Companion.
 
 ## Services
 

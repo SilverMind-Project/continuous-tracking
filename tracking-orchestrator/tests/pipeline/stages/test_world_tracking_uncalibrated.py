@@ -11,14 +11,14 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.domain import BoundingBox, Detection, FaceAnchor, FloorPoint
+from app.domain import BoundingBox, Detection, FloorPoint
 from app.pipeline.stages.world_tracking import (
     _CAMERA_TILE_M,
     _VIRTUAL_ROOM_M,
     _stable_camera_hash,
     _synthetic_floor_point,
 )
-
+from app.tracking.world.tracker import WorldTrackerResult
 
 # ---------------------------------------------------------------------------
 # Unit tests for _stable_camera_hash
@@ -146,18 +146,12 @@ async def test_world_tracking_stage_produces_observations_without_calibration():
     # Tracker mock captures what observations it receives.
     captured_observations: list = []
 
-    class FakeTrackerResult:
-        updated_phs = []
-        snapshots = []
-        continuations = []
-        identity_decisions = []
-        revisions = []
-        det_to_ph = {}
+    empty_result = WorldTrackerResult(updated_phs=[], snapshots=[], continuations=[])
 
     tracker_mock = MagicMock()
     tracker_mock.step = AsyncMock(
         side_effect=lambda observations, **kw: (
-            captured_observations.extend(observations) or FakeTrackerResult()
+            captured_observations.extend(observations) or empty_result
         )
     )
 

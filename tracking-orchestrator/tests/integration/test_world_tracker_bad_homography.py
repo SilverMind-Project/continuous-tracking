@@ -1,6 +1,10 @@
-"""WTR10: Replay — bad homography camera must not produce floor markers.
+"""WTR10: WorldTracker behaviour with uncalibrated observations.
 
-Uncalibrated detections must be counted as diagnostics, not placed on the floor plan.
+WorldTrackingStage creates synthetic floor points for uncalibrated cameras so
+that PHs (and identity resolution) still work without a homography.  This file
+tests the tracker contract directly: uncalibrated observations passed to
+WorldTracker.step are tracked normally (the stage owns the synthetic-floor-point
+conversion; the tracker trusts whatever floor position it receives).
 """
 
 from __future__ import annotations
@@ -47,27 +51,33 @@ def _make_uncalibrated_obs(
 
 
 @pytest.mark.asyncio
-async def test_uncalibrated_detections_not_tracked():
-    """Uncalibrated detections must not spawn PHs or become floor markers."""
+async def test_uncalibrated_detections_are_tracked():
+    """Uncalibrated observations passed to the tracker do spawn PHs.
+
+    WorldTrackingStage converts uncalibrated detections to synthetic floor
+    points before calling WorldTracker.step.  The tracker itself does not
+    filter by calibration status: it trusts whatever floor position it
+    receives.  The resulting PH has calibrated=False floor coordinates and
+    the CC side decides whether to render it on the floor plan.
+    """
     ph_repo = InMemoryPHRepository()
     obs_repo = InMemoryWorldObservationRepository()
 
     tracker = WorldTracker(ph_repo=ph_repo, obs_repo=obs_repo)
     now = datetime.now(UTC)
 
-    # Uncalibrated observation from cam-3.
     result = await tracker.step(
-        observations=[
-            _make_uncalibrated_obs("cam-3", 1),
-        ],
+        observations=[_make_uncalibrated_obs("cam-3", 1)],
         now=now,
     )
 
-    # Uncalibrated observations should be filtered out before association.
-    # No PHs should be spawned.
+    # The tracker spawns a PH even for an uncalibrated observation.
     new_phs = [ph for ph in result.updated_phs if ph.observation_count == 1]
-    uncalibrated_phs = [ph for ph in new_phs if "cam-3" in ph.active_cameras]
-    assert len(uncalibrated_phs) == 0, "Uncalibrated detections must not spawn PHs"
+    cam3_phs = [ph for ph in new_phs if "cam-3" in ph.active_cameras]
+    assert len(cam3_phs) == 1, (
+        "Tracker must spawn a PH for an uncalibrated observation; "
+        "WorldTrackingStage is responsible for synthetic floor points"
+    )
 
 
 @pytest.mark.asyncio

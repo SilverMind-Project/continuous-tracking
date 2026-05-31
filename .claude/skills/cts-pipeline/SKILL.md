@@ -9,7 +9,7 @@ This skill maps the 15-stage frame processing pipeline so you can reason about w
 
 ## The golden rule
 
-> A stage is "live" only if it is wired into the `stages` list in `FrameProcessingPipeline._build_stages()` (`app/pipeline/frame_pipeline.py`). A file under `app/pipeline/stages/` that is not in that list does not run.
+> A stage is "live" only if it is wired into the `stages` list built inside `FrameProcessingPipeline.initialize()` (`app/pipeline/frame_pipeline.py`). A file under `app/pipeline/stages/` that is not in that list does not run.
 
 Always verify by reading `frame_pipeline.py` after adding a stage.
 
@@ -25,7 +25,7 @@ All stage classes live in `app/pipeline/stages/`. Each implements `FrameStage` f
 | 4 | `SpatialProjectionStage` | `spatial_projection.py` | Apply per-camera homography matrix to compute calibrated `FloorPoint` for every detection; runs before inference so the dedup pass can use floor positions |
 | 5 | `InferenceStage` | `inference.py` | SOLIDER-REID appearance embedding + RTMPose pose estimation; both run per-detection |
 | 6 | `FaceIdentityStage` | `face_identity.py` | Rate-limited ArcFace calls to `person-identification-service`; produces `FaceAnchor` per detection |
-| 7 | `WorldTrackingStage` | `world_tracking.py` | Delegates to `WorldTracker`: (a) pre-association dedup, (b) BoT-SORT, (c) PersonHypothesis management and Bayesian identity resolution |
+| 7 | `WorldTrackingStage` | `world_tracking.py` | Builds `WorldObservation`s (synthetic virtual-tile floor point for uncalibrated cameras), then delegates to `WorldTracker.step`: (a) Kalman predict all open PHs, (b) pre-association cross-camera dedup, (c) Hungarian association over floor-plane cost matrix, (d) PH update/spawn/close, (e) Bayesian identity resolution |
 | 8 | `DetectionBackfillStage` | `detection_backfill.py` | Writes `ph_id` onto each detection from the WorldTracker's assignment map; downstream stages read `detection.ph_id` not a separate map |
 | 9 | `ClosePHStage` | (see frame_pipeline.py) | Closes PHs that were active in the previous frame but absent in this one; writes final trajectory/dwell segments |
 | 10 | `PostureStage` | `posture_stage.py` | Keypoint geometry classifier per detection: `lying`, `sitting`, `standing`, `unknown` |
@@ -75,10 +75,7 @@ The integration proof for the hallway/bathroom case is `tests/integration/test_w
 
 ## Quality capture: where it happens and what travels downstream
 
-`CropQuality` (`app/inference/crop_quality.py`) is the single scorer. It is called in two places:
-
-1. Inside `WorldTracker.step()` to compute per-observation quality and update `PersonHypothesis.mean_quality`.
-2. In `TrackletManager` for gallery entry quality.
+`CropQuality` (`app/pipeline/crop_quality.py`) is the single scorer. It is called inside `WorldTracker.step()` to compute per-observation quality (used for dedup representative selection) and to update `PersonHypothesis.mean_quality` (EMA: `0.1 * obs.quality + 0.9 * prev`).
 
 `mean_quality` travels via the `IdentitySnapshot` proto field to the CC side, where `TrackingEventSubscriber` stores it in the presence segment and `PersonLocationEnvelope` surfaces it as the `quality` field. Do not add a second scorer; do not compute quality on the CC side.
 
@@ -87,7 +84,7 @@ The integration proof for the hallway/bathroom case is `tests/integration/test_w
 1. Create `app/pipeline/stages/my_stage.py` implementing `FrameStage`.
 2. Add `class MyStage(FrameStage): ...` with `name = "my_stage"` and `async def run(self, ctx: FrameContext) -> None`.
 3. Import `MyStage` in `app/pipeline/stages/__init__.py`.
-4. Wire the stage into the list in `FrameProcessingPipeline._build_stages()` at the correct position.
+4. Wire the stage into the `stages` list inside `FrameProcessingPipeline.initialize()` at the correct position.
 5. Add a unit test in `tests/unit/pipeline/stages/test_my_stage.py` with an in-memory `FrameContext`.
 6. If the stage has config knobs, add them to `PipelineConfig` (`app/pipeline/config.py`) with documented defaults.
 7. Register a Prometheus counter or histogram if the stage can fail or has measurable latency.

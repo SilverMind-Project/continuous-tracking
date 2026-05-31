@@ -409,7 +409,8 @@ class IdentityResolver:
         # after the tracker remaps it; the entity_id fallback handles that case
         # without polluting observation_ids with ph_ids.
         relevant_anchors = [
-            fa for fa in face_anchors
+            fa
+            for fa in face_anchors
             if fa.tracklet_id in entity_obs_ids or fa.tracklet_id == entity.entity_id
         ]
 
@@ -1112,9 +1113,7 @@ class IdentityResolver:
                 entity_by_obs[oid] = entity
         # Secondary lookup by entity_id so PH-mode anchors (tracklet_id=ph_id)
         # are found without adding ph_id to observation_ids.
-        entity_by_id: dict[str, IdentityResolvableEntity] = {
-            e.entity_id: e for e in hypotheses
-        }
+        entity_by_id: dict[str, IdentityResolvableEntity] = {e.entity_id: e for e in hypotheses}
 
         # Find which entities have direct face evidence and pick the best anchor per entity.
         evidenced_entity_ids: set[str] = set()

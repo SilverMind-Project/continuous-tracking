@@ -21,13 +21,12 @@ from app.inference.face_id_client import FaceIdentificationClient
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.face_identity import (
     FaceIdentityStage,
-    _TrackEntry,
     _bbox_iou,
     _crossing_indices,
     _match_to_tracks,
+    _TrackEntry,
 )
 from app.pipeline.types import FaceIdCameraConfig
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -145,7 +144,7 @@ def test_crossing_indices_no_overlap():
 def test_crossing_indices_three_people_only_overlapping_flagged():
     # a and b overlap heavily (x overlap = 120px on 200px-wide boxes → IoU ≈ 0.43).
     a = _make_detection("d1", bbox=_make_bbox(0, 0, 200, 400))
-    b = _make_detection("d2", bbox=_make_bbox(80, 0, 280, 400))   # crosses a
+    b = _make_detection("d2", bbox=_make_bbox(80, 0, 280, 400))  # crosses a
     c = _make_detection("d3", bbox=_make_bbox(500, 0, 600, 400))  # isolated
     result = _crossing_indices([a, b, c])
     assert 0 in result

@@ -230,7 +230,7 @@ class TestWorldTrackingEmitsRevisions:
             person_id="grandma",
             confidence=0.92,
             quality=1.0,
-            tracklet_id="",           # empty — PH mode
+            tracklet_id="",  # empty — PH mode
             detection_id=detection_uuid,
             camera_id="cam1",
             captured_at=now,

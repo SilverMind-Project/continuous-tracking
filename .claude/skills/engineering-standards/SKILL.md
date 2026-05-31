@@ -35,8 +35,8 @@ Modules are open for extension, closed for modification.
 
 Prefer small, composable objects injected via constructors over deep inheritance hierarchies.
 
-- `SpatialProjectionService` is injected into `CrossCameraAssociator`, not subclassed.
-- `CommitPolicyState` is a separate object passed to `evaluate_commit()`, not stored on a base class.
+- `SpatialProjectionService` is injected into `SpatialProjectionStage`, not subclassed.
+- `IdentityResolver._commit` is a private method; callers pass the resolved posterior, not a shared state object.
 
 ---
 
@@ -178,7 +178,7 @@ def combine_evidence(
     ...
 
 # WRONG -- reads self._config, self._identities, calls self._gallery_repo
-def _from_gallery(self, gt: GlobalTrack) -> PosteriorDist:
+def _from_gallery(self, entity: IdentityResolvableEntity) -> PosteriorDist:
     ...
 ```
 
@@ -599,7 +599,7 @@ Running bare `python` or `pip` installs into the system interpreter and silently
 
 **Pre-release (current state):** A single squashed baseline `0001_NNNN` contains the complete
 final schema. There are no incremental migration files. All changes go directly into the
-baseline. Existing dev databases must be **dropped and recreated** — the `_schema_version`
+baseline. Existing dev databases must be **dropped and recreated**: the `_schema_version`
 table and Alembic `alembic_version` table hold stale entries from any prior chain.
 
 **Post-release:** Each atomic schema change gets its own numbered file:
@@ -814,7 +814,7 @@ Adding a new dedup gate condition: modify `dedup_observations()` only; do not ad
 
 ### Quality-capture rule
 
-Observation and PH quality is computed by the single `CropQuality` scorer (`app/inference/crop_quality.py`). There is no second scorer. The same scorer is used for:
+Observation and PH quality is computed by the single `CropQuality` scorer (`app/pipeline/crop_quality.py`). There is no second scorer. The same scorer is used for:
 - Per-observation quality scores passed to `dedup_observations()` for representative selection.
 - The PH's `mean_quality` field (exponential moving average, updated in `WorldTracker.step()`).
 - Gallery entry quality used by the identity resolver.

@@ -110,7 +110,9 @@ class PublishStage(FrameStage):
                 {
                     "ph_id": str(snap.get("ph_id", ""))[:8],
                     "identity_id": snap.get("identity_id", ""),
-                    "top_probability": round(float(snap.get("top_probability", 0.0) or 0.0), 3),
+                    "top_probability": round(
+                        float(cast(float, snap.get("top_probability", 0.0)) or 0.0), 3
+                    ),
                 }
                 for snap in identity_snapshots
                 if snap.get("identity_id")
