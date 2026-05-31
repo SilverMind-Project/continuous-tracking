@@ -1,8 +1,6 @@
 module github.com/SilverMind-Project/continuous-tracking/rtsp-ingress
 
-go 1.24.0
-
-toolchain go1.24.5
+go 1.25.0
 
 require (
 	github.com/SilverMind-Project/continuous-tracking/proto v0.0.0-00010101000000-000000000000
@@ -10,7 +8,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0
 	go.uber.org/zap v1.27.1
-	golang.org/x/image v0.24.0
+	golang.org/x/image v0.41.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -41,7 +39,7 @@ require (
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 )
 
 replace github.com/SilverMind-Project/continuous-tracking/proto => ../proto
