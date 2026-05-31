@@ -194,6 +194,8 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         height_sigma_m=wt.as_float("height_sigma_m"),
         dedup_enabled=wt.as_bool("dedup_enabled"),
         dedup_max_distance_m=wt.as_float("dedup_max_distance_m"),
+        dedup_residual_coeff_k=wt.as_float("dedup_residual_coeff_k"),
+        dedup_max_distance_ceiling_m=wt.as_float("dedup_max_distance_ceiling_m"),
         dedup_require_no_face_conflict=wt.as_bool("dedup_require_no_face_conflict"),
     )
 

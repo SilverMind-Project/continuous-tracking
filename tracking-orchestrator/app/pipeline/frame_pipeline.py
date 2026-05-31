@@ -87,6 +87,7 @@ from ..trajectory.motion_energy import MotionEnergyTracker
 from ..trajectory.posture import GlobalPostureTracker
 from ..trajectory.posture_strategy import PostureStrategy
 from ..trajectory.trajectory_writer import TrajectoryWriter
+from ..transport.ph_continuation_publisher import PHContinuationPublisher
 from ..transport.redis_streams import (
     FrameReady,
     RedisStreamsTransport,
@@ -262,6 +263,7 @@ class FrameProcessingPipeline:
         self._seen_cameras: set[str] = set()
         self._identity_resolver: IdentityResolver | None = None
         self._revision_publisher: RevisionPublisher | None = None
+        self._ph_continuation_publisher: PHContinuationPublisher | None = None
         # Overlap groups fetched from CC at startup.
         self._overlap_groups: list[OverlapGroup] = []
         # World tracker
@@ -383,11 +385,16 @@ class FrameProcessingPipeline:
             stream=self._config.transport.revisions_stream,
         )
         await self._revision_publisher.connect()
+        self._ph_continuation_publisher = PHContinuationPublisher(
+            redis_url=self._config.transport.redis_url,
+        )
+        await self._ph_continuation_publisher.connect()
 
         self._world_tracker = WorldTracker(
             ph_repo=self._ph_repo,
             obs_repo=self._obs_repo,
             config=self._config.world_tracker,
+            continuation_publisher=self._ph_continuation_publisher,
             identity_resolver=self._identity_resolver,
         )
 
@@ -601,6 +608,9 @@ class FrameProcessingPipeline:
 
         if self._revision_publisher:
             await self._revision_publisher.disconnect()
+
+        if self._ph_continuation_publisher:
+            await self._ph_continuation_publisher.disconnect()
 
         if self._face_id_client:
             await self._face_id_client.disconnect()

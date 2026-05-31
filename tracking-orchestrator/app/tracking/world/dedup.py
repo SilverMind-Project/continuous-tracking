@@ -88,13 +88,14 @@ def dedup_observations(
             # Rule 1: different cameras only.
             if obs_i.camera_id == obs_j.camera_id:
                 continue
-            # Rule 2: within geometric gate.
+            # Rule 2: within residual-aware geometric gate.
             xi = obs_i.floor_point.x_mm / 1000.0
             yi = obs_i.floor_point.y_mm / 1000.0
             xj = obs_j.floor_point.x_mm / 1000.0
             yj = obs_j.floor_point.y_mm / 1000.0
             dist = math.sqrt((xi - xj) ** 2 + (yi - yj) ** 2)
-            if dist > cfg.dedup_max_distance_m:
+            effective_gate = _effective_distance_gate_m(obs_i, obs_j, cfg)
+            if dist > effective_gate:
                 continue
             # Rule 3: no identity conflict if both have committed face ids.
             if cfg.dedup_require_no_face_conflict:
@@ -154,6 +155,18 @@ def _select_representative(cluster: list[WorldObservation]) -> WorldObservation:
         cluster,
         key=lambda obs: (-obs.quality, obs.camera_id, obs.detection_id),
     )
+
+
+def _effective_distance_gate_m(
+    obs_i: WorldObservation,
+    obs_j: WorldObservation,
+    cfg: WorldTrackerConfig,
+) -> float:
+    """Return the pairwise dedup gate widened by calibration residuals."""
+    residual_i = obs_i.floor_residual_m or 0.0
+    residual_j = obs_j.floor_residual_m or 0.0
+    widened = cfg.dedup_max_distance_m + cfg.dedup_residual_coeff_k * (residual_i + residual_j)
+    return min(widened, cfg.dedup_max_distance_ceiling_m)
 
 
 def _build_representative(

@@ -48,11 +48,12 @@ def _make_gt(
     current_identity_id: str | None = None,
     committed_at: datetime | None = None,
     tracklet_ids: list[str] | None = None,
+    camera_ids: list[str] | None = None,
 ) -> GlobalTrack:
     now = datetime.now(UTC)
     return GlobalTrack(
         global_track_id=ph_id,
-        camera_ids=["cam-a"],
+        camera_ids=camera_ids or ["cam-a"],
         tracklet_ids=tracklet_ids or ["t1"],
         started_at=now,
         last_seen_at=now,
@@ -83,7 +84,7 @@ async def _resolver(config: ResolverConfig) -> IdentityResolver:
 
 
 class _ControlledGallery(InMemoryGalleryRepository):
-    def __init__(self, matches: list[tuple[str, float]]) -> None:
+    def __init__(self, matches: list[tuple[str, float] | tuple[str, float, str]]) -> None:
         super().__init__()
         self._matches = matches
 
@@ -106,10 +107,13 @@ class _ControlledGallery(InMemoryGalleryRepository):
                     quality=0.9,
                     origin_tracklet_id=f"{identity_id}-old",
                     face_confirmed=True,
+                    camera_id=camera_id,
                 ),
                 score,
             )
-            for identity_id, score in self._matches
+            for identity_id, score, camera_id in (
+                match if len(match) == 3 else (match[0], match[1], "") for match in self._matches
+            )
         ]
 
 
@@ -366,3 +370,115 @@ async def test_coherence_boost_no_miscommit_without_stable_appearance() -> None:
     )
 
     assert outcome.decisions[0].identity_id is None
+
+
+async def _propagation_resolver(similarity: float) -> IdentityResolver:
+    gallery = InMemoryGalleryRepository()
+    now = datetime.now(UTC)
+    for identity_id in ("alice", "bob"):
+        await gallery.upsert_identity(
+            Identity(identity_id=identity_id, display_name=identity_id, enrolled_at=now)
+        )
+    await gallery.upsert_gallery_entry(
+        GalleryEmbedding(
+            gallery_entry_id="src",
+            identity_id="alice",
+            embedding=[1.0, 0.0],
+            seen_at=now,
+            origin_tracklet_id="t-src",
+            camera_id="cam-a",
+        )
+    )
+    await gallery.upsert_gallery_entry(
+        GalleryEmbedding(
+            gallery_entry_id="dst",
+            identity_id="",
+            embedding=[similarity, (1.0 - similarity**2) ** 0.5],
+            seen_at=now,
+            origin_tracklet_id="t-dst",
+            camera_id="cam-b",
+        )
+    )
+    return IdentityResolver(
+        gallery_repo=gallery,
+        config=ResolverConfig(
+            cross_gt_face_propagation_threshold=0.72,
+            face_commit_min_confidence=0.70,
+            enable_quality_gate=True,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_propagation_threshold_respected(fresh_metrics: Metrics) -> None:
+    src = _make_gt(ph_id="src", tracklet_ids=["t-src"], camera_ids=["cam-a"])
+    dst = _make_gt(ph_id="dst", tracklet_ids=["t-dst"], camera_ids=["cam-b"])
+    anchor = FaceAnchor(person_id="alice", confidence=1.0, quality=1.0, tracklet_id="t-src")
+
+    below = await _propagation_resolver(0.71)
+    below_anchors = await below._propagate_face_anchors([src, dst], [anchor])
+    assert len(below_anchors) == 1
+    assert _metric_total(fresh_metrics.face_propagations_total) == 0.0
+
+    above = await _propagation_resolver(0.73)
+    above_anchors = await above._propagate_face_anchors([src, dst], [anchor])
+    assert len(above_anchors) == 2
+    assert _metric_total(fresh_metrics.face_propagations_total) == 1.0
+
+
+@pytest.mark.asyncio
+async def test_propagation_respects_quality_gate(fresh_metrics: Metrics) -> None:
+    resolver = await _propagation_resolver(0.73)
+    src = _make_gt(ph_id="src", tracklet_ids=["t-src"], camera_ids=["cam-a"])
+    dst = _make_gt(ph_id="dst", tracklet_ids=["t-dst"], camera_ids=["cam-b"])
+
+    outcome = await resolver.resolve(
+        hypotheses=[src, dst],
+        new_face_anchors=[
+            FaceAnchor(person_id="alice", confidence=1.0, quality=1.0, tracklet_id="t-src")
+        ],
+        captured_at=datetime.now(UTC),
+        ph_qualities={"src": 0.9, "dst": 0.1},
+    )
+
+    decisions = {decision.ph_id: decision for decision in outcome.decisions}
+    assert decisions["src"].identity_id == "alice"
+    assert decisions["dst"].identity_id is None
+    assert _metric_total(fresh_metrics.identity_quality_gate_blocks_total) >= 1.0
+
+
+@pytest.mark.asyncio
+async def test_propagation_negative_relatives(fresh_metrics: Metrics) -> None:
+    resolver = await _propagation_resolver(0.68)
+    src = _make_gt(ph_id="src", tracklet_ids=["t-src"], camera_ids=["cam-a"])
+    dst = _make_gt(ph_id="dst", tracklet_ids=["t-dst"], camera_ids=["cam-b"])
+
+    anchors = await resolver._propagate_face_anchors(
+        [src, dst],
+        [FaceAnchor(person_id="alice", confidence=1.0, quality=1.0, tracklet_id="t-src")],
+    )
+
+    assert len(anchors) == 1
+    assert _metric_total(fresh_metrics.face_propagations_total) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_reid_cross_camera_assist_metric(fresh_metrics: Metrics) -> None:
+    resolver = await _coherence_resolver(
+        ResolverConfig(
+            identified_entry_boost_min_sim=0.99,
+            commit_prob=0.64,
+            commit_prob_dense=0.64,
+        ),
+        matches=[("alice", 0.82, "cam-a")],
+    )
+
+    outcome = await resolver.resolve(
+        hypotheses=[_make_gt(tracklet_ids=["t1"], camera_ids=["cam-b"])],
+        new_face_anchors=[],
+        captured_at=datetime.now(UTC),
+        ph_qualities={"ph-1": 0.9},
+    )
+
+    assert outcome.decisions[0].identity_id == "alice"
+    assert _metric_total(fresh_metrics.reid_cross_camera_assist_total) == 1.0

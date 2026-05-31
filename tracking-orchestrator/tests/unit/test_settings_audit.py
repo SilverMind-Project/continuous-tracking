@@ -76,6 +76,7 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     signal = _build_signal_config(settings)
     face_id = _build_face_id_config(settings, camera_configs={})
     resolver = _build_resolver_config(settings)
+    world_tracker = _build_world_tracker_config(settings)
 
     assert signal.absence_threshold_minutes == data["signal"]["absence_threshold_minutes"] == 90
     assert SignalConfig().absence_threshold_minutes == 90
@@ -87,7 +88,9 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     assert PipelineConfig().identity_high_confidence_face_threshold == pytest.approx(0.85)
     assert face_id.min_confidence == data["face_id"]["min_confidence"] == pytest.approx(0.6)
     assert FaceIdConfig().min_confidence == pytest.approx(0.6)
-    assert resolver.cross_gt_face_propagation_threshold == pytest.approx(0.65)
+    assert resolver.cross_gt_face_propagation_threshold == pytest.approx(0.72)
+    assert world_tracker.dedup_residual_coeff_k == pytest.approx(1.0)
+    assert world_tracker.dedup_max_distance_ceiling_m == pytest.approx(1.5)
 
 
 def test_no_dead_settings() -> None:

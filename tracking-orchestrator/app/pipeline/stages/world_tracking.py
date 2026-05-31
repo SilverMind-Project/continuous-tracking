@@ -141,6 +141,7 @@ class WorldTrackingStage(FrameStage):
                     face_anchor=None,
                     detection_id=det.detection_id,
                     quality=det.crop_quality,
+                    floor_residual_m=det.floor_residual_m if fp.calibrated else None,
                 )
             )
         if uncalibrated_count:
@@ -204,6 +205,7 @@ class WorldTrackingStage(FrameStage):
                     face_anchor=face_anchor,
                     detection_id=obs.detection_id,
                     quality=obs.quality,
+                    floor_residual_m=obs.floor_residual_m,
                 )
             )
 

@@ -84,6 +84,16 @@ class SpatialProjectionService:
             return None
         return cal.floor_plan_id or None
 
+    def residual_m_for(self, camera_id: str) -> float | None:
+        """Return the camera calibration's max residual in metres, if available."""
+        cal = self._state.calibrations.get(camera_id)
+        if cal is None:
+            return None
+        residual = cal.quality.max_residual_m
+        if not math.isfinite(residual) or residual < 0.0:
+            return None
+        return residual
+
     @staticmethod
     def distance_m(a: FloorPoint, b: FloorPoint) -> float | None:
         """Euclidean distance between two floor points in metres.

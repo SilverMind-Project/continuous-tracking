@@ -22,6 +22,8 @@ class SpatialProjectionStage(FrameStage):
         ew = ctx.effective_width
         eh = ctx.effective_height
         floor_points: dict[int, FloorPoint] = {}
+        floor_residuals: dict[int, float | None] = {}
+        residual_m = self._projection.residual_m_for(ctx.frame.camera_id)
         for idx, det in enumerate(ctx.raw_detections):
             bbox = BoundingBox(
                 x_min=int(det.x1 * ew),
@@ -29,5 +31,8 @@ class SpatialProjectionStage(FrameStage):
                 x_max=int(det.x2 * ew),
                 y_max=int(det.y2 * eh),
             )
-            floor_points[idx] = self._projection.project_detection(ctx.frame.camera_id, bbox)
+            floor_point = self._projection.project_detection(ctx.frame.camera_id, bbox)
+            floor_points[idx] = floor_point
+            floor_residuals[idx] = residual_m if floor_point.calibrated else None
         ctx._floor_points_by_index = floor_points
+        ctx._floor_residuals_by_index = floor_residuals

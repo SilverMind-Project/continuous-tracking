@@ -62,6 +62,7 @@ class FrameContext:
     # --- Stage: spatial_projection (pre-computed floor points, keyed by
     # index into raw_detections; consumed by inference stage) ---
     _floor_points_by_index: dict[int, FloorPoint] = field(default_factory=dict)
+    _floor_residuals_by_index: dict[int, float | None] = field(default_factory=dict)
 
     # --- Stage: inference (build domain detections + ReID + pose) ---
     domain_detections: list[Detection] = field(default_factory=list)

@@ -234,9 +234,11 @@ class ResolverConfig:
 
     # --- Cross-GT face propagation ---
     # Minimum gallery cosine similarity for propagating a face-confirmed identity
-    # to an adjacent GlobalTrack that has no face anchor of its own. The deployed
-    # value is read from settings.yaml; M4 owns the final safety threshold.
-    cross_gt_face_propagation_threshold: float = 0.78
+    # to an adjacent GlobalTrack that has no face anchor of its own. Propagation
+    # also requires src_face_confidence * gallery_similarity to clear
+    # face_commit_min_confidence, so 0.72 rejects weak ReID similarity while
+    # preserving high-confidence doorway handoffs.
+    cross_gt_face_propagation_threshold: float = 0.72
 
     # Maximum number of adjacent GlobalTracks to propagate face identity to per
     # resolve() call.  Caps the gallery query overhead for busy scenes.
@@ -423,6 +425,12 @@ class IdentityResolver:
                 revision = self._build_revision(entity, decision, captured_at)
                 if revision is not None:
                     outcome.revisions.append(revision)
+            if (
+                decision.identity_id is not None
+                and decision.revises_previous
+                and await self._has_cross_camera_reid_assist(entity, decision.identity_id)
+            ):
+                metrics.metrics.reid_cross_camera_assist_total.inc()
 
             outcome.decisions.append(decision)
 
@@ -704,6 +712,50 @@ class IdentityResolver:
         )
 
         return PosteriorDist(avg)
+
+    async def _has_cross_camera_reid_assist(
+        self,
+        entity: IdentityResolvableEntity,
+        identity_id: str,
+    ) -> bool:
+        """Return True when the committed identity's top ReID hit is cross-camera."""
+        try:
+            recent = await self._gallery_repo.list_gallery_entries_for_tracklets(
+                tracklet_ids=set(entity.observation_ids),
+                limit=20,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "reid_cross_camera_assist_lookup_failed",
+                entity_id=entity.entity_id,
+                exc_info=True,
+            )
+            return False
+
+        if not recent:
+            return False
+
+        import numpy as np
+
+        embs = np.array([e.embedding for e in recent], dtype=np.float32)
+        query = np.mean(embs, axis=0).tolist()
+        try:
+            similar = await self._gallery_repo.search_similar(embedding=query, limit=20)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "reid_cross_camera_assist_search_failed",
+                entity_id=entity.entity_id,
+                exc_info=True,
+            )
+            return False
+
+        for entry, _sim in similar:
+            if entry.identity_id != identity_id:
+                continue
+            return bool(
+                entry.camera_id and entity.camera_ids and entry.camera_id not in entity.camera_ids
+            )
+        return False
 
     def _logistic(self, x: float) -> float:
         """Calibrated logistic curve for ReID similarity -> likelihood.

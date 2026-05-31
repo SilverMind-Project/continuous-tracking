@@ -207,8 +207,10 @@ resolver:
   embedding_coherence_window: 5
   embedding_coherence_min_sim: 0.70
   embedding_coherence_boost: 2.0
-  # M4 owns the final safety threshold. Deployed value remains 0.65 in M2.
-  cross_gt_face_propagation_threshold: 0.65
+  # Synthetic face propagation also requires src_face_confidence * gallery_sim
+  # to clear face_commit_min_confidence, so 0.72 remains reachable for true
+  # handoffs while refusing weak relative/clothing matches.
+  cross_gt_face_propagation_threshold: 0.72
   cross_gt_face_propagation_max_gts: 4
 
 # Keyframe sampler
@@ -237,6 +239,8 @@ world_tracker:
   # ---- Cross-camera dedup (U1) ----
   dedup_enabled: true
   dedup_max_distance_m: 0.6
+  dedup_residual_coeff_k: 1.0
+  dedup_max_distance_ceiling_m: 1.5
   dedup_require_no_face_conflict: true
 
 # Environment label (dev / staging / production)

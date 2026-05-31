@@ -61,6 +61,7 @@ class Metrics:
     face_propagations_total: Counter
     face_id_cooldown_skips_total: Counter
     gallery_backfills_skipped_total: Counter
+    reid_cross_camera_assist_total: Counter
     height_evidence_frames_total: Counter
     unknown_gts_merged_total: Counter
     identity_decays_total: Counter
@@ -247,6 +248,10 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_gallery_backfills_skipped_total",
             "Gallery backfills skipped because the committed identity"
             " has not yet survived the confirmation delay.",
+        ),
+        reid_cross_camera_assist_total=_counter(
+            "cts_reid_cross_camera_assist_total",
+            "Identity commits whose strongest ReID support came from another camera.",
         ),
         homography_rejected_total=_counter(
             "cts_homography_rejected_total",

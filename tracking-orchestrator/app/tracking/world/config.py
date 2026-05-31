@@ -51,4 +51,6 @@ class WorldTrackerConfig:
     # Hungarian assignment runs, preventing one person from spawning two PHs.
     dedup_enabled: bool = True
     dedup_max_distance_m: float = 0.6
+    dedup_residual_coeff_k: float = 1.0
+    dedup_max_distance_ceiling_m: float = 1.5
     dedup_require_no_face_conflict: bool = True

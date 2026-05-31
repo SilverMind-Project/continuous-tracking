@@ -766,7 +766,7 @@ class PostgresWorldObservationRepository:
                 ),
                 observation.height_estimate_m,
                 observation.quality,
-                json.dumps({}),
+                json.dumps({"floor_residual_m": observation.floor_residual_m}),
             )
         return oid
 
@@ -814,6 +814,9 @@ def _row_to_world_observation(row: Any) -> WorldObservation:
     bbox_raw = row["bbox"]
     if isinstance(bbox_raw, str):
         bbox_raw = json.loads(bbox_raw)
+    metadata = row.get("metadata") or {}
+    if isinstance(metadata, str):
+        metadata = json.loads(metadata)
 
     return WorldObservation(
         observation_id=str(row["observation_id"]),
@@ -836,6 +839,7 @@ def _row_to_world_observation(row: Any) -> WorldObservation:
         height_estimate_m=row.get("height_m"),
         face_anchor=None,
         quality=float(row.get("quality") or 0.0),
+        floor_residual_m=metadata.get("floor_residual_m"),
     )
 
 

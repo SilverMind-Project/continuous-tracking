@@ -655,6 +655,7 @@ class InMemoryWorldObservationRepository:
             face_anchor=observation.face_anchor,
             detection_id=observation.detection_id,
             quality=observation.quality,
+            floor_residual_m=observation.floor_residual_m,
         )
         self._observations.setdefault(ph_id, []).append(stored)
         return oid

@@ -123,6 +123,7 @@ class WorldObservation:
     face_anchor: FaceAnchor | None = None
     detection_id: str = ""
     quality: float = 0.0  # composite crop quality [0,1] from CropQuality.quality
+    floor_residual_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -321,6 +322,7 @@ class Detection:
     ph_id: PHId = ""
     floor_point: FloorPoint = field(default_factory=lambda: FloorPoint(0, 0))
     crop_quality: float = 0.0  # composite quality from CropQuality.quality
+    floor_residual_m: float | None = None
 
 
 # ---------------------------------------------------------------------------

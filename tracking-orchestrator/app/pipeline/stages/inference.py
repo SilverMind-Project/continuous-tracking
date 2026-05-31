@@ -88,6 +88,7 @@ class InferenceStage(FrameStage):
 
             # PersonDetectionEvidence — detector provenance.
             fp = ctx._floor_points_by_index.get(det_idx)
+            floor_residual_m = ctx._floor_residuals_by_index.get(det_idx)
             detection_evidence[det_idx] = PersonDetectionEvidence(
                 detection_id=det_id,
                 camera_id=ctx.frame.camera_id,
@@ -160,6 +161,7 @@ class InferenceStage(FrameStage):
                 confidence=det.confidence,
                 floor_point=fp if fp is not None else FloorPoint(0, 0),
                 crop_quality=cq.quality,
+                floor_residual_m=floor_residual_m,
             )
             ctx.domain_detections.append(domain_det)
             if pose_result is not None:

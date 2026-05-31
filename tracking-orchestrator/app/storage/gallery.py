@@ -209,6 +209,7 @@ class InMemoryGalleryRepository(GalleryRepository):
                     quality=entry.quality,
                     origin_tracklet_id=entry.origin_tracklet_id,
                     face_confirmed=entry.face_confirmed,
+                    camera_id=entry.camera_id,
                 )
                 updated += 1
         return updated

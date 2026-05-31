@@ -19,6 +19,8 @@ def _obs(
     detection_id: str = "",
     face_person_id: str | None = None,
     quality: float = 0.5,
+    floor_residual_m: float | None = None,
+    calibrated: bool = True,
 ) -> WorldObservation:
     face: FaceAnchor | None = None
     if face_person_id is not None:
@@ -33,13 +35,14 @@ def _obs(
         camera_id=camera_id,
         frame_index=1,
         captured_at=_NOW,
-        floor_point=FloorPoint(x_mm=int(x_m * 1000), y_mm=int(y_m * 1000), calibrated=True),
+        floor_point=FloorPoint(x_mm=int(x_m * 1000), y_mm=int(y_m * 1000), calibrated=calibrated),
         bbox=BoundingBox(x_min=0, y_min=0, x_max=100, y_max=200),
         embedding=[0.9, 0.1, 0.0],
         detection_confidence=0.92,
         detection_id=detection_id,
         face_anchor=face,
         quality=quality,
+        floor_residual_m=floor_residual_m,
     )
 
 
@@ -82,6 +85,77 @@ def test_beyond_distance_not_merged():
     deduped, _ = dedup_observations([obs1, obs2], _CFG)
 
     assert len(deduped) == 2, "observations beyond threshold must not be merged"
+
+
+def test_dedup_same_person_merged_with_residual():
+    cfg = WorldTrackerConfig(
+        dedup_enabled=True,
+        dedup_max_distance_m=0.6,
+        dedup_residual_coeff_k=1.0,
+        dedup_max_distance_ceiling_m=1.5,
+    )
+    obs1 = _obs("cam-1", 5.0, 5.0, detection_id="d1", quality=0.8, floor_residual_m=0.2)
+    obs2 = _obs("cam-2", 5.9, 5.0, detection_id="d2", quality=0.6, floor_residual_m=0.2)
+
+    deduped, cluster_map = dedup_observations([obs1, obs2], cfg)
+
+    assert len(deduped) == 1
+    rep = deduped[0]
+    assert rep.detection_id == "d1"
+    assert set(cluster_map[rep.detection_id]) == {"d1", "d2"}
+
+
+def test_dedup_different_people_not_merged_with_residual():
+    cfg = WorldTrackerConfig(
+        dedup_enabled=True,
+        dedup_max_distance_m=0.6,
+        dedup_residual_coeff_k=1.0,
+        dedup_max_distance_ceiling_m=1.5,
+    )
+    obs1 = _obs(
+        "cam-1",
+        5.0,
+        5.0,
+        detection_id="d1",
+        face_person_id="alice",
+        floor_residual_m=0.2,
+    )
+    obs2 = _obs(
+        "cam-2",
+        5.7,
+        5.0,
+        detection_id="d2",
+        face_person_id="bob",
+        floor_residual_m=0.2,
+    )
+
+    deduped, _ = dedup_observations([obs1, obs2], cfg)
+
+    assert len(deduped) == 2
+
+
+def test_dedup_ceiling_bounds_widening():
+    cfg = WorldTrackerConfig(
+        dedup_enabled=True,
+        dedup_max_distance_m=0.6,
+        dedup_residual_coeff_k=1.0,
+        dedup_max_distance_ceiling_m=1.5,
+    )
+    obs1 = _obs("cam-1", 5.0, 5.0, detection_id="d1", floor_residual_m=10.0)
+    obs2 = _obs("cam-2", 6.6, 5.0, detection_id="d2", floor_residual_m=10.0)
+
+    deduped, _ = dedup_observations([obs1, obs2], cfg)
+
+    assert len(deduped) == 2
+
+
+def test_dedup_skips_uncalibrated():
+    obs1 = _obs("cam-1", 5.0, 5.0, detection_id="d1", calibrated=False)
+    obs2 = _obs("cam-2", 5.1, 5.0, detection_id="d2", calibrated=False)
+
+    deduped, _ = dedup_observations([obs1, obs2], _CFG)
+
+    assert len(deduped) == 2
 
 
 # U1-T7: representative selection is deterministic (highest quality wins, ties by camera+det id).

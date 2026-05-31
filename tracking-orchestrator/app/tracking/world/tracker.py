@@ -50,7 +50,7 @@ logger = get_logger(__name__)
 class ContinuationPublisher(Protocol):
     """Publishes PHContinuationCandidate events to tracking.continuations."""
 
-    async def publish(self, candidate: PHContinuationCandidate) -> None: ...
+    async def publish(self, candidate: PHContinuationCandidate) -> object: ...
 
 
 @dataclass
@@ -396,6 +396,7 @@ class WorldTracker:
                     )
                     continuations.append(candidate)
                     await self._continuation_publisher.publish(candidate)
+                    _metrics.metrics.world_tracker_continuations_total.inc()
 
         # 7. Close PHs that have not been observed for ph_close_grace_s.
         for ph_idx in assignment.unmatched_phs:
