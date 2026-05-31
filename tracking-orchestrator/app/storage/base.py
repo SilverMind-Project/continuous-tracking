@@ -145,9 +145,7 @@ class PHRepositoryProtocol(Protocol):
         idempotency_key: str | None = None,
     ) -> list[IdentityRevision]: ...
     async def delete_many(self, ph_ids: list[str], *, actor: str, reason: str) -> int: ...
-    async def purge_unknown_older_than(
-        self, cutoff: datetime, *, limit: int = 1000
-    ) -> int: ...
+    async def purge_unknown_older_than(self, cutoff: datetime, *, limit: int = 1000) -> int: ...
     async def list_revisions(
         self,
         *,
@@ -636,9 +634,7 @@ class InMemoryPHRepository:
                     del self._merges[source_ph_id]
             return deleted
 
-    async def purge_unknown_older_than(
-        self, cutoff: datetime, *, limit: int = 1000
-    ) -> int:
+    async def purge_unknown_older_than(self, cutoff: datetime, *, limit: int = 1000) -> int:
         candidates = [
             ph.ph_id
             for ph in sorted(self._phs.values(), key=lambda p: p.last_seen_at)

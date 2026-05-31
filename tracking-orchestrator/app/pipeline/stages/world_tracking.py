@@ -6,11 +6,13 @@ Wires TransitDetector and RoomTransitionPublisher.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from structlog import get_logger
 
 from ...domain import BoundingBox, FaceAnchor, FloorPoint, TransitZone, WorldObservation
 from ...tracking.world.config import WorldTrackerConfig
-from ...tracking.world.tracker import WorldTracker
+from ...tracking.world.tracker import WorldTracker, WorldTrackerResult
 from ...tracking.world.transit_detector import TransitDetector
 from ...transport.room_transition_publisher import RoomTransitionPublisher
 from ..frame_context import FrameContext
@@ -201,7 +203,7 @@ class WorldTrackingStage(FrameStage):
         self,
         *,
         observations: list[WorldObservation],
-        now,
+        now: datetime,
     ) -> list[FaceAnchor]:
         from ...tracking.world.assertion_matching import match_assertions_to_face_anchors
 
@@ -267,7 +269,9 @@ class WorldTrackingStage(FrameStage):
             )
         return observations_with_faces
 
-    async def _publish_transit_events(self, result, event_time) -> None:
+    async def _publish_transit_events(
+        self, result: WorldTrackerResult, event_time: datetime
+    ) -> None:
         # Detect transit zone crossings for each active PH.
         if (
             self._transit_detector is not None
@@ -303,7 +307,9 @@ class WorldTrackingStage(FrameStage):
                     self._transit_detector.remove_ph(ph.ph_id)
 
     @staticmethod
-    def _populate_context(ctx: FrameContext, result, *, include_revisions: bool) -> None:
+    def _populate_context(
+        ctx: FrameContext, result: WorldTrackerResult, *, include_revisions: bool
+    ) -> None:
         # Populate frame context for downstream stages (PH-native).
         ctx.active_ph_ids = {ph.ph_id for ph in result.updated_phs if ph.closed_at is None}
         ctx.outcome_decisions = list(result.identity_decisions)

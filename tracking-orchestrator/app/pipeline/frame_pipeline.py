@@ -810,9 +810,7 @@ class FrameProcessingPipeline:
 
             await self._process_cross_camera_post_detect_batch(fetched_contexts)
 
-    async def _process_cross_camera_post_detect_batch(
-        self, contexts: list[FrameContext]
-    ) -> None:
+    async def _process_cross_camera_post_detect_batch(self, contexts: list[FrameContext]) -> None:
         """Run post-detect stages while preserving cross-camera world tracking.
 
         Detector batching may include multiple frames per camera. Process one

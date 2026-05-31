@@ -68,9 +68,7 @@ class PHMaintenanceService:
 
     async def run_once(self) -> int:
         cutoff = datetime.now(UTC) - timedelta(days=self._config.older_than_days)
-        deleted = await self._repo.purge_unknown_older_than(
-            cutoff, limit=self._config.batch_size
-        )
+        deleted = await self._repo.purge_unknown_older_than(cutoff, limit=self._config.batch_size)
         if deleted:
             logger.info(
                 "ph_maintenance_unknown_purged",

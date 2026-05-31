@@ -352,8 +352,7 @@ class PostgresPHRepository:
     ) -> tuple[list[Keyframe], int]:
         async with self._pool.acquire() as conn:
             total: int = await conn.fetchval(
-                "SELECT COUNT(*) FROM continuous_tracking.tagged_keyframes "
-                "WHERE ph_id = $1::uuid",
+                "SELECT COUNT(*) FROM continuous_tracking.tagged_keyframes WHERE ph_id = $1::uuid",
                 ph_id,
             )
             rows = await conn.fetch(
@@ -745,9 +744,7 @@ class PostgresPHRepository:
         )
         return len(rows)
 
-    async def purge_unknown_older_than(
-        self, cutoff: datetime, *, limit: int = 1000
-    ) -> int:
+    async def purge_unknown_older_than(self, cutoff: datetime, *, limit: int = 1000) -> int:
         async with self._pool.acquire() as conn, conn.transaction():
             rows = await conn.fetch(
                 """
@@ -884,9 +881,7 @@ class PostgresWorldObservationRepository:
 # ---------------------------------------------------------------------------
 
 
-def _json_object_from_db(
-    raw: Any, *, column: str, default_empty: bool = False
-) -> dict[str, Any]:
+def _json_object_from_db(raw: Any, *, column: str, default_empty: bool = False) -> dict[str, Any]:
     if raw is None:
         if default_empty:
             return {}
@@ -900,9 +895,7 @@ def _json_object_from_db(
             raise ValueError(f"{column} contains invalid JSON") from exc
         if isinstance(parsed, Mapping):
             return dict(parsed)
-        raise TypeError(
-            f"{column} must decode to a JSON object, got {type(parsed).__name__}"
-        )
+        raise TypeError(f"{column} must decode to a JSON object, got {type(parsed).__name__}")
     raise TypeError(f"{column} must be a JSON object, got {type(raw).__name__}")
 
 
