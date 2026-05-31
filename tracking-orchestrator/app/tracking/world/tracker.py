@@ -302,8 +302,19 @@ class WorldTracker:
             fx = obs.floor_point.x_mm / 1000.0
             fy = obs.floor_point.y_mm / 1000.0
 
-            if room_polygons and not is_in_any_room_polygon(fx, fy, room_polygons):
+            out_of_room = bool(room_polygons) and not is_in_any_room_polygon(fx, fy, room_polygons)
+            if obs.floor_point.calibrated and out_of_room:
+                _metrics.metrics.world_tracker_spawn_rejected_out_of_room_total.inc()
                 continue
+            if not obs.floor_point.calibrated and out_of_room:
+                _metrics.metrics.identity_shadow_mismatch_total.labels(
+                    feature="uncalibrated_spawn"
+                ).inc()
+                logger.debug(
+                    "world_tracker_uncalibrated_spawn_allowed",
+                    camera_id=obs.camera_id,
+                    calibrated=False,
+                )
 
             ks = initialize(
                 fx,
@@ -339,6 +350,7 @@ class WorldTracker:
                 mean_quality=obs.quality,
             )
             updated_phs.append(new_ph)
+            _metrics.metrics.world_tracker_ph_spawned_total.inc()
             ph_obs_meta[new_ph.ph_id] = (
                 obs.frame_index,
                 obs.bbox,
@@ -410,6 +422,7 @@ class WorldTracker:
                     mean_quality=ph.mean_quality,
                 )
                 updated_phs.append(closed)
+                _metrics.metrics.world_tracker_ph_closed_total.inc()
             else:
                 # Keep open but unobserved; update state to predicted.
                 ks = predicted_states[ph_idx]
@@ -600,6 +613,7 @@ async def _resolve_identities(
                 for ph in resolvable_phs
                 if ph.height_estimate_m is not None
             },
+            ph_qualities={ph.ph_id: ph.mean_quality for ph in resolvable_phs},
             face_evidence=face_evidence,
         )
     except Exception:

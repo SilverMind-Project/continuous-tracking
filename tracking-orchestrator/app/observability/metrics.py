@@ -64,6 +64,9 @@ class Metrics:
     height_evidence_frames_total: Counter
     unknown_gts_merged_total: Counter
     identity_decays_total: Counter
+    identity_quality_gate_blocks_total: Counter
+    identity_flips_total: Counter
+    identity_shadow_mismatch_total: Counter
     posterior_entropy: Histogram
     homography_rejected_total: Counter
     homography_warning_total: Counter
@@ -99,6 +102,7 @@ class Metrics:
     world_tracker_assignment_cost: Histogram
     world_tracker_continuations_total: Counter
     world_tracker_clock_skew_ms: Histogram
+    world_tracker_spawn_rejected_out_of_room_total: Counter
 
     # ---- U1 cross-camera dedup -----------------------------------------
     worldtracker_observations_deduped_total: Counter
@@ -286,6 +290,19 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Identities cleared because the maintenance window expired"
             " without fresh confirming evidence.",
         ),
+        identity_quality_gate_blocks_total=_counter(
+            "cts_identity_quality_gate_blocks_total",
+            "Identity commits or face locks suppressed by the PH quality gate.",
+        ),
+        identity_flips_total=_counter(
+            "cts_identity_flips_total",
+            "Committed identity changes from one non-UNKNOWN identity to another.",
+        ),
+        identity_shadow_mismatch_total=_counter(
+            "cts_identity_shadow_mismatch_total",
+            "Shadow-mode identity decisions that would differ from live behavior.",
+            ["feature"],
+        ),
         posterior_entropy=_hist(
             "cts_posterior_entropy_bits",
             "Per-decision Bayesian posterior entropy (bits).",
@@ -354,6 +371,10 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Per-camera clock skew vs orchestrator wall-clock.",
             (1, 5, 10, 25, 50, 100, 200, 500),
             ["camera_id"],
+        ),
+        world_tracker_spawn_rejected_out_of_room_total=_counter(
+            "cts_world_tracker_spawn_rejected_out_of_room_total",
+            "WorldTracker PH spawns rejected because a calibrated observation was outside rooms.",
         ),
         # ---- U1 cross-camera dedup -----------------------------------------
         worldtracker_observations_deduped_total=_counter(

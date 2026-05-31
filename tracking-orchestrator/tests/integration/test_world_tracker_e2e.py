@@ -23,8 +23,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from prometheus_client import CollectorRegistry, Counter
 
 from app.domain import BoundingBox, FloorPoint, WorldObservation
+from app.observability.metrics import build_metrics
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frame_replays"
 
@@ -33,6 +35,15 @@ FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frame_repl
 _ROOM_POLYGONS: dict[str, list[tuple[float, float]]] = {
     "living_room": [(0.0, 0.0), (25.0, 0.0), (25.0, 25.0), (0.0, 25.0)]
 }
+
+
+def _counter_total(counter: Counter) -> float:
+    return sum(
+        sample.value
+        for metric in counter.collect()
+        for sample in metric.samples
+        if sample.name.endswith("_total")
+    )
 
 
 def _load_fixture(path: Path) -> list[list[WorldObservation]]:
@@ -259,3 +270,59 @@ class TestHallwayBathroomDoor:
         assert all(o.quality > 0.0 for o in obs_list), (
             "T9-Postgres: quality must survive a Postgres save+load (fixture sets quality=0.5)"
         )
+
+
+@pytest.mark.integration
+class TestUncalibratedSpawnWithRoomPolygons:
+    """M3: uncalibrated cameras spawn PHs even when room polygons exist."""
+
+    @pytest.mark.asyncio
+    async def test_uncalibrated_camera_spawns_phs_with_room_polygons(
+        self,
+        db_pool: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from app.observability import metrics as metrics_pkg
+        from app.storage.postgres.ph_repo import (
+            PostgresPHRepository,
+            PostgresWorldObservationRepository,
+        )
+        from app.tracking.world import tracker as tracker_mod
+        from app.tracking.world.tracker import WorldTracker
+
+        fresh_metrics = build_metrics(registry=CollectorRegistry())
+        monkeypatch.setattr(metrics_pkg, "metrics", fresh_metrics)
+        monkeypatch.setattr(tracker_mod._metrics, "metrics", fresh_metrics)
+
+        ph_repo = PostgresPHRepository(db_pool)
+        obs_repo = PostgresWorldObservationRepository(db_pool)
+        tracker = WorldTracker(ph_repo=ph_repo, obs_repo=obs_repo)
+        now = datetime(2026, 5, 28, 10, 0, 0, tzinfo=UTC)
+
+        obs = WorldObservation(
+            camera_id="uncalibrated-cam",
+            frame_index=1,
+            captured_at=now,
+            floor_point=FloorPoint(x_mm=200_000, y_mm=200_000, calibrated=False),
+            bbox=BoundingBox(x_min=10, y_min=20, x_max=110, y_max=220),
+            embedding=[1.0, 0.0, 0.0, 0.0],
+            detection_confidence=0.90,
+            detection_id="det-uncal-1",
+            quality=0.50,
+        )
+
+        await tracker.step(observations=[obs], now=now, room_polygons=_ROOM_POLYGONS)
+
+        phs, total = await ph_repo.list_active(include_transient=True)
+        assert total == 1
+        assert phs[0].last_seen_camera == "uncalibrated-cam"
+        assert _counter_total(fresh_metrics.world_tracker_ph_spawned_total) == 1.0
+        assert _counter_total(fresh_metrics.world_tracker_spawn_rejected_out_of_room_total) == 0.0
+        shadow_sample = next(
+            sample
+            for metric in fresh_metrics.identity_shadow_mismatch_total.collect()
+            for sample in metric.samples
+            if sample.labels.get("feature") == "uncalibrated_spawn"
+            and sample.name.endswith("_total")
+        )
+        assert shadow_sample.value == 1.0

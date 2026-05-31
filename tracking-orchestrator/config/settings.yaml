@@ -179,6 +179,11 @@ resolver:
   commit_margin: 0.15
   face_weight_multiplier: 3.0
   prior_maintenance_max_age_s: 120.0
+  min_quality_to_commit: 0.35
+  min_quality_to_face_lock: 0.45
+  enable_quality_gate: true
+  flip_debounce_window_s: 10.0
+  enable_flip_debounce: true
   # Identity-lock gate for emitted face anchors. This is intentionally stricter
   # than face_id.min_confidence, which only controls whether an anchor is emitted.
   face_commit_min_confidence: 0.70

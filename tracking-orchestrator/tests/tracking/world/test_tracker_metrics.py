@@ -47,11 +47,19 @@ async def test_dedup_counter_increments_once_per_collapsed_observation(monkeypat
     fake_deduped = MagicMock()
     fake_clusters = MagicMock()
     fake_missing = MagicMock()
+    fake_spawned = MagicMock()
+    fake_closed = MagicMock()
+    fake_rejected = MagicMock()
+    fake_shadow = MagicMock()
 
     class _FakeMetrics:
         worldtracker_observations_deduped_total = fake_deduped
         worldtracker_dedup_clusters_total = fake_clusters
         worldtracker_observation_missing_floorpoint_total = fake_missing
+        world_tracker_ph_spawned_total = fake_spawned
+        world_tracker_ph_closed_total = fake_closed
+        world_tracker_spawn_rejected_out_of_room_total = fake_rejected
+        identity_shadow_mismatch_total = fake_shadow
 
     monkeypatch.setattr(_metrics, "metrics", _FakeMetrics())
 
@@ -82,11 +90,19 @@ async def test_missing_floorpoint_counter_increments(monkeypatch):
     fake_deduped = MagicMock()
     fake_clusters = MagicMock()
     fake_missing = MagicMock()
+    fake_spawned = MagicMock()
+    fake_closed = MagicMock()
+    fake_rejected = MagicMock()
+    fake_shadow = MagicMock()
 
     class _FakeMetrics:
         worldtracker_observations_deduped_total = fake_deduped
         worldtracker_dedup_clusters_total = fake_clusters
         worldtracker_observation_missing_floorpoint_total = fake_missing
+        world_tracker_ph_spawned_total = fake_spawned
+        world_tracker_ph_closed_total = fake_closed
+        world_tracker_spawn_rejected_out_of_room_total = fake_rejected
+        identity_shadow_mismatch_total = fake_shadow
 
     monkeypatch.setattr(_metrics, "metrics", _FakeMetrics())
 

@@ -68,6 +68,20 @@ class _FaceLock:
 
 
 @dataclass(frozen=True)
+class _CommitEvaluation:
+    """Pure commit-rule result before side effects and metric emission."""
+
+    new_id: str | None
+    evidence_backed: bool
+    has_evidence: bool
+    within_maintenance_window: bool
+    effective_commit_prob: float
+    effective_commit_margin: float
+    quality_gate_blocked: bool
+    flip_debounce_blocked: bool
+
+
+@dataclass(frozen=True)
 class ResolverConfig:
     """Configuration for the identity resolver."""
 
@@ -122,6 +136,23 @@ class ResolverConfig:
     # face (3.0) but more than neutral (1.0).
     height_weight_multiplier: float = 1.5
 
+    # --- Evidence quality gates ---
+    # Minimum PH crop-quality EMA needed for a new identity commit.
+    # CropQuality maxes out at 0.60 without pose (0.30 area + 0.30 detector
+    # confidence) and 0.80 with pose, so 0.35 blocks clearly poor crops while
+    # allowing ordinary no-pose detections to commit.
+    min_quality_to_commit: float = 0.35
+
+    # Minimum PH crop-quality EMA needed to set or refresh a face lock.
+    # Face locks last longer than ordinary prior maintenance, so they require a
+    # cleaner crop than the baseline commit threshold while staying reachable
+    # for no-pose frames whose practical maximum is 0.60.
+    min_quality_to_face_lock: float = 0.45
+
+    # Shadow flag for quality gating.  When false, low-quality commits and face
+    # locks are allowed but counted in cts_identity_quality_gate_blocks_total.
+    enable_quality_gate: bool = False
+
     # Higher commit threshold used in dense scenes (≥ 2 candidate
     # identities with posterior > 0.3).  Prevents confident-but-wrong
     # commits when two enrolled people are in the same room.
@@ -131,6 +162,16 @@ class ResolverConfig:
     # posteriors like [0.55, 0.40, 0.05], the narrow 0.15 gap should
     # refuse to commit — the resolver must wait for stronger evidence.
     commit_margin_dense: float = 0.20
+
+    # --- Identity flip debounce ---
+    # Reversals inside this window must clear dense-scene thresholds.  This
+    # dampens A -> B -> A oscillation caused by weak or marginal evidence.
+    flip_debounce_window_s: float = 10.0
+
+    # Shadow flag for the flip debounce.  When false, live behavior is unchanged
+    # and cts_identity_shadow_mismatch_total{feature="flip_debounce"} counts
+    # decisions the debounce would have changed.
+    enable_flip_debounce: bool = False
 
     # Maximum age (seconds) of the most recent evidence-backed commit
     # before the prior alone is no longer sufficient to maintain an
@@ -252,6 +293,7 @@ class IdentityResolver:
         new_face_anchors: list[FaceAnchor],
         captured_at: datetime,
         ph_heights: dict[str, float] | None = None,
+        ph_qualities: dict[str, float] | None = None,
         face_evidence: list[FaceEvidence] | None = None,
     ) -> ResolveOutcome:
         """Resolve identities for a batch of tracked entities.
@@ -261,6 +303,7 @@ class IdentityResolver:
             new_face_anchors: face anchors from this frame.
             captured_at: wall-clock time of the current frame.
             ph_heights: optional entity_id → height_m mapping.
+            ph_qualities: optional entity_id → rolling crop quality mapping.
             face_evidence: optional typed FaceEvidence records with source
                 metadata. When provided, direct evidence receives normal
                 weight and propagated evidence receives reduced weight.
@@ -292,6 +335,41 @@ class IdentityResolver:
             reid_likelihood = await self._from_gallery(entity)
             height_likelihood = self._from_height(entity, ph_heights or {})
             posterior = self._combine(prior, face_likelihood, reid_likelihood, height_likelihood)
+            entity_quality = (ph_qualities or {}).get(entity.entity_id, 1.0)
+
+            if not self._config.enable_embedding_coherence_boost:
+                boosted_reid = await self._from_gallery(entity, enable_coherence_boost=True)
+                if boosted_reid.distribution != reid_likelihood.distribution:
+                    boosted_posterior = self._combine(
+                        prior,
+                        face_likelihood,
+                        boosted_reid,
+                        height_likelihood,
+                    )
+                    live_eval = self._evaluate_commit(
+                        entity,
+                        posterior,
+                        face_likelihood,
+                        reid_likelihood,
+                        captured_at,
+                        entity_quality,
+                        enforce_quality_gate=self._config.enable_quality_gate,
+                        enforce_flip_debounce=self._config.enable_flip_debounce,
+                    )
+                    boosted_eval = self._evaluate_commit(
+                        entity,
+                        boosted_posterior,
+                        face_likelihood,
+                        boosted_reid,
+                        captured_at,
+                        entity_quality,
+                        enforce_quality_gate=self._config.enable_quality_gate,
+                        enforce_flip_debounce=self._config.enable_flip_debounce,
+                    )
+                    if live_eval.new_id != boosted_eval.new_id:
+                        metrics.metrics.identity_shadow_mismatch_total.labels(
+                            feature="coherence_boost"
+                        ).inc()
 
             # Build identity evidence ledger for this entity.
             evidence_items = self._build_evidence_ledger(
@@ -304,7 +382,13 @@ class IdentityResolver:
             )
 
             decision = self._commit(
-                entity, posterior, face_likelihood, reid_likelihood, captured_at, best_face_conf
+                entity,
+                posterior,
+                face_likelihood,
+                reid_likelihood,
+                captured_at,
+                best_face_conf,
+                entity_quality=entity_quality,
             )
             # Attach evidence summary.
             ep = EvidencePosterior(
@@ -483,7 +567,12 @@ class IdentityResolver:
     # ReID likelihood from gallery
     # ------------------------------------------------------------------
 
-    async def _from_gallery(self, entity: IdentityResolvableEntity) -> PosteriorDist:
+    async def _from_gallery(
+        self,
+        entity: IdentityResolvableEntity,
+        *,
+        enable_coherence_boost: bool | None = None,
+    ) -> PosteriorDist:
         """Build likelihood from gallery k-NN search.
 
         Queries the gallery for similar embeddings to the entity's
@@ -523,8 +612,13 @@ class IdentityResolver:
         # similar, the person's appearance is stable → apply a likelihood boost
         # to the top matching identity so that stable but below-threshold scores
         # still cross commit_prob.
+        use_coherence_boost = (
+            self._config.enable_embedding_coherence_boost
+            if enable_coherence_boost is None
+            else enable_coherence_boost
+        )
         coherence_active = False
-        if self._config.enable_embedding_coherence_boost and len(embs) >= 2:
+        if use_coherence_boost and len(embs) >= 2:
             window = embs[-self._config.embedding_coherence_window :]
             norms = np.linalg.norm(window, axis=1, keepdims=True)
             normed = window / np.maximum(norms, 1e-8)
@@ -749,6 +843,7 @@ class IdentityResolver:
         reid_likelihood: PosteriorDist,
         captured_at: datetime,
         best_face_confidence: float | None = None,
+        entity_quality: float = 1.0,
     ) -> IdentityDecision:
         """Apply the commit rule to produce an identity decision.
 
@@ -772,11 +867,19 @@ class IdentityResolver:
         # --- Face lock management ---
         existing_lock = self._face_locks.get(entity.entity_id)
         is_face_evidence = top_id in face_likelihood.distribution and top_id not in ("UNKNOWN", "")
+        quality_gate_counted = False
+        face_lock_quality_blocked = (
+            is_face_evidence
+            and best_face_confidence is not None
+            and best_face_confidence >= self._config.face_commit_min_confidence
+            and entity_quality < self._config.min_quality_to_face_lock
+        )
         # Narrow type: only enter the block when confidence is a float.
         if (
             is_face_evidence
             and best_face_confidence is not None
             and best_face_confidence >= self._config.face_commit_min_confidence
+            and (not face_lock_quality_blocked or not self._config.enable_quality_gate)
         ):
             face_conf: float = best_face_confidence  # narrowed
             if existing_lock is None or existing_lock.identity_id == top_id:
@@ -799,7 +902,129 @@ class IdentityResolver:
                     confidence=face_conf,
                     locked_at=captured_at,
                 )
+        if face_lock_quality_blocked:
+            metrics.metrics.identity_quality_gate_blocks_total.inc()
+            quality_gate_counted = True
 
+        live_eval = self._evaluate_commit(
+            entity,
+            posterior,
+            face_likelihood,
+            reid_likelihood,
+            captured_at,
+            entity_quality,
+            enforce_quality_gate=self._config.enable_quality_gate,
+            enforce_flip_debounce=self._config.enable_flip_debounce,
+        )
+
+        prev_id = entity.current_identity_id
+        new_id = live_eval.new_id
+        if live_eval.quality_gate_blocked and not quality_gate_counted:
+            metrics.metrics.identity_quality_gate_blocks_total.inc()
+            quality_gate_counted = True
+
+        if not self._config.enable_flip_debounce:
+            debounced_eval = self._evaluate_commit(
+                entity,
+                posterior,
+                face_likelihood,
+                reid_likelihood,
+                captured_at,
+                entity_quality,
+                enforce_quality_gate=self._config.enable_quality_gate,
+                enforce_flip_debounce=True,
+            )
+            if live_eval.new_id != debounced_eval.new_id:
+                metrics.metrics.identity_shadow_mismatch_total.labels(feature="flip_debounce").inc()
+
+        if (
+            prev_id is not None
+            and not live_eval.within_maintenance_window
+            and not live_eval.has_evidence
+        ):
+            metrics.metrics.identity_decays_total.inc()
+            logger.info(
+                "identity_maintenance_window_expired",
+                entity_id=entity.entity_id,
+                prev_identity_id=prev_id,
+                identity_age_s=round(
+                    (
+                        captured_at - (entity.current_identity_committed_at or entity.last_seen_at)
+                    ).total_seconds(),
+                    1,
+                ),
+                max_age_s=self._config.prior_maintenance_max_age_s,
+            )
+
+        revises = new_id != prev_id
+
+        reason = ""
+        if revises:
+            if prev_id is None:
+                reason = f"initial_assignment: {top_id} (p={top_prob:.3f})"
+            elif new_id is None:
+                reason = f"demoted_to_unknown: {top_id} (p={top_prob:.3f}, margin={margin:.3f})"
+            else:
+                reason = (
+                    f"identity_change: {prev_id} -> {new_id} "
+                    f"(p={top_prob:.3f}, margin={margin:.3f})"
+                )
+
+        metrics.metrics.posterior_entropy.observe(posterior.entropy())
+        if prev_id is not None and new_id is not None and new_id != prev_id:
+            metrics.metrics.identity_flips_total.inc()
+        if new_id is not None and revises:
+            metrics.metrics.identity_commits_total.labels(
+                source="face" if top_id in face_likelihood.distribution else "reid",
+            ).inc()
+
+        if new_id is None:
+            logger.debug(
+                "identity_not_committed",
+                entity_id=entity.entity_id,
+                top_id=top_id,
+                top_prob=round(top_prob, 4),
+                margin=round(margin, 4),
+                has_evidence=live_eval.has_evidence,
+                within_maintenance_window=live_eval.within_maintenance_window,
+                prev_id=prev_id,
+                known_identity_count=len(self._identities),
+                quality_gate_blocked=live_eval.quality_gate_blocked,
+                flip_debounce_blocked=live_eval.flip_debounce_blocked,
+            )
+        elif live_eval.within_maintenance_window:
+            logger.debug(
+                "identity_maintained_by_prior",
+                entity_id=entity.entity_id,
+                identity_id=new_id,
+                top_prob=round(top_prob, 4),
+                age_s=round((captured_at - entity.last_seen_at).total_seconds(), 1),
+            )
+
+        return IdentityDecision(
+            ph_id=entity.entity_id,
+            identity_id=new_id,
+            posterior=posterior,
+            revises_previous=revises,
+            previous_identity_id=prev_id,
+            reason=reason,
+            evidence_backed=live_eval.evidence_backed,
+        )
+
+    def _evaluate_commit(
+        self,
+        entity: IdentityResolvableEntity,
+        posterior: PosteriorDist,
+        face_likelihood: PosteriorDist,
+        reid_likelihood: PosteriorDist,
+        captured_at: datetime,
+        entity_quality: float,
+        *,
+        enforce_quality_gate: bool,
+        enforce_flip_debounce: bool,
+    ) -> _CommitEvaluation:
+        """Evaluate the commit rule without mutating locks or emitting metrics."""
+        (top_id, top_prob), margin = posterior.top_with_margin()
         has_evidence = (
             top_id in face_likelihood.distribution or top_id in reid_likelihood.distribution
         )
@@ -849,71 +1074,42 @@ class IdentityResolver:
         else:
             new_id = None
 
-        if prev_id is not None and not within_maintenance_window and not has_evidence:
-            metrics.metrics.identity_decays_total.inc()
-            logger.info(
-                "identity_maintenance_window_expired",
-                entity_id=entity.entity_id,
-                prev_identity_id=prev_id,
-                identity_age_s=round(
-                    (
-                        captured_at - (entity.current_identity_committed_at or entity.last_seen_at)
-                    ).total_seconds(),
-                    1,
-                ),
-                max_age_s=self._config.prior_maintenance_max_age_s,
-            )
+        quality_gate_blocked = (
+            new_id is not None
+            and new_id != prev_id
+            and entity_quality < self._config.min_quality_to_commit
+        )
+        if quality_gate_blocked and enforce_quality_gate:
+            new_id = None
+            evidence_backed = False
 
-        revises = new_id != prev_id
-
-        reason = ""
-        if revises:
-            if prev_id is None:
-                reason = f"initial_assignment: {top_id} (p={top_prob:.3f})"
-            elif new_id is None:
-                reason = f"demoted_to_unknown: {top_id} (p={top_prob:.3f}, margin={margin:.3f})"
-            else:
-                reason = (
-                    f"identity_change: {prev_id} -> {new_id} "
-                    f"(p={top_prob:.3f}, margin={margin:.3f})"
+        flip_debounce_blocked = False
+        if (
+            prev_id is not None
+            and new_id is not None
+            and new_id != prev_id
+            and entity.current_identity_committed_at is not None
+        ):
+            age_s = (captured_at - entity.current_identity_committed_at).total_seconds()
+            if age_s <= self._config.flip_debounce_window_s:
+                clears_dense = (
+                    top_prob >= self._config.commit_prob_dense
+                    and margin >= self._config.commit_margin_dense
                 )
+                flip_debounce_blocked = not clears_dense
+                if flip_debounce_blocked and enforce_flip_debounce:
+                    new_id = prev_id
+                    evidence_backed = False
 
-        metrics.metrics.posterior_entropy.observe(posterior.entropy())
-        if new_id is not None and revises:
-            metrics.metrics.identity_commits_total.labels(
-                source="face" if top_id in face_likelihood.distribution else "reid",
-            ).inc()
-
-        if new_id is None:
-            logger.debug(
-                "identity_not_committed",
-                entity_id=entity.entity_id,
-                top_id=top_id,
-                top_prob=round(top_prob, 4),
-                margin=round(margin, 4),
-                has_evidence=has_evidence,
-                within_maintenance_window=within_maintenance_window,
-                evidence_ok=evidence_ok,
-                prev_id=prev_id,
-                known_identity_count=len(self._identities),
-            )
-        elif within_maintenance_window:
-            logger.debug(
-                "identity_maintained_by_prior",
-                entity_id=entity.entity_id,
-                identity_id=new_id,
-                top_prob=round(top_prob, 4),
-                age_s=round((captured_at - entity.last_seen_at).total_seconds(), 1),
-            )
-
-        return IdentityDecision(
-            ph_id=entity.entity_id,
-            identity_id=new_id,
-            posterior=posterior,
-            revises_previous=revises,
-            previous_identity_id=prev_id,
-            reason=reason,
+        return _CommitEvaluation(
+            new_id=new_id,
             evidence_backed=evidence_backed,
+            has_evidence=has_evidence,
+            within_maintenance_window=within_maintenance_window,
+            effective_commit_prob=effective_commit_prob,
+            effective_commit_margin=effective_commit_margin,
+            quality_gate_blocked=quality_gate_blocked,
+            flip_debounce_blocked=flip_debounce_blocked,
         )
 
     # ------------------------------------------------------------------
