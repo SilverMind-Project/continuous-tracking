@@ -127,6 +127,15 @@ class PHRepositoryProtocol(Protocol):
         reason: str,
         idempotency_key: str | None = None,
     ) -> IdentityRevision: ...
+    async def batch_merge(
+        self,
+        *,
+        source_ph_ids: list[str],
+        target_ph_id: str,
+        actor: str,
+        reason: str,
+        idempotency_key: str | None = None,
+    ) -> list[IdentityRevision]: ...
     async def split(
         self,
         ph_id: str,
@@ -179,6 +188,7 @@ class InMemoryPHRepository:
         self._revisions: list[IdentityRevision] = []
         self._merges: dict[str, str] = {}
         self._idempotency: dict[str, IdentityRevision] = {}
+        self._batch_idempotency: dict[str, list[IdentityRevision]] = {}
         self._lock = asyncio.Lock()
 
     # -- save / get / list_open / list_closed_since / update_identity --
@@ -484,6 +494,40 @@ class InMemoryPHRepository:
         if idempotency_key:
             self._idempotency[idempotency_key] = revision
         return revision
+
+    async def batch_merge(
+        self,
+        *,
+        source_ph_ids: list[str],
+        target_ph_id: str,
+        actor: str,
+        reason: str,
+        idempotency_key: str | None = None,
+    ) -> list[IdentityRevision]:
+        if idempotency_key and idempotency_key in self._batch_idempotency:
+            return self._batch_idempotency[idempotency_key]
+        if target_ph_id in source_ph_ids:
+            raise ValueError("Target PH cannot also be a merge source")
+        if len(set(source_ph_ids)) != len(source_ph_ids):
+            raise ValueError("Duplicate source PH IDs are not allowed")
+        missing = [ph_id for ph_id in [target_ph_id, *source_ph_ids] if ph_id not in self._phs]
+        if missing:
+            raise ValueError(f"PH not found: {', '.join(missing)}")
+
+        revisions: list[IdentityRevision] = []
+        for source_ph_id in source_ph_ids:
+            revisions.append(
+                await self.merge(
+                    source_ph_id=source_ph_id,
+                    target_ph_id=target_ph_id,
+                    actor=actor,
+                    reason=reason,
+                    idempotency_key=None,
+                )
+            )
+        if idempotency_key:
+            self._batch_idempotency[idempotency_key] = revisions
+        return revisions
 
     async def split(
         self,

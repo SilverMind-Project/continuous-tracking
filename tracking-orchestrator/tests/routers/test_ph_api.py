@@ -285,6 +285,43 @@ class TestPHBatchCorrect:
         assert data["applied"] == 2
 
 
+class TestPHBatchMerge:
+    @pytest.mark.asyncio
+    async def test_batch_merge(self, client: TestClient, repo: InMemoryPHRepository) -> None:
+        await repo.save(_make_ph("ph-1", active_cameras=frozenset(["cam-1"])))
+        await repo.save(_make_ph("ph-2", active_cameras=frozenset(["cam-2"])))
+        await repo.save(_make_ph("ph-3", active_cameras=frozenset(["cam-3"])))
+
+        resp = client.post(
+            "/ph/batch_merge",
+            json={
+                "source_ph_ids": ["ph-1", "ph-2"],
+                "target_ph_id": "ph-3",
+                "reason": "same person",
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["applied"] == 2
+        assert data["source_ph_ids"] == ["ph-1", "ph-2"]
+        assert data["target_ph_id"] == "ph-3"
+        ph1 = await repo.get("ph-1")
+        assert ph1 is not None
+        assert ph1.closed_at is not None
+
+    def test_batch_merge_rejects_target_in_sources(self, client: TestClient) -> None:
+        resp = client.post(
+            "/ph/batch_merge",
+            json={
+                "source_ph_ids": ["ph-1", "ph-2"],
+                "target_ph_id": "ph-1",
+                "reason": "self",
+            },
+        )
+        assert resp.status_code == 422
+
+
 class TestPHDelete:
     @pytest.mark.asyncio
     async def test_batch_delete(self, client: TestClient, repo: InMemoryPHRepository) -> None:

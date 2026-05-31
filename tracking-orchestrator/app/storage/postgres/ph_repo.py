@@ -440,6 +440,95 @@ class PostgresPHRepository:
 
     # -- merge --
 
+    async def _merge_with_conn(
+        self,
+        conn: Any,
+        *,
+        source_ph_id: str,
+        target_ph_id: str,
+        actor: str,
+        reason: str,
+        revision_id: str,
+        now: datetime,
+    ) -> IdentityRevision:
+        src_row = await conn.fetchrow(
+            "SELECT * FROM continuous_tracking.person_hypotheses WHERE ph_id = $1 FOR UPDATE",
+            source_ph_id,
+        )
+        if src_row is None:
+            raise ValueError(f"Source PH not found: {source_ph_id}")
+
+        target_row = await conn.fetchrow(
+            "SELECT * FROM continuous_tracking.person_hypotheses WHERE ph_id = $1 FOR UPDATE",
+            target_ph_id,
+        )
+        if target_row is None:
+            raise ValueError(f"Target PH not found: {target_ph_id}")
+
+        obs_count = (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM continuous_tracking.world_observations WHERE ph_id = $1",
+                source_ph_id,
+            )
+            or 0
+        )
+
+        await conn.execute(
+            "UPDATE continuous_tracking.world_observations SET ph_id = $2 WHERE ph_id = $1",
+            source_ph_id,
+            target_ph_id,
+        )
+
+        await conn.execute(
+            "UPDATE continuous_tracking.person_hypotheses "
+            "SET closed_at = $2, metadata = metadata || $3::jsonb "
+            "WHERE ph_id = $1",
+            source_ph_id,
+            now,
+            json.dumps({"merged_into_ph_id": target_ph_id}),
+        )
+
+        await conn.execute(
+            "INSERT INTO continuous_tracking.ph_merges "
+            "(merge_id, source_ph_id, target_ph_id, revision_id, applied_at) "
+            "VALUES ($1, $2, $3, $4, $5)",
+            str(uuid.uuid4()),
+            source_ph_id,
+            target_ph_id,
+            revision_id,
+            now,
+        )
+
+        await conn.execute(
+            """
+            INSERT INTO continuous_tracking.ph_revisions (
+                revision_id, ph_id, previous_identity_id, new_identity_id,
+                actor, reason, kind, applied_at, rewritten_rows
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            """,
+            revision_id,
+            source_ph_id,
+            src_row["current_identity_id"],
+            target_row["current_identity_id"],
+            actor,
+            reason,
+            "manual_merge",
+            now,
+            obs_count,
+        )
+
+        return IdentityRevision(
+            revision_id=revision_id,
+            ph_id=source_ph_id,
+            previous_identity_id=src_row["current_identity_id"],
+            new_identity_id=target_row["current_identity_id"],
+            actor=actor,
+            reason=reason,
+            applied_at=now,
+            rewritten_rows=obs_count,
+            evidence=None,
+        )
+
     async def merge(
         self,
         *,
@@ -453,76 +542,47 @@ class PostgresPHRepository:
         revision_id = str(uuid.uuid4())
         now = datetime.now(UTC)
         async with self._pool.acquire() as conn, conn.transaction():
-            src_row = await conn.fetchrow(
-                "SELECT * FROM continuous_tracking.person_hypotheses WHERE ph_id = $1 FOR UPDATE",
-                source_ph_id,
+            return await self._merge_with_conn(
+                conn,
+                source_ph_id=source_ph_id,
+                target_ph_id=target_ph_id,
+                actor=actor,
+                reason=reason,
+                revision_id=revision_id,
+                now=now,
             )
-            if src_row is None:
-                raise ValueError(f"Source PH not found: {source_ph_id}")
 
-            obs_count = (
-                await conn.fetchval(
-                    "SELECT COUNT(*) FROM continuous_tracking.world_observations WHERE ph_id = $1",
-                    source_ph_id,
+    async def batch_merge(
+        self,
+        *,
+        source_ph_ids: list[str],
+        target_ph_id: str,
+        actor: str,
+        reason: str,
+        idempotency_key: str | None = None,
+    ) -> list[IdentityRevision]:
+        _ = idempotency_key
+        if target_ph_id in source_ph_ids:
+            raise ValueError("Target PH cannot also be a merge source")
+        if len(set(source_ph_ids)) != len(source_ph_ids):
+            raise ValueError("Duplicate source PH IDs are not allowed")
+
+        now = datetime.now(UTC)
+        async with self._pool.acquire() as conn, conn.transaction():
+            revisions: list[IdentityRevision] = []
+            for source_ph_id in source_ph_ids:
+                revisions.append(
+                    await self._merge_with_conn(
+                        conn,
+                        source_ph_id=source_ph_id,
+                        target_ph_id=target_ph_id,
+                        actor=actor,
+                        reason=reason,
+                        revision_id=str(uuid.uuid4()),
+                        now=now,
+                    )
                 )
-                or 0
-            )
-
-            await conn.execute(
-                "UPDATE continuous_tracking.world_observations SET ph_id = $2 WHERE ph_id = $1",
-                source_ph_id,
-                target_ph_id,
-            )
-
-            await conn.execute(
-                "UPDATE continuous_tracking.person_hypotheses "
-                "SET closed_at = $2, metadata = metadata || $3::jsonb "
-                "WHERE ph_id = $1",
-                source_ph_id,
-                now,
-                json.dumps({"merged_into_ph_id": target_ph_id}),
-            )
-
-            await conn.execute(
-                "INSERT INTO continuous_tracking.ph_merges "
-                "(merge_id, source_ph_id, target_ph_id, revision_id, applied_at) "
-                "VALUES ($1, $2, $3, $4, $5)",
-                str(uuid.uuid4()),
-                source_ph_id,
-                target_ph_id,
-                revision_id,
-                now,
-            )
-
-            await conn.execute(
-                """
-                INSERT INTO continuous_tracking.ph_revisions (
-                    revision_id, ph_id, previous_identity_id, new_identity_id,
-                    actor, reason, kind, applied_at, rewritten_rows
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                """,
-                revision_id,
-                source_ph_id,
-                src_row["current_identity_id"],
-                src_row["current_identity_id"],
-                actor,
-                reason,
-                "manual_merge",
-                now,
-                obs_count,
-            )
-
-        return IdentityRevision(
-            revision_id=revision_id,
-            ph_id=source_ph_id,
-            previous_identity_id=src_row["current_identity_id"],
-            new_identity_id=src_row["current_identity_id"],
-            actor=actor,
-            reason=reason,
-            applied_at=now,
-            rewritten_rows=obs_count,
-            evidence=None,
-        )
+        return revisions
 
     # -- split --
 

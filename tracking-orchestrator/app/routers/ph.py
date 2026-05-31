@@ -25,6 +25,8 @@ from .ph_schemas import (
     BatchCorrectResponse,
     BatchDeleteRequest,
     BatchDeleteResponse,
+    BatchMergeRequest,
+    BatchMergeResponse,
     CorrectIdentityRequest,
     CorrectIdentityResponse,
     KeyframeResponse,
@@ -204,6 +206,54 @@ async def merge_phs(
     return MergeResponse(
         revision=RevisionResponse.from_domain(revision, kind="manual_merge"),
         source_ph_id=body.source_ph_id,
+        target_ph_id=body.target_ph_id,
+    )
+
+
+@router.post("/ph/batch_merge", response_model=BatchMergeResponse)
+async def batch_merge_phs(
+    body: BatchMergeRequest,
+    request: Request,
+    repo: PHRepositoryProtocol = Depends(get_repo),
+) -> BatchMergeResponse:
+    if body.target_ph_id in body.source_ph_ids:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "cts.ph.batch_merge.target_in_sources",
+                "message": "Target PH cannot also be a merge source",
+            },
+        )
+    if len(set(body.source_ph_ids)) != len(body.source_ph_ids):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "cts.ph.batch_merge.duplicate_source",
+                "message": "Duplicate source PH IDs are not allowed",
+            },
+        )
+    actor = _actor_from_request(request)
+    idem_key = _idempotency_key_from_request(request)
+    try:
+        revisions = await repo.batch_merge(
+            source_ph_ids=body.source_ph_ids,
+            target_ph_id=body.target_ph_id,
+            actor=actor,
+            reason=body.reason,
+            idempotency_key=idem_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "ph.batch_merge.invalid", "message": str(exc)},
+        ) from exc
+    metrics.cts_ph_merges_total.labels(actor="operator").inc(len(revisions))
+    for revision in revisions:
+        await _publish_manual_revision(revision, "manual_merge")
+    return BatchMergeResponse(
+        revisions=[RevisionResponse.from_domain(r, kind="manual_merge") for r in revisions],
+        applied=len(revisions),
+        source_ph_ids=body.source_ph_ids,
         target_ph_id=body.target_ph_id,
     )
 

@@ -202,6 +202,12 @@ class MergeRequest(BaseModel):
     reason: str = Field(default="manual", max_length=512)
 
 
+class BatchMergeRequest(BaseModel):
+    source_ph_ids: list[str] = Field(..., min_length=1, max_length=50)
+    target_ph_id: str = Field(..., min_length=1, max_length=128)
+    reason: str = Field(default="manual_bulk_merge", max_length=512)
+
+
 class SplitRequest(BaseModel):
     at_observation_id: str = Field(..., min_length=1, max_length=256)
     reason: str = Field(default="manual", max_length=512)
@@ -242,6 +248,13 @@ class MergeResponse(BaseModel):
     target_ph_id: str
 
 
+class BatchMergeResponse(BaseModel):
+    revisions: list[RevisionResponse]
+    applied: int
+    source_ph_ids: list[str]
+    target_ph_id: str
+
+
 class SplitResponse(BaseModel):
     original_ph_id: str
     new_ph_id: str
@@ -274,6 +287,7 @@ class RevisionsFeedResponse(BaseModel):
 
 
 class KeyframeResponse(BaseModel):
+    keyframe_id: str
     observation_id: str
     observed_at: datetime | None = None
     camera_id: str = ""
@@ -286,6 +300,7 @@ class KeyframeResponse(BaseModel):
     @classmethod
     def from_domain(cls, kf: Keyframe) -> KeyframeResponse:
         return cls(
+            keyframe_id=kf.observation_id,
             observation_id=kf.observation_id,
             observed_at=kf.observed_at,
             camera_id=kf.camera_id,
