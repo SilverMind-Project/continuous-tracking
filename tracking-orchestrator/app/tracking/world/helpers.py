@@ -80,6 +80,7 @@ def resolve_room(
     camera_id: str,
     room_polygons: dict[str, list[tuple[float, float]]],
     camera_room_map: dict[str, str],
+    room_names: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     """Return (room_id, room_name) for a floor point.
 
@@ -90,7 +91,7 @@ def resolve_room(
         if len(vertices) < 3:
             continue
         if Polygon(vertices).contains(point):
-            return room_id, room_id  # room_name == room_id for now
+            return room_id, (room_names or {}).get(room_id, room_id)
 
     room_name = camera_room_map.get(camera_id, "")
     return room_name, room_name

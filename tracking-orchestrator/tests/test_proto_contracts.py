@@ -1,4 +1,4 @@
-"""M6: Proto contract round-trip tests for identity_snapshots and signal metadata."""
+"""Proto contract round-trip tests for identity_snapshots and signal metadata."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class TestIdentitySnapshotRoundTrip:
         )
 
         snap = event.identity_snapshots.add()
-        snap.ph_id = "ph-001"  # R3: renamed from ph_id
+        snap.ph_id = "ph-001"  # renamed from ph_id
         snap.identity_id = "alice"
         snap.top_probability = 0.94
         snap.second_probability = 0.03
@@ -39,7 +39,7 @@ class TestIdentitySnapshotRoundTrip:
 
         assert len(parsed.identity_snapshots) == 1
         s = parsed.identity_snapshots[0]
-        assert s.ph_id == "ph-001"  # R3: renamed from ph_id
+        assert s.ph_id == "ph-001"  # renamed from ph_id
         assert s.identity_id == "alice"
         assert s.top_probability == pytest.approx(0.94)
         assert s.second_probability == pytest.approx(0.03)
@@ -52,7 +52,7 @@ class TestIdentitySnapshotRoundTrip:
 
         for ph_id, identity_id in [("ph-1", "alice"), ("ph-2", "bob"), ("ph-3", "")]:
             snap = event.identity_snapshots.add()
-            snap.ph_id = ph_id  # R3: renamed from ph_id
+            snap.ph_id = ph_id  # renamed from ph_id
             snap.identity_id = identity_id
 
         data = event.SerializeToString()

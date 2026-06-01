@@ -13,11 +13,20 @@ detect bed-sheet-occluded lying posture.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import TYPE_CHECKING
+
+from structlog import get_logger
 
 from ...trajectory.posture import PostureScores, score_posture
 from ...trajectory.posture_strategy import PostureStrategy
 from ..frame_context import FrameContext
+from ._room_maps import camera_room_name
 from .base import FrameStage
+
+if TYPE_CHECKING:
+    from ...services.camera_room_map import CameraRoomMap
+
+logger = get_logger(__name__)
 
 
 def _apply_bedroom_prior(scores: PostureScores, prior: float) -> PostureScores:
@@ -40,14 +49,19 @@ class PostureStage(FrameStage):
 
     def __init__(
         self,
+        camera_room_map: CameraRoomMap,
         posture_strategy: PostureStrategy | None = None,
-        camera_room_map: dict[str, str] | None = None,
     ) -> None:
         self._posture_strategy = posture_strategy
-        self._camera_room_map = camera_room_map or {}
+        self._camera_room_map = camera_room_map
+        self._missing_room_binding_warnings: set[str] = set()
 
     async def run(self, ctx: FrameContext) -> None:
-        room = self._camera_room_map.get(ctx.frame.camera_id, "")
+        room = await camera_room_name(self._camera_room_map, ctx.frame.camera_id)
+        if room is None and ctx.frame.camera_id not in self._missing_room_binding_warnings:
+            self._missing_room_binding_warnings.add(ctx.frame.camera_id)
+            logger.warning("posture_camera_room_binding_missing", camera_id=ctx.frame.camera_id)
+        room = room or ""
         is_bedroom = room.lower() in ("bedroom", "bed_room", "bed room")
 
         for domain_det in ctx.domain_detections:

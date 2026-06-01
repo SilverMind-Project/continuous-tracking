@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import IntEnum
 from typing import Any, Literal, Protocol
 
 # ---------------------------------------------------------------------------
@@ -91,6 +92,40 @@ class IdentityResolvableEntity(Protocol):
     def last_seen_at(self) -> datetime: ...
     @property
     def started_at(self) -> datetime: ...
+    @property
+    def view_prototypes(self) -> tuple[ViewPrototype, ...]: ...
+
+
+# ---------------------------------------------------------------------------
+# Orientation and view prototypes (M4)
+# ---------------------------------------------------------------------------
+
+
+class OrientationBin(IntEnum):
+    """Body orientation relative to the camera.
+
+    IntEnum so it can be stored as a SMALLINT in the database.
+    """
+
+    FRONT = 0
+    BACK = 1
+    LEFT = 2
+    RIGHT = 3
+    UNKNOWN = 4
+
+
+@dataclass(frozen=True)
+class ViewPrototype:
+    """One view-binned appearance prototype for a PersonHypothesis.
+
+    Each prototype holds an EMA of SOLIDER-REID embeddings observed at a
+    particular body orientation, plus a count of observations contributing
+    to it.
+    """
+
+    orientation: OrientationBin
+    embedding: tuple[float, ...]  # 768-dim L2-normalised float32 values
+    count: int  # number of observations EMAd into this prototype
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +159,8 @@ class WorldObservation:
     detection_id: str = ""
     quality: float = 0.0  # composite crop quality [0,1] from CropQuality.quality
     floor_residual_m: float | None = None
+    orientation: OrientationBin = OrientationBin.UNKNOWN  # body orientation from pose keypoints
+    orientation_confidence: float = 0.0  # confidence of orientation estimate [0,1]
 
 
 @dataclass(frozen=True)
@@ -152,6 +189,7 @@ class PersonHypothesis:
     last_posture: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
     mean_quality: float = 0.0  # EMA of observation quality scores
+    view_prototypes: tuple[ViewPrototype, ...] = ()  # per-orientation appearance prototypes
 
     def __post_init__(self) -> None:
         if len(self.state_mean) != PH_MEAN_LEN:
@@ -221,7 +259,7 @@ class WorldFrameSnapshot:
     height_m: float | None = None
     room_id: str = ""
     room_name: str = ""
-    mean_quality: float = 0.0  # PH-level rolling quality from U1 (U2: surfaces on wire)
+    mean_quality: float = 0.0  # PH-level rolling quality from quality capture (surfaces on wire)
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +447,10 @@ class GlobalTrack:
     def observation_ids(self) -> list[str]:
         return list(self.tracklet_ids)
 
+    @property
+    def view_prototypes(self) -> tuple[ViewPrototype, ...]:
+        return ()  # GlobalTrack has no view prototypes (legacy)
+
 
 # ---------------------------------------------------------------------------
 # Identity / Gallery
@@ -480,6 +522,12 @@ class FaceAnchor:
     detection_id: str = ""
     camera_id: CameraId = ""
     captured_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # three-valued recognition state.
+    recognition_state: str = "recognized"  # "recognized" | "candidate" | "unrecognized"
+    # raw cosine similarity to best candidate.
+    similarity: float = 0.0
+    # head pose yaw in degrees (primary frontality axis).
+    yaw_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -599,6 +647,7 @@ class GalleryEmbedding:
     origin_tracklet_id: TrackletId = ""
     face_confirmed: bool = False
     camera_id: str = ""
+    orientation: int = OrientationBin.UNKNOWN  # OrientationBin stored as SMALLINT
 
 
 @dataclass(frozen=True)
@@ -655,6 +704,49 @@ class OverlapGroup:
     group_id: str
     name: str = ""
     camera_ids: tuple[str, ...] = ()
+    source: str = "operator"  # "operator" | "learned"
+
+
+# ---------------------------------------------------------------------------
+# Camera adjacency topology
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CameraTopologyEdge:
+    """Learned transit-time statistics for a directed camera pair.
+
+    Stores a running count, mean, and variance of observed handoff transit
+    times, updated online via the Welford algorithm. The topology model
+    service (``app/tracking/world/topology.py``) computes a plausibility
+    score from these statistics.
+    """
+
+    from_camera: str
+    to_camera: str
+    observation_count: int = 0
+    mean_transit_s: float = 0.0
+    variance_transit_s2: float = 0.0
+    last_updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class CoPresenceLink:
+    """Identity-level co-presence link between two Person Hypotheses.
+
+    Written when two open PHs in the same overlap group share a committed
+    identity.  The CHECK constraint ph_id_a < ph_id_b prevents duplicate
+    directional pairs in storage.
+    """
+
+    id: str
+    group_id: str
+    ph_id_a: str
+    ph_id_b: str
+    identity_id: str
+    first_observed_at: datetime
+    last_observed_at: datetime
+    observation_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -688,7 +780,7 @@ class StreamAssignment:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# M6: Trajectory, dwell, and keyframe types
+# Trajectory, dwell, and keyframe types
 # ---------------------------------------------------------------------------
 
 PostureType = Literal["standing", "sitting", "walking", "lying", "unknown"]

@@ -1,6 +1,6 @@
 """Keyframe stage: samples keyframes and publishes to scene.samples.
 
-WT3: rewired to consume WorldFrameSnapshot instead of active_tracklets.
+Rewired to consume WorldFrameSnapshot instead of active_tracklets.
 Each open PH with a detection this frame is a candidate for periodic
 or identity-change-triggered keyframe sampling.
 """
@@ -54,6 +54,9 @@ class KeyframeStage(FrameStage):
                 "ph_id": snap.ph_id,
                 "camera_id": snap.camera_id,
                 "identity_id": identity_id,
+                "detection_confidence": det_conf,
+                "frame_width": ctx.effective_width,
+                "frame_height": ctx.effective_height,
             }
 
             det_bbox = getattr(detection, "bbox", None)

@@ -1,4 +1,4 @@
-"""WTR2: CC assertions to identity evidence tests.
+"""CC assertions to identity evidence tests.
 
 Tests the spatial/temporal matching of CC identity assertions to
 WorldObservations, producing FaceAnchors for the identity resolver.

@@ -90,13 +90,21 @@ class TestPHList:
 
     @pytest.mark.asyncio
     async def test_list_with_phs(self, client: TestClient, repo: InMemoryPHRepository) -> None:
-        await repo.save(_make_ph("ph-1"))
+        await repo.save(
+            _make_ph(
+                "ph-1",
+                metadata={"last_room_id": "kitchen", "last_room_name": "Kitchen"},
+            )
+        )
         await repo.save(_make_ph("ph-2", identity_id="alice"))
         resp = client.get("/ph")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 2
         assert len(data["items"]) == 2
+        ph1 = next(item for item in data["items"] if item["ph_id"] == "ph-1")
+        assert ph1["room_id"] == "kitchen"
+        assert ph1["room_name"] == "Kitchen"
 
     @pytest.mark.asyncio
     async def test_filter_by_identity(self, client: TestClient, repo: InMemoryPHRepository) -> None:
@@ -153,11 +161,13 @@ class TestPHObservations:
         await repo.save(_make_ph("ph-1"))
         # Manually add observations via the repo's internal store
         obs = _make_observation("cam-1", 1, 1.0, 2.0)
+        object.__setattr__(obs, "observation_id", "obs-1")
         repo._observations.setdefault("ph-1", []).append(obs)
         resp = client.get("/ph/ph-1/observations")
         assert resp.status_code == 200
         data = resp.json()
         assert data["count"] == 1
+        assert data["items"][0]["observation_id"] == "obs-1"
 
 
 # ---------------------------------------------------------------------------

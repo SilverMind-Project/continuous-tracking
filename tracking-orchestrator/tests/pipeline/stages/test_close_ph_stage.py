@@ -1,4 +1,4 @@
-"""WTR3: ClosePHStage tests.
+"""ClosePHStage tests.
 
 Tests that ClosePHStage closes trajectory, motion energy, and posture state
 by PH id when a previously-active PH disappears from ctx.active_ph_ids.

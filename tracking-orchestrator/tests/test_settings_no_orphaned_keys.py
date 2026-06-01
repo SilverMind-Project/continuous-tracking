@@ -1,4 +1,4 @@
-"""WT6: sanity tests verifying orphaned settings.yaml sections are absent.
+"""sanity tests verifying orphaned settings.yaml sections are absent.
 
 Acts as a regression guard against the deleted keys creeping back.
 """
@@ -20,20 +20,18 @@ def _load_yaml() -> dict[str, object]:
 class TestSettingsNoOrphanedKeys:
     def test_settings_yaml_has_no_tracklet_section(self) -> None:
         data = _load_yaml()
-        assert "tracklet" not in data, "tracklet section was deleted in WT6 and must not reappear"
+        assert "tracklet" not in data, "tracklet section was deleted and must not reappear"
 
     def test_settings_yaml_has_no_cross_camera_section(self) -> None:
         data = _load_yaml()
-        assert "cross_camera" not in data, (
-            "cross_camera section was deleted in WT6 and must not reappear"
-        )
+        assert "cross_camera" not in data, "cross_camera section was deleted and must not reappear"
 
     def test_settings_yaml_has_no_stream_maxlen(self) -> None:
         data = _load_yaml()
         redis_section = data.get("redis", {})
         assert isinstance(redis_section, dict)
         assert "stream_maxlen" not in redis_section, (
-            "redis.stream_maxlen was removed in WT6 (per-publisher defaults are used)"
+            "redis.stream_maxlen was removed (per-publisher defaults are used)"
         )
 
     def test_world_tracker_has_no_enabled(self) -> None:
@@ -41,5 +39,5 @@ class TestSettingsNoOrphanedKeys:
         wt = data.get("world_tracker", {})
         assert isinstance(wt, dict)
         assert "enabled" not in wt, (
-            "world_tracker.enabled was removed in WT6 (config has no enabled field)"
+            "world_tracker.enabled was removed (config has no enabled field)"
         )

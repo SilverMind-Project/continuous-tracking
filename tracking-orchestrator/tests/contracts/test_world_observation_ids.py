@@ -1,6 +1,6 @@
-"""WTR1: Contract test — world observation IDs.
+"""Contract test — world observation IDs.
 
-Contract: WTR1 §5 — world observations have a real ``observation_id``.
+Contract:   — world observations have a real ``observation_id``.
 Identity resolver inputs must use persisted observation ids, not synthetic
 camera/frame/time strings.
 """
@@ -90,7 +90,7 @@ async def test_repository_maintains_observation_order():
 
 @pytest.mark.asyncio
 async def test_observation_not_synthetic_id():
-    """WTR2: persisted observations have real UUID-based observation_ids.
+    """persisted observations have real UUID-based observation_ids.
 
     Pre-persist observations may have empty observation_id.
     After persistence (via the repository), the id must be a real UUID,
@@ -115,7 +115,7 @@ async def test_observation_not_synthetic_id():
 
 @pytest.mark.asyncio
 async def test_ph_observation_ids_returns_real_ids():
-    """WTR1 §5: PersonHypothesis.observation_ids must return real observation ids.
+    """: PersonHypothesis.observation_ids must return real observation ids.
 
     Currently PersonHypothesis.observation_ids returns [] (set by repository).
     This test documents the contract: when the repository populates this field,

@@ -16,21 +16,33 @@ from structlog import get_logger
 
 if TYPE_CHECKING:
     from ...inference.evidence import FaceEvidence
+    from ...storage.base import GalleryRepository
     from ...tracking.identity_resolver import IdentityResolver
 
 from ...domain import (
     BoundingBox,
+    CameraTopologyEdge,
+    CoPresenceLink,
     FaceAnchor,
     IdentityDecision,
     IdentityResolvableEntity,
     IdentityRevision,
+    OrientationBin,
+    OverlapGroup,
     PersonHypothesis,
     PHContinuationCandidate,
+    ViewPrototype,
     WorldFrameSnapshot,
     WorldObservation,
 )
 from ...observability import metrics as _metrics
-from ...storage.base import PHRepositoryProtocol, WorldObservationRepositoryProtocol
+from ...storage.base import (
+    CameraTopologyRepository,
+    CoPresenceRepository,
+    PHRepositoryProtocol,
+    WorldObservationRepositoryProtocol,
+)
+from ..orientation import update_view_prototypes
 from .association import associate
 from .config import WorldTrackerConfig
 from .dedup import dedup_observations
@@ -43,8 +55,23 @@ from .helpers import (
     update_height_ema,
 )
 from .kalman import KalmanState, initialize, predict, update
+from .revival import select_revival_candidate
+from .topology import record_handoff
 
 logger = get_logger(__name__)
+
+
+def _metadata_with_room(
+    metadata: dict[str, object],
+    room_id: str,
+    room_name: str,
+) -> dict[str, object]:
+    merged = dict(metadata)
+    if room_id:
+        merged["last_room_id"] = room_id
+    if room_name:
+        merged["last_room_name"] = room_name
+    return merged
 
 
 class ContinuationPublisher(Protocol):
@@ -93,6 +120,10 @@ class _PHResolvable:
     def started_at(self) -> datetime:
         return self._ph.born_at
 
+    @property
+    def view_prototypes(self) -> tuple[ViewPrototype, ...]:
+        return self._ph.view_prototypes
+
 
 @dataclass(frozen=True)
 class WorldTrackerResult:
@@ -104,6 +135,85 @@ class WorldTrackerResult:
     identity_decisions: list[IdentityDecision] = field(default_factory=list)
     revisions: list[IdentityRevision] = field(default_factory=list)
     det_to_ph: dict[str, str] = field(default_factory=dict)
+    revived_ph_ids: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class _ObsVectors:
+    """Parallel arrays unpacked from a deduped observation list for association."""
+
+    floor_points: list[tuple[float, float]]
+    embeddings: list[list[float] | None]
+    face_person_ids: list[str | None]
+    face_confidences: list[float]
+    heights: list[float | None]
+    calibrated: list[bool]
+
+
+@dataclass(frozen=True)
+class _PHVectors:
+    """Parallel arrays unpacked from the active-PH list for association."""
+
+    gallery_means: list[list[float] | None]
+    identity_ids: list[str | None]
+    heights: list[float | None]
+    view_prototypes: list[tuple[ViewPrototype, ...]]
+
+
+def _sanitize_identity_id(raw: str | None) -> str | None:
+    """Convert sentinel identity values (``""``, ``"unknown"``) to ``None``.
+
+    These sentinels originate from the face-ID client and face-identity stage
+    when no enrolled identity matches the detected face.  They must not be
+    treated as valid identity references because ``person_trajectories`` and
+    ``room_dwells`` enforce a FK to ``identities``.
+    """
+    if raw is not None and raw.lower() in ("", "unknown"):
+        return None
+    return raw
+
+
+def _unpack_observations(observations: list[WorldObservation]) -> _ObsVectors:
+    """Unpack a deduped observation list into parallel arrays for association.
+
+    Only recognized face anchors are forwarded to the identity-conflict gate;
+    candidate and unrecognized anchors are weak-positive signals that must not
+    trigger a hard conflict.
+    """
+    floor_points = [
+        (obs.floor_point.x_mm / 1000.0, obs.floor_point.y_mm / 1000.0) for obs in observations
+    ]
+    embeddings: list[list[float] | None] = [obs.embedding or None for obs in observations]
+    face_person_ids: list[str | None] = [
+        obs.face_anchor.person_id
+        if obs.face_anchor and obs.face_anchor.recognition_state == "recognized"
+        else None
+        for obs in observations
+    ]
+    face_confidences: list[float] = [
+        obs.face_anchor.confidence
+        if obs.face_anchor and obs.face_anchor.recognition_state == "recognized"
+        else 0.0
+        for obs in observations
+    ]
+    return _ObsVectors(
+        floor_points=floor_points,
+        embeddings=embeddings,
+        face_person_ids=face_person_ids,
+        face_confidences=face_confidences,
+        heights=[obs.height_estimate_m for obs in observations],
+        calibrated=[obs.floor_point.calibrated for obs in observations],
+    )
+
+
+def _unpack_ph_vectors(phs: list[PersonHypothesis]) -> _PHVectors:
+    """Unpack the active-PH list into parallel arrays for association."""
+    return _PHVectors(
+        gallery_means=[ph.gallery_mean for ph in phs],
+        identity_ids=[ph.current_identity_id for ph in phs],
+        heights=[ph.height_estimate_m for ph in phs],
+        view_prototypes=[ph.view_prototypes for ph in phs],
+    )
 
 
 class WorldTracker:
@@ -121,12 +231,27 @@ class WorldTracker:
         config: WorldTrackerConfig | None = None,
         continuation_publisher: ContinuationPublisher | None = None,
         identity_resolver: IdentityResolver | None = None,
+        gallery_repo: GalleryRepository | None = None,
+        topology_repo: CameraTopologyRepository | None = None,
+        copresence_repo: CoPresenceRepository | None = None,
+        overlap_groups: list[OverlapGroup] | None = None,
     ) -> None:
         self._ph_repo = ph_repo
         self._obs_repo = obs_repo
         self._config = config or WorldTrackerConfig()
         self._continuation_publisher = continuation_publisher
         self._identity_resolver = identity_resolver
+        self._gallery_repo = gallery_repo
+        self._topology_repo = topology_repo
+        self._copresence_repo = copresence_repo
+        self._overlap_groups = overlap_groups or []
+        # In-process cache of each PH's last positive identity confidence.
+        # On coasting / unresolved frames the resolver produces no decision for a
+        # PH, so its per-frame posterior is absent (0.0). Replaying the last
+        # committed confidence here keeps the published top_probability meaningful
+        # for a held identity instead of emitting a sentinel 0.0 that the UI shows
+        # as null. Lost on restart (self-heals on next resolution); pruned on close.
+        self._last_identity_confidence: dict[str, float] = {}
 
     async def step(
         self,
@@ -135,6 +260,7 @@ class WorldTracker:
         face_anchors_by_detection: dict[str, FaceAnchor] | None = None,
         room_polygons: dict[str, list[tuple[float, float]]] | None = None,
         camera_room_map: dict[str, str] | None = None,
+        room_names: dict[str, str] | None = None,
         face_anchors: list[FaceAnchor] | None = None,
         face_evidence: list[FaceEvidence] | None = None,
     ) -> WorldTrackerResult:
@@ -145,6 +271,7 @@ class WorldTracker:
             now: current wall-clock time (pipeline event_time).
             face_anchors_by_detection: face anchors keyed by detection_id.
             room_polygons: room_id → list of (x_m, y_m) vertices.
+            room_names: room_id → display name for polygon-derived rooms.
             camera_room_map: camera_id → room_name fallback.
             face_anchors: flat list of FaceAnchors for identity resolution.
 
@@ -154,6 +281,7 @@ class WorldTracker:
         cfg = self._config
         room_polygons = room_polygons or {}
         camera_room_map = camera_room_map or {}
+        room_names = room_names or {}
         continuations: list[PHContinuationCandidate] = []
         identity_decisions: list[IdentityDecision] = []
         det_to_ph: dict[str, str] = {}
@@ -173,7 +301,9 @@ class WorldTracker:
 
         # 2. Build observation lists; run cross-camera dedup before association.
         raw_observations = observations  # keep original for cluster expansion
-        observations, cluster_map = dedup_observations(raw_observations, cfg)
+        observations, cluster_map = dedup_observations(
+            raw_observations, cfg, overlap_groups=self._overlap_groups or None
+        )
 
         # Emit dedup metrics.
         m = _metrics.metrics
@@ -186,43 +316,58 @@ class WorldTracker:
             if not obs.floor_point.calibrated:
                 m.worldtracker_observation_missing_floorpoint_total.inc()
 
-        obs_floor_points: list[tuple[float, float]] = [
-            (obs.floor_point.x_mm / 1000.0, obs.floor_point.y_mm / 1000.0) for obs in observations
-        ]
-        obs_embeddings: list[list[float] | None] = [
-            obs.embedding if obs.embedding else None for obs in observations
-        ]
-        obs_face_person_ids: list[str | None] = [
-            obs.face_anchor.person_id if obs.face_anchor else None for obs in observations
-        ]
-        obs_face_confidences: list[float] = [
-            obs.face_anchor.confidence if obs.face_anchor else 0.0 for obs in observations
-        ]
-        obs_heights: list[float | None] = [obs.height_estimate_m for obs in observations]
-
-        ph_gallery_means: list[list[float] | None] = [ph.gallery_mean for ph in active_phs]
-        ph_identity_ids: list[str | None] = [ph.current_identity_id for ph in active_phs]
-        ph_heights: list[float | None] = [ph.height_estimate_m for ph in active_phs]
+        obs_vecs = _unpack_observations(observations)
+        ph_vecs = _unpack_ph_vectors(active_phs)
 
         # 3. Associate.
         assignment = associate(
             ph_states=predicted_states,
-            ph_gallery_means=ph_gallery_means,
-            ph_identity_ids=ph_identity_ids,
-            ph_heights=ph_heights,
-            obs_floor_points=obs_floor_points,
-            obs_embeddings=obs_embeddings,
-            obs_face_person_ids=obs_face_person_ids,
-            obs_face_confidences=obs_face_confidences,
-            obs_height_estimates=obs_heights,
+            ph_gallery_means=ph_vecs.gallery_means,
+            ph_identity_ids=ph_vecs.identity_ids,
+            ph_heights=ph_vecs.heights,
+            obs_floor_points=obs_vecs.floor_points,
+            obs_embeddings=obs_vecs.embeddings,
+            obs_face_person_ids=obs_vecs.face_person_ids,
+            obs_face_confidences=obs_vecs.face_confidences,
+            obs_height_estimates=obs_vecs.heights,
             cfg=cfg,
+            obs_calibrated=obs_vecs.calibrated,
+            ph_view_prototypes=ph_vecs.view_prototypes,
         )
+
+        # Shadow association under relaxed uncalibrated gate.
+        if not cfg.enable_uncalibrated_gate_relax and any(not c for c in obs_vecs.calibrated):
+            relaxed_cfg = replace(cfg, enable_uncalibrated_gate_relax=True)
+            shadow_assignment = associate(
+                ph_states=predicted_states,
+                ph_gallery_means=ph_vecs.gallery_means,
+                ph_identity_ids=ph_vecs.identity_ids,
+                ph_heights=ph_vecs.heights,
+                obs_floor_points=obs_vecs.floor_points,
+                obs_embeddings=obs_vecs.embeddings,
+                obs_face_person_ids=obs_vecs.face_person_ids,
+                obs_face_confidences=obs_vecs.face_confidences,
+                obs_height_estimates=obs_vecs.heights,
+                cfg=relaxed_cfg,
+                obs_calibrated=obs_vecs.calibrated,
+                ph_view_prototypes=ph_vecs.view_prototypes,
+            )
+            if set(assignment.matched) != set(shadow_assignment.matched) or set(
+                assignment.unmatched_obs
+            ) != set(shadow_assignment.unmatched_obs):
+                _metrics.metrics.world_tracker_shadow_assoc_mismatch_total.inc()
 
         updated_phs: list[PersonHypothesis] = []
         # Track per-PH observation metadata for snapshot building.
         ph_obs_meta: dict[
             str, tuple[int, BoundingBox | None, float]
         ] = {}  # ph_id -> (frame_index, bbox, detection_confidence)
+        # Representative observation per PH updated this frame. Consumed after
+        # identity resolution (step 9) to seed the multi-view gallery with the
+        # COMMITTED identity. Seeding inside step 4 used the pre-resolution
+        # identity, which is None on the very frame a face first commits, so in
+        # practice the gallery never seeded.
+        seed_obs_by_ph: dict[str, WorldObservation] = {}
 
         # Build a lookup from detection_id to the original (pre-dedup) observation.
         obs_by_det_id = {obs.detection_id: obs for obs in raw_observations if obs.detection_id}
@@ -242,8 +387,22 @@ class WorldTracker:
             new_gallery_mean = update_gallery_mean(
                 ph.gallery_mean, obs.embedding, ph.observation_count
             )
+            new_prototypes = update_view_prototypes(
+                ph.view_prototypes,
+                obs.orientation,
+                obs.embedding,
+                obs.orientation_confidence,
+            )
             new_height = update_height_ema(ph.height_estimate_m, obs.height_estimate_m, alpha=0.1)
             new_mean_quality: float = 0.1 * obs.quality + 0.9 * ph.mean_quality
+            room_id, room_name = resolve_room(
+                obs.floor_point.x_mm / 1000.0,
+                obs.floor_point.y_mm / 1000.0,
+                obs.camera_id,
+                room_polygons,
+                camera_room_map,
+                room_names,
+            )
 
             # Expand active_cameras to include all cameras from the dedup cluster.
             src_ids = cluster_map.get(obs.detection_id, (obs.detection_id,))
@@ -278,6 +437,8 @@ class WorldTracker:
                     )
                 ),
                 mean_quality=new_mean_quality,
+                view_prototypes=new_prototypes,
+                metadata=_metadata_with_room(ph.metadata, room_id, room_name),
             )
             updated_phs.append(updated)
             ph_obs_meta[ph.ph_id] = (
@@ -296,7 +457,26 @@ class WorldTracker:
                 src_obs = obs_by_det_id.get(src_det_id, obs)
                 await self._obs_repo.save(src_obs, ph_id=ph.ph_id)
 
-        # 5. Spawn new PHs for unmatched observations.
+            # Defer multi-view gallery seeding until after identity resolution
+            # (step 9) so the committed identity is known. Capture the obs here.
+            seed_obs_by_ph[ph.ph_id] = obs
+
+        # 5. Spawn new PHs for unmatched observations (or revive recently-closed).
+        # Hoist shared queries outside the per-observation loop to avoid N DB
+        # round-trips for N unmatched observations in one frame.
+        revived_ph_ids: set[str] = set()
+        _revival_lookback = now - timedelta(seconds=cfg.revive_max_age_s)
+        _recent_closed: list[PersonHypothesis] = (
+            await self._ph_repo.list_closed_since(_revival_lookback, limit=100)
+            if assignment.unmatched_obs
+            else []
+        )
+        _topology_edges: list[CameraTopologyEdge] = []
+        if assignment.unmatched_obs and self._topology_repo is not None:
+            try:
+                _topology_edges = await self._topology_repo.list_edges()
+            except Exception:  # noqa: BLE001
+                logger.warning("topology_edges_load_failed", exc_info=True)
         for obs_idx in assignment.unmatched_obs:
             obs = observations[obs_idx]
             fx = obs.floor_point.x_mm / 1000.0
@@ -316,49 +496,188 @@ class WorldTracker:
                     calibrated=False,
                 )
 
-            ks = initialize(
-                fx,
-                fy,
-                cfg.initial_position_sigma_m,
-                cfg.initial_velocity_sigma_m_s,
-                obs.captured_at,
-            )
-            # Include all cameras from the dedup cluster when spawning.
+            # Attempt PH revival before spawning new (same-camera + cross-camera).
+            revival_candidate: PersonHypothesis | None = None
+
+            if cfg.enable_ph_revival:
+                revival_candidate = select_revival_candidate(
+                    obs,
+                    _recent_closed,
+                    obs.captured_at,
+                    cfg,
+                    enable_cross_camera=cfg.enable_cross_camera_revival,
+                    topology_edges=_topology_edges,
+                )
+            else:
+                # Shadow: compute revival candidate to measure what it would catch.
+                shadow_candidate = select_revival_candidate(
+                    obs,
+                    _recent_closed,
+                    obs.captured_at,
+                    cfg,
+                    enable_cross_camera=False,
+                    topology_edges=_topology_edges,
+                )
+                if shadow_candidate is not None:
+                    _metrics.metrics.world_tracker_shadow_revival_total.inc()
+
+                # Shadow cross-camera separately to measure its marginal benefit.
+                if _topology_edges:
+                    shadow_cc = select_revival_candidate(
+                        obs,
+                        _recent_closed,
+                        obs.captured_at,
+                        cfg,
+                        enable_cross_camera=True,
+                        topology_edges=_topology_edges,
+                    )
+                    if shadow_cc is not None and shadow_cc.last_seen_camera != obs.camera_id:
+                        _metrics.metrics.world_tracker_shadow_cross_camera_revival_total.inc()
+
+            # Include all cameras from the dedup cluster when spawning/reviving.
             spawn_src_ids = cluster_map.get(obs.detection_id, (obs.detection_id,))
             spawn_cameras = frozenset(
                 obs_by_det_id[did].camera_id for did in spawn_src_ids if did in obs_by_det_id
             ) or frozenset([obs.camera_id])
-
-            new_ph = PersonHypothesis(
-                ph_id=str(uuid.uuid4()),
-                state_mean=(
-                    float(ks.mean[0]),
-                    float(ks.mean[1]),
-                    float(ks.mean[2]),
-                    float(ks.mean[3]),
-                ),
-                state_cov=tuple(float(v) for v in ks.covariance.flatten()),
-                born_at=obs.captured_at,
-                last_seen_at=obs.captured_at,
-                last_seen_camera=obs.camera_id,
-                observation_count=1,
-                current_identity_id=obs.face_anchor.person_id if obs.face_anchor else None,
-                gallery_mean=obs.embedding if obs.embedding else None,
-                height_estimate_m=obs.height_estimate_m,
-                active_cameras=spawn_cameras,
-                last_floor_speed_m_s=0.0,
-                mean_quality=obs.quality,
+            room_id, room_name = resolve_room(
+                obs.floor_point.x_mm / 1000.0,
+                obs.floor_point.y_mm / 1000.0,
+                obs.camera_id,
+                room_polygons,
+                camera_room_map,
+                room_names,
             )
+
+            if revival_candidate is not None:
+                # Revive: reuse closed PH's ph_id, identity, and gallery state.
+                closed = revival_candidate
+                ks = initialize(
+                    fx,
+                    fy,
+                    cfg.initial_position_sigma_m,
+                    cfg.initial_velocity_sigma_m_s,
+                    obs.captured_at,
+                )
+                new_gallery_mean = update_gallery_mean(
+                    closed.gallery_mean, obs.embedding, closed.observation_count
+                )
+                new_prototypes_rev = update_view_prototypes(
+                    closed.view_prototypes,
+                    obs.orientation,
+                    obs.embedding,
+                    obs.orientation_confidence,
+                )
+                new_ph = PersonHypothesis(
+                    ph_id=closed.ph_id,
+                    state_mean=(
+                        float(ks.mean[0]),
+                        float(ks.mean[1]),
+                        float(ks.mean[2]),
+                        float(ks.mean[3]),
+                    ),
+                    state_cov=tuple(float(v) for v in ks.covariance.flatten()),
+                    born_at=closed.born_at,
+                    last_seen_at=obs.captured_at,
+                    last_seen_camera=obs.camera_id,
+                    observation_count=closed.observation_count + 1,
+                    current_identity_id=closed.current_identity_id,
+                    current_identity_committed_at=closed.current_identity_committed_at,
+                    gallery_mean=new_gallery_mean,
+                    height_estimate_m=closed.height_estimate_m,
+                    active_cameras=closed.active_cameras | spawn_cameras,
+                    closed_at=None,  # reopen
+                    last_floor_speed_m_s=0.0,
+                    last_posture=closed.last_posture,
+                    metadata=_metadata_with_room(closed.metadata, room_id, room_name),
+                    mean_quality=closed.mean_quality,
+                    view_prototypes=new_prototypes_rev,
+                )
+                revived_ph_ids.add(closed.ph_id)
+                _metrics.metrics.cts_ph_revived_total.inc()
+                _metrics.metrics.world_tracker_ph_spawned_total.labels(reason="revived").inc()
+                logger.info(
+                    "ph_revived",
+                    ph_id=closed.ph_id,
+                    camera_id=obs.camera_id,
+                    prev_identity=closed.current_identity_id,
+                    age_s=(
+                        obs.captured_at - (closed.closed_at or closed.last_seen_at)
+                    ).total_seconds(),
+                )
+
+                # Record cross-camera handoff in the topology model.
+                if (
+                    closed.last_seen_camera != obs.camera_id
+                    and self._topology_repo is not None
+                    and closed.closed_at is not None
+                ):
+                    elapsed_s = (obs.captured_at - closed.closed_at).total_seconds()
+                    updated_edge = record_handoff(
+                        closed.last_seen_camera,
+                        obs.camera_id,
+                        elapsed_s,
+                        _topology_edges,
+                        now,
+                    )
+                    await self._topology_repo.upsert_edge(updated_edge)
+                    logger.debug(
+                        "topology_handoff_recorded",
+                        from_camera=closed.last_seen_camera,
+                        to_camera=obs.camera_id,
+                        elapsed_s=round(elapsed_s, 2),
+                    )
+            else:
+                # No revival candidate: spawn a brand-new PH.
+                ks = initialize(
+                    fx,
+                    fy,
+                    cfg.initial_position_sigma_m,
+                    cfg.initial_velocity_sigma_m_s,
+                    obs.captured_at,
+                )
+                # seed first view prototype from spawn observation.
+                spawn_prototypes = update_view_prototypes(
+                    (),
+                    obs.orientation,
+                    obs.embedding,
+                    obs.orientation_confidence,
+                )
+                new_ph = PersonHypothesis(
+                    ph_id=str(uuid.uuid4()),
+                    state_mean=(
+                        float(ks.mean[0]),
+                        float(ks.mean[1]),
+                        float(ks.mean[2]),
+                        float(ks.mean[3]),
+                    ),
+                    state_cov=tuple(float(v) for v in ks.covariance.flatten()),
+                    born_at=obs.captured_at,
+                    last_seen_at=obs.captured_at,
+                    last_seen_camera=obs.camera_id,
+                    observation_count=1,
+                    current_identity_id=_sanitize_identity_id(
+                        obs.face_anchor.person_id if obs.face_anchor else None
+                    ),
+                    gallery_mean=obs.embedding if obs.embedding else None,
+                    height_estimate_m=obs.height_estimate_m,
+                    active_cameras=spawn_cameras,
+                    last_floor_speed_m_s=0.0,
+                    metadata=_metadata_with_room({}, room_id, room_name),
+                    mean_quality=obs.quality,
+                    view_prototypes=spawn_prototypes,
+                )
+
             updated_phs.append(new_ph)
-            _metrics.metrics.world_tracker_ph_spawned_total.inc()
             ph_obs_meta[new_ph.ph_id] = (
                 obs.frame_index,
                 obs.bbox,
                 obs.detection_confidence,
             )
-            # Save the new PH first so the FK constraint on world_observations is satisfied.
+            # Defer gallery seeding to after identity resolution (step 9).
+            seed_obs_by_ph[new_ph.ph_id] = obs
+            # Save the PH first so the FK constraint on world_observations is satisfied.
             await self._ph_repo.save(new_ph)
-            # Persist all source observations for this spawned PH.
+            # Persist all source observations for this PH.
             for src_det_id in spawn_src_ids:
                 src_obs = obs_by_det_id.get(src_det_id, obs)
                 await self._obs_repo.save(src_obs, ph_id=new_ph.ph_id)
@@ -367,10 +686,15 @@ class WorldTracker:
                     det_to_ph[src_det_id] = new_ph.ph_id
 
             # 6. Check for PH continuations from recently closed PHs.
+            had_continuation = False
             if self._continuation_publisher is not None:
-                lookback = obs.captured_at - timedelta(seconds=cfg.inferred_handoff_max_s)
-                recent_closed = await self._ph_repo.list_closed_since(lookback, limit=100)
-                for closed in recent_closed:
+                continuation_lookback = obs.captured_at - timedelta(
+                    seconds=cfg.inferred_handoff_max_s
+                )
+                recent_closed_cont = await self._ph_repo.list_closed_since(
+                    continuation_lookback, limit=100
+                )
+                for closed in recent_closed_cont:
                     if closed.ph_id == new_ph.ph_id:
                         continue
                     if closed.closed_at is None:
@@ -397,61 +721,36 @@ class WorldTracker:
                     continuations.append(candidate)
                     await self._continuation_publisher.publish(candidate)
                     _metrics.metrics.world_tracker_continuations_total.inc()
+                    had_continuation = True
+
+                    # Record cross-camera handoff in topology model.
+                    if closed.last_seen_camera != obs.camera_id and self._topology_repo is not None:
+                        updated_edge = record_handoff(
+                            closed.last_seen_camera,
+                            obs.camera_id,
+                            elapsed,
+                            _topology_edges,
+                            now,
+                        )
+                        await self._topology_repo.upsert_edge(updated_edge)
+
+            if revival_candidate is not None:
+                pass  # Already counted as "revived" above.
+            elif had_continuation:
+                _metrics.metrics.world_tracker_ph_spawned_total.labels(
+                    reason="respawn_after_close"
+                ).inc()
+            else:
+                _metrics.metrics.world_tracker_ph_spawned_total.labels(
+                    reason="new_observation"
+                ).inc()
 
         # 7. Close PHs that have not been observed for ph_close_grace_s.
         for ph_idx in assignment.unmatched_phs:
             ph = active_phs[ph_idx]
-            grace = (now - ph.last_seen_at).total_seconds()
-            if grace > cfg.ph_close_grace_s:
-                closed = PersonHypothesis(
-                    ph_id=ph.ph_id,
-                    state_mean=ph.state_mean,
-                    state_cov=ph.state_cov,
-                    born_at=ph.born_at,
-                    last_seen_at=ph.last_seen_at,
-                    last_seen_camera=ph.last_seen_camera,
-                    observation_count=ph.observation_count,
-                    current_identity_id=ph.current_identity_id,
-                    current_identity_committed_at=ph.current_identity_committed_at,
-                    gallery_mean=ph.gallery_mean,
-                    height_estimate_m=ph.height_estimate_m,
-                    active_cameras=ph.active_cameras,
-                    closed_at=now,
-                    last_floor_speed_m_s=ph.last_floor_speed_m_s,
-                    last_posture=ph.last_posture,
-                    metadata=ph.metadata,
-                    mean_quality=ph.mean_quality,
-                )
-                updated_phs.append(closed)
-                _metrics.metrics.world_tracker_ph_closed_total.inc()
-            else:
-                # Keep open but unobserved; update state to predicted.
-                ks = predicted_states[ph_idx]
-                updated = PersonHypothesis(
-                    ph_id=ph.ph_id,
-                    state_mean=(
-                        float(ks.mean[0]),
-                        float(ks.mean[1]),
-                        float(ks.mean[2]),
-                        float(ks.mean[3]),
-                    ),
-                    state_cov=tuple(float(v) for v in ks.covariance.flatten()),
-                    born_at=ph.born_at,
-                    last_seen_at=ph.last_seen_at,
-                    last_seen_camera=ph.last_seen_camera,
-                    observation_count=ph.observation_count,
-                    current_identity_id=ph.current_identity_id,
-                    current_identity_committed_at=ph.current_identity_committed_at,
-                    gallery_mean=ph.gallery_mean,
-                    height_estimate_m=ph.height_estimate_m,
-                    active_cameras=ph.active_cameras,
-                    closed_at=None,
-                    last_floor_speed_m_s=ph.last_floor_speed_m_s,
-                    last_posture=ph.last_posture,
-                    metadata=ph.metadata,
-                    mean_quality=ph.mean_quality,
-                )
-                updated_phs.append(updated)
+            updated_phs.append(
+                _advance_unmatched_ph(ph, predicted_states[ph_idx], now, cfg.ph_close_grace_s)
+            )
 
         # 8. Persist all updated PHs.
         for ph in updated_phs:
@@ -472,6 +771,43 @@ class WorldTracker:
             config=cfg,
         )
 
+        # Update the held-identity confidence cache: record a positive committed
+        # confidence; clear it on a genuine demotion to UNKNOWN.
+        for pid, data in identity_by_ph.items():
+            conf = float(data.get("identity_confidence") or 0.0)  # type: ignore[arg-type]
+            if data.get("identity_id") and conf > 0.0:
+                self._last_identity_confidence[pid] = conf
+            else:
+                self._last_identity_confidence.pop(pid, None)
+        # Bound the cache to PHs that are still open after this frame. Intersecting
+        # every frame evicts not only PHs closed here (step 7) but also any closed,
+        # merged, or deleted OUTSIDE the tracker (e.g. the PH API), which would
+        # otherwise never pass through this loop and leak. updated_phs is a
+        # superset of all currently-open PHs (every list_open PH is matched or
+        # advanced, plus this frame's spawns/revivals), so this is a hard bound:
+        # cache size <= number of open PHs.
+        open_ph_ids = {ph.ph_id for ph in updated_phs if ph.closed_at is None}
+        self._last_identity_confidence = {
+            pid: conf for pid, conf in self._last_identity_confidence.items() if pid in open_ph_ids
+        }
+
+        # Seed the multi-view gallery AFTER identity resolution so a face that
+        # commits (or is held) this frame seeds with its committed identity.
+        # _seed_multiview_gallery still requires a recognized face anchor on the
+        # observation, so only face-confirmed frames seed (no poisoning).
+        if self._gallery_repo is not None and self._identity_resolver is not None:
+            for ph_id, seed_obs in seed_obs_by_ph.items():
+                resolved = identity_by_ph.get(ph_id, {})
+                raw_identity = resolved.get("identity_id")
+                seed_identity = _sanitize_identity_id(
+                    str(raw_identity) if raw_identity is not None else None
+                )
+                await self._seed_multiview_gallery(seed_identity, seed_obs)
+
+        # Detect co-presence links for overlapping cameras sharing an identity.
+        if self._copresence_repo is not None and self._overlap_groups:
+            await self._detect_copresence(updated_phs, identity_by_ph, now)
+
         # 10. Build snapshots for downstream stages.
         snapshots: list[WorldFrameSnapshot] = []
         for ph in updated_phs:
@@ -483,6 +819,7 @@ class WorldTracker:
                 ph.last_seen_camera,
                 room_polygons,
                 camera_room_map,
+                room_names,
             )
             obs_meta = ph_obs_meta.get(ph.ph_id, (0, None, 0.0))
             obs_frame_index, obs_bbox, obs_det_conf = obs_meta
@@ -498,12 +835,18 @@ class WorldTracker:
                     floor_vx_m_s=ph.state_mean[2],
                     floor_vy_m_s=ph.state_mean[3],
                     position_sigma_m=position_sigma_m(ph.state_cov),
-                    identity_id=(
+                    identity_id=_sanitize_identity_id(
                         str(id_data["identity_id"])
                         if id_data.get("identity_id") is not None
                         else ph.current_identity_id
                     ),
-                    identity_confidence=float(id_data.get("identity_confidence", 0.0) or 0.0),  # type: ignore[arg-type]
+                    # Use this frame's posterior when resolved; otherwise replay
+                    # the held identity's last positive confidence (coasting /
+                    # unresolved frames) instead of emitting a sentinel 0.0.
+                    identity_confidence=(
+                        float(id_data.get("identity_confidence", 0.0) or 0.0)  # type: ignore[arg-type]
+                        or self._last_identity_confidence.get(ph.ph_id, 0.0)
+                    ),
                     posterior_entropy=float(id_data.get("posterior_entropy", 0.0) or 0.0),  # type: ignore[arg-type]
                     direct_face_evidence=bool(id_data.get("direct_face_evidence", False) or False),
                     bbox=obs_bbox,
@@ -522,7 +865,257 @@ class WorldTracker:
             identity_decisions=identity_decisions,
             revisions=revisions,
             det_to_ph=det_to_ph,
+            revived_ph_ids=frozenset(revived_ph_ids),
         )
+
+    async def _detect_copresence(
+        self,
+        updated_phs: list[PersonHypothesis],
+        identity_by_ph: dict[str, dict[str, object]],
+        now: datetime,
+    ) -> None:
+        """Write co-presence links for open PHs in the same overlap group
+        that share a committed identity.
+
+        Guardrail: both PHs must have a non-None ``current_identity_id`` and
+        those identities must match.  This ensures two strangers in the same
+        room are never linked.
+        """
+        if not self._overlap_groups or self._copresence_repo is None:
+            return
+
+        # Build camera → group_id lookup.
+        camera_to_group: dict[str, str] = {}
+        for group in self._overlap_groups:
+            for cam_id in group.camera_ids:
+                camera_to_group[cam_id] = group.group_id
+
+        # Filter to open PHs with a committed identity.
+        open_phs = [
+            ph for ph in updated_phs if ph.closed_at is None and ph.current_identity_id is not None
+        ]
+
+        for i, ph_a in enumerate(open_phs):
+            group_a = camera_to_group.get(ph_a.last_seen_camera)
+            if group_a is None:
+                continue
+            for ph_b in open_phs[i + 1 :]:
+                group_b = camera_to_group.get(ph_b.last_seen_camera)
+                if group_b is None or group_b != group_a:
+                    continue
+                if ph_a.ph_id == ph_b.ph_id:
+                    continue
+                # Identity-equality guardrail.
+                if (
+                    ph_a.current_identity_id is not None
+                    and ph_a.current_identity_id == ph_b.current_identity_id
+                ):
+                    aid, bid = sorted([ph_a.ph_id, ph_b.ph_id])
+                    link = CoPresenceLink(
+                        id=str(uuid.uuid4()),
+                        group_id=group_a,
+                        ph_id_a=aid,
+                        ph_id_b=bid,
+                        identity_id=str(ph_a.current_identity_id),
+                        first_observed_at=now,
+                        last_observed_at=now,
+                        observation_count=1,
+                    )
+                    try:
+                        assert self._copresence_repo is not None  # narrow for mypy
+                        await self._copresence_repo.upsert_link(link)
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "copresence_link_write_failed",
+                            group_id=group_a,
+                            ph_id_a=aid,
+                            ph_id_b=bid,
+                            exc_info=True,
+                        )
+                        continue
+                    _metrics.metrics.worldtracker_copresence_links_total.inc()
+                    logger.debug(
+                        "copresence_link_written",
+                        group_id=group_a,
+                        ph_id_a=aid,
+                        ph_id_b=bid,
+                        identity_id=ph_a.current_identity_id,
+                    )
+
+    async def _seed_multiview_gallery(
+        self,
+        identity_id: str | None,
+        obs: WorldObservation,
+    ) -> None:
+        """Seed an identity's gallery with an orientation-tagged entry.
+
+        ``identity_id`` is the PH's committed identity AFTER identity resolution
+        (the caller passes the resolved, sanitized id, not the stale
+        pre-resolution one). Only seeds when:
+        - ``identity_id`` is a committed (non-UNKNOWN) identity.
+        - The observation has a face anchor with recognition_state=="recognized".
+        - Observation quality and orientation confidence clear their thresholds.
+        - The per-(identity, orientation) cap is not yet reached.
+
+        Gallery entries seeded from non-frontal frames enable the resolver's
+        max-over-views query to re-identify a person who turned around.
+        """
+        from ...domain import GalleryEmbedding
+
+        if self._gallery_repo is None:
+            return
+
+        if not identity_id:
+            return
+
+        face_anchor = obs.face_anchor
+        if face_anchor is None or face_anchor.recognition_state != "recognized":
+            return
+
+        # Gate on orientation confidence (from resolver config).
+        seed_min_conf = 0.5
+        if self._identity_resolver is not None:
+            seed_min_conf = self._identity_resolver._config.seed_orientation_min_confidence
+        if obs.orientation_confidence < seed_min_conf:
+            return
+
+        # Do not seed UNKNOWN orientation.
+        if obs.orientation == OrientationBin.UNKNOWN:
+            return
+
+        if not obs.embedding:
+            return
+
+        # Check per-(identity, orientation) cap.
+        orientation_val = int(obs.orientation)
+        try:
+            existing = await self._gallery_repo.list_gallery_entries(
+                identity_id=identity_id,
+                active_only=False,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "multiview_gallery_seed_list_failed",
+                identity_id=identity_id,
+                exc_info=True,
+            )
+            return
+
+        count_for_orientation = sum(1 for e in existing if e.orientation == orientation_val)
+        _max_per_orientation = 10
+        if count_for_orientation >= _max_per_orientation:
+            logger.debug(
+                "multiview_gallery_seed_capped",
+                identity_id=identity_id,
+                orientation=orientation_val,
+                count=count_for_orientation,
+                cap=_max_per_orientation,
+            )
+            return
+
+        # Write the gallery entry.
+        import uuid as _uuid
+
+        entry = GalleryEmbedding(
+            gallery_entry_id=str(_uuid.uuid4()),
+            identity_id=identity_id,
+            embedding=obs.embedding,
+            seen_at=obs.captured_at,
+            quality=obs.quality,
+            face_confirmed=True,
+            camera_id=obs.camera_id,
+            orientation=orientation_val,
+        )
+        try:
+            await self._gallery_repo.upsert_gallery_entry(entry)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "multiview_gallery_seed_failed",
+                identity_id=identity_id,
+                orientation=orientation_val,
+                exc_info=True,
+            )
+            return
+
+        logger.debug(
+            "multiview_gallery_seeded",
+            identity_id=identity_id,
+            orientation=orientation_val,
+            orientation_name=obs.orientation.name,
+            quality=round(obs.quality, 3),
+        )
+
+
+# ---------------------------------------------------------------------------
+# PH advance helper (pure, no I/O)
+# ---------------------------------------------------------------------------
+
+
+def _advance_unmatched_ph(
+    ph: PersonHypothesis,
+    predicted_ks: KalmanState,
+    now: datetime,
+    ph_close_grace_s: float,
+) -> PersonHypothesis:
+    """Return a closed or drift-predicted PH for one unmatched active track.
+
+    Closes the PH (sets closed_at) when it has not been observed for longer
+    than ph_close_grace_s and emits lifetime metrics.  Otherwise advances
+    the Kalman state to the predicted position without touching identity or
+    gallery state.
+    """
+    grace = (now - ph.last_seen_at).total_seconds()
+    if grace > ph_close_grace_s:
+        _metrics.metrics.world_tracker_ph_closed_total.inc()
+        _metrics.metrics.ph_lifetime_seconds.observe((now - ph.born_at).total_seconds())
+        _metrics.metrics.ph_observations_at_close.observe(ph.observation_count)
+        return PersonHypothesis(
+            ph_id=ph.ph_id,
+            state_mean=ph.state_mean,
+            state_cov=ph.state_cov,
+            born_at=ph.born_at,
+            last_seen_at=ph.last_seen_at,
+            last_seen_camera=ph.last_seen_camera,
+            observation_count=ph.observation_count,
+            current_identity_id=ph.current_identity_id,
+            current_identity_committed_at=ph.current_identity_committed_at,
+            gallery_mean=ph.gallery_mean,
+            height_estimate_m=ph.height_estimate_m,
+            active_cameras=ph.active_cameras,
+            closed_at=now,
+            last_floor_speed_m_s=ph.last_floor_speed_m_s,
+            last_posture=ph.last_posture,
+            metadata=ph.metadata,
+            mean_quality=ph.mean_quality,
+            view_prototypes=ph.view_prototypes,
+        )
+    # Keep open but unobserved; advance state to Kalman prediction.
+    ks = predicted_ks
+    return PersonHypothesis(
+        ph_id=ph.ph_id,
+        state_mean=(
+            float(ks.mean[0]),
+            float(ks.mean[1]),
+            float(ks.mean[2]),
+            float(ks.mean[3]),
+        ),
+        state_cov=tuple(float(v) for v in ks.covariance.flatten()),
+        born_at=ph.born_at,
+        last_seen_at=ph.last_seen_at,
+        last_seen_camera=ph.last_seen_camera,
+        observation_count=ph.observation_count,
+        current_identity_id=ph.current_identity_id,
+        current_identity_committed_at=ph.current_identity_committed_at,
+        gallery_mean=ph.gallery_mean,
+        height_estimate_m=ph.height_estimate_m,
+        active_cameras=ph.active_cameras,
+        closed_at=None,
+        last_floor_speed_m_s=ph.last_floor_speed_m_s,
+        last_posture=ph.last_posture,
+        metadata=ph.metadata,
+        mean_quality=ph.mean_quality,
+        view_prototypes=ph.view_prototypes,
+    )
 
 
 # ---------------------------------------------------------------------------

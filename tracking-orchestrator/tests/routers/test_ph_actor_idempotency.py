@@ -1,4 +1,4 @@
-"""WTR6: Actor extraction and idempotency tests for PH API."""
+"""Actor extraction and idempotency tests for PH API."""
 
 from __future__ import annotations
 

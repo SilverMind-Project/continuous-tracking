@@ -83,10 +83,9 @@ class RevisionPublisher(BasePublisher):
 def _to_proto(revision: IdentityRevision) -> tracking_pb2.IdentityRevision:
     """Convert a domain IdentityRevision to its proto wire form.
 
-    N0: fields renamed from global_track_id/tracklet_ids to ph_id.
+    Fields renamed from global_track_id/tracklet_ids to ph_id.
     The proto message still carries the legacy field numbers for
-    wire compatibility during the N0-N3 transition; CC subscriber
-    decodes accordingly.
+    wire compatibility; CC subscriber decodes accordingly.
     """
     evidence = revision.evidence or IdentityEvidence()
     pb = tracking_pb2.IdentityRevision(

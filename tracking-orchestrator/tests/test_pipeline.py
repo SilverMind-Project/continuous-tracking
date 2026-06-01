@@ -20,6 +20,7 @@ from app.pipeline.frame_pipeline import (
     PipelineDependencies,
     SignalConfig,
 )
+from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
 from app.transport.redis_streams import FrameReady
 
 # A capture timestamp that is always "live" (within the 30s age gate).
@@ -66,6 +67,8 @@ class TestPipelineSkeleton:
                     "revisions_stream": "tracking.revisions",
                     "signals_stream": "tracking.signals",
                     "scene_samples_stream": "scene.samples",
+                    "presence_stream": "tracking.presence",
+                    "dwell_stream": "tracking.dwell",
                     "batch_max_wait_ms": 100,
                     "batch_max_size": 8,
                     "xack_timeout_ms": 5000,
@@ -89,6 +92,31 @@ class TestPipelineSkeleton:
             assert pipeline._detector is None  # Skeleton mode
             assert pipeline._trajectory_writer is not None  # M6
             assert pipeline._keyframe_sampler is not None  # M6
+
+    @pytest.mark.asyncio
+    async def test_live_room_maps_are_injected_into_built_stages(
+        self, pipeline: FrameProcessingPipeline
+    ) -> None:
+        """Startup live-map injection must update the already-built stage objects."""
+        with _mock_redis_deps():
+            await pipeline.initialize()
+            camera_room_map = CameraRoomMap()
+            room_polygon_map = RoomPolygonMap()
+
+            pipeline.set_camera_room_map(camera_room_map)
+            pipeline.set_room_polygon_map(room_polygon_map)
+
+            assert pipeline._world_tracking_stage is not None
+            assert pipeline._world_tracking_stage._camera_room_map is camera_room_map
+            assert pipeline._world_tracking_stage._room_polygon_map is room_polygon_map
+            assert pipeline._stage_runner is not None
+            mapped_stages = [
+                stage
+                for stage in pipeline._stage_runner._stages
+                if hasattr(stage, "_camera_room_map")
+            ]
+            assert mapped_stages
+            assert all(stage._camera_room_map is camera_room_map for stage in mapped_stages)
 
     @pytest.mark.asyncio
     async def test_skeleton_frame_processed(self, pipeline: FrameProcessingPipeline) -> None:
@@ -280,7 +308,7 @@ class TestPipelineSkeleton:
     async def test_calibration_adjacency_syncs_into_pipeline(
         self, pipeline: FrameProcessingPipeline
     ) -> None:
-        """Verify overlap groups are accessible after pipeline initialization."""
+        """Verify calibration adjacency edges are set after pipeline initialization."""
         old_edges = list(calibration_state.adjacency_edges)
         old_version = calibration_state.version
         try:
@@ -295,7 +323,9 @@ class TestPipelineSkeleton:
             )
             with _mock_redis_deps():
                 await pipeline.initialize()
-                assert pipeline._overlap_groups is not None
+                # _overlap_groups removed (dead code); pipeline init
+                # should still succeed with adjacency edges present.
+                assert pipeline._stage_runner is not None
                 await pipeline.stop()
         finally:
             calibration_state.adjacency_edges = old_edges

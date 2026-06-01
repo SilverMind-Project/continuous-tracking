@@ -5,7 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from ..domain import PersonTrajectoryPoint, RoomDwell, TaggedKeyframe
+from ..domain import BboxAnnotation, PersonTrajectoryPoint, RoomDwell, TaggedKeyframe
+from .annotations import BboxAnnotationRepository
 
 
 class TrajectoryRepository(ABC):
@@ -54,6 +55,14 @@ class KeyframeRepository(ABC):
     @abstractmethod
     async def save_keyframe(self, keyframe: TaggedKeyframe) -> None:
         """Store a tagged keyframe."""
+
+    @abstractmethod
+    async def save_keyframe_with_bbox_annotations(
+        self,
+        keyframe: TaggedKeyframe,
+        bbox_annotations: list[BboxAnnotation],
+    ) -> None:
+        """Store a tagged keyframe and its bbox evidence atomically when possible."""
 
     @abstractmethod
     async def get_keyframe(self, keyframe_id: str) -> TaggedKeyframe | None:
@@ -134,11 +143,21 @@ class InMemoryTrajectoryRepository(TrajectoryRepository):
 class InMemoryKeyframeRepository(KeyframeRepository):
     """In-memory store for tagged keyframes."""
 
-    def __init__(self) -> None:
+    def __init__(self, bbox_repo: BboxAnnotationRepository | None = None) -> None:
         self._keyframes: dict[str, TaggedKeyframe] = {}
+        self._bbox_repo = bbox_repo
 
     async def save_keyframe(self, keyframe: TaggedKeyframe) -> None:
         self._keyframes[keyframe.keyframe_id] = keyframe
+
+    async def save_keyframe_with_bbox_annotations(
+        self,
+        keyframe: TaggedKeyframe,
+        bbox_annotations: list[BboxAnnotation],
+    ) -> None:
+        await self.save_keyframe(keyframe)
+        if self._bbox_repo is not None and bbox_annotations:
+            await self._bbox_repo.save_bbox_annotations(bbox_annotations)
 
     async def get_keyframe(self, keyframe_id: str) -> TaggedKeyframe | None:
         return self._keyframes.get(keyframe_id)

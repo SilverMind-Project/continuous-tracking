@@ -16,6 +16,16 @@ from pydantic import BaseModel, Field
 
 from ..domain import IdentityRevision, Keyframe, PersonHypothesis, WorldObservation
 
+
+def _room_fields(ph: PersonHypothesis) -> dict[str, str | None]:
+    room_id = ph.metadata.get("last_room_id") or ph.metadata.get("room_id")
+    room_name = ph.metadata.get("last_room_name") or ph.metadata.get("room_name") or room_id
+    return {
+        "room_id": str(room_id) if room_id else None,
+        "room_name": str(room_name) if room_name else None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Observation
 # ---------------------------------------------------------------------------
@@ -34,6 +44,7 @@ class ObservationResponse(BaseModel):
     @classmethod
     def from_domain(cls, obs: WorldObservation) -> ObservationResponse:
         return cls(
+            observation_id=obs.observation_id,
             camera_id=obs.camera_id,
             frame_index=obs.frame_index,
             captured_at=obs.captured_at,
@@ -56,6 +67,8 @@ class PHSummary(BaseModel):
     closed_at: datetime | None = None
     observation_count: int = 0
     current_identity_id: str | None = None
+    room_id: str | None = None
+    room_name: str | None = None
     active_cameras: list[str] = Field(default_factory=list)
     last_floor_speed_m_s: float = 0.0
     last_posture: str | None = None
@@ -69,6 +82,7 @@ class PHSummary(BaseModel):
             closed_at=ph.closed_at,
             observation_count=ph.observation_count,
             current_identity_id=ph.current_identity_id,
+            **_room_fields(ph),
             active_cameras=list(ph.active_cameras),
             last_floor_speed_m_s=ph.last_floor_speed_m_s,
             last_posture=ph.last_posture,
@@ -88,6 +102,8 @@ class PHDetail(BaseModel):
     observation_count: int = 0
     current_identity_id: str | None = None
     current_identity_committed_at: datetime | None = None
+    room_id: str | None = None
+    room_name: str | None = None
     active_cameras: list[str] = Field(default_factory=list)
     last_seen_camera: str = ""
     last_floor_speed_m_s: float = 0.0
@@ -106,6 +122,7 @@ class PHDetail(BaseModel):
             observation_count=ph.observation_count,
             current_identity_id=ph.current_identity_id,
             current_identity_committed_at=ph.current_identity_committed_at,
+            **_room_fields(ph),
             active_cameras=list(ph.active_cameras),
             last_seen_camera=ph.last_seen_camera,
             last_floor_speed_m_s=ph.last_floor_speed_m_s,
@@ -326,6 +343,8 @@ class PHKeyframesResponse(BaseModel):
 class PHCoPresentItem(BaseModel):
     ph_id: str
     current_identity_id: str | None = None
+    room_id: str | None = None
+    room_name: str | None = None
     last_seen_at: datetime | None = None
     last_seen_camera: str = ""
 
@@ -334,6 +353,7 @@ class PHCoPresentItem(BaseModel):
         return cls(
             ph_id=ph.ph_id,
             current_identity_id=ph.current_identity_id,
+            **_room_fields(ph),
             last_seen_at=ph.last_seen_at,
             last_seen_camera=ph.last_seen_camera,
         )

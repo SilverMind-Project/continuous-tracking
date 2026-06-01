@@ -1,4 +1,4 @@
-"""WTR2: CCIdentityAssertionSubscriber tests.
+"""CCIdentityAssertionSubscriber tests.
 
 Tests the assertion cache, field decoding, expiry, and malformed message
 handling without requiring Redis testcontainers.

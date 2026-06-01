@@ -109,8 +109,10 @@ CREATE TABLE IF NOT EXISTS reid_gallery (
     origin_tracklet_id  UUID,
     seen_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     face_confirmed      BOOLEAN NOT NULL DEFAULT false,
+    orientation         SMALLINT NOT NULL DEFAULT 4,  -- OrientationBin value
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT reid_gallery_orientation_range CHECK (orientation >= 0 AND orientation <= 4)
 );
 
 -- pgvectorscale StreamingDiskANN for scalable vector search
@@ -235,6 +237,7 @@ CREATE TABLE IF NOT EXISTS person_hypotheses (
     active_cameras                TEXT[]       NOT NULL DEFAULT '{}',
     mean_quality                  REAL         NOT NULL DEFAULT 0,
     metadata                      JSONB        NOT NULL DEFAULT '{}',
+    view_prototypes               BYTEA,        -- serialised ViewPrototype tuples
     CONSTRAINT person_hypotheses_state_mean_size CHECK (array_length(state_mean, 1) = 4),
     CONSTRAINT person_hypotheses_state_cov_size  CHECK (array_length(state_cov,  1) = 16),
     CONSTRAINT person_hypotheses_metadata_object CHECK (jsonb_typeof(metadata) = 'object')
@@ -539,6 +542,39 @@ CREATE TRIGGER trg_reid_gallery_updated_at
 CREATE TRIGGER trg_stream_assignments_updated_at
     BEFORE UPDATE ON stream_assignments
     FOR EACH ROW EXECUTE FUNCTION _update_updated_at();
+
+-- =============================================================================
+-- Camera adjacency topology (M5)
+-- =============================================================================
+
+-- Learned transit-time distributions between camera pairs from observed handoffs.
+-- Updated online via the Welford algorithm; the topology model service computes
+-- a plausibility score from the stored count, mean, and variance.
+CREATE TABLE IF NOT EXISTS camera_topology_edges (
+    from_camera        TEXT        NOT NULL,
+    to_camera          TEXT        NOT NULL,
+    observation_count  INTEGER     NOT NULL DEFAULT 0,
+    mean_transit_s     FLOAT8      NOT NULL DEFAULT 0.0,
+    variance_transit_s2 FLOAT8     NOT NULL DEFAULT 0.0,
+    last_updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (from_camera, to_camera)
+);
+
+-- Identity-level co-presence links for overlapping cameras.
+-- Written when two open PHs in the same overlap group share a committed identity.
+-- The CHECK constraint prevents duplicate directional pairs.
+CREATE TABLE IF NOT EXISTS co_presence_links (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id            TEXT        NOT NULL,
+    ph_id_a             UUID        NOT NULL REFERENCES person_hypotheses(ph_id) ON DELETE CASCADE,
+    ph_id_b             UUID        NOT NULL REFERENCES person_hypotheses(ph_id) ON DELETE CASCADE,
+    identity_id         TEXT        NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    first_observed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_observed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    observation_count   INTEGER     NOT NULL DEFAULT 1,
+    CONSTRAINT uq_copresence_ph_pair UNIQUE (ph_id_a, ph_id_b),
+    CONSTRAINT chk_ph_a_lt_ph_b CHECK (ph_id_a < ph_id_b)
+);
 
 -- =============================================================================
 -- Continuous aggregates (non-transactional)

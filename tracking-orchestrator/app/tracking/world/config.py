@@ -44,6 +44,40 @@ class WorldTrackerConfig:
     inferred_handoff_max_s: float = 600.0
     inferred_handoff_max_distance_m: float = 5.0
 
+    # ---- PH revival ----
+    # When enabled, an unmatched observation revives a recently-closed same-camera
+    # PH whose appearance matches instead of spawning a brand-new UNKNOWN PH.
+    enable_ph_revival: bool = False
+    revive_max_age_s: float = 30.0
+    revive_max_distance_m: float = 2.0
+    revive_appearance_min_sim: float = 0.55
+
+    # ---- Uncalibrated association relaxation ----
+    # When enabled, uncalibrated-camera observations use a wider geometric gate
+    # and appearance-weighted cost so synthetic floor-point jitter does not
+    # force a close and respawn.
+    enable_uncalibrated_gate_relax: bool = False
+    uncalibrated_gate_chi2: float = 21.0
+    uncalibrated_alpha_app: float = 0.7
+
+    # ---- Multi-view ReID association ----
+    # When enabled, pair_cost uses max-over-view-prototypes cosine similarity
+    # instead of the single gallery_mean.  Ships shadow-first (off by default).
+    enable_multiview_association: bool = False
+
+    # ---- Cross-camera revival ----
+    # When enabled, unmatched observations can revive recently-closed PHs from
+    # a different camera via topology and multi-view appearance gating.
+    enable_cross_camera_revival: bool = False
+    cross_camera_min_plausibility: float = 0.05
+    cross_camera_revive_appearance_min_sim: float = 0.60
+
+    # ---- Group appearance dedup ----
+    # When enabled, uncalibrated observations in a declared overlap group are
+    # deduped by appearance similarity instead of being skipped.
+    enable_group_appearance_dedup: bool = False
+    dedup_group_appearance_min_sim: float = 0.75
+
     # ---- Cross-camera dedup ----
     # Pre-association floor-point dedup for observations from overlapping cameras.
     # Two observations from different cameras within this distance on the floor plane

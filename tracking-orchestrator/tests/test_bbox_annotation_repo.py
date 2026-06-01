@@ -171,6 +171,36 @@ async def test_tag_annotation_noop_on_missing_id(repo: InMemoryBboxAnnotationRep
     await repo.tag_annotation("nonexistent-uuid", "person-abc")
 
 
+async def test_batch_update_identity_preserves_bbox_geometry(
+    repo: InMemoryBboxAnnotationRepository,
+) -> None:
+    from app.storage.annotations import BboxBatchOperation
+
+    ann = _bbox(identity_id=None)
+    await repo.save_bbox_annotations([ann])
+    annotation_id = next(iter(repo._rows.keys()))
+
+    results = await repo.apply_bbox_batch(
+        "kf1",
+        [
+            BboxBatchOperation(
+                op="update",
+                annotation_id=annotation_id,
+                data={"identity_id": "alice"},
+            )
+        ],
+    )
+
+    assert results == [{"op": "update", "annotation_id": annotation_id, "ok": True}]
+    updated = await repo.get_annotation_by_id(annotation_id)
+    assert updated is not None
+    assert updated.identity_id == "alice"
+    assert updated.x1 == ann.x1
+    assert updated.y1 == ann.y1
+    assert updated.x2 == ann.x2
+    assert updated.y2 == ann.y2
+
+
 # -- delete_annotation --------------------------------------------------------
 
 

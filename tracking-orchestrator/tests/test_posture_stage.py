@@ -13,6 +13,7 @@ from app.domain import BoundingBox, Detection
 from app.inference.schemas import COCO_KEYPOINTS, Keypoint, PoseResult
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.posture_stage import PostureStage
+from app.services.camera_room_map import CameraRoomMap
 from app.trajectory.posture import PostureScores
 
 
@@ -44,6 +45,10 @@ def _det(det_id: str) -> Detection:
         tracklet_id="",
         ph_id=None,
     )
+
+
+def _room_map() -> CameraRoomMap:
+    return CameraRoomMap()
 
 
 def _standing_pose() -> PoseResult:
@@ -80,7 +85,7 @@ async def test_posture_stage_calls_strategy_for_every_detection() -> None:
     mock_strategy.score = AsyncMock(
         return_value=PostureScores(lying=0.0, sitting=0.0, standing_walking=0.8)
     )
-    stage = PostureStage(posture_strategy=mock_strategy)
+    stage = PostureStage(camera_room_map=_room_map(), posture_strategy=mock_strategy)
     dets = [_det("d1"), _det("d2")]
     ctx = _make_ctx(dets, {})
     ctx.det_posture["d1"] = "standing"
@@ -95,7 +100,7 @@ async def test_posture_stage_calls_strategy_for_every_detection() -> None:
 @pytest.mark.asyncio
 async def test_posture_stage_falls_back_to_score_posture_without_strategy() -> None:
     """When no strategy is provided, PostureStage uses score_posture() directly."""
-    stage = PostureStage(posture_strategy=None)
+    stage = PostureStage(camera_room_map=_room_map(), posture_strategy=None)
     det = _det("d1")
     pose = _standing_pose()
     ctx = _make_ctx([det], {"d1": pose})
@@ -107,7 +112,7 @@ async def test_posture_stage_falls_back_to_score_posture_without_strategy() -> N
 
 @pytest.mark.asyncio
 async def test_posture_stage_unknown_when_no_pose_and_no_strategy() -> None:
-    stage = PostureStage(posture_strategy=None)
+    stage = PostureStage(camera_room_map=_room_map(), posture_strategy=None)
     det = _det("d1")
     ctx = _make_ctx([det], {})  # no pose result
     await stage.run(ctx)

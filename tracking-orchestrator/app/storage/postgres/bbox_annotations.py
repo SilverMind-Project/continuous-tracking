@@ -209,21 +209,59 @@ class PostgresBboxAnnotationRepository:
                     results.append({"op": "delete", "annotation_id": op.annotation_id, "ok": True})
                 elif op.op == "update" and op.annotation_id and op.data:
                     d = op.data
-                    await conn.execute(
+                    values: list[Any] = [op.annotation_id]
+                    assignments: list[str] = []
+                    for key, column, caster in (
+                        ("x1", "x1", float),
+                        ("y1", "y1", float),
+                        ("x2", "x2", float),
+                        ("y2", "y2", float),
+                        ("detection_confidence", "detection_confidence", float),
+                        ("frame_width", "frame_width", int),
+                        ("frame_height", "frame_height", int),
+                    ):
+                        if key in d:
+                            values.append(caster(d[key]))
+                            assignments.append(f"{column} = ${len(values)}")
+                    if "identity_id" in d:
+                        values.append(d["identity_id"])
+                        assignments.append(f"identity_id = ${len(values)}")
+                    if not assignments:
+                        results.append(
+                            {
+                                "op": "update",
+                                "annotation_id": op.annotation_id,
+                                "ok": False,
+                                "error": "empty_update",
+                            }
+                        )
+                        continue
+                    result = await conn.execute(
                         "UPDATE continuous_tracking.keyframe_bbox_annotations "
-                        "SET x1 = $2, y1 = $3, x2 = $4, y2 = $5 WHERE id = $1::uuid",
-                        op.annotation_id,
-                        float(d.get("x1", 0)),
-                        float(d.get("y1", 0)),
-                        float(d.get("x2", 0)),
-                        float(d.get("y2", 0)),
+                        f"SET {', '.join(assignments)} WHERE id = $1::uuid",
+                        *values,
                     )
-                    results.append({"op": "update", "annotation_id": op.annotation_id, "ok": True})
+                    updated = _rows_affected(result) > 0
+                    results.append(
+                        {
+                            "op": "update",
+                            "annotation_id": op.annotation_id,
+                            "ok": updated,
+                            **({} if updated else {"error": "not_found"}),
+                        }
+                    )
                 elif op.op == "create" and op.data:
                     import uuid as _uuid
 
                     new_id = str(_uuid.uuid4())
                     d = op.data
+                    keyframe = await conn.fetchrow(
+                        "SELECT ph_id::text AS ph_id, camera_id "
+                        "FROM continuous_tracking.tagged_keyframes WHERE id::text = $1",
+                        keyframe_id,
+                    )
+                    ph_id = d.get("ph_id") or (keyframe["ph_id"] if keyframe else None)
+                    camera_id = d.get("camera_id") or (keyframe["camera_id"] if keyframe else "")
                     await conn.execute(
                         """INSERT INTO continuous_tracking.keyframe_bbox_annotations
                             (id, keyframe_id, ph_id, camera_id,
@@ -232,8 +270,8 @@ class PostgresBboxAnnotationRepository:
                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
                         new_id,
                         keyframe_id,
-                        "",
-                        "",
+                        ph_id,
+                        camera_id,
                         float(d.get("x1", 0)),
                         float(d.get("y1", 0)),
                         float(d.get("x2", 0)),
@@ -264,7 +302,7 @@ class PostgresBboxAnnotationRepository:
 def _row_to_domain(row: asyncpg.Record) -> BboxAnnotation:
     return BboxAnnotation(
         keyframe_id=row["keyframe_id"],
-        ph_id=row["ph_id"],
+        ph_id=row["ph_id"] or "",
         camera_id=row["camera_id"],
         x1=row["x1"],
         y1=row["y1"],
@@ -284,3 +322,10 @@ def _row_to_domain(row: asyncpg.Record) -> BboxAnnotation:
         override_by=row["override_by"],
         override_at=row["override_at"],
     )
+
+
+def _rows_affected(command_status: str) -> int:
+    try:
+        return int(command_status.split()[-1])
+    except (ValueError, IndexError):
+        return 0

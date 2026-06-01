@@ -92,6 +92,11 @@ class FaceEvidence:
     - ``"direct"``  — ArcFace match from a real person crop sent to the service.
     - ``"propagated"`` — synthetic anchor created by cross-GT face propagation.
     - ``"manual"`` — operator-applied identity correction.
+
+    ``recognition_state`` is a separate axis from ``source``:
+    - ``"recognized"`` — similarity >= threshold (strong positive).
+    - ``"candidate"`` — grey zone between thresholds (weak positive).
+    - ``"unrecognized"`` — face present but similarity < unknown_threshold.
     """
 
     person_id: str
@@ -105,3 +110,9 @@ class FaceEvidence:
     model_name: str = "arcface"
     model_version: str = ""
     captured_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # Three-valued recognition state.
+    recognition_state: str = "recognized"
+    # Raw cosine similarity to best candidate.
+    similarity: float = 0.0
+    # Head pose yaw in degrees.
+    yaw_deg: float = 0.0

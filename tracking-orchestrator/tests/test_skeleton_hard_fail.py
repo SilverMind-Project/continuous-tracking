@@ -49,6 +49,8 @@ def _config(**kwargs: object) -> PipelineConfig:
                 "revisions_stream": "tracking.revisions",
                 "signals_stream": "tracking.signals",
                 "scene_samples_stream": "scene.samples",
+                "presence_stream": "tracking.presence",
+                "dwell_stream": "tracking.dwell",
                 "maxlen": 1000,
             },
         )(),

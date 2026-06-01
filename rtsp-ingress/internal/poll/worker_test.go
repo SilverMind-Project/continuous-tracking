@@ -236,16 +236,21 @@ func TestWorker_StaticFramesFiltered(t *testing.T) {
 
 func TestWorker_ChangingFramesPublished(t *testing.T) {
 	// Alternating black/white frames should both pass the motion gate after the
-	// first frame establishes the baseline.
+	// first frame establishes the baseline.  Use a 20 ms interval and a 300 ms
+	// deadline so the test is not sensitive to race-detector overhead.
 	black := solidJPEG(t, 64, 48, color.Black)
 	white := solidJPEG(t, 64, 48, color.White)
-	fetcher := &sequenceFetcher{frames: [][]byte{black, white, black, white, black, white}}
+	frames := make([][]byte, 0, 20)
+	for range 10 {
+		frames = append(frames, black, white)
+	}
+	fetcher := &sequenceFetcher{frames: frames}
 	pub := &fakePublisher{}
-	cam := makeCam(5)
+	cam := makeCam(20)
 	gate := motion.New(0.001) // very sensitive
 	w := poll.NewWorker(cam, fetcher, gate, pub, zap.NewNop())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	w.Run(ctx)
 

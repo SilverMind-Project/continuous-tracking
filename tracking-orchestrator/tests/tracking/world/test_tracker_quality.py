@@ -1,4 +1,4 @@
-"""U1-T10: Tests that mean_quality EMA is updated on PHs."""
+"""Tests that mean_quality EMA is updated on PHs."""
 
 from __future__ import annotations
 

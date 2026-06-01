@@ -1,4 +1,4 @@
-"""U1-T8: Tests that the dedup knob and wiring work end-to-end (InMemory repos)."""
+"""Tests that the dedup knob and wiring work end-to-end (InMemory repos)."""
 
 from __future__ import annotations
 

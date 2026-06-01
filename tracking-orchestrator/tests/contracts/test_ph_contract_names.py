@@ -1,4 +1,4 @@
-"""WTR1/R3: Contract name tests — PH-native field names.
+"""Contract name tests — PH-native field names.
 
 Asserts that public Pydantic schemas expose ``ph_id``, not ``global_track_id``
 or ``tracklet_id``, except in explicitly approved boundary files.
@@ -20,7 +20,7 @@ import pytest
 from app.transport.redis_streams import _build_tracking_event_pb
 
 # -- Approved boundary files that may still reference legacy names -----------
-# These files are grandfathered until their respective WTR milestones.
+# These files are grandfathered until their respective refactoring milestones.
 _APPROVED_LEGACY_FILES: set[str] = {
     "app/domain/__init__.py",
 }
@@ -158,7 +158,7 @@ def test_revision_response_uses_ph_id():
 
 
 def test_identity_snapshot_proto_uses_ph_id():
-    """R3: IdentitySnapshot proto message must expose ph_id, not global_track_id.
+    """IdentitySnapshot proto message must expose ph_id, not global_track_id.
 
     This test encodes the rename contract: the generated _pb2 binding for
     IdentitySnapshot must have a ph_id attribute and must NOT have global_track_id.
@@ -175,7 +175,7 @@ def test_identity_snapshot_proto_uses_ph_id():
 
 
 def test_transport_identity_snapshot_sets_ph_id_not_global_track_id() -> None:
-    """R3: _build_tracking_event_pb must set ph_id on IdentitySnapshot, not global_track_id."""
+    """_build_tracking_event_pb must set ph_id on IdentitySnapshot, not global_track_id."""
     source = inspect.getsource(_build_tracking_event_pb)
     assert "s.ph_id" in source, "transport must set s.ph_id on IdentitySnapshot"
     assert "s.global_track_id" not in source, (

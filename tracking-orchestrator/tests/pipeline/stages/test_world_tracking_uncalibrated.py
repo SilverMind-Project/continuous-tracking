@@ -111,6 +111,7 @@ async def test_world_tracking_stage_produces_observations_without_calibration():
     from app.domain import FloorPoint
     from app.pipeline.frame_context import FrameContext
     from app.pipeline.stages.world_tracking import WorldTrackingStage
+    from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from app.transport.redis_streams import FrameReady
 
     now = datetime.now(UTC)
@@ -155,7 +156,11 @@ async def test_world_tracking_stage_produces_observations_without_calibration():
         )
     )
 
-    stage = WorldTrackingStage(tracker=tracker_mock)
+    stage = WorldTrackingStage(
+        tracker=tracker_mock,
+        camera_room_map=CameraRoomMap(),
+        room_polygon_map=RoomPolygonMap(),
+    )
     await stage.run(ctx)
 
     assert len(captured_observations) == 1, (

@@ -22,6 +22,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from structlog import get_logger
 
 from .config import Settings, settings
+from .domain import OverlapGroup
 from .observability.logging_config import configure_logging
 
 # Configure structlog before any logger is first used.
@@ -136,6 +137,8 @@ def _build_transport_config(s: Settings) -> TransportConfig:
         revisions_stream=s.as_str("redis.revisions_stream"),
         signals_stream=s.as_str("redis.signals_stream"),
         scene_samples_stream=s.as_str("redis.scene_samples_stream"),
+        presence_stream=s.as_str("redis.presence_stream"),
+        dwell_stream=s.as_str("redis.dwell_stream"),
     )
 
 
@@ -171,6 +174,18 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         face_lock_maintenance_max_age_s=r.as_float("face_lock_maintenance_max_age_s"),
         cross_gt_face_propagation_threshold=r.as_float("cross_gt_face_propagation_threshold"),
         cross_gt_face_propagation_max_gts=r.as_int("cross_gt_face_propagation_max_gts"),
+        enable_sticky_maintenance=r.as_bool("enable_sticky_maintenance"),
+        contradiction_face_confidence=r.as_float("contradiction_face_confidence"),
+        contradiction_posterior_prob=r.as_float("contradiction_posterior_prob"),
+        contradiction_posterior_margin=r.as_float("contradiction_posterior_margin"),
+        # Rich face evidence
+        candidate_face_weight_multiplier=r.as_float("candidate_face_weight_multiplier"),
+        face_present_unknown_unknown_mass=r.as_float("face_present_unknown_unknown_mass"),
+        frontality_full_yaw_deg=r.as_float("frontality_full_yaw_deg"),
+        frontality_zero_yaw_deg=r.as_float("frontality_zero_yaw_deg"),
+        frontality_min_factor=r.as_float("frontality_min_factor"),
+        enable_multiview_gallery=r.as_bool("enable_multiview_gallery"),
+        seed_orientation_min_confidence=r.as_float("seed_orientation_min_confidence"),
     )
 
 
@@ -198,6 +213,23 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         dedup_residual_coeff_k=wt.as_float("dedup_residual_coeff_k"),
         dedup_max_distance_ceiling_m=wt.as_float("dedup_max_distance_ceiling_m"),
         dedup_require_no_face_conflict=wt.as_bool("dedup_require_no_face_conflict"),
+        enable_ph_revival=wt.as_bool("enable_ph_revival"),
+        revive_max_age_s=wt.as_float("revive_max_age_s"),
+        revive_max_distance_m=wt.as_float("revive_max_distance_m"),
+        revive_appearance_min_sim=wt.as_float("revive_appearance_min_sim"),
+        enable_uncalibrated_gate_relax=wt.as_bool("enable_uncalibrated_gate_relax"),
+        uncalibrated_gate_chi2=wt.as_float("uncalibrated_gate_chi2"),
+        uncalibrated_alpha_app=wt.as_float("uncalibrated_alpha_app"),
+        enable_multiview_association=wt.as_bool("enable_multiview_association"),
+        # Cross-camera revival
+        enable_cross_camera_revival=wt.as_bool("enable_cross_camera_revival"),
+        cross_camera_min_plausibility=wt.as_float("cross_camera_min_plausibility"),
+        cross_camera_revive_appearance_min_sim=wt.as_float(
+            "cross_camera_revive_appearance_min_sim"
+        ),
+        # Group appearance dedup
+        enable_group_appearance_dedup=wt.as_bool("enable_group_appearance_dedup"),
+        dedup_group_appearance_min_sim=wt.as_float("dedup_group_appearance_min_sim"),
     )
 
 
@@ -279,8 +311,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     cc_api_key = settings.as_str("cognitive_companion.api_key")
     cc_client = CognitiveCompanionClient(cc_url, cc_api_key)
     face_id_camera_configs = await _fetch_cc_camera_configs(cc_client)
-    overlap_groups = await fetch_overlap_groups(cc_client)
     adjacency_edges_raw = await fetch_adjacency_edges(cc_client)
+
+    declared_overlap_groups: list[OverlapGroup] = []
+    try:
+        declared_overlap_groups = await fetch_overlap_groups(cc_client)
+        logger.info("overlap_groups_loaded", count=len(declared_overlap_groups))
+    except Exception:
+        logger.exception("overlap_groups_fetch_failed")
 
     # Build config objects from settings (env-interpolated YAML).
     resolver_config = _build_resolver_config(settings)
@@ -300,13 +338,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         allow_skeleton=settings.as_bool("pipeline.allow_skeleton"),
         # Phase 1: noise reduction
         detection_iou_dedup_threshold=settings.as_float("pipeline.detection.iou_dedup_threshold"),
-        identity_commit_window_s=settings.as_float("pipeline.identity.commit_window_s"),
-        identity_high_confidence_face_threshold=settings.as_float(
-            "pipeline.identity.high_confidence_face_threshold"
-        ),
-        gallery_identity_backfill_delay_s=settings.as_float(
-            "pipeline.identity.gallery_backfill_delay_s"
-        ),
         identity_rewrite_on_face_commit=settings.as_bool(
             "pipeline.identity.rewrite_on_face_commit"
         ),
@@ -316,6 +347,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         min_keyframe_detection_confidence=settings.as_float(
             "pipeline.min_keyframe_detection_confidence"
         ),
+        live_publish_max_hz=settings.as_float("pipeline.live_publish_max_hz"),
     )
     _pipeline = FrameProcessingPipeline(config)
 
@@ -494,7 +526,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         posture_strategy = fast_strategy
         logger.info("Posture strategy: RTMPose only (depth slow-path disabled)")
 
-    # -- N1: PH repository (Postgres or in-memory fallback) --
+    # -- PH repository (Postgres or in-memory fallback) --
     from .storage.base import InMemoryPHRepository as _InMemPH
 
     if _pool is not None:
@@ -512,10 +544,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     identity_rewriter = (
         PostgresIdentityRewriter(_pool) if _pool is not None else InMemoryIdentityRewriter()
     )
+
+    # Cross-camera topology and co-presence repositories.
+    from .storage.base import (
+        CachedCameraTopologyRepository,
+        InMemoryCameraTopologyRepository,
+        InMemoryCoPresenceRepository,
+    )
+    from .storage.postgres.camera_topology_repo import (
+        PostgresCameraTopologyRepository,
+        PostgresCoPresenceRepository,
+    )
+
+    if _pool is not None:
+        topology_repo_obj: CachedCameraTopologyRepository | InMemoryCameraTopologyRepository = (
+            CachedCameraTopologyRepository(PostgresCameraTopologyRepository(_pool))
+        )
+        copresence_repo_obj: InMemoryCoPresenceRepository | PostgresCoPresenceRepository = (
+            PostgresCoPresenceRepository(_pool)
+        )
+    else:
+        topology_repo_obj = InMemoryCameraTopologyRepository()
+        copresence_repo_obj = InMemoryCoPresenceRepository()
+
     deps = PipelineDependencies(
         detector=detector,
         gallery_repo=gallery_repo,
-        ph_repo=deps_ph_repo,  # type: ignore[arg-type] # N1: Postgres-backed PH repository
+        ph_repo=deps_ph_repo,  # type: ignore[arg-type]  # Postgres-backed PH repository
         trajectory_repo=trajectory_repo,
         keyframe_repo=keyframe_repo,
         signal_repo=signal_repo,
@@ -526,9 +581,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         posture_strategy=posture_strategy,
         identity_rewriter=identity_rewriter,
         bbox_repo=bbox_repo,  # type: ignore[arg-type]
+        topology_repo=topology_repo_obj,
+        copresence_repo=copresence_repo_obj,
+        overlap_groups=declared_overlap_groups,
     )
     await _pipeline.initialize(deps)
-    _pipeline.set_overlap_groups(overlap_groups)
 
     # Restore persisted adjacency edges from CC DB into in-memory calibration state.
     from .calibration.state import AdjacencyEdge as _AdjacencyEdge
@@ -566,22 +623,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _pipeline.start()
 
     # CC config sync service (camera-to-room map + homography sync).
-    from .services.camera_room_map import CameraRoomMap
+    from .services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from .services.cc_config_sync import CCConfigSyncService
 
     camera_room_map = CameraRoomMap()
+    room_polygon_map = RoomPolygonMap()
     _poll_s = settings.as_float("cc_sync.poll_interval_s")
     cc_sync_service = CCConfigSyncService(
         client=cc_client,
         calibration_state=calibration_state,
         camera_room_map=camera_room_map,
+        room_polygon_map=room_polygon_map,
         poll_interval_s=_poll_s,
     )
     app.state.cc_sync_service = cc_sync_service
     app.state.cc_sync_task = asyncio.create_task(cc_sync_service.run())
     app.state.camera_room_map = camera_room_map
+    app.state.room_polygon_map = room_polygon_map
     # Wire CameraRoomMap into the pipeline so stages read room bindings.
     _pipeline.set_camera_room_map(camera_room_map)
+    _pipeline.set_room_polygon_map(room_polygon_map)
 
     # Load transit zones from CC and wire into the world tracker.
     from .domain import TransitZone as _TransitZone
@@ -767,7 +828,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     # Internal calibration endpoints consumed by the CC BFF.
-    # Phase-0 §0.27 will move these to a separate :8510 listener; for M7
+    # Reserved for future use: separate :8510 listener
     # they live on the same app under /internal/ to keep the routing simple.
     app.include_router(calibration_router)
     app.include_router(dashboard_router)

@@ -46,6 +46,7 @@ def test_post_homography_stores_matrix(client: TestClient):
     status_resp = client.get("/internal/calibration/status")
     assert status_resp.status_code == 200
     assert status_resp.json()["cameras_with_homography"] == 1
+    assert status_resp.json()["homography_camera_ids"] == ["cam-1"]
 
 
 def test_post_homography_invalid_matrix_shape(client: TestClient):

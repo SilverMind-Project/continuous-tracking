@@ -1,4 +1,4 @@
-"""WT4: tests for DetectionBackfillStage stamping ph_id from det_to_ph."""
+"""tests for DetectionBackfillStage stamping ph_id from det_to_ph."""
 
 from __future__ import annotations
 

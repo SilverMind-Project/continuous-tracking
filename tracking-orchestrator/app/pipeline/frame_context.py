@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         FloorPoint,
         IdentityDecision,
         IdentityRevision,
+        OrientationBin,
         PostureType,
         WorldFrameSnapshot,
     )
@@ -69,6 +70,9 @@ class FrameContext:
     crops: list[npt.NDArray[np.uint8]] = field(default_factory=list)
     embeddings: list[Embedding] = field(default_factory=list)
     det_pose_result: dict[str, PoseResult] = field(default_factory=dict)
+    # per-detection body orientation estimate from pose keypoints.
+    # Producer: InferenceStage. Consumer: WorldTrackingStage.
+    orientation_by_detection: dict[str, tuple[OrientationBin, float]] = field(default_factory=dict)
     # Typed evidence produced by inference adapters.
     _detection_evidence: dict[int, PersonDetectionEvidence] = field(default_factory=dict)
     _appearance_evidence: list[AppearanceEvidence] = field(default_factory=list)
@@ -100,6 +104,8 @@ class FrameContext:
     det_to_ph: dict[str, str] = field(default_factory=dict)
     # Producer: WorldTrackingStage. Consumers: ClosePHStage.
     active_ph_ids: set[str] = field(default_factory=set)
+    # Producer: WorldTrackingStage. Consumers: ClosePHStage, TrajectoryStage.
+    revived_ph_ids: frozenset[str] = frozenset()
 
     # --- Stage: publish ---
     identities: dict[str, tuple[str, float]] = field(default_factory=dict)

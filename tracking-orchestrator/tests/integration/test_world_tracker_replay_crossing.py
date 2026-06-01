@@ -1,4 +1,4 @@
-"""WTR10: Replay — two people crossing, no identity swap.
+"""Replay — two people crossing, no identity swap.
 
 Two people with distinct embeddings observed near each other
 must produce two distinct PHs without identity merging.

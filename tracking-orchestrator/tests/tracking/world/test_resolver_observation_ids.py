@@ -1,4 +1,4 @@
-"""WTR2: Identity resolver observation IDs are real, not synthetic.
+"""Identity resolver observation IDs are real, not synthetic.
 
 Tests that _resolve_identities() receives real observation IDs from the
 repository, not synthetic camera/frame/time strings.

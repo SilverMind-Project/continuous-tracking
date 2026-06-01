@@ -1,6 +1,6 @@
-"""WTR2: FaceIdentityStage PH-mode tests.
+"""FaceIdentityStage PH-mode tests.
 
-In PH mode (tracklet_manager=None), the stage must:
+The stage must:
 - Produce FaceAnchors keyed by detection_id.
 - Suppress repeat calls via per-track IoU-based cooldown.
 - Force face-id for both detections when their bboxes overlap (crossing).
@@ -78,6 +78,13 @@ class _FakeFaceResult:
     def __init__(self, person_id: str, confidence: float):
         self.person_id = person_id
         self.confidence = confidence
+        self.recognition_state = "recognized"
+        self.best_candidate_id = person_id if person_id != "unknown" else None
+        self.similarity = confidence
+        self.yaw_deg = 0.0
+        self.pitch_deg = 0.0
+        self.roll_deg = 0.0
+        self.det_score = 0.85
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +166,7 @@ def test_crossing_indices_three_people_only_overlapping_flagged():
 
 @pytest.mark.asyncio
 async def test_ph_mode_emits_face_anchor_with_detection_id():
-    """With no tracklet_manager, face ID still produces FaceAnchors with detection_id."""
+    """Face ID produces FaceAnchors keyed by detection_id."""
     client = AsyncMock(spec=FaceIdentificationClient)
     client.identify_crops.return_value = [
         (0, [_FakeFaceResult("alice", 0.85)]),
@@ -167,7 +174,6 @@ async def test_ph_mode_emits_face_anchor_with_detection_id():
 
     stage = FaceIdentityStage(
         face_id_client=client,
-        tracklet_manager=None,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
@@ -194,7 +200,6 @@ async def test_cooldown_fires_when_track_position_unchanged():
 
     stage = FaceIdentityStage(
         face_id_client=client,
-        tracklet_manager=None,
         face_id_cooldown_s=5.0,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -226,7 +231,6 @@ async def test_new_position_bypasses_cooldown():
 
     stage = FaceIdentityStage(
         face_id_client=client,
-        tracklet_manager=None,
         face_id_cooldown_s=60.0,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -262,7 +266,6 @@ async def test_crossing_forces_face_id_despite_cooldown():
 
     stage = FaceIdentityStage(
         face_id_client=client,
-        tracklet_manager=None,
         face_id_cooldown_s=60.0,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -302,7 +305,6 @@ async def test_disappeared_track_pruned_from_cooldown_dict():
 
     stage = FaceIdentityStage(
         face_id_client=client,
-        tracklet_manager=None,
         face_id_cooldown_s=60.0,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -332,7 +334,6 @@ async def test_low_confidence_face_dropped():
 
     stage = FaceIdentityStage(
         face_id_client=client,
-        tracklet_manager=None,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
@@ -353,7 +354,6 @@ async def test_face_evidence_includes_detection_id_in_ph_mode():
 
     stage = FaceIdentityStage(
         face_id_client=client,
-        tracklet_manager=None,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )

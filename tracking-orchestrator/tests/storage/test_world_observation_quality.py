@@ -1,4 +1,4 @@
-"""U1-T9: quality field round-trips through InMemoryWorldObservationRepository."""
+"""quality field round-trips through InMemoryWorldObservationRepository."""
 
 from __future__ import annotations
 

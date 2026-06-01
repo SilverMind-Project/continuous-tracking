@@ -111,8 +111,53 @@ class TrajectoryWriter:
 
         return point
 
-    async def close_track(self, ph_id: str, closed_at: datetime) -> None:
-        """Close the open dwell for a terminated PH."""
+    async def start_segment(
+        self,
+        ph_id: str,
+        identity_id: str | None,
+        room_name: str,
+        entered_at: datetime,
+    ) -> None:
+        """Start a clean dwell segment for a revived PH.
+
+        When a PH is revived after being closed, its previous dwell was already
+        finalized and removed from ``_open_dwell``.  This method creates a new
+        dwell segment so trajectory writing can resume without relying on an
+        implicit side effect from ``_handle_dwell``.
+
+        Must be called before the first ``write()`` for the revived PH in the
+        same frame, so ``_handle_dwell`` can detect a room change or merge
+        posture counts correctly.
+        """
+        # Clear any stale state that might linger from the previous lifecycle.
+        self._current_room.pop(ph_id, None)
+        self._open_dwell.pop(ph_id, None)
+        self._dwell_posture_counts.pop(ph_id, None)
+        self._dwell_still_acc.pop(ph_id, None)
+        self._last_obs_time.pop(ph_id, None)
+
+        # Create a fresh dwell entry for the new segment.
+        new_dwell = RoomDwell(
+            dwell_id=str(uuid.uuid4()),
+            identity_id=identity_id,
+            ph_id=ph_id,
+            room_name=room_name,
+            entered_at=entered_at,
+            entry_confidence=0.0,
+            min_motion_energy=None,
+            still_seconds=0,
+        )
+        await self._repo.save_room_dwell(new_dwell)
+        self._open_dwell[ph_id] = new_dwell
+        self._current_room[ph_id] = room_name
+        self._dwell_posture_counts[ph_id] = {}
+        self._last_obs_time[ph_id] = entered_at
+
+    async def close_track(self, ph_id: str, closed_at: datetime) -> int:
+        """Close the open dwell for a terminated PH.
+
+        Returns the dwell duration in seconds, or 0 if no open dwell existed.
+        """
         dwell = self._open_dwell.pop(ph_id, None)
         if dwell is not None:
             duration = int((closed_at - dwell.entered_at).total_seconds())
@@ -136,6 +181,8 @@ class TrajectoryWriter:
             )
             await self._repo.update_room_dwell(closed)
             self._current_room.pop(ph_id, None)
+            return duration
+        return 0
 
     async def close_all(self, closed_at: datetime) -> None:
         """Close all open dwells and clear per-track state.

@@ -99,6 +99,12 @@ class Metrics:
     world_tracker_ph_open: Gauge
     world_tracker_ph_spawned_total: Counter
     world_tracker_ph_closed_total: Counter
+
+    # ---- PH lifecycle (M1) ----------------------------------------------
+    ph_lifetime_seconds: Histogram
+    ph_observations_at_close: Histogram
+    identity_unknown_after_known_total: Counter
+
     world_tracker_observations_total: Counter
     world_tracker_assignment_cost: Histogram
     world_tracker_continuations_total: Counter
@@ -138,6 +144,23 @@ class Metrics:
     cts_ph_merges_total: Counter
     cts_ph_splits_total: Counter
     cts_ph_api_latency_seconds: Histogram
+
+    # ---- PH continuity ----
+    cts_ph_revived_total: Counter
+    world_tracker_shadow_revival_total: Counter
+    world_tracker_shadow_assoc_mismatch_total: Counter
+
+    # ---- Rich face evidence ----
+    cts_face_anchors_total: Counter
+
+    # ---- Cross-camera & co-presence ----
+    world_tracker_shadow_cross_camera_revival_total: Counter
+    worldtracker_group_appearance_dedup_total: Counter
+    worldtracker_copresence_links_total: Counter
+
+    # ---- CC load decoupling (Tier 2 event emission) ----
+    cts_presence_events_published_total: Counter
+    cts_dwell_events_published_total: Counter
 
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
@@ -352,10 +375,26 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         world_tracker_ph_spawned_total=_counter(
             "cts_world_tracker_ph_spawned_total",
             "PHs created since process start.",
+            ["reason"],
         ),
         world_tracker_ph_closed_total=_counter(
             "cts_world_tracker_ph_closed_total",
             "PHs closed since process start.",
+        ),
+        # ---- PH lifecycle (M1) ------------------------------------------------
+        ph_lifetime_seconds=_hist(
+            "cts_ph_lifetime_seconds",
+            "Seconds from PH creation to close.",
+            (0.5, 1, 2, 5, 10, 30, 60, 300),
+        ),
+        ph_observations_at_close=_hist(
+            "cts_ph_observations_at_close",
+            "Observation count at PH close time.",
+            (1, 2, 3, 5, 10, 30, 100),
+        ),
+        identity_unknown_after_known_total=_counter(
+            "cts_identity_unknown_after_known_total",
+            "PHs that previously had a known identity now resolving to UNKNOWN.",
         ),
         world_tracker_observations_total=_counter(
             "cts_world_tracker_observations_total",
@@ -491,6 +530,49 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "PH API endpoint request latency in seconds",
             (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5),
             ["endpoint"],
+        ),
+        # ---- PH continuity ----
+        cts_ph_revived_total=_counter(
+            "cts_ph_revived_total",
+            "PHs revived from recently-closed state instead of spawning new.",
+        ),
+        world_tracker_shadow_revival_total=_counter(
+            "cts_world_tracker_shadow_revival_total",
+            "Shadow count: revivals that would have fired if enable_ph_revival were on.",
+        ),
+        world_tracker_shadow_assoc_mismatch_total=_counter(
+            "cts_world_tracker_shadow_assoc_mismatch_total",
+            "Shadow count: assoc decisions that would differ under relaxed uncalibrated gate.",
+        ),
+        # ---- Rich face evidence ----
+        cts_face_anchors_total=_counter(
+            "cts_face_anchors_total",
+            "Face anchors produced by FaceIdentityStage.",
+            ["recognition_state"],
+        ),
+        # ---- Cross-camera and co-presence ----
+        world_tracker_shadow_cross_camera_revival_total=_counter(
+            "cts_world_tracker_shadow_cross_camera_revival_total",
+            "Shadow cross-camera PH revivals that would fire if enabled.",
+        ),
+        worldtracker_group_appearance_dedup_total=_counter(
+            "cts_worldtracker_group_appearance_dedup_total",
+            "Group-appearance dedup clusters formed (M5).",
+        ),
+        worldtracker_copresence_links_total=_counter(
+            "cts_worldtracker_copresence_links_total",
+            "Co-presence links written between PHs sharing an identity.",
+        ),
+        # ---- CC load decoupling (Tier 2 event emission) ----
+        cts_presence_events_published_total=_counter(
+            "cts_presence_events_published_total",
+            "Presence events published to tracking.presence.",
+            ["event_type"],
+        ),
+        cts_dwell_events_published_total=_counter(
+            "cts_dwell_events_published_total",
+            "Dwell events published to tracking.dwell.",
+            ["event_type"],
         ),
     )
 

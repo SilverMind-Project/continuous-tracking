@@ -61,6 +61,8 @@ class TransportConfig:
     revisions_stream: str = "tracking.revisions"
     signals_stream: str = "tracking.signals"
     scene_samples_stream: str = "scene.samples"
+    presence_stream: str = "tracking.presence"
+    dwell_stream: str = "tracking.dwell"
 
 
 # Re-export proto FrameReady so callers use the wire type directly without

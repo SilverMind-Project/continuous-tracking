@@ -1,4 +1,4 @@
-"""WTR10: Replay — one person across two cameras produces one PH.
+"""Replay — one person across two cameras produces one PH.
 
 Uses InMemory repos. Verifies one PH lifecycle across two calibrated cameras.
 """

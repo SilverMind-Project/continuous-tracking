@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..domain import BboxAnnotation, TaggedKeyframe
-from ..storage.base import BboxAnnotationRepository, KeyframeRepository
+from ..storage.base import KeyframeRepository
 
 
 @dataclass(frozen=True)
@@ -63,11 +63,9 @@ class KeyframeSampler:
         self,
         repo: KeyframeRepository,
         config: SamplerConfig | None = None,
-        bbox_repo: BboxAnnotationRepository | None = None,
     ) -> None:
         self._repo = repo
         self._config = config or SamplerConfig()
-        self._bbox_repo = bbox_repo
         # Last time a periodic sample was taken per PH.
         self._last_sample: dict[str, datetime] = {}
 
@@ -112,28 +110,16 @@ class KeyframeSampler:
             tag_reason="periodic",
             expires_at=expires_at,
         )
-        await self._repo.save_keyframe(keyframe)
+        bbox_annotations = _bbox_annotations_for_keyframe(
+            keyframe=keyframe,
+            detection_bbox=detection_bbox,
+            detection_confidence=detection_confidence,
+            detection_frame_width=detection_frame_width,
+            detection_frame_height=detection_frame_height,
+            detection_identity_id=detection_identity_id,
+        )
+        await self._repo.save_keyframe_with_bbox_annotations(keyframe, bbox_annotations)
         self._last_sample[entity_key] = captured_at
-
-        if self._bbox_repo is not None and detection_bbox is not None:
-            await self._bbox_repo.save_bbox_annotations(
-                [
-                    BboxAnnotation(
-                        keyframe_id=keyframe_id,
-                        ph_id=entity_key,
-                        camera_id=camera_id,
-                        x1=detection_bbox[0],
-                        y1=detection_bbox[1],
-                        x2=detection_bbox[2],
-                        y2=detection_bbox[3],
-                        detection_confidence=detection_confidence,
-                        frame_width=detection_frame_width,
-                        frame_height=detection_frame_height,
-                        identity_id=detection_identity_id,
-                        created_at=datetime.now(UTC),
-                    )
-                ]
-            )
 
         return keyframe
 
@@ -177,30 +163,47 @@ class KeyframeSampler:
             tag_reason=tag_reason,  # type: ignore[arg-type]
             expires_at=expires_at,
         )
-        await self._repo.save_keyframe(keyframe)
-
-        if self._bbox_repo is not None and detection_bbox is not None:
-            await self._bbox_repo.save_bbox_annotations(
-                [
-                    BboxAnnotation(
-                        keyframe_id=keyframe_id,
-                        ph_id=entity_key,
-                        camera_id=camera_id,
-                        x1=detection_bbox[0],
-                        y1=detection_bbox[1],
-                        x2=detection_bbox[2],
-                        y2=detection_bbox[3],
-                        detection_confidence=detection_confidence,
-                        frame_width=detection_frame_width,
-                        frame_height=detection_frame_height,
-                        identity_id=detection_identity_id,
-                        created_at=datetime.now(UTC),
-                    )
-                ]
-            )
+        bbox_annotations = _bbox_annotations_for_keyframe(
+            keyframe=keyframe,
+            detection_bbox=detection_bbox,
+            detection_confidence=detection_confidence,
+            detection_frame_width=detection_frame_width,
+            detection_frame_height=detection_frame_height,
+            detection_identity_id=detection_identity_id,
+        )
+        await self._repo.save_keyframe_with_bbox_annotations(keyframe, bbox_annotations)
 
         return keyframe
 
     def reset_ph(self, ph_id: str) -> None:
         """Remove the periodic timer for a terminated PH."""
         self._last_sample.pop(ph_id, None)
+
+
+def _bbox_annotations_for_keyframe(
+    *,
+    keyframe: TaggedKeyframe,
+    detection_bbox: tuple[float, float, float, float] | None,
+    detection_confidence: float,
+    detection_frame_width: int,
+    detection_frame_height: int,
+    detection_identity_id: str | None,
+) -> list[BboxAnnotation]:
+    if detection_bbox is None:
+        return []
+    return [
+        BboxAnnotation(
+            keyframe_id=keyframe.keyframe_id,
+            ph_id=keyframe.ph_id,
+            camera_id=keyframe.camera_id,
+            x1=detection_bbox[0],
+            y1=detection_bbox[1],
+            x2=detection_bbox[2],
+            y2=detection_bbox[3],
+            detection_confidence=detection_confidence,
+            frame_width=detection_frame_width,
+            frame_height=detection_frame_height,
+            identity_id=detection_identity_id,
+            created_at=datetime.now(UTC),
+        )
+    ]

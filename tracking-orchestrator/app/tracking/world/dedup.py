@@ -13,13 +13,16 @@ building the observation lists and calling associate().
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from structlog import get_logger
 
+from .helpers import cosine_similarity
+
 if TYPE_CHECKING:
-    from ...domain import FaceAnchor, WorldObservation
+    from ...domain import FaceAnchor, OverlapGroup, WorldObservation
     from .config import WorldTrackerConfig
 
 logger = get_logger(__name__)
@@ -41,13 +44,16 @@ class DedupCluster:
 def dedup_observations(
     observations: list[WorldObservation],
     cfg: WorldTrackerConfig,
+    *,
+    overlap_groups: list[OverlapGroup] | None = None,
 ) -> tuple[list[WorldObservation], dict[str, tuple[str, ...]]]:
     """Collapse same-floor, cross-camera observations into one representative each.
 
     Args:
         observations: raw observations for this frame (all cameras).
         cfg: WorldTrackerConfig; uses ``dedup_enabled``, ``dedup_max_distance_m``,
-             ``dedup_require_no_face_conflict``.
+             ``dedup_require_no_face_conflict``, and M5 group-appearance keys.
+        overlap_groups: declared overlap groups for group-appearance dedup (M5).
 
     Returns:
         (deduped_observations, cluster_map) where:
@@ -97,19 +103,27 @@ def dedup_observations(
             effective_gate = _effective_distance_gate_m(obs_i, obs_j, cfg)
             if dist > effective_gate:
                 continue
-            # Rule 3: no identity conflict if both have committed face ids.
+            # Rule 3: no identity conflict if both have recognized face ids.
+            # Candidate and unrecognized anchors are weak evidence; they must
+            # not block cross-camera dedup.
             if cfg.dedup_require_no_face_conflict:
                 fa_i: FaceAnchor | None = obs_i.face_anchor
                 fa_j: FaceAnchor | None = obs_j.face_anchor
                 if (
                     fa_i is not None
                     and fa_j is not None
+                    and fa_i.recognition_state == "recognized"
+                    and fa_j.recognition_state == "recognized"
                     and fa_i.person_id is not None
                     and fa_j.person_id is not None
                     and fa_i.person_id != fa_j.person_id
                 ):
                     continue
             _union(i, j)
+
+    # M5.3: Group-appearance dedup for uncalibrated cameras in declared overlap groups.
+    if cfg.enable_group_appearance_dedup and overlap_groups:
+        _group_appearance_dedup_pass(observations, cfg, overlap_groups, _find, _union, n)
 
     # Build clusters from the union-find roots.
     clusters: dict[int, list[int]] = {}
@@ -147,6 +161,78 @@ def dedup_observations(
             _ = n_collapsed  # surfaced to caller via cluster_map length
 
     return deduped, cluster_map
+
+
+def _group_appearance_dedup_pass(
+    observations: list[WorldObservation],
+    cfg: WorldTrackerConfig,
+    overlap_groups: list[OverlapGroup],
+    _find: Callable[[int], int],
+    _union: Callable[[int, int], None],
+    n: int,
+) -> None:
+    """Apply appearance-based dedup for uncalibrated observations in overlap groups.
+
+    Within each declared overlap group, uncalibrated observations from different
+    cameras are merged when their appearance similarity clears the threshold and
+    there is no face conflict.  Opposite-perspective observations (low similarity)
+    are correctly left unmerged; identity-level linking handles them later.
+    """
+    # Build camera → group_id lookup.
+    camera_to_group: dict[str, str] = {}
+    for group in overlap_groups:
+        for cam_id in group.camera_ids:
+            camera_to_group.setdefault(cam_id, group.group_id)
+
+    for i in range(n):
+        obs_i = observations[i]
+        if obs_i.floor_point.calibrated:
+            continue  # already handled by the geometric pass above
+        group_id_i = camera_to_group.get(obs_i.camera_id)
+        if group_id_i is None:
+            continue
+
+        for j in range(i + 1, n):
+            obs_j = observations[j]
+            if obs_j.floor_point.calibrated:
+                continue
+            group_id_j = camera_to_group.get(obs_j.camera_id)
+            if group_id_j is None or group_id_j != group_id_i:
+                continue
+            if obs_i.camera_id == obs_j.camera_id:
+                continue
+
+            # Appearance gate.
+            if obs_i.embedding is not None and obs_j.embedding is not None:
+                sim = cosine_similarity(obs_i.embedding, obs_j.embedding)
+                if sim < cfg.dedup_group_appearance_min_sim:
+                    continue
+            else:
+                continue  # cannot merge without embeddings
+
+            # Identity-conflict gate: recognized faces only.
+            if cfg.dedup_require_no_face_conflict:
+                fa_i = obs_i.face_anchor
+                fa_j = obs_j.face_anchor
+                if (
+                    fa_i is not None
+                    and fa_j is not None
+                    and fa_i.recognition_state == "recognized"
+                    and fa_j.recognition_state == "recognized"
+                    and fa_i.person_id is not None
+                    and fa_j.person_id is not None
+                    and fa_i.person_id != fa_j.person_id
+                ):
+                    continue
+
+            _union(i, j)
+            logger.debug(
+                "group_appearance_dedup_merged",
+                camera_i=obs_i.camera_id,
+                camera_j=obs_j.camera_id,
+                group_id=group_id_i,
+                sim=round(sim, 3),
+            )
 
 
 def _select_representative(cluster: list[WorldObservation]) -> WorldObservation:

@@ -482,3 +482,174 @@ async def test_reid_cross_camera_assist_metric(fresh_metrics: Metrics) -> None:
 
     assert outcome.decisions[0].identity_id == "alice"
     assert _metric_total(fresh_metrics.reid_cross_camera_assist_total) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Sticky maintenance tests
+# ---------------------------------------------------------------------------
+
+
+def test_sticky_maintenance_holds_identity_when_posterior_is_unknown(
+    fresh_metrics: Metrics,
+) -> None:
+    """With sticky maintenance enabled, a PH with committed identity within
+    the maintenance window keeps its identity even when the posterior argmax
+    is UNKNOWN (no face, weak ReID)."""
+    now = datetime.now(UTC)
+    gt = _make_gt(
+        current_identity_id="alice",
+        committed_at=now - timedelta(seconds=5),
+    )
+    # Posterior says UNKNOWN dominates (no face evidence, weak ReID).
+    posterior = PosteriorDist({"UNKNOWN": 0.90, "alice": 0.10})
+    face = PosteriorDist({})  # no face evidence
+    reid = PosteriorDist({})  # no ReID evidence
+
+    resolver = IdentityResolver(
+        gallery_repo=InMemoryGalleryRepository(),
+        config=ResolverConfig(
+            enable_sticky_maintenance=True,
+            prior_maintenance_max_age_s=120.0,
+        ),
+    )
+
+    decision = resolver._commit(gt, posterior, face, reid, now)
+    # Sticky maintenance should hold the identity (not demote to UNKNOWN).
+    assert decision.identity_id == "alice"
+    assert not decision.revises_previous  # identity didn't change
+
+
+def test_sticky_maintenance_overturned_by_face_contradiction(
+    fresh_metrics: Metrics,
+) -> None:
+    """A strong face anchor for a different identity contradicts and overturns
+    sticky maintenance."""
+    now = datetime.now(UTC)
+    gt = _make_gt(
+        current_identity_id="alice",
+        committed_at=now - timedelta(seconds=5),
+    )
+    # Posterior favors bob, but sticky would normally hold alice without
+    # the face contradiction.
+    posterior = PosteriorDist({"bob": 0.70, "UNKNOWN": 0.20, "alice": 0.10})
+    # Face evidence strongly supports bob (contradiction).
+    face = PosteriorDist({"bob": 0.90})
+    reid = PosteriorDist({})
+
+    resolver = IdentityResolver(
+        gallery_repo=InMemoryGalleryRepository(),
+        config=ResolverConfig(
+            enable_sticky_maintenance=True,
+            prior_maintenance_max_age_s=120.0,
+            contradiction_face_confidence=0.70,
+        ),
+    )
+
+    # Register alice and bob as known identities.
+    resolver.register_identity(Identity(identity_id="alice", display_name="Alice", enrolled_at=now))
+    resolver.register_identity(Identity(identity_id="bob", display_name="Bob", enrolled_at=now))
+
+    decision = resolver._commit(
+        gt,
+        posterior,
+        face,
+        reid,
+        now,
+        best_face_confidence=0.85,  # above contradiction threshold
+    )
+    # The strong face contradiction should overturn the held identity.
+    assert decision.identity_id == "bob"
+    assert decision.revises_previous
+
+
+def test_sticky_maintenance_decays_outside_window(
+    fresh_metrics: Metrics,
+) -> None:
+    """Outside the maintenance window with no evidence, identity decays to
+    UNKNOWN even with sticky maintenance enabled."""
+    now = datetime.now(UTC)
+    gt = _make_gt(
+        current_identity_id="alice",
+        committed_at=now - timedelta(seconds=200),  # outside 120 s window
+    )
+    posterior = PosteriorDist({"UNKNOWN": 0.90, "alice": 0.10})
+    face = PosteriorDist({})
+    reid = PosteriorDist({})
+
+    resolver = IdentityResolver(
+        gallery_repo=InMemoryGalleryRepository(),
+        config=ResolverConfig(
+            enable_sticky_maintenance=True,
+            prior_maintenance_max_age_s=120.0,
+        ),
+    )
+
+    decision = resolver._commit(gt, posterior, face, reid, now)
+    # Outside the window, identity should decay.
+    assert decision.identity_id is None
+    assert decision.revises_previous
+
+
+def test_sticky_maintenance_shadow_counts_when_disabled(
+    fresh_metrics: Metrics,
+) -> None:
+    """When sticky maintenance is disabled, the shadow metric increments when
+    the sticky rule would have made a different decision."""
+    now = datetime.now(UTC)
+    gt = _make_gt(
+        current_identity_id="alice",
+        committed_at=now - timedelta(seconds=5),
+    )
+    posterior = PosteriorDist({"UNKNOWN": 0.90, "alice": 0.10})
+    face = PosteriorDist({})
+    reid = PosteriorDist({})
+
+    resolver = IdentityResolver(
+        gallery_repo=InMemoryGalleryRepository(),
+        config=ResolverConfig(
+            enable_sticky_maintenance=False,  # shadow mode
+            prior_maintenance_max_age_s=120.0,
+        ),
+    )
+
+    # Run commit: live decision should be UNKNOWN (no evidence, no maintenance
+    # window because identity_unchanged is False).
+    decision = resolver._commit(gt, posterior, face, reid, now)
+    # Live: identity drops to UNKNOWN.
+    assert decision.identity_id is None
+
+    # Shadow counter should have incremented because sticky maintenance would
+    # have held alice.
+    assert (
+        _metric_total(
+            fresh_metrics.identity_shadow_mismatch_total.labels(feature="sticky_maintenance")
+        )
+        >= 1.0
+    )
+
+
+def test_sticky_maintenance_no_contradiction_with_same_face(
+    fresh_metrics: Metrics,
+) -> None:
+    """A face anchor for the same identity is not a contradiction."""
+    now = datetime.now(UTC)
+    gt = _make_gt(
+        current_identity_id="alice",
+        committed_at=now - timedelta(seconds=5),
+    )
+    posterior = PosteriorDist({"alice": 0.80, "UNKNOWN": 0.20})
+    face = PosteriorDist({"alice": 0.95})  # supports alice, not contradiction
+    reid = PosteriorDist({})
+
+    resolver = IdentityResolver(
+        gallery_repo=InMemoryGalleryRepository(),
+        config=ResolverConfig(
+            enable_sticky_maintenance=True,
+            prior_maintenance_max_age_s=120.0,
+        ),
+    )
+
+    decision = resolver._commit(gt, posterior, face, reid, now, best_face_confidence=0.90)
+    # Identity should be held (no contradiction).
+    assert decision.identity_id == "alice"
+    assert not decision.revises_previous

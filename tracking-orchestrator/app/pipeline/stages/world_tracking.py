@@ -7,16 +7,28 @@ Wires TransitDetector and RoomTransitionPublisher.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from structlog import get_logger
 
-from ...domain import BoundingBox, FaceAnchor, FloorPoint, TransitZone, WorldObservation
+from ...domain import (
+    BoundingBox,
+    FaceAnchor,
+    FloorPoint,
+    OrientationBin,
+    TransitZone,
+    WorldObservation,
+)
 from ...tracking.world.config import WorldTrackerConfig
 from ...tracking.world.tracker import WorldTracker, WorldTrackerResult
 from ...tracking.world.transit_detector import TransitDetector
 from ...transport.room_transition_publisher import RoomTransitionPublisher
 from ..frame_context import FrameContext
+from ._room_maps import camera_room_names, room_polygon_snapshot
 from .base import FrameStage
+
+if TYPE_CHECKING:
+    from ...services.camera_room_map import CameraRoomMap, RoomPolygonMap
 
 logger = get_logger(__name__)
 
@@ -84,9 +96,9 @@ class WorldTrackingStage(FrameStage):
     def __init__(
         self,
         tracker: WorldTracker,
+        camera_room_map: CameraRoomMap,
+        room_polygon_map: RoomPolygonMap,
         config: WorldTrackerConfig | None = None,
-        room_polygons: dict[str, list[tuple[float, float]]] | None = None,
-        camera_room_map: dict[str, str] | None = None,
         enabled: bool = True,
         transit_detector: TransitDetector | None = None,
         transit_zones: list[TransitZone] | None = None,
@@ -98,8 +110,8 @@ class WorldTrackingStage(FrameStage):
     ) -> None:
         self._tracker = tracker
         self._config = config or WorldTrackerConfig()
-        self._room_polygons = room_polygons or {}
-        self._camera_room_map = camera_room_map or {}
+        self._room_polygon_map = room_polygon_map
+        self._camera_room_map = camera_room_map
         self._enabled = enabled
         self._transit_detector = transit_detector
         self._transit_zones = transit_zones or []
@@ -108,6 +120,7 @@ class WorldTrackingStage(FrameStage):
         self._anchor_match_window_s = anchor_match_window_s
         self._anchor_match_distance_m = anchor_match_distance_m
         self._anchor_min_confidence = anchor_min_confidence
+        self._missing_room_binding_warnings: set[str] = set()
 
     async def run(self, ctx: FrameContext) -> None:
         await self.run_many([ctx])
@@ -141,12 +154,22 @@ class WorldTrackingStage(FrameStage):
         face_evidence = [
             face_evidence for ctx in contexts for face_evidence in (ctx._face_evidence or [])
         ]
+        camera_ids = {ctx.frame.camera_id for ctx in contexts} | {
+            obs.camera_id for obs in observations
+        }
+        camera_room_map = await camera_room_names(self._camera_room_map, camera_ids)
+        for camera_id in sorted(camera_ids - set(camera_room_map)):
+            if camera_id not in self._missing_room_binding_warnings:
+                self._missing_room_binding_warnings.add(camera_id)
+                logger.warning("world_tracking_camera_room_binding_missing", camera_id=camera_id)
+        room_polygons, room_names = await room_polygon_snapshot(self._room_polygon_map)
 
         result = await self._tracker.step(
             observations=observations_with_faces,
             now=batch_time,
-            room_polygons=self._room_polygons,
-            camera_room_map=self._camera_room_map,
+            room_polygons=room_polygons,
+            camera_room_map=camera_room_map,
+            room_names=room_names,
             face_anchors=all_face_anchors,
             face_evidence=face_evidence or None,
         )
@@ -195,6 +218,12 @@ class WorldTrackingStage(FrameStage):
                     detection_id=det.detection_id,
                     quality=det.crop_quality,
                     floor_residual_m=det.floor_residual_m if fp.calibrated else None,
+                    orientation=ctx.orientation_by_detection.get(
+                        det.detection_id, (OrientationBin.UNKNOWN, 0.0)
+                    )[0],
+                    orientation_confidence=ctx.orientation_by_detection.get(
+                        det.detection_id, (OrientationBin.UNKNOWN, 0.0)
+                    )[1],
                 )
             )
         return observations, uncalibrated_count
@@ -265,6 +294,8 @@ class WorldTrackingStage(FrameStage):
                     detection_id=obs.detection_id,
                     quality=obs.quality,
                     floor_residual_m=obs.floor_residual_m,
+                    orientation=obs.orientation,
+                    orientation_confidence=obs.orientation_confidence,
                 )
             )
         return observations_with_faces
@@ -317,6 +348,8 @@ class WorldTrackingStage(FrameStage):
         ctx.committed_ids = {ph.ph_id: ph.current_identity_id for ph in result.updated_phs}
         # born_at per PH so RevisionsStage can set applies_from to track start.
         ctx.ph_born_at_by_id = {ph.ph_id: ph.born_at for ph in result.updated_phs}
+        # revived PH ids so ClosePHStage and TrajectoryStage can reconcile.
+        ctx.revived_ph_ids = result.revived_ph_ids
 
         # Store snapshots on the context for downstream stages.
         ctx.world_snapshots = list(result.snapshots)

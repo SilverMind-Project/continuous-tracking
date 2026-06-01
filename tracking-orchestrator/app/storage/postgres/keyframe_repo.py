@@ -12,7 +12,7 @@ from typing import Any
 import asyncpg  # type: ignore[import-untyped]
 from structlog import get_logger
 
-from ...domain import TaggedKeyframe
+from ...domain import BboxAnnotation, TaggedKeyframe
 from ..base import KeyframeRepository
 
 logger = get_logger(__name__)
@@ -65,6 +65,54 @@ class PostgresKeyframeRepository(KeyframeRepository):
                 keyframe.tag_reason,
                 keyframe.expires_at,
             )
+
+    async def save_keyframe_with_bbox_annotations(
+        self,
+        keyframe: TaggedKeyframe,
+        bbox_annotations: list[BboxAnnotation],
+    ) -> None:
+        async with self._pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                _SQL_INSERT_KEYFRAME,
+                keyframe.keyframe_id,
+                keyframe.ph_id or None,
+                keyframe.camera_id,
+                keyframe.minio_key,
+                keyframe.captured_at,
+                json.dumps(keyframe.annotations),
+                keyframe.tag_reason,
+                keyframe.expires_at,
+            )
+            if bbox_annotations:
+                await conn.executemany(
+                    """
+                    INSERT INTO continuous_tracking.keyframe_bbox_annotations
+                        (keyframe_id, ph_id, camera_id,
+                         x1, y1, x2, y2, detection_confidence,
+                         frame_width, frame_height, identity_id, created_at,
+                         bbox_age_frames)
+                    VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [
+                        (
+                            ann.keyframe_id,
+                            ann.ph_id or None,
+                            ann.camera_id,
+                            ann.x1,
+                            ann.y1,
+                            ann.x2,
+                            ann.y2,
+                            ann.detection_confidence,
+                            ann.frame_width,
+                            ann.frame_height,
+                            ann.identity_id,
+                            ann.created_at,
+                            ann.bbox_age_frames,
+                        )
+                        for ann in bbox_annotations
+                    ],
+                )
 
     async def get_keyframe(self, keyframe_id: str) -> TaggedKeyframe | None:
         async with self._pool.acquire() as conn:

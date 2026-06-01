@@ -1,4 +1,4 @@
-"""WT3: tests for snapshot-driven KeyframeStage.
+"""tests for snapshot-driven KeyframeStage.
 
 Verifies that KeyframeStage consumes ctx.world_snapshots and samples/triggers
 keyframes per PH per frame.
@@ -114,7 +114,7 @@ class TestKeyframesFromSnapshots:
         # No detections have ph_id set → det_by_ph empty →
         # snapshots are skipped entirely.
         # To test the sampling path, we need detections with ph_id.
-        # Using MagicMock to simulate WT4-stamped detections.
+        # Using MagicMock to simulate ph-stamped detections.
         from app.domain import Detection as Det
 
         det_a = MagicMock(spec=Det)

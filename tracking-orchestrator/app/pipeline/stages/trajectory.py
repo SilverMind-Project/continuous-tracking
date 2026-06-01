@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from typing import TYPE_CHECKING
+
 from structlog import get_logger
 
 from ...domain import FloorPoint, PostureType
@@ -13,6 +16,10 @@ from ...trajectory.trajectory_writer import TrajectoryWriter
 from ..frame_context import FrameContext
 from .base import FrameStage
 
+if TYPE_CHECKING:
+    from ...transport.dwell_publisher import DwellPublisher
+    from ...transport.presence_publisher import PresencePublisher
+
 logger = get_logger(__name__)
 
 
@@ -21,6 +28,8 @@ class ClosePHStage(FrameStage):
 
     Uses ``ctx.active_ph_ids`` directly. No GlobalTrackRepository dependency.
     Closes trajectory, motion energy, and posture state by PH id.
+
+    Emits presence-disappeared and dwell-ended events on PH close.
     """
 
     name = "close_ph"
@@ -31,6 +40,8 @@ class ClosePHStage(FrameStage):
         motion_energy_tracker: MotionEnergyTracker | None = None,
         posture_tracker: GlobalPostureTracker | None = None,
         prev_active_ph_ids: set[str] | None = None,
+        presence_publisher: PresencePublisher | None = None,
+        dwell_publisher: DwellPublisher | None = None,
     ) -> None:
         self._trajectory_writer = trajectory_writer
         self._motion_energy_tracker = motion_energy_tracker
@@ -38,24 +49,133 @@ class ClosePHStage(FrameStage):
         self._prev_active_ph_ids: set[str] = (
             prev_active_ph_ids if prev_active_ph_ids is not None else set()
         )
+        self._presence_publisher = presence_publisher
+        self._dwell_publisher = dwell_publisher
+        # Per-PH state for presence and dwell event emission.
+        self._seen_ph_ids: set[str] = set()
+        self._last_identity_by_ph: dict[str, str | None] = {}
+        self._last_room_by_ph: dict[str, str] = {}
+        self._room_entered_at: dict[str, datetime] = {}
 
     async def run(self, ctx: FrameContext) -> None:
         current_ph_ids = ctx.active_ph_ids
-        terminated_ph_ids = self._prev_active_ph_ids - current_ph_ids
-        if not terminated_ph_ids:
-            self._prev_active_ph_ids = current_ph_ids
-            return
+        event_time_ns = int(ctx.event_time.timestamp() * 1e9)
 
+        # Detect new PHs and emit presence-appeared + dwell-started.
+        # Only emit when the PH has a WorldFrameSnapshot, which proves it met
+        # min_observations_to_publish (gated in WorldTracker.step).  PHs that
+        # enter active_ph_ids but lack a snapshot are not yet confirmed.
+        new_ph_ids = current_ph_ids - self._seen_ph_ids
+        if new_ph_ids:
+            snap_by_ph = {s.ph_id: s for s in ctx.world_snapshots}
+            for ph_id in new_ph_ids:
+                snap = snap_by_ph.get(ph_id)
+                if snap is None:
+                    # PH not yet confirmed — skip until min_observations_to_publish met.
+                    continue
+                identity_id = snap.identity_id if snap else None
+                room_name = snap.room_name if snap else ""
+                self._last_identity_by_ph[ph_id] = identity_id
+                self._last_room_by_ph[ph_id] = room_name
+                self._room_entered_at[ph_id] = ctx.event_time
+                # Emit presence-appeared.
+                if self._presence_publisher is not None:
+                    await self._presence_publisher.publish_appeared(
+                        ph_id=ph_id,
+                        identity_id=identity_id,
+                        room_name=room_name,
+                        event_time_unix_ns=event_time_ns,
+                    )
+                # Emit dwell-started on first room assignment.
+                if self._dwell_publisher is not None and room_name:
+                    await self._dwell_publisher.publish_started(
+                        ph_id=ph_id,
+                        identity_id=identity_id,
+                        room_name=room_name,
+                        event_time_unix_ns=event_time_ns,
+                    )
+                # Only mark as seen once presence event is emitted.
+                self._seen_ph_ids.add(ph_id)
+
+        # Update identity and room tracking for active PHs from snapshots.
+        for snap in ctx.world_snapshots:
+            ph_id = snap.ph_id
+            if ph_id not in current_ph_ids:
+                continue
+            prev_room = self._last_room_by_ph.get(ph_id)
+            # Update identity.
+            if snap.identity_id:
+                self._last_identity_by_ph[ph_id] = snap.identity_id
+            # Detect room change → dwell-ended for old room, dwell-started for new.
+            if (
+                prev_room
+                and snap.room_name
+                and snap.room_name != prev_room
+                and self._dwell_publisher is not None
+            ):
+                # Compute dwell duration in the old room.
+                entered_at = self._room_entered_at.get(ph_id)
+                old_duration_s = (
+                    int((ctx.event_time - entered_at).total_seconds())
+                    if entered_at is not None
+                    else 0
+                )
+                await self._dwell_publisher.publish_ended(
+                    ph_id=ph_id,
+                    identity_id=self._last_identity_by_ph.get(ph_id),
+                    room_name=prev_room,
+                    event_time_unix_ns=event_time_ns,
+                    duration_s=old_duration_s,
+                )
+                await self._dwell_publisher.publish_started(
+                    ph_id=ph_id,
+                    identity_id=self._last_identity_by_ph.get(ph_id),
+                    room_name=snap.room_name,
+                    event_time_unix_ns=event_time_ns,
+                )
+                self._room_entered_at[ph_id] = ctx.event_time
+            self._last_room_by_ph[ph_id] = snap.room_name
+
+        terminated_ph_ids = self._prev_active_ph_ids - current_ph_ids
         close_time = ctx.event_time
+
+        # Close tracks first to capture dwell duration, then emit tier-2 events.
         for ph_id in terminated_ph_ids:
+            identity_id = self._last_identity_by_ph.get(ph_id)
+            room_name = self._last_room_by_ph.get(ph_id, "")
+            duration_s = 0
+
             logger.debug("Closing terminated PH", ph_id=ph_id)
             if self._trajectory_writer:
-                await self._trajectory_writer.close_track(ph_id, closed_at=close_time)
+                duration_s = await self._trajectory_writer.close_track(ph_id, closed_at=close_time)
             if self._motion_energy_tracker is not None:
                 self._motion_energy_tracker.evict_track(ph_id)
             if self._posture_tracker is not None:
                 self._posture_tracker.evict_track(ph_id)
+
+            if self._presence_publisher is not None:
+                await self._presence_publisher.publish_disappeared(
+                    ph_id=ph_id,
+                    identity_id=identity_id,
+                    room_name=room_name,
+                    event_time_unix_ns=event_time_ns,
+                )
+            if self._dwell_publisher is not None:
+                await self._dwell_publisher.publish_ended(
+                    ph_id=ph_id,
+                    identity_id=identity_id,
+                    room_name=room_name,
+                    event_time_unix_ns=event_time_ns,
+                    duration_s=duration_s,
+                )
+
         self._prev_active_ph_ids = current_ph_ids
+        # Clean up state for terminated PHs.
+        for ph_id in terminated_ph_ids:
+            self._seen_ph_ids.discard(ph_id)
+            self._last_identity_by_ph.pop(ph_id, None)
+            self._last_room_by_ph.pop(ph_id, None)
+            self._room_entered_at.pop(ph_id, None)
 
 
 class TrajectoryStage(FrameStage):
@@ -69,15 +189,11 @@ class TrajectoryStage(FrameStage):
         floor_projector: FloorProjector | None = None,
         motion_energy_tracker: MotionEnergyTracker | None = None,
         posture_tracker: GlobalPostureTracker | None = None,
-        tracklet_manager: object | None = None,
-        camera_room_map: dict[str, str] | None = None,
     ) -> None:
         self._trajectory_writer = trajectory_writer
         self._floor_projector = floor_projector
         self._motion_energy_tracker = motion_energy_tracker
         self._posture_tracker = posture_tracker
-        self._tracklet_manager = tracklet_manager
-        self._camera_room_map = camera_room_map or {}
 
     async def run(self, ctx: FrameContext) -> None:
         if not ctx.world_snapshots or not self._trajectory_writer:
@@ -85,6 +201,17 @@ class TrajectoryStage(FrameStage):
 
         traj_time = ctx.event_time
         decision_by_ph = {d.ph_id: d for d in ctx.outcome_decisions}
+
+        # Start fresh dwell segments for revived PHs before writing trajectory
+        # points, so dwell rows are clean and auditable (not resurrecting old dwells).
+        for snap in ctx.world_snapshots:
+            if snap.ph_id in ctx.revived_ph_ids:
+                await self._trajectory_writer.start_segment(
+                    ph_id=snap.ph_id,
+                    identity_id=snap.identity_id,
+                    room_name=snap.room_name,
+                    entered_at=traj_time,
+                )
 
         for snap in ctx.world_snapshots:
             if snap.camera_id != ctx.frame.camera_id:

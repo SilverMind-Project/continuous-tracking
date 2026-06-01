@@ -50,25 +50,28 @@ _SQL_LIST_IDENTITIES_ALL = """
 
 _SQL_UPSERT_GALLERY_ENTRY = """
     INSERT INTO continuous_tracking.reid_gallery
-        (id, identity_id, embedding, quality, origin_tracklet_id, seen_at, face_confirmed)
-    VALUES ($1, $2, $3::vector, $4, $5, $6, $7)
+        (id, identity_id, embedding, quality, origin_tracklet_id, seen_at,
+         face_confirmed, orientation)
+    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8)
     ON CONFLICT (id) DO UPDATE SET
         embedding = EXCLUDED.embedding,
         quality = EXCLUDED.quality,
         seen_at = EXCLUDED.seen_at,
         face_confirmed = EXCLUDED.face_confirmed,
+        orientation = EXCLUDED.orientation,
         updated_at = now()
 """
 
 _SQL_GET_GALLERY_ENTRY = """
-    SELECT id, identity_id, embedding, quality, origin_tracklet_id, seen_at, face_confirmed
+    SELECT id, identity_id, embedding, quality, origin_tracklet_id, seen_at,
+           face_confirmed, orientation
     FROM continuous_tracking.reid_gallery
     WHERE id = $1
 """
 
 _SQL_LIST_GALLERY_ENTRIES = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
-           rg.seen_at, rg.face_confirmed
+           rg.seen_at, rg.face_confirmed, rg.orientation
     FROM continuous_tracking.reid_gallery rg
     INNER JOIN continuous_tracking.identities i ON rg.identity_id = i.identity_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
@@ -80,10 +83,9 @@ _SQL_LIST_GALLERY_ENTRIES = """
 _SQL_SEARCH_SIMILAR = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality,
            rg.origin_tracklet_id, rg.seen_at, rg.face_confirmed,
-           t.camera_id,
+           rg.orientation, ''::text AS camera_id,
            1.0 - (rg.embedding <=> $3::vector) AS similarity
     FROM continuous_tracking.reid_gallery rg
-    LEFT JOIN continuous_tracking.tracklets t ON rg.origin_tracklet_id = t.tracklet_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
       AND rg.identity_id IS NOT NULL AND rg.identity_id != ''
       AND ($2 IS TRUE
@@ -92,10 +94,9 @@ _SQL_SEARCH_SIMILAR = """
                FROM continuous_tracking.identities
                WHERE identity_id = rg.identity_id
            ))
-      AND ($4::text IS NULL OR t.camera_id = $4)
-      AND ($5::integer IS NULL OR rg.seen_at > now() - ($6::integer || 'seconds')::interval)
+      AND ($4::integer IS NULL OR rg.seen_at > now() - ($5::integer || 'seconds')::interval)
     ORDER BY rg.embedding <=> $3::vector
-    LIMIT $7
+    LIMIT $6
 """
 
 _SQL_LIST_GALLERY_FOR_TRACKLETS = """
@@ -168,6 +169,10 @@ class PostgresGalleryRepository(GalleryRepository):
     async def upsert_gallery_entry(self, entry: GalleryEmbedding) -> str:
         embedding_str = _embedding_to_pgvector(entry.embedding)
         identity_id = entry.identity_id if entry.identity_id else None
+        # origin_tracklet_id is a nullable UUID column; the domain default is ""
+        # (online multi-view seeding has no originating tracklet). Coerce empty
+        # to None so asyncpg does not reject "" as an invalid UUID.
+        origin_tracklet_id = entry.origin_tracklet_id if entry.origin_tracklet_id else None
         async with self._pool.acquire() as conn:
             await conn.execute(
                 _SQL_UPSERT_GALLERY_ENTRY,
@@ -175,9 +180,10 @@ class PostgresGalleryRepository(GalleryRepository):
                 identity_id,
                 embedding_str,
                 entry.quality,
-                entry.origin_tracklet_id,
+                origin_tracklet_id,
                 entry.seen_at,
                 entry.face_confirmed,
+                entry.orientation,
             )
         return entry.gallery_entry_id
 
@@ -194,6 +200,7 @@ class PostgresGalleryRepository(GalleryRepository):
             seen_at=row["seen_at"],
             origin_tracklet_id=row["origin_tracklet_id"] or "",
             face_confirmed=row["face_confirmed"],
+            orientation=row.get("orientation", 4),
         )
 
     async def list_gallery_entries(
@@ -214,6 +221,7 @@ class PostgresGalleryRepository(GalleryRepository):
                 seen_at=row["seen_at"],
                 origin_tracklet_id=row["origin_tracklet_id"] or "",
                 face_confirmed=row["face_confirmed"],
+                orientation=row.get("orientation", 4),
             )
             for row in rows
         ]
@@ -232,10 +240,9 @@ class PostgresGalleryRepository(GalleryRepository):
                 None,  # $1: identity_id filter
                 True,  # $2: active_only filter
                 embedding_str,  # $3: query embedding
-                camera_id,  # $4: camera_id filter
-                max_age_seconds,  # $5: IS NULL check
-                max_age_seconds,  # $6: interval seconds value
-                limit,  # $7: LIMIT
+                max_age_seconds,  # $4: IS NULL check
+                max_age_seconds,  # $5: interval seconds value
+                limit,  # $6: LIMIT
             )
         return [
             (
@@ -276,6 +283,7 @@ class PostgresGalleryRepository(GalleryRepository):
                 seen_at=row["seen_at"],
                 origin_tracklet_id=row["origin_tracklet_id"] or "",
                 face_confirmed=row["face_confirmed"],
+                orientation=row.get("orientation", 4),
             )
             for row in rows
         ]

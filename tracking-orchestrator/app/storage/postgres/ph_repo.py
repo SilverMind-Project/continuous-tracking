@@ -7,6 +7,7 @@ Implements PHRepositoryProtocol using asyncpg against the
 from __future__ import annotations
 
 import json
+import struct
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -20,11 +21,84 @@ from ...domain import (
     IdentityEvidence,
     IdentityRevision,
     Keyframe,
+    OrientationBin,
     PersonHypothesis,
+    ViewPrototype,
     WorldObservation,
 )
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# view_prototypes binary serialization (bytea)
+# ---------------------------------------------------------------------------
+
+_PROTOTYPE_HEADER_FMT = ">I"  # uint32: number of prototypes
+_PROTOTYPE_ENTRY_FMT = ">BI I"  # orientation (uint8), count (uint32), embedding_dim (uint32)
+_EMBEDDING_DIM = 768
+
+
+def _pack_view_prototypes(prototypes: tuple[ViewPrototype, ...]) -> bytes | None:
+    """Serialize view_prototypes to bytea for DB storage.
+
+    Binary layout:
+        4 bytes: num_prototypes (uint32 BE)
+        For each prototype:
+            1 byte:  orientation value (0-4)
+            4 bytes: count (uint32 BE)
+            4 bytes: embedding_dim (uint32 BE, always 768)
+            N*4 bytes: float32 embedding values (BE)
+    Returns None when prototypes is empty (stored as SQL NULL).
+    """
+    if not prototypes:
+        return None
+    parts: list[bytes] = [struct.pack(_PROTOTYPE_HEADER_FMT, len(prototypes))]
+    for p in prototypes:
+        parts.append(
+            struct.pack(
+                _PROTOTYPE_ENTRY_FMT,
+                int(p.orientation),
+                p.count,
+                len(p.embedding),
+            )
+        )
+        parts.append(struct.pack(f">{len(p.embedding)}f", *p.embedding))
+    return b"".join(parts)
+
+
+def _unpack_view_prototypes(data: bytes | None) -> tuple[ViewPrototype, ...]:
+    """Deserialize view_prototypes from bytea.
+
+    Returns an empty tuple when *data* is None or empty.
+    """
+    if not data:
+        return ()
+    try:
+        offset = 0
+        num_protos = struct.unpack_from(_PROTOTYPE_HEADER_FMT, data, offset)[0]
+        offset += struct.calcsize(_PROTOTYPE_HEADER_FMT)
+        prototypes: list[ViewPrototype] = []
+        for _ in range(num_protos):
+            orientation_val, count, emb_dim = struct.unpack_from(_PROTOTYPE_ENTRY_FMT, data, offset)
+            offset += struct.calcsize(_PROTOTYPE_ENTRY_FMT)
+            emb_vals = struct.unpack_from(f">{emb_dim}f", data, offset)
+            offset += emb_dim * struct.calcsize("f")
+            prototypes.append(
+                ViewPrototype(
+                    orientation=OrientationBin(orientation_val),
+                    embedding=emb_vals,
+                    count=count,
+                )
+            )
+        return tuple(prototypes)
+    except (struct.error, ValueError) as exc:
+        logger.warning(
+            "view_prototypes_deserialize_failed",
+            error=str(exc),
+            data_len=len(data) if data else 0,
+        )
+        return ()
+
 
 # ---------------------------------------------------------------------------
 # PostgresPHRepository
@@ -48,10 +122,10 @@ class PostgresPHRepository:
                     observation_count, current_identity_id,
                     current_identity_committed_at,
                     state_mean, state_cov, gallery_mean, height_m,
-                    active_cameras, metadata, mean_quality
+                    active_cameras, metadata, mean_quality, view_prototypes
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                    $14::jsonb, $15
+                    $14::jsonb, $15, $16
                 )
                 ON CONFLICT (ph_id) DO UPDATE SET
                     closed_at = COALESCE(EXCLUDED.closed_at, ph.closed_at),
@@ -71,7 +145,8 @@ class PostgresPHRepository:
                     height_m = EXCLUDED.height_m,
                     active_cameras = EXCLUDED.active_cameras,
                     metadata = EXCLUDED.metadata,
-                    mean_quality = EXCLUDED.mean_quality
+                    mean_quality = EXCLUDED.mean_quality,
+                    view_prototypes = EXCLUDED.view_prototypes
                 """,
                 ph.ph_id,
                 ph.born_at,
@@ -90,6 +165,7 @@ class PostgresPHRepository:
                     _json_object_from_domain(ph.metadata, column="PersonHypothesis.metadata")
                 ),
                 ph.mean_quality,
+                _pack_view_prototypes(ph.view_prototypes),
             )
 
     async def get(self, ph_id: str) -> PersonHypothesis | None:
@@ -177,6 +253,7 @@ class PostgresPHRepository:
             predicates.append("closed_at IS NOT NULL")
         if not include_transient:
             predicates.append("EXTRACT(EPOCH FROM (COALESCE(closed_at, NOW()) - born_at)) >= 2.0")
+            predicates.append("observation_count >= 2")
         if min_duration_s is not None:
             predicates.append(
                 f"EXTRACT(EPOCH FROM (COALESCE(closed_at, NOW()) - born_at)) >= ${idx}"
@@ -1015,6 +1092,7 @@ def _row_to_ph(row: Any) -> PersonHypothesis:
         last_posture=None,
         metadata=metadata,
         mean_quality=float(row.get("mean_quality") or 0.0),
+        view_prototypes=_unpack_view_prototypes(row.get("view_prototypes")),
     )
 
 

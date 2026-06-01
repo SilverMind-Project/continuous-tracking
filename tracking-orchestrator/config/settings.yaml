@@ -21,6 +21,8 @@ redis:
   revisions_stream: tracking.revisions
   signals_stream: tracking.signals
   scene_samples_stream: scene.samples
+  presence_stream: tracking.presence
+  dwell_stream: tracking.dwell
   batch_max_wait_ms: 100
   batch_max_size: 8
   xack_timeout_ms: 5000
@@ -38,9 +40,9 @@ triton:
   reid_model: reid-solider
   pose_model: pose-rtmpose
   pose_enabled: true
-  # Reserved for M7 (occluded posture); depth slow-path not yet wired. See TD-008.
+  # Reserved for future depth slow-path. See TD-008.
   depth_enabled: true
-  # Reserved for M7 (occluded posture); depth slow-path not yet wired. See TD-008.
+  # Reserved for future depth slow-path. See TD-008.
   depth_model: depth-anything-v2
   timeout_ms: 5000
   startup_wait_s: 120
@@ -116,8 +118,12 @@ pipeline:
   max_concurrent_frames: 4
   # Read by: main.py → PipelineConfig(shutdown_timeout=)
   shutdown_timeout_s: 5.0
+  # Read by: main.py → PipelineConfig(live_publish_max_hz=)
+  # Maximum publish rate per camera for tracking.events (UI live feed).
+  # Inference still runs every frame; this caps only the UI-facing stream.
+  live_publish_max_hz: 3.0
 
-  # Reserved for M7 (occluded posture); depth slow-path not yet wired. See TD-008.
+  # Reserved for future depth slow-path. See TD-008.
   posture:
     # Read by: main.py → DepthPostureStrategy / FusedPostureStrategy
     depth_slow_path_enabled: false
@@ -133,7 +139,7 @@ pipeline:
   # True only in unit tests that run without a detector.
   allow_skeleton: false
 
-  # M3: minimum detection confidence for keyframe bbox annotations
+  # minimum detection confidence for keyframe bbox annotations
   min_keyframe_detection_confidence: 0.5
 
   # Read by: main.py → PipelineConfig(batch_window_s=, max_batch_size=)
@@ -148,18 +154,6 @@ pipeline:
     iou_dedup_threshold: 0.50
 
   identity:
-    # Read by: main.py → PipelineConfig(identity_commit_window_s=)
-    # At most one identity commit per PH per N seconds.
-    commit_window_s: 5.0
-
-    # Read by: main.py → PipelineConfig(identity_high_confidence_face_threshold=)
-    # Face anchors above this confidence bypass the commit window and commit
-    # immediately with applies_from = track.first_seen_at.
-    high_confidence_face_threshold: 0.85
-
-    # Read by: main.py → PipelineConfig(gallery_identity_backfill_delay_s=)
-    gallery_backfill_delay_s: 10.0
-
     # Read by: main.py → PipelineConfig(identity_rewrite_on_face_commit=)
     rewrite_on_face_commit: true
 
@@ -168,7 +162,7 @@ cognitive_companion:
   url: "${CC_API_URL}"
   api_key: "${CC_INGRESS_API_KEY}"
 
-# CC config sync (M2)
+# CC config sync
 cc_sync:
   poll_interval_s: 60.0
 
@@ -202,16 +196,37 @@ resolver:
   identified_entry_boost_min_sim: 0.65
   identified_entry_min_likelihood: 0.80
   # The embedding_coherence_* keys only take effect when
-  # enable_embedding_coherence_boost is true. M3 evaluates enabling this path.
+  # enable_embedding_coherence_boost is true.
   enable_embedding_coherence_boost: false
   embedding_coherence_window: 5
   embedding_coherence_min_sim: 0.70
   embedding_coherence_boost: 2.0
+  # Sticky maintenance — hold committed identity unless strongly contradicted.
+  # M2 enabled 2026-06-02 after make ci guardrails (two_people_one_room,
+  # resident_plus_stranger) passed green. Staged rollout phase 1.
+  enable_sticky_maintenance: true
+  contradiction_face_confidence: 0.70
+  contradiction_posterior_prob: 0.80
+  contradiction_posterior_margin: 0.20
+
+  # Rich face evidence — three-valued recognition weights.
+  candidate_face_weight_multiplier: 1.0
+  face_present_unknown_unknown_mass: 0.10
+  frontality_full_yaw_deg: 15.0
+  frontality_zero_yaw_deg: 60.0
+  frontality_min_factor: 0.3
+
   # Synthetic face propagation also requires src_face_confidence * gallery_sim
   # to clear face_commit_min_confidence, so 0.72 remains reachable for true
   # handoffs while refusing weak relative/clothing matches.
   cross_gt_face_propagation_threshold: 0.72
   cross_gt_face_propagation_max_gts: 4
+  # Multi-view gallery query — per-orientation ReID with max-over-views.
+  # Enabled 2026-06-02 (M4) after the UNKNOWN-complement leak fix and guardrails:
+  # back-view retrieval commits via max-over-views; orthogonal stranger stays
+  # UNKNOWN. Benefit ramps as the gallery accumulates non-front prototypes.
+  enable_multiview_gallery: true
+  seed_orientation_min_confidence: 0.5
 
 # Keyframe sampler
 sampler:
@@ -228,7 +243,7 @@ person_hypotheses:
     interval_s: 3600.0
     batch_size: 1000
 
-# World tracker (M1 floor-plane Kalman tracker)
+# World tracker
 world_tracker:
   gate_chi2: 9.21
   alpha_geo: 0.5
@@ -251,6 +266,41 @@ world_tracker:
   dedup_residual_coeff_k: 1.0
   dedup_max_distance_ceiling_m: 1.5
   dedup_require_no_face_conflict: true
+  # ---- PH revival ----
+  # M2 enabled 2026-06-02 (phase 1) after make ci guardrails passed.
+  enable_ph_revival: true
+  revive_max_age_s: 30.0
+  revive_max_distance_m: 2.0
+  revive_appearance_min_sim: 0.55
+  # ---- Uncalibrated association relaxation ----
+  # M2 enabled 2026-06-02 (phase 1) after make ci guardrails passed.
+  enable_uncalibrated_gate_relax: true
+  uncalibrated_gate_chi2: 21.0
+  uncalibrated_alpha_app: 0.7
+  # ---- Multi-view ReID ----
+  # Enabled 2026-06-02 (M4): association appearance cost uses max-over-view
+  # prototypes; calibrated single-mean path unchanged. Covered by
+  # test_cost_matrix_multiview (back-prototype match) and shadow proofs.
+  enable_multiview_association: true
+
+  # ---- Cross-camera revival (M5) ----
+  # Enabled 2026-06-02 (stage after M2) once step-level guardrails passed:
+  # cross_camera_handoff links identity across cameras; the 2-camera stranger
+  # guardrail proves a stranger never inherits a resident's identity. Reads
+  # per-PH view_prototypes (no gallery dependency); appearance gate is an
+  # absolute cosine floor (cross_camera_revive_appearance_min_sim), not the
+  # normalize-to-1 posterior. M4 multiview stays OFF (staged next).
+  enable_cross_camera_revival: true
+  cross_camera_min_plausibility: 0.05
+  cross_camera_revive_appearance_min_sim: 0.60
+
+  # ---- Group appearance dedup (M5) ----
+  # Enabled 2026-06-02 for the declared overlap group {cam02,cam03,cam04}.
+  # Merges same-perspective uncalibrated obs within a group by appearance; no
+  # group => no merge; face conflict blocks. Covered by test_dedup group cases.
+  # Requires the overlap group declared CC-side (cts_camera_overlap_groups).
+  enable_group_appearance_dedup: true
+  dedup_group_appearance_min_sim: 0.75
 
 # Environment label (dev / staging / production)
 env: production

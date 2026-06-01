@@ -108,6 +108,18 @@ class TestPHListFilters:
         assert data["total"] == 0
 
     @pytest.mark.asyncio
+    async def test_list_phs_filter_by_room_id(
+        self, client: TestClient, repo: InMemoryPHRepository
+    ) -> None:
+        await repo.save(_make_ph("ph-1", metadata={"last_room_id": "kitchen"}))
+        await repo.save(_make_ph("ph-2", metadata={"last_room_id": "bedroom"}))
+        resp = client.get("/ph?room_id=kitchen&include_transient=true")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["ph_id"] == "ph-1"
+
+    @pytest.mark.asyncio
     async def test_list_phs_filter_search_matches_display_name(
         self, client: TestClient, repo: InMemoryPHRepository
     ) -> None:

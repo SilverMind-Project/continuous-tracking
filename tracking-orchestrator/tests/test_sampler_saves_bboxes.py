@@ -3,7 +3,7 @@
 Tests cover:
 - maybe_sample saves a bbox annotation when detection data is provided.
 - trigger_sample saves a bbox annotation when detection data is provided.
-- No bbox annotation is saved when bbox_repo is not configured.
+- No bbox annotation is saved when the keyframe repo has no linked bbox repo.
 - No bbox annotation is saved when detection_bbox is None.
 """
 
@@ -29,9 +29,8 @@ def bbox_repo() -> InMemoryBboxAnnotationRepository:
 def sampler(bbox_repo: InMemoryBboxAnnotationRepository) -> KeyframeSampler:
     config = SamplerConfig(keyframe_min_interval_s=30.0)
     return KeyframeSampler(
-        repo=InMemoryKeyframeRepository(),
+        repo=InMemoryKeyframeRepository(bbox_repo=bbox_repo),
         config=config,
-        bbox_repo=bbox_repo,
     )
 
 
@@ -143,11 +142,10 @@ async def test_no_bbox_saved_when_detection_bbox_is_none(
     assert results == []
 
 
-async def test_no_bbox_saved_when_bbox_repo_not_configured() -> None:
+async def test_no_bbox_saved_when_keyframe_repo_has_no_bbox_repo() -> None:
     sampler_no_bbox = KeyframeSampler(
         repo=InMemoryKeyframeRepository(),
         config=SamplerConfig(keyframe_min_interval_s=30.0),
-        bbox_repo=None,
     )
     kf = await sampler_no_bbox.maybe_sample(
         ph_id="ph-001",

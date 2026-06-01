@@ -18,6 +18,7 @@ from ...inference.pose import PoseEstimator
 from ...inference.schemas import DetectionBox, Embedding, PoseResult
 from ...pipeline.crop_quality import CropQuality
 from ...pipeline.crops import crop_detection, is_degenerate
+from ...tracking.orientation import estimate_body_orientation
 from ..frame_context import FrameContext
 from ..types import ReidEmbedderProtocol
 from .base import FrameStage
@@ -166,6 +167,10 @@ class InferenceStage(FrameStage):
             ctx.domain_detections.append(domain_det)
             if pose_result is not None:
                 ctx.det_pose_result[domain_det.detection_id] = pose_result
+                # estimate body orientation from pose keypoints.
+                bbox_w_norm = bbox.width / max(ctx.effective_width, 1)
+                orientation, conf = estimate_body_orientation(pose_result.keypoints, bbox_w_norm)
+                ctx.orientation_by_detection[domain_det.detection_id] = (orientation, conf)
 
         ctx._detection_evidence = detection_evidence
         ctx._appearance_evidence = appearance_evidence

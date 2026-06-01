@@ -1,4 +1,4 @@
-"""U1-T11: dedup metrics increment correctly."""
+"""dedup metrics increment correctly."""
 
 from __future__ import annotations
 

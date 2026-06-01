@@ -20,6 +20,7 @@ dependencies = [
     "prometheus-client>=0.25.0",
     "triton-shared",
     "shapely>=2.0",
+    "tenacity>=9.1.4",
 ]
 
 [project.optional-dependencies]

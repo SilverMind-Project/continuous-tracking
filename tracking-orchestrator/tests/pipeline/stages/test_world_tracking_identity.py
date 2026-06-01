@@ -1,4 +1,4 @@
-"""WT1: tests for identity resolution wiring in the world tracker.
+"""tests for identity resolution wiring in the world tracker.
 
 Verifies that:
 1. Identity commits produce revisions (populates ctx.new_revisions).
@@ -267,9 +267,9 @@ class TestPipelineWiring:
     async def test_world_tracker_built_with_resolver_and_publisher(self) -> None:
         """FrameProcessingPipeline.initialize() wires resolver + publisher into WorldTracker.
 
-        This is the only place in WT1 where asserting on a private attribute
+        This is the only place where asserting on a private attribute
         is acceptable — it verifies the wiring contract that is the whole point
-        of WT1.
+        of this test suite.
         """
         with (
             patch("app.pipeline.frame_pipeline.RedisStreamsTransport") as mock_transport_cls,
@@ -297,7 +297,7 @@ class TestPipelineWiring:
             assert pipeline._world_tracker is not None, (
                 "WorldTracker must be constructed during initialize()"
             )
-            # WT1 wiring contract: WorldTracker receives the same
+            # Wiring contract: WorldTracker receives the same
             # IdentityResolver instance that the pipeline created.
             assert pipeline._world_tracker._identity_resolver is pipeline._identity_resolver, (
                 "WorldTracker must receive the IdentityResolver instance created by the pipeline"

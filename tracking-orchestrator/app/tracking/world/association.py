@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from ...domain import ViewPrototype
 from .config import WorldTrackerConfig
 from .cost_matrix import GATE_INF, pair_cost
 from .kalman import KalmanState
@@ -32,6 +33,9 @@ def associate(
     obs_face_confidences: list[float],
     obs_height_estimates: list[float | None],
     cfg: WorldTrackerConfig,
+    *,
+    obs_calibrated: list[bool] | None = None,
+    ph_view_prototypes: list[tuple[ViewPrototype, ...]] | None = None,
 ) -> Assignment:
     """Hungarian assignment with gating.
 
@@ -43,6 +47,9 @@ def associate(
         return Assignment(matched=[], unmatched_phs=[], unmatched_obs=list(range(n_obs)))
     if n_obs == 0:
         return Assignment(matched=[], unmatched_phs=list(range(n_ph)), unmatched_obs=[])
+
+    calib_flags = obs_calibrated if obs_calibrated is not None else [True] * n_obs
+    prototypes = ph_view_prototypes if ph_view_prototypes is not None else [()] * n_ph
 
     cost = np.full((n_ph, n_obs), GATE_INF, dtype=np.float64)
     for i in range(n_ph):
@@ -59,6 +66,8 @@ def associate(
                 obs_face_anchor_confidence=obs_face_confidences[j],
                 obs_height_estimate_m=obs_height_estimates[j],
                 cfg=cfg,
+                calibrated=calib_flags[j],
+                ph_view_prototypes=prototypes[i],
             )
 
     # If every pair is gated, skip the solver.

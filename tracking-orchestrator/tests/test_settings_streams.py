@@ -1,4 +1,4 @@
-"""WT6: tests for configurable stream names wired through TransportConfig.
+"""tests for configurable stream names wired through TransportConfig.
 
 Option A: revisions_stream, signals_stream, scene_samples_stream are
 plumbed through TransportConfig and used by the corresponding publishers.

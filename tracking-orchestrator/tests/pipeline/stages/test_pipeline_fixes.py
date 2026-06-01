@@ -63,9 +63,8 @@ class TestInMemoryTrajectoryRepoSharing:
 
 class TestKeyframeBboxRepoReuse:
     @pytest.mark.asyncio
-    async def test_keyframe_sampler_reuses_injected_bbox_repo(self) -> None:
-        """When a bbox_repo is injected into initialize(), the keyframe sampler
-        must use that same instance rather than creating a new fallback."""
+    async def test_default_keyframe_repo_uses_injected_bbox_repo(self) -> None:
+        """Default in-memory keyframe storage writes bboxes to the injected bbox repo."""
         pipeline = FrameProcessingPipeline(
             PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
         )
@@ -75,10 +74,10 @@ class TestKeyframeBboxRepoReuse:
         with _mock_redis_deps():
             await pipeline.initialize(PipelineDependencies(bbox_repo=injected_bbox_repo))
 
-            sampler_repo = pipeline._keyframe_sampler._bbox_repo  # type: ignore[union-attr]
+            keyframe_repo = pipeline._keyframe_sampler._repo  # type: ignore[union-attr]
 
-            assert sampler_repo is injected_bbox_repo, (
-                "KeyframeSampler must use the injected bbox_repo, not create a separate fallback"
+            assert keyframe_repo._bbox_repo is injected_bbox_repo, (  # type: ignore[attr-defined]
+                "InMemoryKeyframeRepository must write bboxes to the injected bbox repo"
             )
 
             # Also verify the pipeline's own bbox_repo is the same instance.
@@ -87,9 +86,8 @@ class TestKeyframeBboxRepoReuse:
             await pipeline.stop()
 
     @pytest.mark.asyncio
-    async def test_keyframe_sampler_reuses_pipeline_bbox_repo_default(self) -> None:
-        """When no bbox_repo is injected, the keyframe sampler must still use
-        the same instance as the pipeline's internally created fallback."""
+    async def test_default_keyframe_repo_uses_pipeline_bbox_repo_default(self) -> None:
+        """Default in-memory keyframe storage writes bboxes to the pipeline fallback."""
         pipeline = FrameProcessingPipeline(
             PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
         )
@@ -97,14 +95,14 @@ class TestKeyframeBboxRepoReuse:
         with _mock_redis_deps():
             await pipeline.initialize()
 
-            sampler_repo = pipeline._keyframe_sampler._bbox_repo  # type: ignore[union-attr]
+            keyframe_repo = pipeline._keyframe_sampler._repo  # type: ignore[union-attr]
             pipeline_repo = pipeline._bbox_repo
 
-            assert sampler_repo is pipeline_repo, (
-                "KeyframeSampler must share the pipeline's bbox_repo fallback"
+            assert keyframe_repo._bbox_repo is pipeline_repo, (  # type: ignore[attr-defined]
+                "InMemoryKeyframeRepository must write bboxes to the pipeline fallback"
             )
 
-            assert isinstance(sampler_repo, InMemoryBboxAnnotationRepository)
+            assert isinstance(pipeline_repo, InMemoryBboxAnnotationRepository)
 
             await pipeline.stop()
 

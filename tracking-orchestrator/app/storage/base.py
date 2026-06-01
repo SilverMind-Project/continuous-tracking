@@ -10,6 +10,8 @@ from typing import Any, Protocol
 from structlog import get_logger
 
 from ..domain import (
+    CameraTopologyEdge,
+    CoPresenceLink,
     IdentityRevision,
     Keyframe,
     PersonHypothesis,
@@ -45,6 +47,11 @@ from .trajectory import (
 )
 
 logger = get_logger(__name__)
+
+# Minimum observation count for a PH to appear in default (non-transient) listings.
+# Mirrors the default min_observations_to_publish (3) minus 1 to allow borderline
+# PHs while hiding truly single-observation spawns.
+_TRANSIENT_MIN_OBSERVATIONS: int = 2
 
 # ---------------------------------------------------------------------------
 # PHRepositoryProtocol
@@ -237,9 +244,8 @@ class InMemoryPHRepository:
                     last_posture=ph.last_posture,
                     metadata=ph.metadata,
                     mean_quality=ph.mean_quality,
+                    view_prototypes=ph.view_prototypes,
                 )
-
-    # -- list_active --
 
     async def list_active(
         self,
@@ -262,6 +268,11 @@ class InMemoryPHRepository:
                 if ph.closed_at is not None
                 and (since is None or ph.last_seen_at >= since)
                 and (until is None or ph.born_at <= until)
+                and (
+                    room_id is None
+                    or str(ph.metadata.get("last_room_id") or ph.metadata.get("room_id") or "")
+                    == room_id
+                )
                 and (identity_id is None or ph.current_identity_id == identity_id)
                 and (
                     search is None
@@ -275,6 +286,11 @@ class InMemoryPHRepository:
                 if ph.closed_at is None
                 and (since is None or ph.last_seen_at >= since)
                 and (until is None or ph.born_at <= until)
+                and (
+                    room_id is None
+                    or str(ph.metadata.get("last_room_id") or ph.metadata.get("room_id") or "")
+                    == room_id
+                )
                 and (identity_id is None or ph.current_identity_id == identity_id)
                 and (
                     search is None
@@ -286,7 +302,10 @@ class InMemoryPHRepository:
         if not include_transient:
             now = datetime.now(UTC)
             results = [
-                ph for ph in results if ((ph.closed_at or now) - ph.born_at).total_seconds() >= 2.0
+                ph
+                for ph in results
+                if ((ph.closed_at or now) - ph.born_at).total_seconds() >= 2.0
+                and ph.observation_count >= _TRANSIENT_MIN_OBSERVATIONS
             ]
         if min_duration_s is not None:
             now = datetime.now(UTC)
@@ -417,6 +436,7 @@ class InMemoryPHRepository:
                 last_posture=ph.last_posture,
                 metadata=ph.metadata,
                 mean_quality=ph.mean_quality,
+                view_prototypes=ph.view_prototypes,
             )
         revision = IdentityRevision(
             revision_id=str(uuid.uuid4()),
@@ -477,6 +497,7 @@ class InMemoryPHRepository:
                 last_posture=source.last_posture,
                 metadata={**source.metadata, "merged_into_ph_id": target_ph_id},
                 mean_quality=source.mean_quality,
+                view_prototypes=source.view_prototypes,
             )
             self._merges[source_ph_id] = target_ph_id
         revision = IdentityRevision(
@@ -574,6 +595,7 @@ class InMemoryPHRepository:
                 last_posture=ph.last_posture,
                 metadata=ph.metadata,
                 mean_quality=ph.mean_quality,
+                view_prototypes=ph.view_prototypes,
             )
             later_ph = PersonHypothesis(
                 ph_id=new_ph_id,
@@ -593,6 +615,7 @@ class InMemoryPHRepository:
                 last_posture=ph.last_posture,
                 metadata=ph.metadata,
                 mean_quality=ph.mean_quality,
+                view_prototypes=ph.view_prototypes,
             )
             self._phs[new_ph_id] = later_ph
             self._observations[ph_id] = earlier_obs
@@ -647,6 +670,7 @@ class InMemoryPHRepository:
                     last_posture=ph.last_posture,
                     metadata=ph.metadata,
                     mean_quality=ph.mean_quality,
+                    view_prototypes=ph.view_prototypes,
                 )
                 revision = IdentityRevision(
                     revision_id=str(uuid.uuid4()),
@@ -740,6 +764,127 @@ class InMemoryWorldObservationRepository:
 
 
 # ---------------------------------------------------------------------------
+# CameraTopologyRepository (M5.1)
+# ---------------------------------------------------------------------------
+
+
+class CameraTopologyRepository(Protocol):
+    """Persist camera adjacency topology statistics (structural interface)."""
+
+    async def get_edge(self, from_camera: str, to_camera: str) -> CameraTopologyEdge | None: ...
+    async def upsert_edge(self, edge: CameraTopologyEdge) -> None: ...
+    async def list_edges(self) -> list[CameraTopologyEdge]: ...
+    async def list_edges_from(self, from_camera: str) -> list[CameraTopologyEdge]: ...
+
+
+class InMemoryCameraTopologyRepository:
+    """In-memory camera topology edge store for unit tests."""
+
+    def __init__(self) -> None:
+        self._edges: dict[tuple[str, str], CameraTopologyEdge] = {}
+
+    async def get_edge(self, from_camera: str, to_camera: str) -> CameraTopologyEdge | None:
+        return self._edges.get((from_camera, to_camera))
+
+    async def upsert_edge(self, edge: CameraTopologyEdge) -> None:
+        self._edges[(edge.from_camera, edge.to_camera)] = edge
+
+    async def list_edges(self) -> list[CameraTopologyEdge]:
+        return list(self._edges.values())
+
+    async def list_edges_from(self, from_camera: str) -> list[CameraTopologyEdge]:
+        return [e for k, e in self._edges.items() if k[0] == from_camera]
+
+
+class CachedCameraTopologyRepository:
+    """Write-through in-process cache wrapping any CameraTopologyRepository.
+
+    Topology changes only when a handoff is recorded (upsert_edge).  Between
+    writes, list_edges and list_edges_from are served from the in-memory cache
+    with zero DB round-trips.  After every upsert_edge the cache is updated
+    in-place so the caller sees the new edge immediately without a second
+    read-back.
+
+    Usage::
+
+        raw_repo = PostgresCameraTopologyRepository(pool)
+        repo: CameraTopologyRepository = CachedCameraTopologyRepository(raw_repo)
+        # Inject the cached version wherever a CameraTopologyRepository is expected.
+    """
+
+    def __init__(self, delegate: CameraTopologyRepository) -> None:
+        self._delegate = delegate
+        self._cache: dict[tuple[str, str], CameraTopologyEdge] = {}
+        self._loaded: bool = False
+
+    async def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        edges = await self._delegate.list_edges()
+        self._cache = {(e.from_camera, e.to_camera): e for e in edges}
+        self._loaded = True
+
+    async def get_edge(self, from_camera: str, to_camera: str) -> CameraTopologyEdge | None:
+        await self._ensure_loaded()
+        return self._cache.get((from_camera, to_camera))
+
+    async def upsert_edge(self, edge: CameraTopologyEdge) -> None:
+        await self._delegate.upsert_edge(edge)
+        # Optimistic in-place update so the current caller sees the result immediately.
+        self._cache[(edge.from_camera, edge.to_camera)] = edge
+        self._loaded = True  # cache is valid even if it was previously cold
+
+    async def list_edges(self) -> list[CameraTopologyEdge]:
+        await self._ensure_loaded()
+        return list(self._cache.values())
+
+    async def list_edges_from(self, from_camera: str) -> list[CameraTopologyEdge]:
+        await self._ensure_loaded()
+        return [e for (fc, _), e in self._cache.items() if fc == from_camera]
+
+
+# ---------------------------------------------------------------------------
+# CoPresenceRepository (M5.1)
+# ---------------------------------------------------------------------------
+
+
+class CoPresenceRepository(Protocol):
+    """Persist identity-level co-presence links between PHs (structural interface)."""
+
+    async def upsert_link(self, link: CoPresenceLink) -> None: ...
+    async def list_by_group(self, group_id: str) -> list[CoPresenceLink]: ...
+    async def list_by_identity(self, identity_id: str) -> list[CoPresenceLink]: ...
+    async def list_by_ph(self, ph_id: str) -> list[CoPresenceLink]: ...
+    async def get_active_link(self, ph_id_a: str, ph_id_b: str) -> CoPresenceLink | None: ...
+
+
+class InMemoryCoPresenceRepository:
+    """In-memory co-presence link store for unit tests."""
+
+    def __init__(self) -> None:
+        self._links: dict[tuple[str, str], CoPresenceLink] = {}
+
+    async def upsert_link(self, link: CoPresenceLink) -> None:
+        aid, bid = sorted([link.ph_id_a, link.ph_id_b])
+        self._links[(aid, bid)] = link
+
+    async def list_by_group(self, group_id: str) -> list[CoPresenceLink]:
+        return [link for link in self._links.values() if link.group_id == group_id]
+
+    async def list_by_identity(self, identity_id: str) -> list[CoPresenceLink]:
+        return [link for link in self._links.values() if link.identity_id == identity_id]
+
+    async def list_by_ph(self, ph_id: str) -> list[CoPresenceLink]:
+        return [
+            link for link in self._links.values() if link.ph_id_a == ph_id or link.ph_id_b == ph_id
+        ]
+
+    async def get_active_link(self, ph_id_a: str, ph_id_b: str) -> CoPresenceLink | None:
+        aid, bid = sorted([ph_id_a, ph_id_b])
+        return self._links.get((aid, bid))
+
+
+# ---------------------------------------------------------------------------
 # Module exports
 # ---------------------------------------------------------------------------
 
@@ -748,6 +893,8 @@ __all__ = [
     "AssignmentRepository",
     "BboxAnnotationRepository",
     "BehaviorBaselineRepository",
+    "CameraTopologyRepository",
+    "CoPresenceRepository",
     "CorrectionRepository",
     "DementiaSignalRepository",
     "GalleryRepository",
@@ -756,6 +903,8 @@ __all__ = [
     "InMemoryAssignmentRepository",
     "InMemoryBboxAnnotationRepository",
     "InMemoryBehaviorBaselineRepository",
+    "InMemoryCameraTopologyRepository",
+    "InMemoryCoPresenceRepository",
     "InMemoryCorrectionRepository",
     "InMemoryDementiaSignalRepository",
     "InMemoryGalleryRepository",

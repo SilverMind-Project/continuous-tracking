@@ -12,11 +12,27 @@ from app.domain import BoundingBox, Detection
 from app.inference.schemas import COCO_KEYPOINTS, Keypoint, PoseResult
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.posture_stage import PostureStage
+from app.services.camera_room_map import CameraRoomBinding, CameraRoomMap
 from app.trajectory.posture import (
     PostureScores,
     _score_upper_torso_lying,
     score_posture,
 )
+
+
+async def _camera_room_map(camera_id: str, room_name: str) -> CameraRoomMap:
+    room_map = CameraRoomMap()
+    await room_map.set_all(
+        [
+            CameraRoomBinding(
+                camera_id=camera_id,
+                room_id=room_name,
+                room_name=room_name,
+                bound_at=datetime.now(UTC),
+            )
+        ]
+    )
+    return room_map
 
 
 def _kp(x: float = 0.5, y: float = 0.5, score: float = 0.9) -> Keypoint:
@@ -152,8 +168,8 @@ class TestPostureStageBedroomPrior:
         )
 
         stage = PostureStage(
+            camera_room_map=await _camera_room_map("cam-bedroom", "bedroom"),
             posture_strategy=mock_strategy,
-            camera_room_map={"cam-bedroom": "bedroom"},
         )
 
         det = _make_det(camera_id="cam-bedroom")
@@ -188,8 +204,8 @@ class TestPostureStageBedroomPrior:
         )
 
         stage = PostureStage(
+            camera_room_map=await _camera_room_map("cam-living", "living room"),
             posture_strategy=mock_strategy,
-            camera_room_map={"cam-living": "living room"},
         )
 
         det = _make_det(camera_id="cam-living")

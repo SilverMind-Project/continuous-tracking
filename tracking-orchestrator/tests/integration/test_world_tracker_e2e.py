@@ -1,4 +1,4 @@
-"""R1 + U1: WorldTracker end-to-end replay tests (C1, C2) + hallway-bathroom proof.
+"""WorldTracker end-to-end replay tests (C1, C2) + hallway-bathroom proof.
 
 Replays synthetic WorldObservation fixtures through the real WorldTracker
 pipeline (Postgres-backed repos) and asserts correct PH lifecycle.
@@ -9,17 +9,14 @@ See scripts/synthesize_replay_fixture.py for generation.
 Marked @pytest.mark.integration; CI selects this marker. Testcontainer
 Postgres is started by the session fixture in tests/conftest.py.
 
-U1: C1 (test_single_ph_covers_both_cameras) is now a normal passing test.
+ C1 (test_single_ph_covers_both_cameras) is now a normal passing test.
 The cross-camera dedup pass lands in U1 and collapses the two simultaneous
 observations from overlapping cameras into one PH before the association step.
 """
 
 from __future__ import annotations
 
-import json
-import struct
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -27,14 +24,7 @@ from prometheus_client import CollectorRegistry, Counter
 
 from app.domain import BoundingBox, FloorPoint, WorldObservation
 from app.observability.metrics import build_metrics
-
-FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frame_replays"
-
-# A large room polygon that covers all fixture floor coordinates.
-# Fixture ranges: x_mm 3000-11000 (3-11 m), y_mm 2000-16000 (2-16 m).
-_ROOM_POLYGONS: dict[str, list[tuple[float, float]]] = {
-    "living_room": [(0.0, 0.0), (25.0, 0.0), (25.0, 25.0), (0.0, 25.0)]
-}
+from tests.integration._replay import _ROOM_POLYGONS, FIXTURES_DIR, load_fixture
 
 
 def _counter_total(counter: Counter) -> float:
@@ -44,43 +34,6 @@ def _counter_total(counter: Counter) -> float:
         for sample in metric.samples
         if sample.name.endswith("_total")
     )
-
-
-def _load_fixture(path: Path) -> list[list[WorldObservation]]:
-    """Load length-prefixed JSON fixture; return list of per-frame observation lists."""
-    steps: list[list[WorldObservation]] = []
-    with path.open("rb") as f:
-        while chunk := f.read(4):
-            length = struct.unpack(">I", chunk)[0]
-            data = f.read(length)
-            obs_list: list[dict[str, Any]] = json.loads(data)
-            frame_obs: list[WorldObservation] = []
-            for o in obs_list:
-                bbox_d = o["bbox"]
-                frame_obs.append(
-                    WorldObservation(
-                        camera_id=o["camera_id"],
-                        frame_index=o["frame_index"],
-                        captured_at=datetime.fromisoformat(o["captured_at_iso"]),
-                        floor_point=FloorPoint(
-                            x_mm=o["floor_x_mm"],
-                            y_mm=o["floor_y_mm"],
-                            calibrated=True,
-                        ),
-                        bbox=BoundingBox(
-                            x_min=bbox_d["x_min"],
-                            y_min=bbox_d["y_min"],
-                            x_max=bbox_d["x_max"],
-                            y_max=bbox_d["y_max"],
-                        ),
-                        embedding=o["embedding"],
-                        detection_confidence=o["detection_confidence"],
-                        detection_id=o.get("detection_id", ""),
-                        quality=float(o.get("quality", 0.5)),
-                    )
-                )
-            steps.append(frame_obs)
-    return steps
 
 
 @pytest.mark.integration
@@ -103,7 +56,7 @@ class TestWorldTrackerE2EOnePersonTwoCameras:
         obs_repo = PostgresWorldObservationRepository(db_pool)
         tracker = WorldTracker(ph_repo=ph_repo, obs_repo=obs_repo)
 
-        steps = _load_fixture(fixture)
+        steps = load_fixture(fixture)
         assert len(steps) >= 2, "Fixture must have at least 2 steps"
 
         # Verify fixture spans at least 2 cameras (fixture integrity check T6).
@@ -153,7 +106,7 @@ class TestWorldTrackerE2EOnePersonTwoCameras:
         obs_repo = PostgresWorldObservationRepository(db_pool)
         tracker = WorldTracker(ph_repo=ph_repo, obs_repo=obs_repo)
 
-        steps = _load_fixture(fixture)
+        steps = load_fixture(fixture)
         base_time = datetime(2026, 5, 28, 9, 0, 0, tzinfo=UTC)
         for i, frame_obs in enumerate(steps):
             now = base_time + timedelta(seconds=i * 0.5)
@@ -192,7 +145,7 @@ class TestWorldTrackerE2ETwoPeopleTwoRooms:
         obs_repo = PostgresWorldObservationRepository(db_pool)
         tracker = WorldTracker(ph_repo=ph_repo, obs_repo=obs_repo)
 
-        steps = _load_fixture(fixture)
+        steps = load_fixture(fixture)
         assert len(steps) >= 2, "Fixture must have at least 2 steps"
 
         camera_ids_in_fixture = {obs.camera_id for step in steps for obs in step}
@@ -222,7 +175,7 @@ class TestWorldTrackerE2ETwoPeopleTwoRooms:
 
 @pytest.mark.integration
 class TestHallwayBathroomDoor:
-    """U1: senior-safety proof — hallway + doorway camera at a bathroom door."""
+    """senior-safety proof — hallway + doorway camera at a bathroom door."""
 
     @pytest.mark.asyncio
     async def test_hallway_bathroom_one_person(self, db_pool: Any) -> None:
@@ -246,7 +199,7 @@ class TestHallwayBathroomDoor:
         obs_repo = PostgresWorldObservationRepository(db_pool)
         tracker = WorldTracker(ph_repo=ph_repo, obs_repo=obs_repo)
 
-        steps = _load_fixture(fixture)
+        steps = load_fixture(fixture)
         base_time = datetime(2026, 5, 28, 9, 0, 0, tzinfo=UTC)
         for i, frame_obs in enumerate(steps):
             now = base_time + timedelta(seconds=i * 0.5)
@@ -274,7 +227,7 @@ class TestHallwayBathroomDoor:
 
 @pytest.mark.integration
 class TestUncalibratedSpawnWithRoomPolygons:
-    """M3: uncalibrated cameras spawn PHs even when room polygons exist."""
+    """uncalibrated cameras spawn PHs even when room polygons exist."""
 
     @pytest.mark.asyncio
     async def test_uncalibrated_camera_spawns_phs_with_room_polygons(

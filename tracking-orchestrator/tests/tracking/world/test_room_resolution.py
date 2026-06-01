@@ -1,4 +1,4 @@
-"""WTR5: Room resolution from floor point and polygons."""
+"""Room resolution from floor point and polygons."""
 
 from __future__ import annotations
 

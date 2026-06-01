@@ -1,4 +1,4 @@
-"""WT3: tests for snapshot-driven TrajectoryStage.
+"""tests for snapshot-driven TrajectoryStage.
 
 Verifies that TrajectoryStage consumes ctx.world_snapshots and writes one
 trajectory point per current-camera snapshot per frame.

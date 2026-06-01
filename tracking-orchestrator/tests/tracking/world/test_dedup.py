@@ -1,10 +1,10 @@
-"""U1-T3 through U1-T7: Unit tests for the cross-camera dedup pass."""
+"""Unit tests for the cross-camera dedup pass (geometric + group-appearance)."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.domain import BoundingBox, FaceAnchor, FloorPoint, WorldObservation
+from app.domain import BoundingBox, FaceAnchor, FloorPoint, OverlapGroup, WorldObservation
 from app.tracking.world.config import WorldTrackerConfig
 from app.tracking.world.dedup import dedup_observations
 
@@ -21,6 +21,7 @@ def _obs(
     quality: float = 0.5,
     floor_residual_m: float | None = None,
     calibrated: bool = True,
+    embedding: list[float] | None = None,
 ) -> WorldObservation:
     face: FaceAnchor | None = None
     if face_person_id is not None:
@@ -37,7 +38,7 @@ def _obs(
         captured_at=_NOW,
         floor_point=FloorPoint(x_mm=int(x_m * 1000), y_mm=int(y_m * 1000), calibrated=calibrated),
         bbox=BoundingBox(x_min=0, y_min=0, x_max=100, y_max=200),
-        embedding=[0.9, 0.1, 0.0],
+        embedding=embedding if embedding is not None else [0.9, 0.1, 0.0],
         detection_confidence=0.92,
         detection_id=detection_id,
         face_anchor=face,
@@ -46,7 +47,7 @@ def _obs(
     )
 
 
-# U1-T3: two different-camera observations within gate collapse to one representative.
+# two different-camera observations within gate collapse to one representative.
 def test_different_cameras_within_gate_collapsed():
     obs1 = _obs("cam-1", 5.0, 5.0, detection_id="d1", quality=0.7)
     obs2 = _obs("cam-2", 5.1, 5.05, detection_id="d2", quality=0.5)
@@ -58,7 +59,7 @@ def test_different_cameras_within_gate_collapsed():
     assert set(cluster_map[rep.detection_id]) == {"d1", "d2"}
 
 
-# U1-T4: two SAME-camera observations at the same point are NOT merged.
+# two SAME-camera observations at the same point are NOT merged.
 def test_same_camera_not_merged():
     obs1 = _obs("cam-1", 5.0, 5.0, detection_id="d1")
     obs2 = _obs("cam-1", 5.1, 5.0, detection_id="d2")
@@ -69,7 +70,7 @@ def test_same_camera_not_merged():
     assert cluster_map["d2"] == ("d2",)
 
 
-# U1-T5: two different-camera observations with CONFLICTING committed face ids are NOT merged.
+# two different-camera observations with CONFLICTING committed face ids are NOT merged.
 def test_face_conflict_prevents_merge():
     obs1 = _obs("cam-1", 5.0, 5.0, detection_id="d1", face_person_id="alice")
     obs2 = _obs("cam-2", 5.05, 5.0, detection_id="d2", face_person_id="bob")
@@ -78,7 +79,7 @@ def test_face_conflict_prevents_merge():
     assert len(deduped) == 2, "conflicting face ids must not be merged"
 
 
-# U1-T6: two different-camera observations BEYOND dedup_max_distance_m are NOT merged.
+# two different-camera observations BEYOND dedup_max_distance_m are NOT merged.
 def test_beyond_distance_not_merged():
     obs1 = _obs("cam-1", 5.0, 5.0, detection_id="d1")
     obs2 = _obs("cam-2", 6.0, 5.0, detection_id="d2")  # 1.0 m apart, > 0.6 m threshold
@@ -158,7 +159,7 @@ def test_dedup_skips_uncalibrated():
     assert len(deduped) == 2
 
 
-# U1-T7: representative selection is deterministic (highest quality wins, ties by camera+det id).
+# representative selection is deterministic (highest quality wins, ties by camera+det id).
 def test_representative_selection_is_deterministic():
     obs_hi = _obs("cam-1", 5.0, 5.0, detection_id="d1", quality=0.8)
     obs_lo = _obs("cam-2", 5.05, 5.0, detection_id="d2", quality=0.3)
@@ -195,3 +196,142 @@ def test_representative_floor_point_is_quality_weighted():
     # With quality 1.0 vs 1e-6, the weighted mean is very close to obs_hi's position.
     rep = deduped[0]
     assert abs(rep.floor_point.x_mm / 1000.0 - 5.0) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Group-appearance dedup tests
+# ---------------------------------------------------------------------------
+
+
+_GROUP = OverlapGroup(group_id="g1", name="test", camera_ids=("cam-1", "cam-2"))
+
+
+def test_group_appearance_dedup_merges_same_perspective() -> None:
+    """Within a group, two uncalibrated observations with high sim merge."""
+    cfg = WorldTrackerConfig(
+        dedup_enabled=True,
+        enable_group_appearance_dedup=True,
+        dedup_group_appearance_min_sim=0.75,
+    )
+    obs1 = _obs(
+        "cam-1",
+        5.0,
+        5.0,
+        detection_id="d1",
+        calibrated=False,
+        embedding=[0.9, 0.1, 0.0],
+        quality=0.7,
+    )
+    obs2 = _obs(
+        "cam-2",
+        5.0,
+        5.0,
+        detection_id="d2",
+        calibrated=False,
+        embedding=[0.85, 0.15, 0.0],
+        quality=0.5,
+    )
+    deduped, _cluster_map = dedup_observations([obs1, obs2], cfg, overlap_groups=[_GROUP])
+    assert len(deduped) == 1, "same-perspective uncalibrated obs in group should merge"
+    rep = deduped[0]
+    assert rep.camera_id == "cam-1"  # higher quality wins
+
+
+def test_group_appearance_dedup_low_sim_does_not_merge() -> None:
+    """Within a group, low-appearance uncalibrated observations are not merged."""
+    cfg = WorldTrackerConfig(
+        dedup_enabled=True,
+        enable_group_appearance_dedup=True,
+        dedup_group_appearance_min_sim=0.75,
+    )
+    obs1 = _obs(
+        "cam-1",
+        5.0,
+        5.0,
+        detection_id="d1",
+        calibrated=False,
+        embedding=[1.0, 0.0, 0.0],
+        quality=0.7,
+    )
+    obs2 = _obs(
+        "cam-2",
+        5.0,
+        5.0,
+        detection_id="d2",
+        calibrated=False,
+        embedding=[0.0, 1.0, 0.0],
+        quality=0.5,
+    )
+    deduped, _ = dedup_observations([obs1, obs2], cfg, overlap_groups=[_GROUP])
+    assert len(deduped) == 2, "opposite-perspective should not merge at observation level"
+
+
+def test_group_appearance_dedup_no_group_no_merge() -> None:
+    """Uncalibrated observations not in any group never merge."""
+    cfg = WorldTrackerConfig(
+        dedup_enabled=True,
+        enable_group_appearance_dedup=True,
+        dedup_group_appearance_min_sim=0.75,
+    )
+    obs1 = _obs("cam-1", 5.0, 5.0, detection_id="d1", calibrated=False, embedding=[0.9, 0.1, 0.0])
+    obs2 = _obs("cam-2", 5.0, 5.0, detection_id="d2", calibrated=False, embedding=[0.9, 0.1, 0.0])
+    deduped, _ = dedup_observations([obs1, obs2], cfg, overlap_groups=[])
+    assert len(deduped) == 2, "no overlap group -> no merge"
+
+
+def test_group_appearance_dedup_face_conflict_blocked() -> None:
+    """Group appearance dedup respects face-conflict gate."""
+    cfg = WorldTrackerConfig(
+        dedup_enabled=True,
+        enable_group_appearance_dedup=True,
+        dedup_group_appearance_min_sim=0.75,
+        dedup_require_no_face_conflict=True,
+    )
+    obs1 = _obs(
+        "cam-1",
+        5.0,
+        5.0,
+        detection_id="d1",
+        calibrated=False,
+        embedding=[0.9, 0.1, 0.0],
+        face_person_id="alice",
+    )
+    obs2 = _obs(
+        "cam-2",
+        5.0,
+        5.0,
+        detection_id="d2",
+        calibrated=False,
+        embedding=[0.85, 0.15, 0.0],
+        face_person_id="bob",
+    )
+    deduped, _ = dedup_observations([obs1, obs2], cfg, overlap_groups=[_GROUP])
+    assert len(deduped) == 2, "face conflict must prevent group-appearance merge"
+
+
+def test_group_appearance_dedup_disabled_skips() -> None:
+    """When enable_group_appearance_dedup is False, uncalibrated obs never merge."""
+    cfg = WorldTrackerConfig(
+        dedup_enabled=True,
+        enable_group_appearance_dedup=False,
+    )
+    obs1 = _obs(
+        "cam-1",
+        5.0,
+        5.0,
+        detection_id="d1",
+        calibrated=False,
+        embedding=[0.9, 0.1, 0.0],
+        quality=0.7,
+    )
+    obs2 = _obs(
+        "cam-2",
+        5.0,
+        5.0,
+        detection_id="d2",
+        calibrated=False,
+        embedding=[0.85, 0.15, 0.0],
+        quality=0.5,
+    )
+    deduped, _ = dedup_observations([obs1, obs2], cfg, overlap_groups=[_GROUP])
+    assert len(deduped) == 2, "flag off -> no group-appearance dedup"

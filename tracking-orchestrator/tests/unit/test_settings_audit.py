@@ -80,12 +80,6 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert signal.absence_threshold_minutes == data["signal"]["absence_threshold_minutes"] == 90
     assert SignalConfig().absence_threshold_minutes == 90
-    assert (
-        settings.as_float("pipeline.identity.high_confidence_face_threshold")
-        == data["pipeline"]["identity"]["high_confidence_face_threshold"]
-        == pytest.approx(0.85)
-    )
-    assert PipelineConfig().identity_high_confidence_face_threshold == pytest.approx(0.85)
     assert face_id.min_confidence == data["face_id"]["min_confidence"] == pytest.approx(0.6)
     assert FaceIdConfig().min_confidence == pytest.approx(0.6)
     assert resolver.cross_gt_face_propagation_threshold == pytest.approx(0.72)
@@ -130,6 +124,8 @@ def test_no_dead_settings() -> None:
     externally_supplied = {
         (FaceIdConfig, "camera_configs"),
         (SignalConfig, "timezone"),
+        # sampling gate, default-off, no settings.yaml key (M4 may add one).
+        (ResolverConfig, "coherence_shadow_sample_rate"),
     }
     for config_cls, builder in dataclass_fields.items():
         source = inspect.getsource(builder)

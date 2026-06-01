@@ -110,7 +110,6 @@ class FaceIdentityStage(FrameStage):
     def __init__(
         self,
         face_id_client: FaceIdentificationClient | None = None,
-        tracklet_manager: object | None = None,  # N0: was TrackletManager, deleted
         gallery_repo: GalleryRepository | None = None,
         face_id_cooldown_s: float = 5.0,
         face_id_min_confidence: float = 0.5,
@@ -119,7 +118,6 @@ class FaceIdentityStage(FrameStage):
         face_service_version: str = "",
     ) -> None:
         self._face_id_client = face_id_client
-        self._tracklet_manager = tracklet_manager
         self._gallery_repo = gallery_repo
         self._face_id_cooldown_s = face_id_cooldown_s
         self._face_id_min_confidence = face_id_min_confidence
@@ -301,56 +299,106 @@ class FaceIdentityStage(FrameStage):
         )
 
         face_anchors: list[FaceAnchor] = []
+        recognized_count = 0
+        candidate_count = 0
+        unrecognized_count = 0
+
         for crop_idx, face_results in crop_face_results:
             det = crop_detections[crop_idx]
+            detection_id = det.detection_id
+
+            if not detection_id:
+                logger.debug(
+                    "face_anchor_dropped_no_detection_id",
+                    camera_id=camera_id,
+                )
+                continue
 
             for face in face_results:
-                if face.person_id == "unknown":
-                    continue
-                if face.confidence < min_conf:
-                    continue
+                state = face.recognition_state
 
-                tracklet_id = ""
-                detection_id = det.detection_id
-                if self._tracklet_manager is not None:
-                    tracklet_id = self._tracklet_manager.get_tracklet_id_for_detection(  # type: ignore[attr-defined]
-                        det.detection_id
-                    )
-                    if not tracklet_id:
-                        logger.debug(
-                            "face_anchor_dropped_no_tracklet",
-                            person_id=face.person_id,
-                            detection_id=det.detection_id,
-                            camera_id=camera_id,
-                        )
+                if state == "recognized":
+                    # Strong positive: emit if confidence >= min_conf (same as before M3).
+                    if face.confidence < min_conf:
                         continue
-
-                if self._tracklet_manager is None and not detection_id:
-                    logger.debug(
-                        "face_anchor_dropped_no_detection_id",
-                        person_id=face.person_id,
-                        camera_id=camera_id,
+                    face_anchors.append(
+                        FaceAnchor(
+                            person_id=face.person_id,
+                            confidence=face.confidence,
+                            tracklet_id="",
+                            detection_id=detection_id,
+                            camera_id=camera_id,
+                            captured_at=now,
+                            recognition_state="recognized",
+                            similarity=face.similarity,
+                            yaw_deg=face.yaw_deg,
+                        )
                     )
-                    continue
+                    recognized_count += 1
 
-                face_anchors.append(
-                    FaceAnchor(
-                        person_id=face.person_id,
-                        confidence=face.confidence,
-                        tracklet_id=tracklet_id,
-                        detection_id=detection_id,
-                        camera_id=camera_id,
-                        captured_at=now,
+                elif state == "candidate":
+                    # Weak positive for the best candidate (grey zone).
+                    # Do not apply min_conf gating; the similarity is intentionally below
+                    # the recognition threshold but at or above unknown_threshold.
+                    if face.best_candidate_id is None:
+                        continue
+                    face_anchors.append(
+                        FaceAnchor(
+                            person_id=face.best_candidate_id,
+                            confidence=face.similarity,  # raw cosine, not ArcFace confidence
+                            tracklet_id="",
+                            detection_id=detection_id,
+                            camera_id=camera_id,
+                            captured_at=now,
+                            recognition_state="candidate",
+                            similarity=face.similarity,
+                            yaw_deg=face.yaw_deg,
+                        )
                     )
-                )
+                    candidate_count += 1
+
+                elif state == "unrecognized":
+                    # Marker: a face region was detected but the embedding is too far
+                    # from any enrolled identity.  Carries det_score so the resolver
+                    # knows a real face existed.
+                    face_anchors.append(
+                        FaceAnchor(
+                            person_id="unknown",
+                            confidence=face.det_score,  # detection score, not recognition
+                            tracklet_id="",
+                            detection_id=detection_id,
+                            camera_id=camera_id,
+                            captured_at=now,
+                            recognition_state="unrecognized",
+                            similarity=face.similarity,
+                            yaw_deg=face.yaw_deg,
+                        )
+                    )
+                    unrecognized_count += 1
 
         if face_anchors:
             logger.debug(
                 "face_anchors_created",
                 camera_id=camera_id,
                 anchor_count=len(face_anchors),
+                recognized=recognized_count,
+                candidate=candidate_count,
+                unrecognized=unrecognized_count,
                 identities=[fa.person_id for fa in face_anchors],
-                mode="ph" if self._tracklet_manager is None else "tracklet",
+                mode="ph",
+            )
+        # Emit per-state metric so operators can see the recognition-state mix.
+        if recognized_count:
+            _metrics.metrics.cts_face_anchors_total.labels(recognition_state="recognized").inc(
+                recognized_count
+            )
+        if candidate_count:
+            _metrics.metrics.cts_face_anchors_total.labels(recognition_state="candidate").inc(
+                candidate_count
+            )
+        if unrecognized_count:
+            _metrics.metrics.cts_face_anchors_total.labels(recognition_state="unrecognized").inc(
+                unrecognized_count
             )
         return face_anchors
 
@@ -361,6 +409,9 @@ class FaceIdentityStage(FrameStage):
         matches from synthetic propagated anchors in the identity resolver.
         In PH mode, detection_id is the primary key for matching evidence
         to observations.
+
+        ``recognition_state``, ``similarity``, and ``yaw_deg`` are forwarded
+        so the resolver can weight evidence by recognition state and frontality.
         """
         evidence: list[FaceEvidence] = []
         for fa in ctx.face_anchors:
@@ -376,6 +427,9 @@ class FaceIdentityStage(FrameStage):
                     quality=fa.quality,
                     model_version=self._face_service_version,
                     captured_at=fa.captured_at,
+                    recognition_state=fa.recognition_state,
+                    similarity=fa.similarity,
+                    yaw_deg=fa.yaw_deg,
                 )
             )
         ctx._face_evidence = evidence

@@ -181,13 +181,23 @@ class InMemoryBboxAnnotationRepository:
                 if op.annotation_id in self._rows:
                     ann = self._rows[op.annotation_id]
                     d = op.data
+                    patch: dict[str, Any] = {}
+                    for key in (
+                        "x1",
+                        "y1",
+                        "x2",
+                        "y2",
+                        "detection_confidence",
+                        "frame_width",
+                        "frame_height",
+                        "identity_id",
+                    ):
+                        if key in d:
+                            patch[key] = d[key]
                     self._rows[op.annotation_id] = BboxAnnotation(
                         **{
                             **ann.__dict__,
-                            "x1": d.get("x1", ann.x1),
-                            "y1": d.get("y1", ann.y1),
-                            "x2": d.get("x2", ann.x2),
-                            "y2": d.get("y2", ann.y2),
+                            **patch,
                         }
                     )
                     results.append({"op": "update", "annotation_id": op.annotation_id, "ok": True})
@@ -204,8 +214,8 @@ class InMemoryBboxAnnotationRepository:
                 new_id = str(uuid.uuid4())
                 ann = BboxAnnotation(
                     keyframe_id=keyframe_id,
-                    ph_id="",
-                    camera_id="",
+                    ph_id=str(op.data.get("ph_id") or ""),
+                    camera_id=str(op.data.get("camera_id") or ""),
                     x1=float(op.data.get("x1", 0)),
                     y1=float(op.data.get("y1", 0)),
                     x2=float(op.data.get("x2", 0)),
@@ -219,6 +229,8 @@ class InMemoryBboxAnnotationRepository:
                 )
                 self._rows[new_id] = ann
                 self._by_keyframe.setdefault(keyframe_id, []).append(new_id)
+                if ann.ph_id:
+                    self._by_ph.setdefault(ann.ph_id, []).append(new_id)
                 results.append({"op": "create", "annotation_id": new_id, "ok": True})
         return results
 

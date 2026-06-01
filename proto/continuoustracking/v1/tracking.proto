@@ -236,3 +236,58 @@ message IdentityCandidate {
   // Posterior probability P(identity | observations).
   float probability = 3;
 }
+
+// PresenceEvent is published to tracking.presence when a person appears in
+// or disappears from the home.  One event per state transition; never
+// emitted per frame.
+message PresenceEvent {
+  // Person Hypothesis ID of the person whose presence changed.
+  string ph_id = 1;
+
+  // Committed identity ID (empty when the PH is still UNKNOWN).
+  string identity_id = 2;
+
+  // Whether the person appeared or disappeared.
+  PresenceEventType event_type = 3;
+
+  // Room where the event occurred (camera-bound room at the time).
+  string room_name = 4;
+
+  // Wall-clock time of the state change.
+  fixed64 event_time_unix_ns = 5;
+}
+
+enum PresenceEventType {
+  PRESENCE_EVENT_TYPE_UNSPECIFIED = 0;
+  PRESENCE_EVENT_TYPE_APPEARED = 1;
+  PRESENCE_EVENT_TYPE_DISAPPEARED = 2;
+}
+
+// DwellEvent is published to tracking.dwell when a dwell segment starts
+// or ends (person enters or leaves a room).  One event per threshold
+// crossing; never emitted per frame.
+message DwellEvent {
+  // Person Hypothesis ID.
+  string ph_id = 1;
+
+  // Committed identity ID (empty when UNKNOWN).
+  string identity_id = 2;
+
+  // Whether the dwell started or ended.
+  DwellEventType event_type = 3;
+
+  // Room name of the dwell segment.
+  string room_name = 4;
+
+  // Wall-clock time of the state change.
+  fixed64 event_time_unix_ns = 5;
+
+  // Duration in seconds (populated only on ended events).
+  int32 duration_s = 6;
+}
+
+enum DwellEventType {
+  DWELL_EVENT_TYPE_UNSPECIFIED = 0;
+  DWELL_EVENT_TYPE_STARTED = 1;
+  DWELL_EVENT_TYPE_ENDED = 2;
+}

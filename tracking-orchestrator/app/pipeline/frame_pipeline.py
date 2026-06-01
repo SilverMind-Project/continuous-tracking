@@ -50,8 +50,10 @@ from ..pipeline.stages import (
     TrajectoryStage,
     WorldTrackingStage,
 )
+from ..pipeline.stages._room_maps import camera_room_name
 from ..pipeline.types import FaceIdCameraConfig, FrameImageFetcher, ReidEmbedderProtocol
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
+from ..services.camera_room_map import CameraRoomMap, RoomPolygonMap
 from ..services.identity_rewriter import (
     IdentityRewriter,
     InMemoryIdentityRewriter,
@@ -59,6 +61,8 @@ from ..services.identity_rewriter import (
 from ..storage.base import (
     BboxAnnotationRepository,
     BehaviorBaselineRepository,
+    CameraTopologyRepository,
+    CoPresenceRepository,
     DementiaSignalRepository,
     GalleryRepository,
     InMemoryBboxAnnotationRepository,
@@ -87,7 +91,9 @@ from ..trajectory.motion_energy import MotionEnergyTracker
 from ..trajectory.posture import GlobalPostureTracker
 from ..trajectory.posture_strategy import PostureStrategy
 from ..trajectory.trajectory_writer import TrajectoryWriter
+from ..transport.dwell_publisher import DwellPublisher
 from ..transport.ph_continuation_publisher import PHContinuationPublisher
+from ..transport.presence_publisher import PresencePublisher
 from ..transport.redis_streams import (
     FrameReady,
     RedisStreamsTransport,
@@ -173,6 +179,9 @@ class PipelineDependencies:
     # World tracker repositories
     ph_repo: PHRepositoryProtocol | None = None
     obs_repo: WorldObservationRepositoryProtocol | None = None
+    topology_repo: CameraTopologyRepository | None = None
+    copresence_repo: CoPresenceRepository | None = None
+    overlap_groups: list[OverlapGroup] | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -199,13 +208,6 @@ class PipelineConfig:
     # --- Identity resolution ---
     resolver: ResolverConfig = field(default_factory=ResolverConfig)
     known_identities: list[Identity] = field(default_factory=list)
-    identity_commit_window_s: float = 3.0
-    identity_high_confidence_face_threshold: float = 0.85
-    # Delay (seconds) after an identity is first committed before backfilling
-    # gallery entries with that identity.  Prevents a false identity commit from
-    # contaminating the gallery before it has a chance to be revised.  Set to 0
-    # to restore the previous immediate-backfill behaviour.
-    gallery_identity_backfill_delay_s: float = 10.0
     # Retroactive cross-table rewrite on identity revisions.
     # When True, the IdentityRewriter updates trajectory, dwell, and signal
     # rows so that history reflects the newly committed identity.
@@ -216,11 +218,6 @@ class PipelineConfig:
     # an already-kept detection by more than this IoU are dropped before
     # the tracker sees them. Belt-and-braces since the ONNX model bakes NMS.
     detection_iou_dedup_threshold: float = 0.55
-    # Per-camera tracker dedup IoU threshold (see TrackerConfig.dedup_iou_threshold).
-    tracker_dedup_iou_threshold: float = 0.6
-    # Stability gate: tracklets must survive this many frames before being
-    # exposed to downstream pipeline stages and publication.
-    tracker_min_frames_to_publish: int = 3
 
     # --- Face ID ---
     face_id: FaceIdConfig = field(default_factory=FaceIdConfig)
@@ -228,7 +225,9 @@ class PipelineConfig:
     # --- Keyframe sampling ---
     sampler: SamplerConfig = field(default_factory=SamplerConfig)
     min_keyframe_detection_confidence: float = 0.5
-    camera_room_map: dict[str, str] = field(default_factory=dict)
+    # Maximum per-camera publish rate for tracking.events (UI live feed).
+    # Inference runs every frame regardless.
+    live_publish_max_hz: float = 3.0
 
     # --- Signals ---
     signals: SignalConfig = field(default_factory=SignalConfig)
@@ -264,15 +263,14 @@ class FrameProcessingPipeline:
         self._identity_resolver: IdentityResolver | None = None
         self._revision_publisher: RevisionPublisher | None = None
         self._ph_continuation_publisher: PHContinuationPublisher | None = None
-        # Overlap groups fetched from CC at startup.
-        self._overlap_groups: list[OverlapGroup] = []
+        self._presence_publisher: PresencePublisher | None = None
+        self._dwell_publisher: DwellPublisher | None = None
         # World tracker
         self._world_tracker: WorldTracker | None = None
         self._ph_repo: PHRepositoryProtocol | None = None
         self._obs_repo: WorldObservationRepositoryProtocol | None = None
         self._frame_fetcher: FrameImageFetcher | None = None
         self._reid_embedder: ReidEmbedderProtocol | None = None
-        # M6
         self._trajectory_writer: TrajectoryWriter | None = None
         self._keyframe_sampler: KeyframeSampler | None = None
         self._scene_publisher: SceneSamplesPublisher | None = None
@@ -319,6 +317,8 @@ class FrameProcessingPipeline:
         self._world_tracking_stage: WorldTrackingStage | None = None
         self._fetch_stage: FetchStage | None = None
         self._detect_stage: DetectStage | None = None
+        self._camera_room_map = CameraRoomMap()
+        self._room_polygon_map = RoomPolygonMap()
 
     @property
     def is_running(self) -> bool:
@@ -393,12 +393,28 @@ class FrameProcessingPipeline:
         )
         await self._ph_continuation_publisher.connect()
 
+        # Presence and dwell publishers for CC load decoupling.
+        self._presence_publisher = PresencePublisher(
+            redis_url=self._config.transport.redis_url,
+            stream=self._config.transport.presence_stream,
+        )
+        await self._presence_publisher.connect()
+        self._dwell_publisher = DwellPublisher(
+            redis_url=self._config.transport.redis_url,
+            stream=self._config.transport.dwell_stream,
+        )
+        await self._dwell_publisher.connect()
+
         self._world_tracker = WorldTracker(
             ph_repo=self._ph_repo,
             obs_repo=self._obs_repo,
             config=self._config.world_tracker,
             continuation_publisher=self._ph_continuation_publisher,
             identity_resolver=self._identity_resolver,
+            gallery_repo=self._gallery_repo,
+            topology_repo=deps.topology_repo if deps else None,
+            copresence_repo=deps.copresence_repo if deps else None,
+            overlap_groups=deps.overlap_groups if deps else None,
         )
 
         # ---- Trajectory writer + keyframe sampler ----
@@ -407,10 +423,12 @@ class FrameProcessingPipeline:
         _traj_repo = deps.trajectory_repo or InMemoryTrajectoryRepository()
         self._trajectory_writer = TrajectoryWriter(repo=_traj_repo)
 
+        keyframe_repo = deps.keyframe_repo or InMemoryKeyframeRepository(
+            bbox_repo=self._bbox_repo
+        )
         self._keyframe_sampler = KeyframeSampler(
-            repo=deps.keyframe_repo or InMemoryKeyframeRepository(),
+            repo=keyframe_repo,
             config=self._config.sampler,
-            bbox_repo=self._bbox_repo,
         )
 
         self._scene_publisher = SceneSamplesPublisher(
@@ -482,12 +500,16 @@ class FrameProcessingPipeline:
         )
         world_tracking_stage = WorldTrackingStage(
             tracker=self._world_tracker,
+            camera_room_map=self._camera_room_map,
+            room_polygon_map=self._room_polygon_map,
             config=self._config.world_tracker,
-            camera_room_map=self._config.camera_room_map,
         )
-        stages = [
-            fetch_stage,
-            detect_stage,
+
+        # Named stage groups — replace fragile integer slices so adding
+        # or reordering a stage cannot silently corrupt batched paths.
+        io_stages = [fetch_stage, detect_stage]
+
+        pre_world_stages = [
             PrivacyStage(),
             SpatialProjectionStage(projection_service=self._spatial_projection),
             InferenceStage(
@@ -497,32 +519,33 @@ class FrameProcessingPipeline:
             ),
             FaceIdentityStage(
                 face_id_client=self._face_id_client,
-                tracklet_manager=None,  # tracklets not used in world-coordinate tracker
                 gallery_repo=self._gallery_repo,
                 face_id_cooldown_s=self._config.face_id.cooldown_s,
                 face_id_min_confidence=self._config.face_id.min_confidence,
                 face_id_camera_configs=self._config.face_id.camera_configs,
                 last_face_id_by_tracklet=self._last_face_id_by_tracklet,
             ),
-            world_tracking_stage,
+        ]
+
+        post_world_stages = [
             DetectionBackfillStage(),
             ClosePHStage(
                 trajectory_writer=self._trajectory_writer,
                 motion_energy_tracker=self._motion_energy_tracker,
                 posture_tracker=self._posture_tracker,
                 prev_active_ph_ids=self._prev_active_ph_ids,
+                presence_publisher=self._presence_publisher,
+                dwell_publisher=self._dwell_publisher,
             ),
             PostureStage(
+                camera_room_map=self._camera_room_map,
                 posture_strategy=self._posture_strategy,
-                camera_room_map=self._config.camera_room_map,
             ),
             TrajectoryStage(
                 trajectory_writer=self._trajectory_writer,
                 floor_projector=self._floor_projector,
                 motion_energy_tracker=self._motion_energy_tracker,
                 posture_tracker=self._posture_tracker,
-                tracklet_manager=None,  # tracklets not used in world-coordinate tracker
-                camera_room_map=self._config.camera_room_map,
             ),
             KeyframeStage(
                 keyframe_sampler=self._keyframe_sampler,
@@ -541,17 +564,22 @@ class FrameProcessingPipeline:
             ),
             PublishStage(
                 transport=self._transport,
-                camera_room_map=self._config.camera_room_map,
+                camera_room_map=self._camera_room_map,
+                live_publish_max_hz=self._config.live_publish_max_hz,
             ),
         ]
+
+        stages = io_stages + pre_world_stages + [world_tracking_stage] + post_world_stages
 
         self._fetch_stage = fetch_stage
         self._detect_stage = detect_stage
         self._world_tracking_stage = world_tracking_stage
         self._stage_runner = StageRunner(stages)
-        self._post_detect_runner = StageRunner(stages[2:])
-        self._pre_world_runner = StageRunner(stages[2:6])
-        self._post_world_runner = StageRunner(stages[7:])
+        self._post_detect_runner = StageRunner(
+            [*pre_world_stages, world_tracking_stage, *post_world_stages]
+        )
+        self._pre_world_runner = StageRunner(pre_world_stages)
+        self._post_world_runner = StageRunner(post_world_stages)
 
         logger.info(
             "Pipeline initialized",
@@ -618,6 +646,12 @@ class FrameProcessingPipeline:
 
         if self._ph_continuation_publisher:
             await self._ph_continuation_publisher.disconnect()
+
+        if self._presence_publisher:
+            await self._presence_publisher.disconnect()
+
+        if self._dwell_publisher:
+            await self._dwell_publisher.disconnect()
 
         if self._face_id_client:
             await self._face_id_client.disconnect()
@@ -990,14 +1024,24 @@ class FrameProcessingPipeline:
             await self._settings_repo.save_camera_config(CameraConfig(camera_id=camera_id))
         self._seen_cameras.add(camera_id)
 
-    def set_camera_room_map(self, camera_room_map: object) -> None:
+    def set_camera_room_map(self, camera_room_map: CameraRoomMap) -> None:
         """Inject the live CameraRoomMap into pipeline stages.
 
         Called at startup after the CCConfigSyncService is created.
-        Stages that need room attribution read from this map instead of
-        the static ``PipelineConfig.camera_room_map`` dict.
+        Stages that need room attribution read from this map.
         """
         self._camera_room_map = camera_room_map
+        if self._stage_runner is None:
+            return
+        for stage in self._stage_runner._stages:
+            if hasattr(stage, "_camera_room_map"):
+                stage._camera_room_map = camera_room_map  # type: ignore[attr-defined]
+
+    def set_room_polygon_map(self, room_polygon_map: RoomPolygonMap) -> None:
+        """Inject the live room polygon map into WorldTrackingStage."""
+        self._room_polygon_map = room_polygon_map
+        if self._world_tracking_stage is not None:
+            self._world_tracking_stage._room_polygon_map = room_polygon_map  # type: ignore[attr-defined]
 
     def set_transit_config(
         self,
@@ -1016,13 +1060,6 @@ class FrameProcessingPipeline:
                     stage._transit_zones = transit_zones  # type: ignore[attr-defined]
                     stage._room_transition_publisher = room_transition_publisher  # type: ignore[attr-defined]
                     break
-
-    def set_overlap_groups(self, groups: list[OverlapGroup]) -> None:
-        """Apply overlap group data from CC.
-
-        Stored for the WorldTracker which handles overlap directly.
-        """
-        self._overlap_groups = groups
 
     async def _process_frame(self, frame: FrameReady) -> None:
         """Process a single FrameReady through the full pipeline."""
@@ -1080,7 +1117,7 @@ class FrameProcessingPipeline:
             event_time=event_time,
             frame_index=frame.frame_index,
             minio_key=frame.minio_key,
-            room_name=self._config.camera_room_map.get(frame.camera_id, ""),
+            room_name=await camera_room_name(self._camera_room_map, frame.camera_id),
             frame_width=frame.width,
             frame_height=frame.height,
             capture_time_unix_ns=frame.capture_time_unix_ns,

@@ -24,6 +24,7 @@ the pipeline.
 from __future__ import annotations
 
 import math
+import random
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
@@ -31,6 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+import numpy as np
 from structlog import get_logger
 
 if TYPE_CHECKING:
@@ -38,12 +40,14 @@ if TYPE_CHECKING:
 
 from ..domain import (
     FaceAnchor,
+    GalleryEmbedding,
     Identity,
     IdentityDecision,
     IdentityResolvableEntity,
     IdentityRevision,
     PosteriorDist,
     ResolveOutcome,
+    ViewPrototype,
 )
 from ..inference.evidence import FaceEvidence
 from ..observability import metrics
@@ -173,6 +177,46 @@ class ResolverConfig:
     # decisions the debounce would have changed.
     enable_flip_debounce: bool = False
 
+    # Sticky maintenance — hold a committed identity within the maintenance
+    # window unless strongly contradicted, even when the posterior argmax is
+    # UNKNOWN or a weakly-supported other identity.  Encodes the product-owner
+    # choice to "favor continuity and stability" under weak evidence.
+    enable_sticky_maintenance: bool = False
+
+    # A different identity's face anchor at or above this confidence
+    # contradicts the held identity during sticky maintenance.
+    contradiction_face_confidence: float = 0.70
+
+    # --- Rich face evidence ---
+    # Multiplier applied to candidate (grey-zone) face evidence in _combine.
+    # Sits below face_weight_multiplier (3.0) and above neutral (1.0).
+    # A candidate face for an identity contributes a weak positive scaled by
+    # the already-low raw similarity, so the effective contribution is small.
+    candidate_face_weight_multiplier: float = 1.0
+
+    # Mass added to the UNKNOWN entry of the face likelihood when a face
+    # region is present but unrecognized.  Small (0.10) and applied to
+    # UNKNOWN only — never penalizes a held identity.
+    face_present_unknown_unknown_mass: float = 0.10
+
+    # Yaw angle (degrees) at or below which frontality factor = 1.0.
+    # A face looking directly at the camera is fully weighted.
+    frontality_full_yaw_deg: float = 15.0
+
+    # Yaw angle (degrees) at or above which frontality factor = frontality_min_factor.
+    # A face in near-profile or beyond is down-weighted.
+    frontality_zero_yaw_deg: float = 60.0
+
+    # Floor of the frontality factor for extreme yaw angles.
+    # An off-axis recognized face is still positive but down-weighted,
+    # reducing false commits from glancing matches.
+    frontality_min_factor: float = 0.3
+
+    # A different non-UNKNOWN identity clearing both these dense-scene
+    # thresholds contradicts the held identity during sticky maintenance.
+    contradiction_posterior_prob: float = 0.80
+    contradiction_posterior_margin: float = 0.20
+
     # Maximum age (seconds) of the most recent evidence-backed commit
     # before the prior alone is no longer sufficient to maintain an
     # identity.  Set longer than the face-id cooldown (default 5 s) so
@@ -219,6 +263,11 @@ class ResolverConfig:
     # coherence is active.  Capped at 0.99 after multiplication.
     embedding_coherence_boost: float = 2.0
 
+    # Fraction of frames where the coherence-boost shadow comparison runs.
+    # 0.0 = disabled (no shadow query).  Set > 0 to measure what enabling
+    # coherence boost would change.
+    coherence_shadow_sample_rate: float = 0.0
+
     # --- Face lock ---
     # Minimum face anchor confidence to set a face lock on a GlobalTrack.
     # Face locks extend the maintenance window to face_lock_maintenance_max_age_s
@@ -243,6 +292,16 @@ class ResolverConfig:
     # Maximum number of adjacent GlobalTracks to propagate face identity to per
     # resolve() call.  Caps the gallery query overhead for busy scenes.
     cross_gt_face_propagation_max_gts: int = 4
+
+    # --- Multi-view gallery query ---
+    # When enabled, _from_gallery builds per-orientation queries from the PH's
+    # view_prototypes and takes the max-over-views logistic similarity per
+    # identity.  Ships shadow-first (off by default).
+    enable_multiview_gallery: bool = False
+
+    # Minimum orientation confidence for seeding a gallery entry from a
+    # face-recognized PH's non-frontal observation.
+    seed_orientation_min_confidence: float = 0.5
 
 
 class IdentityResolver:
@@ -270,6 +329,14 @@ class IdentityResolver:
             ...
     """
 
+    # How long (seconds) to reuse the cached enrolled-identity list before
+    # re-querying the DB.  Enrollment/removal is rare (a few times per week in
+    # production), so 10 s strikes the right balance: a newly-enrolled person
+    # affects the prior only weakly anyway (the face anchor drives the first
+    # commit), while the DB query saved per frame is meaningful at 5+ Hz with
+    # multiple active PHs.
+    _IDENTITY_LIST_TTL_S: float = 10.0
+
     def __init__(
         self,
         gallery_repo: GalleryRepository,
@@ -284,6 +351,10 @@ class IdentityResolver:
         self._identities: dict[str, Identity] = {
             ident.identity_id: ident for ident in identities or []
         }
+        # Timestamps for the TTL-based identity-list cache.
+        self._identities_loaded_at: datetime | None = (
+            None  # None forces an immediate load on first resolve()
+        )
         # Revision rate limiter: global_track_id -> list of revision timestamps
         self._revision_log: dict[str, list[datetime]] = defaultdict(list)
         # Face locks: global_track_id -> _FaceLock tracking the strongest committed face identity.
@@ -313,11 +384,18 @@ class IdentityResolver:
         Returns:
             ResolveOutcome with decisions and any revisions to emit.
         """
-        # Refresh known-identity list from the gallery so new enrolments
-        # are picked up without a restart and the prior is not degenerate.
-        # The gallery query is fast (indexed PK scan, ≤100 rows in practice).
-        enrolled = await self._gallery_repo.list_identities(active_only=True)
-        self._identities = {ident.identity_id: ident for ident in enrolled}
+        # Refresh the known-identity list on first call and after the TTL
+        # expires.  Enrollment is rare (a few times per week); a 10-second
+        # staleness window eliminates the per-frame DB query at 5+ Hz with
+        # multiple active PHs without meaningfully delaying new enrolments
+        # (the face anchor drives the first commit, not the prior list).
+        now_dt = captured_at
+        if self._identities_loaded_at is None or (
+            (now_dt - self._identities_loaded_at).total_seconds() >= self._IDENTITY_LIST_TTL_S
+        ):
+            enrolled = await self._gallery_repo.list_identities(active_only=True)
+            self._identities = {ident.identity_id: ident for ident in enrolled}
+            self._identities_loaded_at = now_dt
 
         # Propagate face anchors from face-evidenced entities to similar adjacent
         # entities that share the same physical space but weren't merged by the
@@ -339,7 +417,50 @@ class IdentityResolver:
             posterior = self._combine(prior, face_likelihood, reid_likelihood, height_likelihood)
             entity_quality = (ph_qualities or {}).get(entity.entity_id, 1.0)
 
-            if not self._config.enable_embedding_coherence_boost:
+            # shadow multiview gallery query.
+            if not self._config.enable_multiview_gallery and entity.view_prototypes:
+                multiview_reid = await self._from_gallery(entity, enable_multiview=True)
+                if multiview_reid.distribution != reid_likelihood.distribution:
+                    multiview_posterior = self._combine(
+                        prior, face_likelihood, multiview_reid, height_likelihood
+                    )
+                    live_eval_mv = self._evaluate_commit(
+                        entity,
+                        posterior,
+                        face_likelihood,
+                        reid_likelihood,
+                        captured_at,
+                        entity_quality,
+                        contradicted=False,
+                        enable_sticky_maintenance=self._config.enable_sticky_maintenance,
+                        enforce_quality_gate=self._config.enable_quality_gate,
+                        enforce_flip_debounce=self._config.enable_flip_debounce,
+                    )
+                    mv_eval = self._evaluate_commit(
+                        entity,
+                        multiview_posterior,
+                        face_likelihood,
+                        multiview_reid,
+                        captured_at,
+                        entity_quality,
+                        contradicted=False,
+                        enable_sticky_maintenance=self._config.enable_sticky_maintenance,
+                        enforce_quality_gate=self._config.enable_quality_gate,
+                        enforce_flip_debounce=self._config.enable_flip_debounce,
+                    )
+                    if live_eval_mv.new_id != mv_eval.new_id:
+                        metrics.metrics.identity_shadow_mismatch_total.labels(
+                            feature="multiview_gallery"
+                        ).inc()
+
+            if not self._config.enable_embedding_coherence_boost and (
+                # sample only a fraction of frames for the shadow comparison.
+                # Default 0.0 means no shadow query; set a non-zero rate to
+                # evaluate the coherence boost.  This avoids doubling gallery
+                # query load every frame in production.
+                self._config.coherence_shadow_sample_rate <= 0.0
+                or random.random() < self._config.coherence_shadow_sample_rate
+            ):
                 boosted_reid = await self._from_gallery(entity, enable_coherence_boost=True)
                 if boosted_reid.distribution != reid_likelihood.distribution:
                     boosted_posterior = self._combine(
@@ -355,6 +476,8 @@ class IdentityResolver:
                         reid_likelihood,
                         captured_at,
                         entity_quality,
+                        contradicted=False,
+                        enable_sticky_maintenance=self._config.enable_sticky_maintenance,
                         enforce_quality_gate=self._config.enable_quality_gate,
                         enforce_flip_debounce=self._config.enable_flip_debounce,
                     )
@@ -365,6 +488,8 @@ class IdentityResolver:
                         boosted_reid,
                         captured_at,
                         entity_quality,
+                        contradicted=False,
+                        enable_sticky_maintenance=self._config.enable_sticky_maintenance,
                         enforce_quality_gate=self._config.enable_quality_gate,
                         enforce_flip_debounce=self._config.enable_flip_debounce,
                     )
@@ -484,26 +609,35 @@ class IdentityResolver:
     ) -> tuple[PosteriorDist, float | None]:
         """Build likelihood from face anchors associated with this entity.
 
-        Face anchors are the strongest evidence. A face anchor is associated
-        with an entity if its tracklet_id is in the entity's observation list.
+        Three recognition states are handled distinctly:
+        - recognized: (strong positive via p_face).
+        - candidate: weak positive for best_candidate_id, scaled by raw similarity
+          and frontality.  Does not apply min_conf gating.
+        - unrecognized: a face region was present but not recognized.  Adds a small
+          mass to UNKNOWN only; never penalizes a held identity.
 
-        When ``face_evidence`` is provided, propagated evidence receives
-        reduced weight (propagated_face_weight_multiplier) compared to
-        direct ArcFace evidence.
+        Frontality factor (from yaw) is multiplied into every face anchor's effective
+        weight so off-axis matches are down-weighted.
 
         Returns (PosteriorDist, best_confidence) where best_confidence is the
-        strongest face anchor's confidence, or None when no anchor matched.
+        strongest *recognized* face anchor's confidence, or None when no recognized
+        anchor matched.
         """
         entity_obs_ids = set(entity.observation_ids)
+        # Build detection_id → evidence lookup from typed evidence records.
+        ev_by_detection: dict[str, FaceEvidence] = {}
+        if face_evidence:
+            for fe in face_evidence:
+                if fe.detection_id:
+                    ev_by_detection[fe.detection_id] = fe
 
-        # Find face anchors whose tracklet belongs to this entity.
-        # In PH mode the anchor carries entity_id (ph_id) as its tracklet_id
-        # after the tracker remaps it; the entity_id fallback handles that case
-        # without polluting observation_ids with ph_ids.
+        # Find face anchors associated with this entity.
         relevant_anchors = [
             fa
             for fa in face_anchors
-            if fa.tracklet_id in entity_obs_ids or fa.tracklet_id == entity.entity_id
+            if fa.tracklet_id in entity_obs_ids
+            or fa.tracklet_id == entity.entity_id
+            or fa.detection_id in entity_obs_ids
         ]
 
         if not relevant_anchors:
@@ -515,52 +649,116 @@ class IdentityResolver:
             )
             return PosteriorDist({}), None
 
-        # Build tracklet_id → source lookup from typed evidence records.
-        evidence_source: dict[str, str] = {}
-        if face_evidence:
-            for fe in face_evidence:
-                if fe.tracklet_id:
-                    evidence_source[fe.tracklet_id] = fe.source
+        # Separate anchors by recognition state.
+        recognized_anchors = [fa for fa in relevant_anchors if fa.recognition_state == "recognized"]
+        candidate_anchors = [fa for fa in relevant_anchors if fa.recognition_state == "candidate"]
+        unrecognized_anchors = [
+            fa for fa in relevant_anchors if fa.recognition_state == "unrecognized"
+        ]
 
-        # Take the strongest face anchor (highest confidence * quality).
-        best = max(relevant_anchors, key=lambda fa: fa.confidence * fa.quality)
-
-        # Determine evidence source and apply appropriate weight.
-        source = evidence_source.get(best.tracklet_id, "direct")
-        weight_mult = (
-            self._config.propagated_face_weight_multiplier if source == "propagated" else 1.0
-        )
-
-        logger.debug(
-            "face_anchor_matched",
-            entity_id=entity.entity_id,
-            person_id=best.person_id,
-            confidence=round(best.confidence, 3),
-            source=source,
-            weight_multiplier=weight_mult,
-            anchor_count=len(relevant_anchors),
-        )
-
-        # p_face: probability that this anchor is correct.
-        p_face = self._p_face(best.confidence, best.quality) * weight_mult
-
+        # Build the likelihood distribution.
         likelihood: dict[str, float] = {}
-        if best.person_id:
-            likelihood[best.person_id] = p_face
-        # Smooth the remainder over all known identities + UNKNOWN.
-        remainder = 1.0 - p_face
-        if remainder > 0:
-            candidates = list(self._identities.keys())
-            if candidates:
-                per_id = remainder / (len(candidates) + 1)
-                for cid in candidates:
-                    if cid != best.person_id:
-                        likelihood[cid] = per_id
-                likelihood["UNKNOWN"] = per_id
-            else:
-                likelihood["UNKNOWN"] = remainder
+        best_recognized_conf: float | None = None
 
-        return PosteriorDist(likelihood), best.confidence
+        # --- Recognized anchors ---
+        if recognized_anchors:
+            # Use the strongest recognized anchor.
+            best = max(recognized_anchors, key=lambda fa: fa.confidence * fa.quality)
+            best_recognized_conf = best.confidence
+
+            # Determine evidence source for weight multiplier.
+            ev = ev_by_detection.get(best.detection_id)
+            source = ev.source if ev and ev.source else "direct"
+            weight_mult = (
+                self._config.propagated_face_weight_multiplier if source == "propagated" else 1.0
+            )
+
+            frontality = self._frontality_factor(best.yaw_deg)
+            p_face = self._p_face(best.confidence, best.quality) * weight_mult * frontality
+
+            if best.person_id:
+                likelihood[best.person_id] = p_face
+
+            logger.debug(
+                "face_anchor_matched",
+                entity_id=entity.entity_id,
+                person_id=best.person_id,
+                confidence=round(best.confidence, 3),
+                source=source,
+                weight_multiplier=weight_mult,
+                frontality_factor=round(frontality, 3),
+                anchor_count=len(relevant_anchors),
+            )
+
+        # --- Candidate anchors (weak positive, grey zone) ---
+        # A candidate face corroborates the held identity through a turn.
+        # It is a weak positive for best_candidate_id, scaled by raw similarity.
+        #
+        # _combine multiplies every face entry by face_weight_multiplier (default 3.0).
+        # For candidate entries we want the effective multiplier to be
+        # candidate_face_weight_multiplier (default 1.0).  So we pre-adjust the
+        # base weight by the ratio so the net effect is correct.
+        candidate_ratio = self._config.candidate_face_weight_multiplier / max(
+            self._config.face_weight_multiplier, 0.01
+        )
+        for fa in candidate_anchors:
+            if not fa.person_id or fa.person_id == "unknown":
+                continue
+            frontality = self._frontality_factor(fa.yaw_deg)
+            # Base weight: raw cosine similarity scaled by frontality and the
+            # candidate-to-face ratio so _combine applies the intended multiplier.
+            candidate_weight = fa.similarity * frontality * candidate_ratio
+            existing = likelihood.get(fa.person_id, 0.0)
+            likelihood[fa.person_id] = max(existing, candidate_weight)
+            logger.debug(
+                "face_candidate_matched",
+                entity_id=entity.entity_id,
+                person_id=fa.person_id,
+                similarity=round(fa.similarity, 3),
+                frontality_factor=round(frontality, 3),
+                candidate_ratio=round(candidate_ratio, 3),
+                candidate_weight=round(candidate_weight, 4),
+            )
+
+        # --- Unrecognized markers (face present, unknown identity) ---
+        # Add a small mass to UNKNOWN only.  This nudges toward UNKNOWN for a
+        # genuine stranger but never subtracts from a held identity.
+        if unrecognized_anchors:
+            unknown_mass = self._config.face_present_unknown_unknown_mass
+            likelihood["UNKNOWN"] = likelihood.get("UNKNOWN", 0.0) + unknown_mass
+            logger.debug(
+                "face_unrecognized_marker",
+                entity_id=entity.entity_id,
+                unrecognized_count=len(unrecognized_anchors),
+                unknown_mass_added=unknown_mass,
+            )
+
+        # --- Smooth remainder ---
+        # - Recognized anchors: spread remainder across all identities + UNKNOWN
+        #
+        # - Candidate-only anchors: the candidate evidence is a weak positive for
+        #   best_candidate_id only.  Put remainder into UNKNOWN so other identities
+        #   don't get spurious support from a grey-zone face.
+        # - Unrecognized-only: all remainder → UNKNOWN (no positive evidence).
+        if likelihood:
+            total_face = sum(likelihood.values())
+            remainder = max(0.0, 1.0 - total_face)
+            if remainder > 0:
+                if recognized_anchors:
+                    candidates = list(self._identities.keys())
+                    if candidates:
+                        per_id = remainder / (len(candidates) + 1)
+                        for cid in candidates:
+                            if cid not in likelihood:
+                                likelihood[cid] = per_id
+                        likelihood["UNKNOWN"] = likelihood.get("UNKNOWN", 0.0) + per_id
+                    else:
+                        likelihood["UNKNOWN"] = likelihood.get("UNKNOWN", 0.0) + remainder
+                else:
+                    # Candidate-only or unrecognized-only: remainder → UNKNOWN.
+                    likelihood["UNKNOWN"] = likelihood.get("UNKNOWN", 0.0) + remainder
+
+        return PosteriorDist(likelihood), best_recognized_conf
 
     def _p_face(self, confidence: float, quality: float) -> float:
         """Probability that a face anchor is correct.
@@ -571,6 +769,24 @@ class IdentityResolver:
         combined = 0.7 * confidence + 0.3 * quality
         return min(0.99, 0.5 + 0.5 * math.tanh(4 * (combined - 0.5)))
 
+    def _frontality_factor(self, yaw_deg: float) -> float:
+        """Linear frontality ramp based on absolute yaw.
+
+        1.0 at or below frontality_full_yaw_deg (default 15°),
+        linearly decreasing to frontality_min_factor (default 0.3)
+        at or above frontality_zero_yaw_deg (default 60°).
+        """
+        abs_yaw = abs(yaw_deg)
+        if abs_yaw <= self._config.frontality_full_yaw_deg:
+            return 1.0
+        if abs_yaw >= self._config.frontality_zero_yaw_deg:
+            return self._config.frontality_min_factor
+        # Linear interpolation.
+        frac = (abs_yaw - self._config.frontality_full_yaw_deg) / (
+            self._config.frontality_zero_yaw_deg - self._config.frontality_full_yaw_deg
+        )
+        return 1.0 - frac * (1.0 - self._config.frontality_min_factor)
+
     # ------------------------------------------------------------------
     # ReID likelihood from gallery
     # ------------------------------------------------------------------
@@ -580,15 +796,27 @@ class IdentityResolver:
         entity: IdentityResolvableEntity,
         *,
         enable_coherence_boost: bool | None = None,
+        enable_multiview: bool = False,
     ) -> PosteriorDist:
         """Build likelihood from gallery k-NN search.
 
         Queries the gallery for similar embeddings to the entity's
         gallery entries. Maps results to per-identity scores using a
         calibrated logistic curve.
+
+        When *enable_multiview* is True (or the live config flag is on)
+        and the entity has view_prototypes, one query is issued per
+        orientation bin and the MAX logistic similarity per identity is
+        taken across all per-view results.  Falls back to the single
+        mean-of-embeddings query when no prototypes are available.
         """
-        # Build a real query embedding from the entity's existing
-        # gallery entries (mean of recent embeddings per observation).
+        use_multiview = enable_multiview or self._config.enable_multiview_gallery
+        prototypes = entity.view_prototypes if use_multiview else ()
+
+        if prototypes:
+            return await self._from_gallery_multiview(entity, prototypes)
+
+        # --- Single-query path (original behaviour) ---
         try:
             recent = await self._gallery_repo.list_gallery_entries_for_tracklets(
                 tracklet_ids=set(entity.observation_ids),
@@ -611,15 +839,10 @@ class IdentityResolver:
             return PosteriorDist({})
 
         # Compute mean embedding from recent gallery entries.
-        import numpy as np
-
         embs = np.array([e.embedding for e in recent], dtype=np.float32)
         query = np.mean(embs, axis=0).tolist()
 
-        # Embedding coherence check: if the last N embeddings are all mutually
-        # similar, the person's appearance is stable → apply a likelihood boost
-        # to the top matching identity so that stable but below-threshold scores
-        # still cross commit_prob.
+        # Embedding coherence check.
         use_coherence_boost = (
             self._config.enable_embedding_coherence_boost
             if enable_coherence_boost is None
@@ -658,7 +881,123 @@ class IdentityResolver:
             )
             return PosteriorDist({})
 
+        return self._score_gallery_hits(similar, coherence_active)
+
+    async def _from_gallery_multiview(
+        self,
+        entity: IdentityResolvableEntity,
+        prototypes: tuple[ViewPrototype, ...],
+    ) -> PosteriorDist:
+        """Per-view gallery query with max-over-views aggregation.
+
+        One search_similar call per orientation bin that has a qualified
+        prototype.  Results are collected across all views and the MAX
+        logistic similarity per identity is taken.
+        """
+
+        # Minimum prototype count to qualify for a query.
+        _min_proto_count = 2
+        _max_queries = 4
+
+        # Collect per-view results.
+        all_hits: list[tuple[GalleryEmbedding, float]] = []  # (entry, similarity)
+        queries_run = 0
+
+        for p in prototypes:
+            if queries_run >= _max_queries:
+                break
+            if p.count < _min_proto_count:
+                continue
+            queries_run += 1
+
+            query_emb = list(p.embedding)
+            try:
+                similar = await self._gallery_repo.search_similar(
+                    embedding=query_emb,
+                    limit=20,
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "reid_multiview_search_failed",
+                    entity_id=entity.entity_id,
+                    orientation=int(p.orientation),
+                    exc_info=True,
+                )
+                continue
+
+            all_hits.extend(similar)
+
+        if not all_hits:
+            logger.debug(
+                "reid_multiview_no_matches",
+                entity_id=entity.entity_id,
+                queries_run=queries_run,
+                prototype_count=len(prototypes),
+            )
+            return PosteriorDist({})
+
         # Map hits to per-identity scores using logistic curve.
+        likelihood: dict[str, list[float]] = defaultdict(list)
+        boosted = False
+        for entry, sim in all_hits:
+            logit = self._logistic(sim)
+            if (
+                entry.identity_id is not None
+                and sim >= self._config.identified_entry_boost_min_sim
+                and logit < self._config.identified_entry_min_likelihood
+            ):
+                logit = self._config.identified_entry_min_likelihood
+                boosted = True
+            key = entry.identity_id if entry.identity_id else "UNKNOWN"
+            likelihood[key].append(logit)
+
+        # MAX over views per identity (not mean).
+        avg: dict[str, float] = {}
+        for key, scores in likelihood.items():
+            avg[key] = max(scores)  # max-over-views is the core fix
+
+        if not avg:
+            return PosteriorDist({})
+
+        if boosted:
+            non_match_floor = (1.0 - self._config.identified_entry_min_likelihood) / max(
+                len(self._identities), 1
+            )
+            for iid in self._identities:
+                if iid not in avg:
+                    avg[iid] = non_match_floor
+            if "UNKNOWN" not in avg:
+                avg["UNKNOWN"] = non_match_floor
+
+        # Single-identity normalization guard. Without residual UNKNOWN mass a
+        # weak best match still normalizes to the only/nearest enrolled identity,
+        # so a stranger whose body does not match anyone commits as that identity
+        # (the clinical identity-leak this resolver must never produce). Hold the
+        # complement of the best identity match strength on UNKNOWN: weak matches
+        # resolve to UNKNOWN while strong matches (logit near 1) still commit.
+        identity_logits = [v for k, v in avg.items() if k != "UNKNOWN"]
+        if identity_logits:
+            avg["UNKNOWN"] = max(avg.get("UNKNOWN", 0.0), 1.0 - max(identity_logits))
+
+        top_reid = max(avg.items(), key=lambda x: x[1])
+        logger.debug(
+            "reid_multiview_top_match",
+            entity_id=entity.entity_id,
+            top_identity=top_reid[0],
+            top_score=round(top_reid[1], 4),
+            candidate_count=len(avg),
+            queries_run=queries_run,
+            total_hits=len(all_hits),
+        )
+
+        return PosteriorDist(avg)
+
+    def _score_gallery_hits(
+        self,
+        similar: list[tuple[GalleryEmbedding, float]],
+        coherence_active: bool = False,
+    ) -> PosteriorDist:
+        """Score gallery search hits into a PosteriorDist (shared helper)."""
         likelihood: dict[str, list[float]] = defaultdict(list)
         boosted = False
         for entry, sim in similar:
@@ -695,14 +1034,13 @@ class IdentityResolver:
         if coherence_active and avg:
             best_key = max(avg, key=lambda k: avg[k])
             if best_key != "UNKNOWN":
-                original = avg[best_key]
-                avg[best_key] = min(0.99, original * self._config.embedding_coherence_boost)
+                avg[best_key] = min(0.99, avg[best_key] * self._config.embedding_coherence_boost)
                 coherence_boosted_identity = best_key
 
         top_reid = max(avg.items(), key=lambda x: x[1])
         logger.debug(
             "reid_top_match",
-            entity_id=entity.entity_id,
+            entity_id="single_query",
             top_identity=top_reid[0],
             top_score=round(top_reid[1], 4),
             candidate_count=len(avg),
@@ -734,8 +1072,6 @@ class IdentityResolver:
 
         if not recent:
             return False
-
-        import numpy as np
 
         embs = np.array([e.embedding for e in recent], dtype=np.float32)
         query = np.mean(embs, axis=0).tolist()
@@ -958,6 +1294,18 @@ class IdentityResolver:
             metrics.metrics.identity_quality_gate_blocks_total.inc()
             quality_gate_counted = True
 
+        # Compute contradiction for sticky maintenance.
+        prev_id = entity.current_identity_id
+        contradicted = _compute_contradiction(
+            prev_id=prev_id,
+            face_likelihood=face_likelihood,
+            best_face_confidence=best_face_confidence,
+            top_id=top_id,
+            top_prob=top_prob,
+            margin=margin,
+            config=self._config,
+        )
+
         live_eval = self._evaluate_commit(
             entity,
             posterior,
@@ -965,15 +1313,35 @@ class IdentityResolver:
             reid_likelihood,
             captured_at,
             entity_quality,
+            contradicted=contradicted,
+            enable_sticky_maintenance=self._config.enable_sticky_maintenance,
             enforce_quality_gate=self._config.enable_quality_gate,
             enforce_flip_debounce=self._config.enable_flip_debounce,
         )
 
-        prev_id = entity.current_identity_id
         new_id = live_eval.new_id
         if live_eval.quality_gate_blocked and not quality_gate_counted:
             metrics.metrics.identity_quality_gate_blocks_total.inc()
             quality_gate_counted = True
+
+        # Sticky maintenance shadow — compute what sticky would decide.
+        if not self._config.enable_sticky_maintenance and prev_id is not None:
+            sticky_shadow_eval = self._evaluate_commit(
+                entity,
+                posterior,
+                face_likelihood,
+                reid_likelihood,
+                captured_at,
+                entity_quality,
+                contradicted=contradicted,
+                enable_sticky_maintenance=True,
+                enforce_quality_gate=self._config.enable_quality_gate,
+                enforce_flip_debounce=self._config.enable_flip_debounce,
+            )
+            if live_eval.new_id != sticky_shadow_eval.new_id:
+                metrics.metrics.identity_shadow_mismatch_total.labels(
+                    feature="sticky_maintenance"
+                ).inc()
 
         if not self._config.enable_flip_debounce:
             debounced_eval = self._evaluate_commit(
@@ -983,6 +1351,8 @@ class IdentityResolver:
                 reid_likelihood,
                 captured_at,
                 entity_quality,
+                contradicted=contradicted,
+                enable_sticky_maintenance=self._config.enable_sticky_maintenance,
                 enforce_quality_gate=self._config.enable_quality_gate,
                 enforce_flip_debounce=True,
             )
@@ -1031,6 +1401,8 @@ class IdentityResolver:
             ).inc()
 
         if new_id is None:
+            if prev_id is not None:
+                metrics.metrics.identity_unknown_after_known_total.inc()
             logger.debug(
                 "identity_not_committed",
                 entity_id=entity.entity_id,
@@ -1072,6 +1444,8 @@ class IdentityResolver:
         captured_at: datetime,
         entity_quality: float,
         *,
+        contradicted: bool = False,
+        enable_sticky_maintenance: bool = False,
         enforce_quality_gate: bool,
         enforce_flip_debounce: bool,
     ) -> _CommitEvaluation:
@@ -1102,6 +1476,33 @@ class IdentityResolver:
                 within_maintenance_window = (
                     identity_age_s <= self._config.prior_maintenance_max_age_s
                 )
+
+        # Sticky maintenance — extend the maintenance window when identity dips
+        # (posterior says UNKNOWN or weak other) but the window hasn't expired and
+        # no strong contradiction exists.  This encodes the owner's choice to
+        # "favor continuity and stability" under weak evidence.
+        if (
+            enable_sticky_maintenance
+            and prev_id is not None
+            and not within_maintenance_window
+            and not contradicted
+        ):
+            face_lock = self._face_locks.get(entity.entity_id)
+            if face_lock is not None and face_lock.identity_id == prev_id:
+                lock_age_s = (captured_at - face_lock.locked_at).total_seconds()
+                sticky_within_window = lock_age_s <= self._config.face_lock_maintenance_max_age_s
+            elif entity.current_identity_committed_at is not None:
+                age_delta = captured_at - entity.current_identity_committed_at
+                sticky_within_window = (
+                    age_delta.total_seconds() <= self._config.prior_maintenance_max_age_s
+                )
+            else:
+                age_delta = captured_at - entity.last_seen_at
+                sticky_within_window = (
+                    age_delta.total_seconds() <= self._config.prior_maintenance_max_age_s
+                )
+            if sticky_within_window:
+                within_maintenance_window = True
 
         evidence_ok = has_evidence or within_maintenance_window
 
@@ -1209,7 +1610,7 @@ class IdentityResolver:
 
         revision = IdentityRevision(
             revision_id=str(uuid.uuid4()),
-            ph_id=entity.entity_id,  # N0: entity_id is a PH id
+            ph_id=entity.entity_id,  # entity_id is a PH id
             previous_identity_id=decision.previous_identity_id,
             new_identity_id=decision.identity_id,
             actor="resolver",
@@ -1364,9 +1765,13 @@ class IdentityResolver:
         entity_by_id: dict[str, IdentityResolvableEntity] = {e.entity_id: e for e in hypotheses}
 
         # Find which entities have direct face evidence and pick the best anchor per entity.
+        # only recognized anchors can propagate — candidate and unrecognized
+        # evidence is too weak to justify cross-camera identity transfer.
         evidenced_entity_ids: set[str] = set()
         best_anchor_by_entity: dict[str, FaceAnchor] = {}
         for fa in face_anchors:
+            if fa.recognition_state != "recognized":
+                continue
             src_entity = entity_by_obs.get(fa.tracklet_id) or entity_by_id.get(fa.tracklet_id)
             if src_entity is None:
                 continue
@@ -1459,3 +1864,56 @@ class IdentityResolver:
     def register_identity(self, identity: Identity) -> None:
         """Register a known identity for display name lookup."""
         self._identities[identity.identity_id] = identity
+
+
+# ---------------------------------------------------------------------------
+# Contradiction helper (pure, outside the class)
+# ---------------------------------------------------------------------------
+
+
+def _compute_contradiction(
+    *,
+    prev_id: str | None,
+    face_likelihood: PosteriorDist,
+    best_face_confidence: float | None,
+    top_id: str,
+    top_prob: float,
+    margin: float,
+    config: ResolverConfig,
+) -> bool:
+    """Determine whether evidence strongly contradicts a held identity.
+
+    Two contradiction paths (either one is sufficient):
+    1. Face anchor names a different identity with high confidence.
+       Guard: only *recognized* face anchors can contradict.
+       Candidate and unrecognized faces are too weak to overturn a held identity.
+    2. Posterior argmax is a different non-UNKNOWN identity with high
+       probability and margin (dense-scene thresholds).
+
+    Returns False when prev_id is None (no held identity to contradict).
+    """
+    if prev_id is None:
+        return False
+
+    # Face contradiction: the best *recognized* face anchor names a different,
+    # known identity at or above the contradiction confidence threshold.
+    # best_face_confidence is now the best *recognized* anchor confidence
+    # (None when only candidate/unrecognized anchors exist), so candidate and
+    # unrecognized faces cannot trigger contradiction — exactly as required.
+    if (
+        best_face_confidence is not None
+        and best_face_confidence >= config.contradiction_face_confidence
+        and face_likelihood.distribution
+    ):
+        face_top = max(face_likelihood.distribution, key=face_likelihood.distribution.__getitem__)
+        if face_top != "UNKNOWN" and face_top != prev_id:
+            return True
+
+    # Posterior contradiction: a different non-UNKNOWN identity clears both
+    # dense-scene probability and margin thresholds.
+    return bool(
+        top_id != prev_id
+        and top_id != "UNKNOWN"
+        and top_prob >= config.contradiction_posterior_prob
+        and margin >= config.contradiction_posterior_margin
+    )

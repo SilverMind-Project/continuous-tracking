@@ -21,6 +21,104 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type PresenceEventType int32
+
+const (
+	PresenceEventType_PRESENCE_EVENT_TYPE_UNSPECIFIED PresenceEventType = 0
+	PresenceEventType_PRESENCE_EVENT_TYPE_APPEARED    PresenceEventType = 1
+	PresenceEventType_PRESENCE_EVENT_TYPE_DISAPPEARED PresenceEventType = 2
+)
+
+// Enum value maps for PresenceEventType.
+var (
+	PresenceEventType_name = map[int32]string{
+		0: "PRESENCE_EVENT_TYPE_UNSPECIFIED",
+		1: "PRESENCE_EVENT_TYPE_APPEARED",
+		2: "PRESENCE_EVENT_TYPE_DISAPPEARED",
+	}
+	PresenceEventType_value = map[string]int32{
+		"PRESENCE_EVENT_TYPE_UNSPECIFIED": 0,
+		"PRESENCE_EVENT_TYPE_APPEARED":    1,
+		"PRESENCE_EVENT_TYPE_DISAPPEARED": 2,
+	}
+)
+
+func (x PresenceEventType) Enum() *PresenceEventType {
+	p := new(PresenceEventType)
+	*p = x
+	return p
+}
+
+func (x PresenceEventType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PresenceEventType) Descriptor() protoreflect.EnumDescriptor {
+	return file_continuoustracking_v1_tracking_proto_enumTypes[0].Descriptor()
+}
+
+func (PresenceEventType) Type() protoreflect.EnumType {
+	return &file_continuoustracking_v1_tracking_proto_enumTypes[0]
+}
+
+func (x PresenceEventType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PresenceEventType.Descriptor instead.
+func (PresenceEventType) EnumDescriptor() ([]byte, []int) {
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{0}
+}
+
+type DwellEventType int32
+
+const (
+	DwellEventType_DWELL_EVENT_TYPE_UNSPECIFIED DwellEventType = 0
+	DwellEventType_DWELL_EVENT_TYPE_STARTED     DwellEventType = 1
+	DwellEventType_DWELL_EVENT_TYPE_ENDED       DwellEventType = 2
+)
+
+// Enum value maps for DwellEventType.
+var (
+	DwellEventType_name = map[int32]string{
+		0: "DWELL_EVENT_TYPE_UNSPECIFIED",
+		1: "DWELL_EVENT_TYPE_STARTED",
+		2: "DWELL_EVENT_TYPE_ENDED",
+	}
+	DwellEventType_value = map[string]int32{
+		"DWELL_EVENT_TYPE_UNSPECIFIED": 0,
+		"DWELL_EVENT_TYPE_STARTED":     1,
+		"DWELL_EVENT_TYPE_ENDED":       2,
+	}
+)
+
+func (x DwellEventType) Enum() *DwellEventType {
+	p := new(DwellEventType)
+	*p = x
+	return p
+}
+
+func (x DwellEventType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DwellEventType) Descriptor() protoreflect.EnumDescriptor {
+	return file_continuoustracking_v1_tracking_proto_enumTypes[1].Descriptor()
+}
+
+func (DwellEventType) Type() protoreflect.EnumType {
+	return &file_continuoustracking_v1_tracking_proto_enumTypes[1]
+}
+
+func (x DwellEventType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DwellEventType.Descriptor instead.
+func (DwellEventType) EnumDescriptor() ([]byte, []int) {
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{1}
+}
+
 // TrackingEvent is the core message produced by the tracking-orchestrator
 // after processing a frame. It carries the Bayesian identity posterior,
 // spatial coordinates, and temporal metadata.
@@ -1000,6 +1098,183 @@ func (x *IdentityCandidate) GetProbability() float32 {
 	return 0
 }
 
+// PresenceEvent is published to tracking.presence when a person appears in
+// or disappears from the home.  One event per state transition; never
+// emitted per frame.
+type PresenceEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Person Hypothesis ID of the person whose presence changed.
+	PhId string `protobuf:"bytes,1,opt,name=ph_id,json=phId,proto3" json:"ph_id,omitempty"`
+	// Committed identity ID (empty when the PH is still UNKNOWN).
+	IdentityId string `protobuf:"bytes,2,opt,name=identity_id,json=identityId,proto3" json:"identity_id,omitempty"`
+	// Whether the person appeared or disappeared.
+	EventType PresenceEventType `protobuf:"varint,3,opt,name=event_type,json=eventType,proto3,enum=continuoustracking.v1.PresenceEventType" json:"event_type,omitempty"`
+	// Room where the event occurred (camera-bound room at the time).
+	RoomName string `protobuf:"bytes,4,opt,name=room_name,json=roomName,proto3" json:"room_name,omitempty"`
+	// Wall-clock time of the state change.
+	EventTimeUnixNs uint64 `protobuf:"fixed64,5,opt,name=event_time_unix_ns,json=eventTimeUnixNs,proto3" json:"event_time_unix_ns,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PresenceEvent) Reset() {
+	*x = PresenceEvent{}
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PresenceEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PresenceEvent) ProtoMessage() {}
+
+func (x *PresenceEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PresenceEvent.ProtoReflect.Descriptor instead.
+func (*PresenceEvent) Descriptor() ([]byte, []int) {
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *PresenceEvent) GetPhId() string {
+	if x != nil {
+		return x.PhId
+	}
+	return ""
+}
+
+func (x *PresenceEvent) GetIdentityId() string {
+	if x != nil {
+		return x.IdentityId
+	}
+	return ""
+}
+
+func (x *PresenceEvent) GetEventType() PresenceEventType {
+	if x != nil {
+		return x.EventType
+	}
+	return PresenceEventType_PRESENCE_EVENT_TYPE_UNSPECIFIED
+}
+
+func (x *PresenceEvent) GetRoomName() string {
+	if x != nil {
+		return x.RoomName
+	}
+	return ""
+}
+
+func (x *PresenceEvent) GetEventTimeUnixNs() uint64 {
+	if x != nil {
+		return x.EventTimeUnixNs
+	}
+	return 0
+}
+
+// DwellEvent is published to tracking.dwell when a dwell segment starts
+// or ends (person enters or leaves a room).  One event per threshold
+// crossing; never emitted per frame.
+type DwellEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Person Hypothesis ID.
+	PhId string `protobuf:"bytes,1,opt,name=ph_id,json=phId,proto3" json:"ph_id,omitempty"`
+	// Committed identity ID (empty when UNKNOWN).
+	IdentityId string `protobuf:"bytes,2,opt,name=identity_id,json=identityId,proto3" json:"identity_id,omitempty"`
+	// Whether the dwell started or ended.
+	EventType DwellEventType `protobuf:"varint,3,opt,name=event_type,json=eventType,proto3,enum=continuoustracking.v1.DwellEventType" json:"event_type,omitempty"`
+	// Room name of the dwell segment.
+	RoomName string `protobuf:"bytes,4,opt,name=room_name,json=roomName,proto3" json:"room_name,omitempty"`
+	// Wall-clock time of the state change.
+	EventTimeUnixNs uint64 `protobuf:"fixed64,5,opt,name=event_time_unix_ns,json=eventTimeUnixNs,proto3" json:"event_time_unix_ns,omitempty"`
+	// Duration in seconds (populated only on ended events).
+	DurationS     int32 `protobuf:"varint,6,opt,name=duration_s,json=durationS,proto3" json:"duration_s,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DwellEvent) Reset() {
+	*x = DwellEvent{}
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DwellEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DwellEvent) ProtoMessage() {}
+
+func (x *DwellEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DwellEvent.ProtoReflect.Descriptor instead.
+func (*DwellEvent) Descriptor() ([]byte, []int) {
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *DwellEvent) GetPhId() string {
+	if x != nil {
+		return x.PhId
+	}
+	return ""
+}
+
+func (x *DwellEvent) GetIdentityId() string {
+	if x != nil {
+		return x.IdentityId
+	}
+	return ""
+}
+
+func (x *DwellEvent) GetEventType() DwellEventType {
+	if x != nil {
+		return x.EventType
+	}
+	return DwellEventType_DWELL_EVENT_TYPE_UNSPECIFIED
+}
+
+func (x *DwellEvent) GetRoomName() string {
+	if x != nil {
+		return x.RoomName
+	}
+	return ""
+}
+
+func (x *DwellEvent) GetEventTimeUnixNs() uint64 {
+	if x != nil {
+		return x.EventTimeUnixNs
+	}
+	return 0
+}
+
+func (x *DwellEvent) GetDurationS() int32 {
+	if x != nil {
+		return x.DurationS
+	}
+	return 0
+}
+
 var File_continuoustracking_v1_tracking_proto protoreflect.FileDescriptor
 
 const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
@@ -1093,7 +1368,34 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\videntity_id\x18\x01 \x01(\tR\n" +
 	"identityId\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
-	"\vprobability\x18\x03 \x01(\x02R\vprobabilityBOZMgithub.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
+	"\vprobability\x18\x03 \x01(\x02R\vprobability\"\xd8\x01\n" +
+	"\rPresenceEvent\x12\x13\n" +
+	"\x05ph_id\x18\x01 \x01(\tR\x04phId\x12\x1f\n" +
+	"\videntity_id\x18\x02 \x01(\tR\n" +
+	"identityId\x12G\n" +
+	"\n" +
+	"event_type\x18\x03 \x01(\x0e2(.continuoustracking.v1.PresenceEventTypeR\teventType\x12\x1b\n" +
+	"\troom_name\x18\x04 \x01(\tR\broomName\x12+\n" +
+	"\x12event_time_unix_ns\x18\x05 \x01(\x06R\x0feventTimeUnixNs\"\xf1\x01\n" +
+	"\n" +
+	"DwellEvent\x12\x13\n" +
+	"\x05ph_id\x18\x01 \x01(\tR\x04phId\x12\x1f\n" +
+	"\videntity_id\x18\x02 \x01(\tR\n" +
+	"identityId\x12D\n" +
+	"\n" +
+	"event_type\x18\x03 \x01(\x0e2%.continuoustracking.v1.DwellEventTypeR\teventType\x12\x1b\n" +
+	"\troom_name\x18\x04 \x01(\tR\broomName\x12+\n" +
+	"\x12event_time_unix_ns\x18\x05 \x01(\x06R\x0feventTimeUnixNs\x12\x1d\n" +
+	"\n" +
+	"duration_s\x18\x06 \x01(\x05R\tdurationS*\x7f\n" +
+	"\x11PresenceEventType\x12#\n" +
+	"\x1fPRESENCE_EVENT_TYPE_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cPRESENCE_EVENT_TYPE_APPEARED\x10\x01\x12#\n" +
+	"\x1fPRESENCE_EVENT_TYPE_DISAPPEARED\x10\x02*l\n" +
+	"\x0eDwellEventType\x12 \n" +
+	"\x1cDWELL_EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18DWELL_EVENT_TYPE_STARTED\x10\x01\x12\x1a\n" +
+	"\x16DWELL_EVENT_TYPE_ENDED\x10\x02BOZMgithub.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
 
 var (
 	file_continuoustracking_v1_tracking_proto_rawDescOnce sync.Once
@@ -1107,36 +1409,43 @@ func file_continuoustracking_v1_tracking_proto_rawDescGZIP() []byte {
 	return file_continuoustracking_v1_tracking_proto_rawDescData
 }
 
-var file_continuoustracking_v1_tracking_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_continuoustracking_v1_tracking_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_continuoustracking_v1_tracking_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_continuoustracking_v1_tracking_proto_goTypes = []any{
-	(*TrackingEvent)(nil),     // 0: continuoustracking.v1.TrackingEvent
-	(*FrameRef)(nil),          // 1: continuoustracking.v1.FrameRef
-	(*Detection)(nil),         // 2: continuoustracking.v1.Detection
-	(*PoseKeypoint)(nil),      // 3: continuoustracking.v1.PoseKeypoint
-	(*TrailPoint)(nil),        // 4: continuoustracking.v1.TrailPoint
-	(*PosteriorEvidence)(nil), // 5: continuoustracking.v1.PosteriorEvidence
-	(*BoundingBox)(nil),       // 6: continuoustracking.v1.BoundingBox
-	(*FloorPoint)(nil),        // 7: continuoustracking.v1.FloorPoint
-	(*IdentityRevision)(nil),  // 8: continuoustracking.v1.IdentityRevision
-	(*IdentitySnapshot)(nil),  // 9: continuoustracking.v1.IdentitySnapshot
-	(*IdentityCandidate)(nil), // 10: continuoustracking.v1.IdentityCandidate
+	(PresenceEventType)(0),    // 0: continuoustracking.v1.PresenceEventType
+	(DwellEventType)(0),       // 1: continuoustracking.v1.DwellEventType
+	(*TrackingEvent)(nil),     // 2: continuoustracking.v1.TrackingEvent
+	(*FrameRef)(nil),          // 3: continuoustracking.v1.FrameRef
+	(*Detection)(nil),         // 4: continuoustracking.v1.Detection
+	(*PoseKeypoint)(nil),      // 5: continuoustracking.v1.PoseKeypoint
+	(*TrailPoint)(nil),        // 6: continuoustracking.v1.TrailPoint
+	(*PosteriorEvidence)(nil), // 7: continuoustracking.v1.PosteriorEvidence
+	(*BoundingBox)(nil),       // 8: continuoustracking.v1.BoundingBox
+	(*FloorPoint)(nil),        // 9: continuoustracking.v1.FloorPoint
+	(*IdentityRevision)(nil),  // 10: continuoustracking.v1.IdentityRevision
+	(*IdentitySnapshot)(nil),  // 11: continuoustracking.v1.IdentitySnapshot
+	(*IdentityCandidate)(nil), // 12: continuoustracking.v1.IdentityCandidate
+	(*PresenceEvent)(nil),     // 13: continuoustracking.v1.PresenceEvent
+	(*DwellEvent)(nil),        // 14: continuoustracking.v1.DwellEvent
 }
 var file_continuoustracking_v1_tracking_proto_depIdxs = []int32{
-	1,  // 0: continuoustracking.v1.TrackingEvent.frame_ref:type_name -> continuoustracking.v1.FrameRef
-	2,  // 1: continuoustracking.v1.TrackingEvent.detections:type_name -> continuoustracking.v1.Detection
-	8,  // 2: continuoustracking.v1.TrackingEvent.identity_revisions:type_name -> continuoustracking.v1.IdentityRevision
-	9,  // 3: continuoustracking.v1.TrackingEvent.identity_snapshots:type_name -> continuoustracking.v1.IdentitySnapshot
-	6,  // 4: continuoustracking.v1.Detection.bbox:type_name -> continuoustracking.v1.BoundingBox
-	7,  // 5: continuoustracking.v1.Detection.floor_point:type_name -> continuoustracking.v1.FloorPoint
-	3,  // 6: continuoustracking.v1.Detection.pose_keypoints:type_name -> continuoustracking.v1.PoseKeypoint
-	4,  // 7: continuoustracking.v1.Detection.trail:type_name -> continuoustracking.v1.TrailPoint
-	5,  // 8: continuoustracking.v1.Detection.evidence:type_name -> continuoustracking.v1.PosteriorEvidence
-	10, // 9: continuoustracking.v1.IdentityRevision.candidates:type_name -> continuoustracking.v1.IdentityCandidate
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	3,  // 0: continuoustracking.v1.TrackingEvent.frame_ref:type_name -> continuoustracking.v1.FrameRef
+	4,  // 1: continuoustracking.v1.TrackingEvent.detections:type_name -> continuoustracking.v1.Detection
+	10, // 2: continuoustracking.v1.TrackingEvent.identity_revisions:type_name -> continuoustracking.v1.IdentityRevision
+	11, // 3: continuoustracking.v1.TrackingEvent.identity_snapshots:type_name -> continuoustracking.v1.IdentitySnapshot
+	8,  // 4: continuoustracking.v1.Detection.bbox:type_name -> continuoustracking.v1.BoundingBox
+	9,  // 5: continuoustracking.v1.Detection.floor_point:type_name -> continuoustracking.v1.FloorPoint
+	5,  // 6: continuoustracking.v1.Detection.pose_keypoints:type_name -> continuoustracking.v1.PoseKeypoint
+	6,  // 7: continuoustracking.v1.Detection.trail:type_name -> continuoustracking.v1.TrailPoint
+	7,  // 8: continuoustracking.v1.Detection.evidence:type_name -> continuoustracking.v1.PosteriorEvidence
+	12, // 9: continuoustracking.v1.IdentityRevision.candidates:type_name -> continuoustracking.v1.IdentityCandidate
+	0,  // 10: continuoustracking.v1.PresenceEvent.event_type:type_name -> continuoustracking.v1.PresenceEventType
+	1,  // 11: continuoustracking.v1.DwellEvent.event_type:type_name -> continuoustracking.v1.DwellEventType
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_continuoustracking_v1_tracking_proto_init() }
@@ -1149,13 +1458,14 @@ func file_continuoustracking_v1_tracking_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_continuoustracking_v1_tracking_proto_rawDesc), len(file_continuoustracking_v1_tracking_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   11,
+			NumEnums:      2,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_continuoustracking_v1_tracking_proto_goTypes,
 		DependencyIndexes: file_continuoustracking_v1_tracking_proto_depIdxs,
+		EnumInfos:         file_continuoustracking_v1_tracking_proto_enumTypes,
 		MessageInfos:      file_continuoustracking_v1_tracking_proto_msgTypes,
 	}.Build()
 	File_continuoustracking_v1_tracking_proto = out.File

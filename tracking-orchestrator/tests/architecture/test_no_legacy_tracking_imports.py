@@ -1,6 +1,6 @@
-"""WTR9: Architecture test — no legacy tracking module imports in product code.
+"""Architecture test — no legacy tracking module imports in product code.
 
-These modules were deleted or deprecated in WTR9. Product code outside
+These modules were deleted or deprecated. Product code outside
 the approved grandfathered list must not import them.
 """
 
@@ -81,6 +81,6 @@ def test_no_product_code_imports_legacy_tracking():
             all_violations.append(f"{rel}:\n" + "\n".join(v))
 
     assert not all_violations, (
-        "Product code imports legacy tracking modules that were deleted in WTR9:\n\n"
+        "Product code imports legacy tracking modules that were deleted:\n\n"
         + "\n\n".join(all_violations)
     )

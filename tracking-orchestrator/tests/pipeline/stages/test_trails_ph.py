@@ -1,4 +1,4 @@
-"""WT4: tests for TrailsStage keying on ph_id (PH id)."""
+"""tests for TrailsStage keying on ph_id (PH id)."""
 
 from __future__ import annotations
 

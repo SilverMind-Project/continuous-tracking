@@ -1,4 +1,4 @@
-"""WTR5: TransitDetector tests with shapely-backed polygons."""
+"""TransitDetector tests with shapely-backed polygons."""
 
 from __future__ import annotations
 

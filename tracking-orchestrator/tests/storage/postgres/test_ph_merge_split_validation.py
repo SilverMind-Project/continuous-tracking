@@ -1,4 +1,4 @@
-"""WTR6: Merge/split validation tests for InMemoryPHRepository."""
+"""Merge/split validation tests for InMemoryPHRepository."""
 
 from __future__ import annotations
 

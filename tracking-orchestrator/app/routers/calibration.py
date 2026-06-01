@@ -122,6 +122,7 @@ class AdjacencyRequest(BaseModel):
 
 class CalibrationStatusResponse(BaseModel):
     cameras_with_homography: int
+    homography_camera_ids: list[str] = []
     cameras_with_privacy_zones: int
     adjacency_edge_count: int
     last_reload_at: str | None
@@ -585,6 +586,7 @@ async def get_status() -> CalibrationStatusResponse:
     ]
     return CalibrationStatusResponse(
         cameras_with_homography=len(state.homographies),
+        homography_camera_ids=sorted(state.homographies),
         cameras_with_privacy_zones=len(state.privacy_zones),
         adjacency_edge_count=len(state.adjacency_edges),
         last_reload_at=state.last_reload_at,

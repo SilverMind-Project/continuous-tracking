@@ -1,4 +1,4 @@
-"""WTR10: WorldTracker behaviour with uncalibrated observations.
+"""WorldTracker behaviour with uncalibrated observations.
 
 WorldTrackingStage creates synthetic floor points for uncalibrated cameras so
 that PHs (and identity resolution) still work without a homography.  This file
