@@ -213,6 +213,25 @@ class TrajectoryStage(FrameStage):
                     entered_at=traj_time,
                 )
 
+        # Ingest this camera's posture evidence for every PH it sees this frame,
+        # keyed by the local camera. The resolve-and-write step below runs once
+        # per PH (on the dedup-representative frame) and fuses across all of the
+        # PH's active cameras, so overlapping views contribute their own scores
+        # rather than only the representative's. record_snapshot does not advance
+        # hysteresis, so multi-camera ingest never distorts the temporal smoother.
+        # PHs this camera represents are skipped here: their update() call below
+        # records the same snapshot, so ingesting again would double-count.
+        if self._posture_tracker is not None:
+            represented_ph_ids = {
+                snap.ph_id for snap in ctx.world_snapshots if snap.camera_id == ctx.frame.camera_id
+            }
+            for det in ctx.domain_detections:
+                if not det.ph_id or det.ph_id in represented_ph_ids:
+                    continue
+                scores = ctx.det_posture_scores.get(det.detection_id)
+                if scores is not None:
+                    self._posture_tracker.record_snapshot(det.ph_id, ctx.frame.camera_id, scores)
+
         for snap in ctx.world_snapshots:
             if snap.camera_id != ctx.frame.camera_id:
                 continue
@@ -237,7 +256,11 @@ class TrajectoryStage(FrameStage):
                         global_track_id=snap.ph_id,
                         camera_id=snap.camera_id,
                         scores=posture_scores,
-                        active_camera_ids=[snap.camera_id],
+                        # Fuse posture across every camera currently on this PH, not
+                        # just the frame's camera. The tracker drops stale per-camera
+                        # snapshots (camera_stale_after_s) so cameras that have lost
+                        # sight of the person stop contributing automatically.
+                        active_camera_ids=list(snap.active_cameras) or [snap.camera_id],
                         motion_energy=gt_motion_energy,
                     )
                     ctx.det_posture[det_id] = gt_posture

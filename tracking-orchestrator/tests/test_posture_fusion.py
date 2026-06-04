@@ -148,6 +148,45 @@ class TestEvictTrack:
         tracker.evict_track("gt-1")
 
 
+class TestRecordSnapshotIngest:
+    """record_snapshot ingests a camera's evidence without resolving or smoothing."""
+
+    def test_record_snapshot_stores_without_advancing_hysteresis(self) -> None:
+        """Ingesting a snapshot must not create or advance hysteresis state."""
+        tracker = GlobalPostureTracker(required_consecutive=2)
+        tracker.record_snapshot("gt-1", "cam-1", _scores(sitting=0.8, kp=0.7))
+        assert "cam-1" in tracker._snapshots["gt-1"]
+        # No resolve happened, so no committed posture yet.
+        assert tracker.committed_posture("gt-1") is None
+
+    def test_two_cameras_both_land_in_snapshots(self) -> None:
+        """Two cameras seen in one frame both contribute to the fusion store."""
+        tracker = GlobalPostureTracker(required_consecutive=1)
+        # cam-2 ingested via record_snapshot (the non-representative path).
+        tracker.record_snapshot("gt-1", "cam-2", _scores(sw=0.9, kp=0.9))
+        # cam-1 resolves via update (the representative path), fusing both.
+        result = tracker.update(
+            "gt-1", "cam-1", _scores(sitting=0.4, kp=0.3), ["cam-1", "cam-2"]
+        )
+        assert set(tracker._snapshots["gt-1"]) == {"cam-1", "cam-2"}
+        # The high-confidence standing camera (cam-2) outweighs the weak sitting one.
+        assert result == "standing"
+
+    def test_ingested_camera_outweighs_representative_when_higher_confidence(self) -> None:
+        """A non-representative camera with a better crop drives the fused result.
+
+        This is the case the minimal field-plumbing fix could not reach: the
+        dedup representative (cam-1, weak sitting) resolves, but cam-2's stronger
+        keypoint evidence was ingested separately and dominates the fusion.
+        """
+        tracker = GlobalPostureTracker(required_consecutive=1)
+        tracker.record_snapshot("gt-1", "cam-2", _scores(lying=0.95, kp=0.95))
+        result = tracker.update(
+            "gt-1", "cam-1", _scores(sitting=0.6, kp=0.25), ["cam-1", "cam-2"]
+        )
+        assert result == "lying"
+
+
 class TestMultiCameraFusionEndToEnd:
     def test_best_camera_evidence_wins_over_partial_view(self) -> None:
         """Regression: full sitting from cam-1 must win over partial lying from cam-2."""

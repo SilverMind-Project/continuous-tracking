@@ -692,6 +692,37 @@ class GlobalPostureTracker:
         self._camera_stale_after_s = camera_stale_after_s
         self._depth_weight = depth_weight
 
+    def record_snapshot(
+        self,
+        global_track_id: str,
+        camera_id: str,
+        scores: PostureScores,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """Store one camera's posture evidence for a track without resolving.
+
+        Separated from ``update`` so every camera that sees a person in a frame
+        can contribute its own soft scores to the fusion store, while the
+        resolve-and-smooth step (``update``) runs exactly once per person per
+        frame. Calling ``update`` N times per frame would advance the hysteresis
+        counter N times and break the N-consecutive-frame semantics, so callers
+        ingest non-resolving cameras here and resolve once via ``update``.
+        """
+        snapshot_time = now if now is not None else datetime.now(UTC)
+        if global_track_id not in self._snapshots:
+            self._snapshots[global_track_id] = {}
+        self._snapshots[global_track_id][camera_id] = _CameraSnapshot(
+            lying=scores.lying,
+            sitting=scores.sitting,
+            standing_walking=scores.standing_walking,
+            keypoint_confidence=scores.keypoint_confidence,
+            captured_at=snapshot_time,
+        )
+        _metrics.metrics.cts_posture_camera_contributions_total.labels(
+            camera_id=camera_id,
+        ).inc()
+
     def update(
         self,
         global_track_id: str,
@@ -713,18 +744,7 @@ class GlobalPostureTracker:
         now = datetime.now(UTC)
 
         # 1. Store this camera's latest snapshot.
-        if global_track_id not in self._snapshots:
-            self._snapshots[global_track_id] = {}
-        self._snapshots[global_track_id][camera_id] = _CameraSnapshot(
-            lying=scores.lying,
-            sitting=scores.sitting,
-            standing_walking=scores.standing_walking,
-            keypoint_confidence=scores.keypoint_confidence,
-            captured_at=now,
-        )
-        _metrics.metrics.cts_posture_camera_contributions_total.labels(
-            camera_id=camera_id,
-        ).inc()
+        self.record_snapshot(global_track_id, camera_id, scores, now=now)
 
         # 2. Quality-weighted fusion across active cameras.
         fused = self._fuse(global_track_id, active_camera_ids, now)

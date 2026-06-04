@@ -11,11 +11,15 @@ from unittest.mock import MagicMock
 
 from app.domain import (
     BoundingBox,
+    Detection,
+    FloorPoint,
     WorldFrameSnapshot,
 )
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.trajectory import TrajectoryStage
 from app.storage.trajectory import InMemoryTrajectoryRepository
+from app.trajectory.motion_energy import MotionEnergyTracker
+from app.trajectory.posture import GlobalPostureTracker, PostureScores
 from app.trajectory.trajectory_writer import TrajectoryWriter
 
 
@@ -166,6 +170,51 @@ class TestTrajectoryWritesFromSnapshots:
         await stage.run(ctx)
 
         assert len(repo._points) == 0
+
+    async def test_non_representative_camera_ingests_posture(self) -> None:
+        """A camera that does not represent a PH still feeds its posture to fusion.
+
+        PH ``ph-x`` is represented by ``cam-a`` (snapshot camera). When the frame
+        from ``cam-b`` is processed, its own detection of ``ph-x`` must land in the
+        GlobalPostureTracker store under ``cam-b`` so cross-camera fusion can use
+        it, even though ``cam-b`` writes no trajectory row for ``ph-x``.
+        """
+        now = datetime.now(UTC)
+        snap = _make_snapshot(ph_id="ph-x", camera_id="cam-a", captured_at=now)
+
+        repo = InMemoryTrajectoryRepository()
+        writer = TrajectoryWriter(repo=repo)
+        posture_tracker = GlobalPostureTracker(required_consecutive=1)
+        stage = TrajectoryStage(
+            trajectory_writer=writer,
+            motion_energy_tracker=MotionEnergyTracker(),
+            posture_tracker=posture_tracker,
+        )
+
+        ctx = _make_ctx(camera_id="cam-b", now=now, snapshots=[snap])
+        ctx.domain_detections = [
+            Detection(
+                detection_id="det-b",
+                camera_id="cam-b",
+                bbox=BoundingBox(0.0, 0.0, 10.0, 20.0),
+                embedding=[],
+                capture_time=now,
+                event_time=now,
+                ph_id="ph-x",
+                floor_point=FloorPoint(0, 0),
+            )
+        ]
+        ctx.det_posture_scores["det-b"] = PostureScores(
+            lying=0.9, sitting=0.0, standing_walking=0.0, keypoint_confidence=0.85
+        )
+
+        await stage.run(ctx)
+
+        # cam-b wrote no trajectory row (it does not represent ph-x).
+        assert len(repo._points) == 0
+        # But cam-b's posture evidence is now in the fusion store for ph-x.
+        assert "cam-b" in posture_tracker._snapshots["ph-x"]
+        assert posture_tracker._snapshots["ph-x"]["cam-b"].lying == 0.9
 
     async def test_room_name_from_snapshot(self) -> None:
         """Trajectory point room_name comes from the snapshot, not camera_room_map."""

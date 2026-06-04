@@ -855,6 +855,7 @@ class WorldTracker:
                     room_id=room_id,
                     room_name=room_name,
                     mean_quality=ph.mean_quality,
+                    active_cameras=ph.active_cameras,
                 )
             )
 

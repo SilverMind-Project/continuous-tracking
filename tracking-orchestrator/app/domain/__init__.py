@@ -260,6 +260,7 @@ class WorldFrameSnapshot:
     room_id: str = ""
     room_name: str = ""
     mean_quality: float = 0.0  # PH-level rolling quality from quality capture (surfaces on wire)
+    active_cameras: frozenset[str] = frozenset()  # all cameras on this PH (multi-camera fusion)
 
 
 # ---------------------------------------------------------------------------
