@@ -11,6 +11,10 @@
 --   - Legacy tracking tables (global_tracks, tracklets, do_not_fuse_hints,
 --     tracklet_gallery, global_track_identity, identity_revisions) are not
 --     created; they are superseded by the PH-native model.
+--   - tracking_events, detections, stream_assignments, and person_activities
+--     are not created; they were never written to by any storage repository
+--     and have no corresponding protocol. Activity signals flow through
+--     dementia_signals; room assignment lives in CC camera configuration.
 --   - person_trajectories, room_dwells use ph_id (FK to person_hypotheses)
 --     instead of global_track_id.
 --   - tagged_keyframes uses ph_id only (no tracklet_id or global_track_id).
@@ -64,21 +68,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_streams_camera_id
     WHERE is_active = true;
 
 -- =============================================================================
--- Stream assignments: room/zone assignments for streams
--- =============================================================================
-CREATE TABLE IF NOT EXISTS stream_assignments (
-    assignment_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    stream_id     TEXT NOT NULL REFERENCES streams(stream_id) ON DELETE CASCADE,
-    room_id       TEXT NOT NULL DEFAULT '',
-    zone_id       TEXT NOT NULL DEFAULT '',
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_assignments_stream_id
-    ON stream_assignments (stream_id);
-
--- =============================================================================
 -- Identities and gallery embeddings
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS identities (
@@ -124,98 +113,6 @@ CREATE INDEX IF NOT EXISTS idx_reid_gallery_identity_time
 
 CREATE INDEX IF NOT EXISTS idx_reid_gallery_origin_tracklet
     ON reid_gallery (origin_tracklet_id);
-
--- =============================================================================
--- Tracking events: top-level frame processing results (hypertable)
--- =============================================================================
-CREATE TABLE IF NOT EXISTS tracking_events (
-    event_id    UUID NOT NULL,
-    event_time  TIMESTAMPTZ NOT NULL,
-    camera_id   TEXT NOT NULL REFERENCES cameras(camera_id) ON DELETE CASCADE,
-    frame_index BIGINT NOT NULL DEFAULT 0,
-    frame_data  JSONB NOT NULL DEFAULT '{}',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (event_id, event_time)
-);
-
-SELECT create_hypertable('tracking_events', 'event_time', if_not_exists => TRUE);
-
-CREATE INDEX IF NOT EXISTS idx_tracking_events_camera_time
-    ON tracking_events (camera_id, event_time DESC);
-
--- =============================================================================
--- Detections: individual person detections within a frame.
--- tracklet_id and global_track_id are plain UUID columns retained for
--- historical frame-level data; no FK constraint (referenced tables removed).
--- =============================================================================
-CREATE TABLE IF NOT EXISTS detections (
-    detection_id    UUID PRIMARY KEY,
-    event_id        UUID NOT NULL,
-    camera_id       TEXT NOT NULL REFERENCES cameras(camera_id) ON DELETE CASCADE,
-    bbox            JSONB NOT NULL DEFAULT '{}',
-    embedding       vector(768),
-    confidence      REAL NOT NULL DEFAULT 1.0,
-    tracklet_id     UUID,
-    global_track_id UUID,
-    floor_point     JSONB NOT NULL DEFAULT '{}',
-    capture_time    TIMESTAMPTZ,
-    event_time      TIMESTAMPTZ NOT NULL,
-    FOREIGN KEY (event_id, event_time)
-        REFERENCES tracking_events(event_id, event_time)
-        ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_detections_embedding
-    ON detections USING diskann (embedding vector_cosine_ops)
-    WHERE embedding IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_detections_global_track
-    ON detections (global_track_id)
-    WHERE global_track_id IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_detections_event_time
-    ON detections (event_time DESC);
-
-CREATE INDEX IF NOT EXISTS idx_detections_event_id
-    ON detections (event_id);
-
--- =============================================================================
--- Person activities: dementia activity layer records (hypertable)
--- =============================================================================
-CREATE TABLE IF NOT EXISTS person_activities (
-    activity_id      UUID NOT NULL,
-    occurred_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    identity_id      TEXT REFERENCES identities(identity_id) ON DELETE SET NULL,
-    camera_id        TEXT NOT NULL REFERENCES cameras(camera_id) ON DELETE CASCADE,
-    activity_type    TEXT NOT NULL CHECK (activity_type IN (
-        'entry',
-        'exit',
-        'linger',
-        'loop',
-        'fall_detected',
-        'area_entered',
-        'area_exited',
-        'pacing',
-        'sundowning',
-        'bathroom_anomaly',
-        'stillness',
-        'nighttime_movement',
-        'absence'
-    )),
-    metadata         JSONB NOT NULL DEFAULT '{}',
-    confidence       REAL NOT NULL DEFAULT 1.0,
-    related_event_id UUID,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (activity_id, occurred_at)
-);
-
-SELECT create_hypertable('person_activities', 'occurred_at', if_not_exists => TRUE);
-
-CREATE INDEX IF NOT EXISTS idx_person_activities_identity_time
-    ON person_activities (identity_id, occurred_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_person_activities_type
-    ON person_activities (activity_type, occurred_at DESC);
 
 -- =============================================================================
 -- Person hypotheses: world-tracker first-class person records.
@@ -537,10 +434,6 @@ CREATE TRIGGER trg_identities_updated_at
 
 CREATE TRIGGER trg_reid_gallery_updated_at
     BEFORE UPDATE ON reid_gallery
-    FOR EACH ROW EXECUTE FUNCTION _update_updated_at();
-
-CREATE TRIGGER trg_stream_assignments_updated_at
-    BEFORE UPDATE ON stream_assignments
     FOR EACH ROW EXECUTE FUNCTION _update_updated_at();
 
 -- =============================================================================
