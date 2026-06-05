@@ -625,65 +625,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # CC config sync service (camera-to-room map + homography sync).
     from .services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from .services.cc_config_sync import CCConfigSyncService
+    from .services.transit_zone_map import TransitZoneMap
 
     camera_room_map = CameraRoomMap()
     room_polygon_map = RoomPolygonMap()
+    transit_zone_map = TransitZoneMap()
     _poll_s = settings.as_float("cc_sync.poll_interval_s")
     cc_sync_service = CCConfigSyncService(
         client=cc_client,
         calibration_state=calibration_state,
         camera_room_map=camera_room_map,
         room_polygon_map=room_polygon_map,
+        transit_zone_map=transit_zone_map,
         poll_interval_s=_poll_s,
     )
     app.state.cc_sync_service = cc_sync_service
     app.state.cc_sync_task = asyncio.create_task(cc_sync_service.run())
     app.state.camera_room_map = camera_room_map
     app.state.room_polygon_map = room_polygon_map
+    app.state.transit_zone_map = transit_zone_map
     # Wire CameraRoomMap into the pipeline so stages read room bindings.
     _pipeline.set_camera_room_map(camera_room_map)
     _pipeline.set_room_polygon_map(room_polygon_map)
 
-    # Load transit zones from CC and wire into the world tracker.
-    from .domain import TransitZone as _TransitZone
+    # Wire live transit zones into the world tracker. CCConfigSyncService
+    # populates TransitZoneMap every poll after converting zones to metres.
     from .tracking.world.transit_detector import TransitDetector as _TransitDetector
     from .transport.room_transition_publisher import (
         RoomTransitionPublisher as _RoomTransitionPublisher,
     )
-
-    _transit_zones: list[_TransitZone] = []
-    try:
-        _tz_data = await cc_client.get("/api/v1/cts/transit-zones")
-        if isinstance(_tz_data, list):
-            for tz in _tz_data:
-                if not isinstance(tz, dict):
-                    continue
-                _poly_raw = tz.get("polygon", [])
-                _polygon: list[tuple[float, float]] = [
-                    (float(p[0]), float(p[1]))
-                    for p in _poly_raw
-                    if isinstance(p, list) and len(p) >= 2
-                ]
-                if len(_polygon) < 3:
-                    continue
-                _dir_raw = tz.get("direction_vec", [0.0, 0.0])
-                _transit_zones.append(
-                    _TransitZone(
-                        zone_id=str(tz.get("id", "")),
-                        name=str(tz.get("name", "")),
-                        kind=str(tz.get("kind", "door")),
-                        polygon=_polygon,
-                        inside_room_id=str(tz.get("inside_room_id", "")),
-                        outside_room_id=str(tz.get("outside_room_id", "")),
-                        direction_vec=(
-                            float(_dir_raw[0]) if len(_dir_raw) > 0 else 0.0,
-                            float(_dir_raw[1]) if len(_dir_raw) > 1 else 0.0,
-                        ),
-                    )
-                )
-        logger.info("transit_zones_loaded", count=len(_transit_zones))
-    except Exception:
-        logger.exception("transit_zone_load_failed")
 
     _transit_detector = _TransitDetector()
     _room_transition_pub = _RoomTransitionPublisher(
@@ -692,7 +662,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _room_transition_pub.connect()
     _pipeline.set_transit_config(
         transit_detector=_transit_detector,
-        transit_zones=_transit_zones,  # type: ignore[arg-type]
+        transit_zone_map=transit_zone_map,
         room_transition_publisher=_room_transition_pub,
     )
 

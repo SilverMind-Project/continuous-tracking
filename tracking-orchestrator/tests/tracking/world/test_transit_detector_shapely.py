@@ -1,4 +1,4 @@
-"""TransitDetector tests with shapely-backed polygons."""
+"""TransitDetector tests with shapely-backed metre-space polygons."""
 
 from __future__ import annotations
 
@@ -10,83 +10,97 @@ from app.tracking.world.transit_detector import TransitDetector
 
 def _make_zone(
     zone_id: str = "tz-1",
-    polygon: list | None = None,
+    polygon: list[tuple[float, float]] | None = None,
     direction_vec: tuple[float, float] = (1.0, 0.0),
-    inside_room_id: str = "1",
-    outside_room_id: str = "2",
+    inside_room_id: str = "3",
+    outside_room_id: str = "5",
 ) -> TransitZone:
     if polygon is None:
-        polygon = [(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)]  # 2x1 rectangle
+        polygon = [(4.8, 1.0), (5.2, 1.0), (5.2, 3.0), (4.8, 3.0)]
     return TransitZone(
         zone_id=zone_id,
-        name="Test Zone",
+        name="Bathroom Door",
         kind="door",
-        polygon=[(float(p[0]), float(p[1])) for p in polygon],
+        polygon=polygon,
         inside_room_id=inside_room_id,
         outside_room_id=outside_room_id,
         direction_vec=direction_vec,
     )
 
 
-def test_enter_event_fires_once():
-    """Entering a zone from outside produces exactly one enter event."""
+def test_realistic_metre_units_crossing_fires():
+    """A multi-metre floor polygon catches the normalized-vs-metres regression."""
     detector = TransitDetector()
     now = datetime.now(UTC)
-    zone = _make_zone()
+    zone = _make_zone(
+        polygon=[(7.8, 4.4), (8.2, 4.4), (8.2, 5.2), (7.8, 5.2)],
+        direction_vec=(20.0, 0.0),
+    )
 
-    # First check: outside the zone.
-    events = detector.check("ph-1", -1.0, -1.0, [zone], now)
-    assert len(events) == 0
+    assert detector.check("ph-1", 8.8, 4.8, [zone], now) == []
+    events = detector.check("ph-1", 7.4, 4.8, [zone], now)
 
-    # Second check: now inside the zone.
-    events = detector.check("ph-1", 1.0, 0.5, [zone], now)
     assert len(events) == 1
     assert events[0].direction == "enter"
-    assert events[0].ph_id == "ph-1"
 
 
-def test_exit_event_fires_once():
-    """Exiting a zone produces exactly one exit event."""
+def test_outside_to_inside_emits_one_enter_event():
+    """Moving opposite direction_vec enters the inside room."""
     detector = TransitDetector()
     now = datetime.now(UTC)
     zone = _make_zone()
 
-    # Enter first.
-    detector.check("ph-1", 1.0, 0.5, [zone], now)
-    # Exit.
-    events = detector.check("ph-1", -1.0, -1.0, [zone], now)
+    assert detector.check("ph-1", 6.0, 2.0, [zone], now) == []
+    events = detector.check("ph-1", 4.0, 2.0, [zone], now)
+    follow_up = detector.check("ph-1", 3.5, 2.0, [zone], now)
+
+    assert len(events) == 1
+    assert events[0].direction == "enter"
+    assert events[0].inside_room_id == "3"
+    assert events[0].outside_room_id == "5"
+    assert follow_up == []
+
+
+def test_inside_to_outside_emits_one_exit_event():
+    """Moving with direction_vec exits to the outside room."""
+    detector = TransitDetector()
+    now = datetime.now(UTC)
+    zone = _make_zone()
+
+    assert detector.check("ph-1", 4.0, 2.0, [zone], now) == []
+    events = detector.check("ph-1", 6.0, 2.0, [zone], now)
+    follow_up = detector.check("ph-1", 6.5, 2.0, [zone], now)
+
     assert len(events) == 1
     assert events[0].direction == "exit"
+    assert follow_up == []
 
 
-def test_jitter_inside_zone_does_not_duplicate():
-    """Staying inside a zone across multiple checks does not produce more events."""
+def test_lingering_on_threshold_emits_no_event():
+    """Sub-threshold movement across the door line is debounced."""
+    detector = TransitDetector(min_displacement_m=0.2)
+    now = datetime.now(UTC)
+    zone = _make_zone()
+
+    assert detector.check("ph-1", 5.05, 2.0, [zone], now) == []
+    assert detector.check("ph-1", 4.95, 2.0, [zone], now) == []
+    assert detector.check("ph-1", 5.04, 2.0, [zone], now) == []
+
+
+def test_two_phs_crossing_opposite_directions_emit_correct_events():
+    """Per-PH state keeps simultaneous opposite crossings independent."""
     detector = TransitDetector()
     now = datetime.now(UTC)
     zone = _make_zone()
 
-    # Enter.
-    events = detector.check("ph-1", 1.0, 0.5, [zone], now)
-    assert len(events) == 1
+    assert detector.check("ph-enter", 6.0, 2.0, [zone], now) == []
+    assert detector.check("ph-exit", 4.0, 2.5, [zone], now) == []
 
-    # Stay inside (jitter).
-    events = detector.check("ph-1", 1.1, 0.4, [zone], now)
-    assert len(events) == 0
-    events = detector.check("ph-1", 0.9, 0.6, [zone], now)
-    assert len(events) == 0
+    enter_events = detector.check("ph-enter", 4.0, 2.0, [zone], now)
+    exit_events = detector.check("ph-exit", 6.0, 2.5, [zone], now)
 
-
-def test_direction_resolves_enter_vs_exit():
-    """Moving from outside→inside with positive dot product produces 'enter'."""
-    detector = TransitDetector()
-    now = datetime.now(UTC)
-    zone = _make_zone(direction_vec=(1.0, 0.0))  # inside direction is +x
-
-    # Move from left to right (positive x displacement → enter).
-    detector.check("ph-1", -1.0, 0.5, [zone], now)  # outside
-    events = detector.check("ph-1", 1.0, 0.5, [zone], now)  # enter zone
-    assert len(events) == 1
-    assert events[0].direction == "enter"
+    assert [event.direction for event in enter_events] == ["enter"]
+    assert [event.direction for event in exit_events] == ["exit"]
 
 
 def test_remove_ph_clears_state():
@@ -95,10 +109,10 @@ def test_remove_ph_clears_state():
     now = datetime.now(UTC)
     zone = _make_zone()
 
-    detector.check("ph-1", 1.0, 0.5, [zone], now)  # enter
+    detector.check("ph-1", 6.0, 2.0, [zone], now)
+    assert detector.check("ph-1", 4.0, 2.0, [zone], now)
     detector.remove_ph("ph-1")
 
-    # After removal, the PH is outside again. Entering should fire again.
-    events = detector.check("ph-1", 1.0, 0.5, [zone], now)
-    assert len(events) == 1
-    assert events[0].direction == "enter"
+    assert detector.check("ph-1", 6.0, 2.0, [zone], now) == []
+    events = detector.check("ph-1", 4.0, 2.0, [zone], now)
+    assert [event.direction for event in events] == ["enter"]

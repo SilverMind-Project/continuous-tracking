@@ -16,7 +16,6 @@ from ...domain import (
     FaceAnchor,
     FloorPoint,
     OrientationBin,
-    TransitZone,
     WorldObservation,
 )
 from ...tracking.world.config import WorldTrackerConfig
@@ -29,6 +28,7 @@ from .base import FrameStage
 
 if TYPE_CHECKING:
     from ...services.camera_room_map import CameraRoomMap, RoomPolygonMap
+    from ...services.transit_zone_map import TransitZoneMap
 
 logger = get_logger(__name__)
 
@@ -101,7 +101,7 @@ class WorldTrackingStage(FrameStage):
         config: WorldTrackerConfig | None = None,
         enabled: bool = True,
         transit_detector: TransitDetector | None = None,
-        transit_zones: list[TransitZone] | None = None,
+        transit_zone_map: TransitZoneMap | None = None,
         room_transition_publisher: RoomTransitionPublisher | None = None,
         assertion_cache: object | None = None,
         anchor_match_window_s: float = 30.0,
@@ -114,7 +114,7 @@ class WorldTrackingStage(FrameStage):
         self._camera_room_map = camera_room_map
         self._enabled = enabled
         self._transit_detector = transit_detector
-        self._transit_zones = transit_zones or []
+        self._transit_zone_map = transit_zone_map
         self._room_transition_publisher = room_transition_publisher
         self._assertion_cache = assertion_cache
         self._anchor_match_window_s = anchor_match_window_s
@@ -305,10 +305,14 @@ class WorldTrackingStage(FrameStage):
     ) -> None:
         # Detect transit zone crossings for each active PH.
         if (
-            self._transit_detector is not None
-            and self._transit_zones
-            and self._room_transition_publisher is not None
+            self._transit_detector is None
+            or self._transit_zone_map is None
+            or self._room_transition_publisher is None
         ):
+            return
+
+        zones = await self._transit_zone_map.snapshot()
+        if zones:
             # Build ph_id -> current_identity_id lookup for publishing.
             ph_identity: dict[str, str | None] = {
                 ph.ph_id: ph.current_identity_id for ph in result.updated_phs
@@ -318,7 +322,7 @@ class WorldTrackingStage(FrameStage):
                     ph_id=ph.ph_id,
                     floor_x_m=ph.state_mean[0],
                     floor_y_m=ph.state_mean[1],
-                    zones=self._transit_zones,
+                    zones=zones,
                     now=event_time,
                 )
                 for event in events:
@@ -332,10 +336,13 @@ class WorldTrackingStage(FrameStage):
                             "room_transition_publish_error",
                             ph_id=ph.ph_id,
                         )
-            # Clean up transit detector state for closed PHs.
-            for ph in result.updated_phs:
-                if ph.closed_at is not None:
-                    self._transit_detector.remove_ph(ph.ph_id)
+
+        # Clean up transit detector state for closed PHs. Zone edits are read
+        # live from TransitZoneMap; per-PH last-position state may span an edit,
+        # which can at worst affect the first post-edit movement sample.
+        for ph in result.updated_phs:
+            if ph.closed_at is not None:
+                self._transit_detector.remove_ph(ph.ph_id)
 
     @staticmethod
     def _populate_context(

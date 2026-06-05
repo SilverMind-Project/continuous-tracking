@@ -70,8 +70,7 @@ class RoomPolygonMap:
     async def snapshot(self) -> tuple[dict[str, list[tuple[float, float]]], dict[str, str]]:
         async with self._lock:
             polygons = {
-                room_id: list(binding.polygon_m)
-                for room_id, binding in self._bindings.items()
+                room_id: list(binding.polygon_m) for room_id, binding in self._bindings.items()
             }
             names = {room_id: binding.room_name for room_id, binding in self._bindings.items()}
             return polygons, names

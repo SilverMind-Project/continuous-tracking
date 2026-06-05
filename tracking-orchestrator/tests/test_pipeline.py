@@ -21,6 +21,7 @@ from app.pipeline.frame_pipeline import (
     SignalConfig,
 )
 from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+from app.services.transit_zone_map import TransitZoneMap
 from app.transport.redis_streams import FrameReady
 
 # A capture timestamp that is always "live" (within the 30s age gate).
@@ -102,13 +103,22 @@ class TestPipelineSkeleton:
             await pipeline.initialize()
             camera_room_map = CameraRoomMap()
             room_polygon_map = RoomPolygonMap()
+            transit_zone_map = TransitZoneMap()
+            transit_detector = object()
+            room_transition_publisher = object()
 
             pipeline.set_camera_room_map(camera_room_map)
             pipeline.set_room_polygon_map(room_polygon_map)
+            pipeline.set_transit_config(
+                transit_detector=transit_detector,
+                transit_zone_map=transit_zone_map,
+                room_transition_publisher=room_transition_publisher,
+            )
 
             assert pipeline._world_tracking_stage is not None
             assert pipeline._world_tracking_stage._camera_room_map is camera_room_map
             assert pipeline._world_tracking_stage._room_polygon_map is room_polygon_map
+            assert pipeline._world_tracking_stage._transit_zone_map is transit_zone_map
             assert pipeline._stage_runner is not None
             mapped_stages = [
                 stage

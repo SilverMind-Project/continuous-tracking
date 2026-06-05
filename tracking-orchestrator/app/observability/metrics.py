@@ -76,6 +76,8 @@ class Metrics:
     uncalibrated_detection_total: Counter
     transit_event_published_total: Counter
     transit_event_unknown_identity_total: Counter
+    transit_zones_loaded: Gauge
+    transit_zone_rejected_total: Counter
 
     # ---- Staleness / backlog -----------------------------------------
     frames_dropped_stale_total: Counter
@@ -300,6 +302,15 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         transit_event_unknown_identity_total=_counter(
             "cts_transit_event_unknown_identity_total",
             "RoomTransitionEvent messages where identity_id was unknown.",
+        ),
+        transit_zones_loaded=_gauge(
+            "cts_transit_zones_loaded",
+            "Transit zones currently loaded from CC in floor-plan metre coordinates.",
+        ),
+        transit_zone_rejected_total=_counter(
+            "cts_transit_zone_rejected_total",
+            "Transit zones rejected during CC sync contract validation.",
+            ["reason"],
         ),
         face_id_cooldown_skips_total=_counter(
             "cts_face_id_cooldown_skips_total",

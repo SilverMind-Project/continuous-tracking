@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NoReturn
 
 from structlog import get_logger
 from tenacity import (
@@ -22,6 +22,7 @@ from tenacity import (
 
 from ..calibration.state import CalibrationState
 from ..calibration.validator import validate_homography
+from ..domain import TransitZone
 from ..observability import metrics as _m
 from ..services.camera_room_map import (
     CameraRoomBinding,
@@ -29,6 +30,7 @@ from ..services.camera_room_map import (
     RoomPolygonBinding,
     RoomPolygonMap,
 )
+from ..services.transit_zone_map import TransitZoneBinding, TransitZoneMap
 
 logger = get_logger(__name__)
 
@@ -117,10 +119,7 @@ def _optional_matrix3(data: dict[str, Any], key: str, *, context: str) -> list[l
                 f"{context}.{key}[{row_index}] must have exactly 3 columns"
             )
         matrix.append(
-            [
-                _require_number(item, context=f"{context}.{key}[{row_index}][]")
-                for item in row_items
-            ]
+            [_require_number(item, context=f"{context}.{key}[{row_index}][]") for item in row_items]
         )
     return matrix
 
@@ -135,6 +134,7 @@ class CCConfigSyncService:
         calibration_state: CalibrationState,
         camera_room_map: CameraRoomMap,
         room_polygon_map: RoomPolygonMap,
+        transit_zone_map: TransitZoneMap,
         poll_interval_s: float = 60.0,
         fetch_retry_attempts: int = 3,
         fetch_retry_initial_s: float = 3.0,
@@ -144,6 +144,7 @@ class CCConfigSyncService:
         self._calibration_state = calibration_state
         self._camera_room_map = camera_room_map
         self._room_polygon_map = room_polygon_map
+        self._transit_zone_map = transit_zone_map
         self._poll_interval_s = poll_interval_s
         self._fetch_retry_attempts = fetch_retry_attempts
         self._fetch_retry_initial_s = fetch_retry_initial_s
@@ -175,6 +176,8 @@ class CCConfigSyncService:
         except CCConfigSyncContractError:
             await self._camera_room_map.set_all([])
             await self._room_polygon_map.set_all([])
+            await self._transit_zone_map.set_all([])
+            _m.metrics.transit_zones_loaded.set(0)
             raise
 
     async def _poll_validated(self, now: datetime) -> None:
@@ -268,10 +271,27 @@ class CCConfigSyncService:
             camera_count=len(bindings),
         )
 
-        await self._sync_room_polygons(now)
+        scale_m = await self._floor_plan_scale_m()
+        if scale_m is None:
+            await self._room_polygon_map.set_all([])
+            await self._transit_zone_map.set_all([])
+            _m.metrics.transit_zones_loaded.set(0)
+            logger.warning(
+                "cc_config_sync_room_polygons_disabled",
+                reason="floor_plan_scale_missing",
+            )
+            logger.warning(
+                "cc_config_sync_transit_zones_disabled",
+                reason="floor_plan_scale_missing",
+            )
+            return
 
-    async def _sync_room_polygons(self, now: datetime) -> None:
-        """Fetch CC room polygons and convert normalized floor-plan coords to metres."""
+        width_m, height_m = scale_m
+        await self._sync_room_polygons(now, width_m=width_m, height_m=height_m)
+        await self._sync_transit_zones(now, width_m=width_m, height_m=height_m)
+
+    async def _floor_plan_scale_m(self) -> tuple[float, float] | None:
+        """Return floor-plan dimensions in metres, or None when scale is unset."""
         floor_plan = _require_mapping(
             await self._fetch_floor_plan(), context="/api/v1/household/floor-plan"
         )
@@ -279,12 +299,7 @@ class CCConfigSyncService:
         height_px = floor_plan.get("floor_plan_height")
         meters_per_pixel = floor_plan.get("floor_meters_per_pixel")
         if not width_px or not height_px or not meters_per_pixel:
-            await self._room_polygon_map.set_all([])
-            logger.warning(
-                "cc_config_sync_room_polygons_disabled",
-                reason="floor_plan_scale_missing",
-            )
-            return
+            return None
 
         mpp = _require_number(
             meters_per_pixel,
@@ -304,6 +319,10 @@ class CCConfigSyncService:
             )
             * mpp
         )
+        return width_m, height_m
+
+    async def _sync_room_polygons(self, now: datetime, *, width_m: float, height_m: float) -> None:
+        """Fetch CC room polygons and convert normalized floor-plan coords to metres."""
         rooms = _require_list(await self._fetch_rooms(), context="/api/v1/rooms")
         bindings: list[RoomPolygonBinding] = []
         for index, room_raw in enumerate(rooms):
@@ -319,9 +338,7 @@ class CCConfigSyncService:
             polygon_points = _require_list(polygon_raw, context=f"{context}.floor_polygon")
             polygon_m: list[tuple[float, float]] = []
             for point_index, point_raw in enumerate(polygon_points):
-                point = _require_list(
-                    point_raw, context=f"{context}.floor_polygon[{point_index}]"
-                )
+                point = _require_list(point_raw, context=f"{context}.floor_polygon[{point_index}]")
                 if len(point) < 2:
                     raise CCConfigSyncContractError(
                         f"{context}.floor_polygon[{point_index}] must have at least 2 values"
@@ -345,6 +362,78 @@ class CCConfigSyncService:
         await self._room_polygon_map.set_all(bindings)
         logger.debug("cc_config_sync_room_polygons_applied", room_count=len(bindings))
 
+    async def _sync_transit_zones(self, now: datetime, *, width_m: float, height_m: float) -> None:
+        """Fetch CC transit zones and convert normalized floor-plan coords to metres."""
+        zones = _require_list(
+            await self._fetch_transit_zones(), context="/api/v1/cts/transit-zones"
+        )
+        bindings: list[TransitZoneBinding] = []
+        for index, zone_raw in enumerate(zones):
+            context = f"/api/v1/cts/transit-zones[{index}]"
+            zone = _require_mapping(zone_raw, context=context)
+            zone_id = zone.get("id")
+            if zone_id is None:
+                self._reject_transit_zone("missing_id", context=context)
+            name = _require_non_empty_str(zone, "name", context=context)
+            kind = _require_non_empty_str(zone, "kind", context=context)
+            inside_room_id = zone.get("inside_room_id")
+            if inside_room_id is None:
+                self._reject_transit_zone("missing_inside_room_id", context=context)
+            outside_room_id = zone.get("outside_room_id")
+            if outside_room_id is None:
+                self._reject_transit_zone("missing_outside_room_id", context=context)
+
+            polygon_raw = zone.get("polygon")
+            if polygon_raw is None:
+                self._reject_transit_zone("missing_polygon", context=context)
+            polygon_points = _require_list(polygon_raw, context=f"{context}.polygon")
+            polygon_m: list[tuple[float, float]] = []
+            for point_index, point_raw in enumerate(polygon_points):
+                point = _require_list(point_raw, context=f"{context}.polygon[{point_index}]")
+                if len(point) < 2:
+                    self._reject_transit_zone("malformed_polygon_point", context=context)
+                x = _require_number(point[0], context=f"{context}.polygon[{point_index}][0]")
+                y = _require_number(point[1], context=f"{context}.polygon[{point_index}][1]")
+                polygon_m.append((x * width_m, y * height_m))
+            if len(polygon_m) < 3:
+                self._reject_transit_zone("polygon_too_short", context=context)
+
+            direction_raw = zone.get("direction_vec")
+            if direction_raw is None:
+                self._reject_transit_zone("missing_direction_vec", context=context)
+            direction_items = _require_list(direction_raw, context=f"{context}.direction_vec")
+            if len(direction_items) != 2:
+                self._reject_transit_zone("malformed_direction_vec", context=context)
+            direction_vec = (
+                _require_number(direction_items[0], context=f"{context}.direction_vec[0]")
+                * width_m,
+                _require_number(direction_items[1], context=f"{context}.direction_vec[1]")
+                * height_m,
+            )
+
+            bindings.append(
+                TransitZoneBinding(
+                    zone=TransitZone(
+                        zone_id=str(zone_id),
+                        name=name,
+                        kind=kind,
+                        polygon=polygon_m,
+                        inside_room_id=str(inside_room_id),
+                        outside_room_id=str(outside_room_id),
+                        direction_vec=direction_vec,
+                    ),
+                    bound_at=now,
+                )
+            )
+
+        await self._transit_zone_map.set_all(bindings)
+        _m.metrics.transit_zones_loaded.set(len(bindings))
+        logger.debug("cc_config_sync_transit_zones_applied", zone_count=len(bindings))
+
+    def _reject_transit_zone(self, reason: str, *, context: str) -> NoReturn:
+        _m.metrics.transit_zone_rejected_total.labels(reason=reason).inc()
+        raise CCConfigSyncContractError(f"{context} rejected: {reason}")
+
     async def _fetch_cameras(self) -> Any:
         """Fetch CC camera config with bounded retry for transient upstream failures."""
         return await self._fetch_with_retry("/api/v1/cts/cameras")
@@ -356,6 +445,10 @@ class CCConfigSyncService:
     async def _fetch_floor_plan(self) -> Any:
         """Fetch CC floor-plan scale with bounded retry for transient upstream failures."""
         return await self._fetch_with_retry("/api/v1/household/floor-plan")
+
+    async def _fetch_transit_zones(self) -> Any:
+        """Fetch CC transit zones with bounded retry for transient upstream failures."""
+        return await self._fetch_with_retry("/api/v1/cts/transit-zones")
 
     async def _fetch_with_retry(self, path: str) -> Any:
         async for attempt in AsyncRetrying(

@@ -71,11 +71,13 @@ async def test_rejected_homography_does_not_reach_calibration_state():
     from app.calibration.state import CalibrationState
     from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from app.services.cc_config_sync import CCConfigSyncService
+    from app.services.transit_zone_map import TransitZoneMap
 
     cal_state = CalibrationState()
     cal_state.set_homography = AsyncMock()
     camera_room_map = CameraRoomMap()
     room_polygon_map = RoomPolygonMap()
+    transit_zone_map = TransitZoneMap()
 
     client = MagicMock()
 
@@ -107,6 +109,7 @@ async def test_rejected_homography_does_not_reach_calibration_state():
         calibration_state=cal_state,
         camera_room_map=camera_room_map,
         room_polygon_map=room_polygon_map,
+        transit_zone_map=transit_zone_map,
         poll_interval_s=999,
     )
 
@@ -124,10 +127,12 @@ async def test_sync_restores_homography_with_floor_plan_metadata():
     from app.calibration.state import CalibrationState
     from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from app.services.cc_config_sync import CCConfigSyncService
+    from app.services.transit_zone_map import TransitZoneMap
 
     cal_state = CalibrationState()
     camera_room_map = CameraRoomMap()
     room_polygon_map = RoomPolygonMap()
+    transit_zone_map = TransitZoneMap()
     matrix = [[1.0, 0.0, 0.1], [0.0, 1.0, 0.2], [0.0, 0.0, 1.0]]
 
     client = MagicMock()
@@ -159,6 +164,7 @@ async def test_sync_restores_homography_with_floor_plan_metadata():
         calibration_state=cal_state,
         camera_room_map=camera_room_map,
         room_polygon_map=room_polygon_map,
+        transit_zone_map=transit_zone_map,
         poll_interval_s=999,
     )
 
@@ -180,10 +186,12 @@ async def test_sync_converts_room_polygons_to_floor_metres():
     from app.calibration.state import CalibrationState
     from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from app.services.cc_config_sync import CCConfigSyncService
+    from app.services.transit_zone_map import TransitZoneMap
 
     cal_state = CalibrationState()
     camera_room_map = CameraRoomMap()
     room_polygon_map = RoomPolygonMap()
+    transit_zone_map = TransitZoneMap()
 
     async def get(path: str):
         if path == "/api/v1/cts/cameras":
@@ -202,6 +210,8 @@ async def test_sync_converts_room_polygons_to_floor_metres():
                     "floor_polygon": [[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]],
                 }
             ]
+        if path == "/api/v1/cts/transit-zones":
+            return []
         raise AssertionError(f"unexpected path {path}")
 
     client = MagicMock()
@@ -211,6 +221,7 @@ async def test_sync_converts_room_polygons_to_floor_metres():
         calibration_state=cal_state,
         camera_room_map=camera_room_map,
         room_polygon_map=room_polygon_map,
+        transit_zone_map=transit_zone_map,
         poll_interval_s=999,
     )
 
@@ -227,10 +238,12 @@ async def test_config_fetch_retries_transient_failures_before_applying():
     from app.calibration.state import CalibrationState
     from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from app.services.cc_config_sync import CCConfigSyncService
+    from app.services.transit_zone_map import TransitZoneMap
 
     cal_state = CalibrationState()
     camera_room_map = CameraRoomMap()
     room_polygon_map = RoomPolygonMap()
+    transit_zone_map = TransitZoneMap()
 
     client = MagicMock()
     client.get = AsyncMock(
@@ -254,6 +267,7 @@ async def test_config_fetch_retries_transient_failures_before_applying():
         calibration_state=cal_state,
         camera_room_map=camera_room_map,
         room_polygon_map=room_polygon_map,
+        transit_zone_map=transit_zone_map,
         poll_interval_s=999,
         fetch_retry_initial_s=0,
         fetch_retry_max_s=0,
@@ -278,14 +292,14 @@ async def test_malformed_room_polygon_raises_without_applying_polygon_map():
         RoomPolygonMap,
     )
     from app.services.cc_config_sync import CCConfigSyncContractError, CCConfigSyncService
+    from app.services.transit_zone_map import TransitZoneMap
 
     cal_state = CalibrationState()
     camera_room_map = CameraRoomMap()
     room_polygon_map = RoomPolygonMap()
+    transit_zone_map = TransitZoneMap()
     now = datetime.now(UTC)
-    await camera_room_map.set_all(
-        [CameraRoomBinding("old-cam", "old-room", "Old Room", now)]
-    )
+    await camera_room_map.set_all([CameraRoomBinding("old-cam", "old-room", "Old Room", now)])
     await room_polygon_map.set_all(
         [RoomPolygonBinding("old-room", "Old Room", [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)], now)]
     )
@@ -310,6 +324,7 @@ async def test_malformed_room_polygon_raises_without_applying_polygon_map():
         calibration_state=cal_state,
         camera_room_map=camera_room_map,
         room_polygon_map=room_polygon_map,
+        transit_zone_map=transit_zone_map,
         poll_interval_s=999,
     )
 
@@ -320,3 +335,193 @@ async def test_malformed_room_polygon_raises_without_applying_polygon_map():
     assert await camera_room_map.get("old-cam") is None
     assert polygons == {}
     assert names == {}
+
+
+@pytest.mark.asyncio
+async def test_sync_converts_transit_zones_to_floor_metres():
+    """CC transit zones are normalized; CTS detector needs metre coordinates."""
+    from app.calibration.state import CalibrationState
+    from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+    from app.services.cc_config_sync import CCConfigSyncService
+    from app.services.transit_zone_map import TransitZoneMap
+
+    cal_state = CalibrationState()
+    camera_room_map = CameraRoomMap()
+    room_polygon_map = RoomPolygonMap()
+    transit_zone_map = TransitZoneMap()
+
+    async def get(path: str):
+        if path == "/api/v1/cts/cameras":
+            return []
+        if path == "/api/v1/household/floor-plan":
+            return {
+                "floor_plan_width": 1000,
+                "floor_plan_height": 500,
+                "floor_meters_per_pixel": 0.02,
+            }
+        if path == "/api/v1/rooms":
+            return []
+        if path == "/api/v1/cts/transit-zones":
+            return [
+                {
+                    "id": 11,
+                    "name": "Bathroom Door",
+                    "kind": "door",
+                    "polygon": [[0.4, 0.45], [0.6, 0.45], [0.6, 0.55], [0.4, 0.55]],
+                    "inside_room_id": 3,
+                    "outside_room_id": 5,
+                    "direction_vec": [0.6, 0.8],
+                }
+            ]
+        raise AssertionError(f"unexpected path {path}")
+
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=get)
+    svc = CCConfigSyncService(
+        client=client,
+        calibration_state=cal_state,
+        camera_room_map=camera_room_map,
+        room_polygon_map=room_polygon_map,
+        transit_zone_map=transit_zone_map,
+        poll_interval_s=999,
+    )
+
+    await svc._poll()
+
+    zones = await transit_zone_map.snapshot()
+    assert len(zones) == 1
+    zone = zones[0]
+    assert zone.zone_id == "11"
+    assert zone.inside_room_id == "3"
+    assert zone.outside_room_id == "5"
+    assert zone.polygon[0] == pytest.approx((8.0, 4.5))
+    assert zone.direction_vec == pytest.approx((12.0, 8.0))
+
+
+@pytest.mark.asyncio
+async def test_missing_floor_scale_clears_transit_zones():
+    """Unset floor scale disables transit-zone detection instead of using normalized units."""
+    from datetime import UTC, datetime
+
+    from app.calibration.state import CalibrationState
+    from app.domain import TransitZone
+    from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+    from app.services.cc_config_sync import CCConfigSyncService
+    from app.services.transit_zone_map import TransitZoneBinding, TransitZoneMap
+
+    cal_state = CalibrationState()
+    camera_room_map = CameraRoomMap()
+    room_polygon_map = RoomPolygonMap()
+    transit_zone_map = TransitZoneMap()
+    await transit_zone_map.set_all(
+        [
+            TransitZoneBinding(
+                zone=TransitZone(
+                    zone_id="old-zone",
+                    name="Old Zone",
+                    kind="door",
+                    polygon=[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0)],
+                    inside_room_id="3",
+                    outside_room_id="5",
+                    direction_vec=(1.0, 0.0),
+                ),
+                bound_at=datetime.now(UTC),
+            )
+        ]
+    )
+
+    async def get(path: str):
+        if path == "/api/v1/cts/cameras":
+            return []
+        if path == "/api/v1/household/floor-plan":
+            return _floor_plan_missing_scale()
+        raise AssertionError(f"unexpected path {path}")
+
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=get)
+    svc = CCConfigSyncService(
+        client=client,
+        calibration_state=cal_state,
+        camera_room_map=camera_room_map,
+        room_polygon_map=room_polygon_map,
+        transit_zone_map=transit_zone_map,
+        poll_interval_s=999,
+    )
+
+    await svc._poll()
+
+    assert await transit_zone_map.snapshot() == []
+
+
+@pytest.mark.asyncio
+async def test_transit_zone_contract_error_clears_transit_map():
+    """Malformed transit zones are contract failures and clear stale bindings."""
+    from datetime import UTC, datetime
+
+    from app.calibration.state import CalibrationState
+    from app.domain import TransitZone
+    from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+    from app.services.cc_config_sync import CCConfigSyncContractError, CCConfigSyncService
+    from app.services.transit_zone_map import TransitZoneBinding, TransitZoneMap
+
+    cal_state = CalibrationState()
+    camera_room_map = CameraRoomMap()
+    room_polygon_map = RoomPolygonMap()
+    transit_zone_map = TransitZoneMap()
+    await transit_zone_map.set_all(
+        [
+            TransitZoneBinding(
+                zone=TransitZone(
+                    zone_id="old-zone",
+                    name="Old Zone",
+                    kind="door",
+                    polygon=[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0)],
+                    inside_room_id="3",
+                    outside_room_id="5",
+                    direction_vec=(1.0, 0.0),
+                ),
+                bound_at=datetime.now(UTC),
+            )
+        ]
+    )
+
+    async def get(path: str):
+        if path == "/api/v1/cts/cameras":
+            return []
+        if path == "/api/v1/household/floor-plan":
+            return {
+                "floor_plan_width": 1000,
+                "floor_plan_height": 500,
+                "floor_meters_per_pixel": 0.02,
+            }
+        if path == "/api/v1/rooms":
+            return []
+        if path == "/api/v1/cts/transit-zones":
+            return [
+                {
+                    "id": 11,
+                    "name": "Broken Door",
+                    "kind": "door",
+                    "polygon": [[0.4, 0.45], [0.6]],
+                    "inside_room_id": 3,
+                    "outside_room_id": 5,
+                    "direction_vec": [1.0, 0.0],
+                }
+            ]
+        raise AssertionError(f"unexpected path {path}")
+
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=get)
+    svc = CCConfigSyncService(
+        client=client,
+        calibration_state=cal_state,
+        camera_room_map=camera_room_map,
+        room_polygon_map=room_polygon_map,
+        transit_zone_map=transit_zone_map,
+        poll_interval_s=999,
+    )
+
+    with pytest.raises(CCConfigSyncContractError):
+        await svc._poll()
+
+    assert await transit_zone_map.snapshot() == []

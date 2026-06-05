@@ -165,9 +165,7 @@ class TestRecordSnapshotIngest:
         # cam-2 ingested via record_snapshot (the non-representative path).
         tracker.record_snapshot("gt-1", "cam-2", _scores(sw=0.9, kp=0.9))
         # cam-1 resolves via update (the representative path), fusing both.
-        result = tracker.update(
-            "gt-1", "cam-1", _scores(sitting=0.4, kp=0.3), ["cam-1", "cam-2"]
-        )
+        result = tracker.update("gt-1", "cam-1", _scores(sitting=0.4, kp=0.3), ["cam-1", "cam-2"])
         assert set(tracker._snapshots["gt-1"]) == {"cam-1", "cam-2"}
         # The high-confidence standing camera (cam-2) outweighs the weak sitting one.
         assert result == "standing"
@@ -181,9 +179,7 @@ class TestRecordSnapshotIngest:
         """
         tracker = GlobalPostureTracker(required_consecutive=1)
         tracker.record_snapshot("gt-1", "cam-2", _scores(lying=0.95, kp=0.95))
-        result = tracker.update(
-            "gt-1", "cam-1", _scores(sitting=0.6, kp=0.25), ["cam-1", "cam-2"]
-        )
+        result = tracker.update("gt-1", "cam-1", _scores(sitting=0.6, kp=0.25), ["cam-1", "cam-2"])
         assert result == "lying"
 
 

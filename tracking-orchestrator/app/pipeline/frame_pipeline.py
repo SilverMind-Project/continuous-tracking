@@ -58,6 +58,7 @@ from ..services.identity_rewriter import (
     IdentityRewriter,
     InMemoryIdentityRewriter,
 )
+from ..services.transit_zone_map import TransitZoneMap
 from ..storage.base import (
     BboxAnnotationRepository,
     BehaviorBaselineRepository,
@@ -423,9 +424,7 @@ class FrameProcessingPipeline:
         _traj_repo = deps.trajectory_repo or InMemoryTrajectoryRepository()
         self._trajectory_writer = TrajectoryWriter(repo=_traj_repo)
 
-        keyframe_repo = deps.keyframe_repo or InMemoryKeyframeRepository(
-            bbox_repo=self._bbox_repo
-        )
+        keyframe_repo = deps.keyframe_repo or InMemoryKeyframeRepository(bbox_repo=self._bbox_repo)
         self._keyframe_sampler = KeyframeSampler(
             repo=keyframe_repo,
             config=self._config.sampler,
@@ -1035,29 +1034,29 @@ class FrameProcessingPipeline:
             return
         for stage in self._stage_runner._stages:
             if hasattr(stage, "_camera_room_map"):
-                stage._camera_room_map = camera_room_map  # type: ignore[attr-defined]
+                stage._camera_room_map = camera_room_map
 
     def set_room_polygon_map(self, room_polygon_map: RoomPolygonMap) -> None:
         """Inject the live room polygon map into WorldTrackingStage."""
         self._room_polygon_map = room_polygon_map
         if self._world_tracking_stage is not None:
-            self._world_tracking_stage._room_polygon_map = room_polygon_map  # type: ignore[attr-defined]
+            self._world_tracking_stage._room_polygon_map = room_polygon_map
 
     def set_transit_config(
         self,
         transit_detector: object,
-        transit_zones: list[object],
+        transit_zone_map: TransitZoneMap,
         room_transition_publisher: object,
     ) -> None:
         """Inject transit zone dependencies into WorldTrackingStage.
 
-        Called at startup after transit zones are loaded from CC sync.
+        Called at startup after the live transit-zone map is created.
         """
         if self._stage_runner is not None:
             for stage in self._stage_runner._stages:
                 if stage.name == "world_tracking":
                     stage._transit_detector = transit_detector  # type: ignore[attr-defined]
-                    stage._transit_zones = transit_zones  # type: ignore[attr-defined]
+                    stage._transit_zone_map = transit_zone_map  # type: ignore[attr-defined]
                     stage._room_transition_publisher = room_transition_publisher  # type: ignore[attr-defined]
                     break
 
@@ -1112,12 +1111,13 @@ class FrameProcessingPipeline:
         event_time = datetime.now(UTC)
 
         assert self._transport is not None
+        room_name = await camera_room_name(self._camera_room_map, frame.camera_id)
         await self._transport.publish_event(
             camera_id=frame.camera_id,
             event_time=event_time,
             frame_index=frame.frame_index,
             minio_key=frame.minio_key,
-            room_name=await camera_room_name(self._camera_room_map, frame.camera_id),
+            room_name=room_name if room_name is not None else "",
             frame_width=frame.width,
             frame_height=frame.height,
             capture_time_unix_ns=frame.capture_time_unix_ns,
