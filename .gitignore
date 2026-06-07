@@ -30,6 +30,8 @@ tracking-orchestrator/*.egg-info/
 # Jetson-generated TensorRT engines are device and TensorRT-version specific.
 triton-models-jetson/**/1/*.plan
 triton-models-jetson/**/1/*.engine
+triton-models-jetson/reports/
+calibration-data/
 
 # Compiled Object files, Alias and Private Window files
 *.a

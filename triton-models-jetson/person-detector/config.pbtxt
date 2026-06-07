@@ -1,14 +1,10 @@
 # YOLO26L person detector for Jetson Orin Nano Super.
 #
 # TensorRT plan generated from:
-#   triton-models-jetson/person-detector/1/model.onnx
+#   triton-models-jetson/person-detector/1/model_int8.onnx
 #
-# Export a batch-8 ONNX for Jetson:
-#   python triton-models/scripts/export_yolo.py --weights yolo26l.pt \
-#     --batch 8 --out triton-models-jetson/person-detector/1/model.onnx
-#
-# Set TRITON_DETECTOR_STATIC_BATCH_SIZE=8 on the orchestrator when pointing CTS
-# at this Jetson Triton instance.
+# The QAT checkpoint is re-exported at fixed batch 1 for the 8 GB Jetson.
+# The DGX model remains fixed batch 8 in the separate triton-models repository.
 
 name: "person-detector"
 platform: "tensorrt_plan"
@@ -19,7 +15,7 @@ input [
   {
     name: "images"
     data_type: TYPE_FP32
-    dims: [8, 3, 640, 640]
+    dims: [1, 3, 640, 640]
   }
 ]
 
@@ -27,7 +23,7 @@ output [
   {
     name: "output0"
     data_type: TYPE_FP32
-    dims: [8, 300, 6]
+    dims: [1, 300, 6]
   }
 ]
 

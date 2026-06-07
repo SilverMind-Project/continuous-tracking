@@ -3,10 +3,9 @@
 Triton Inference Server model repository shared by the Continuous Tracking
 System (CTS) and scene-analysis-service (SAS).
 
-All models use **QDQ-quantized ONNX** format (QuantizeLinear → Op → DequantizeLinear).
-This uses standard FP32 ops internally, making it portable across NVIDIA
-(CUDAExecutionProvider) and Intel Arc (OpenVINOExecutionProvider) GPUs without
-requiring specialized INT8 CUDA kernels.
+The repository contains model-specific FP32 and Q/DQ ONNX graphs. The five
+Buffalo_L models are served as canonical FP32 graphs here; their validated INT8
+counterparts live in `triton-models-jetson`.
 
 ## Directory layout
 
@@ -52,6 +51,11 @@ triton-models/
 │   └── 1/
 │       ├── model.onnx        FP32 ONNX — 52 MB
 │       └── model_qdq.onnx    QDQ ONNX — ~13 MB  ← active
+├── face-detector-scrfd/      Buffalo_L SCRFD detector (FP32 ONNX)
+├── face-recognition-arcface/ Buffalo_L ArcFace embeddings (FP32 ONNX)
+├── face-landmark-2d106/      Buffalo_L 106-point landmarks (FP32 ONNX)
+├── face-landmark-3d68/       Buffalo_L 68-point 3D landmarks (FP32 ONNX)
+├── face-attribute-genderage/ Buffalo_L gender/age attributes (FP32 ONNX)
 ├── embeddinggemma-300m/      Gemma 3 300M sentence embeddings (ONNX Runtime)
 │   ├── config.pbtxt
 │   └── 1/
@@ -69,8 +73,7 @@ triton-models/
     └── quantize_int8.py      Dynamic QDQ quantization for any ONNX model
 ```
 
-Model binary files (`.onnx`) are excluded from git — they are several hundred
-MB each. Generate them with the export/download/quantize scripts.
+Large ONNX files are managed through Git LFS.
 
 ## Model inventory
 
@@ -79,9 +82,34 @@ MB each. Generate them with the export/download/quantize scripts.
 | YOLO26L | `person-detector` | ONNX Runtime | 95 MB | **~24 MB** | `images` [N,3,640,640] | `output0` [N,300,6] NMS-free |
 | CLIP ViT-L/14 | `clip-vision` | ONNX Runtime | 1,160 MB | **~293 MB** | `input` [N,3,224,224] | `output` [N,768] |
 | Florence-2-large | `florence-2` | Python (BLS) | — | **~794 MB** | `pixel_values` [1,3,H,W] + `input_ids` [1,seq] | `output_ids` [1,max_len] |
-| Swin-Tiny ReID | `reid-solider` | ONNX Runtime | 107 MB | **~29 MB** | `input` [N,3,256,128] | `output` [N,768] |
+| Swin-Tiny ReID | `reid-solider` | ONNX Runtime | 107 MB | **~29 MB** | `input` [N,3,384,128] | `output` [N,768] |
 | RTMPose-m | `pose-rtmpose` | ONNX Runtime | 52 MB | **~13 MB** | `input` [N,3,256,192] | `simcc_x` [N,17,384], `simcc_y` [N,17,512] |
+| SCRFD | `face-detector-scrfd` | ONNX Runtime | 16.9 MB | Jetson repo | `input.1` [1,3,640,640] | 9 detection heads |
+| ArcFace R50 | `face-recognition-arcface` | ONNX Runtime | 174.4 MB | Jetson repo | `input.1` [1,3,112,112] | `683` [1,512] |
+| 2D landmarks | `face-landmark-2d106` | ONNX Runtime | 5.0 MB | Jetson repo | `data` [1,3,192,192] | `fc1` [1,212] |
+| 3D landmarks | `face-landmark-3d68` | ONNX Runtime | 143.6 MB | Jetson repo | `data` [1,3,192,192] | `fc1` [1,3309] |
+| Gender/age | `face-attribute-genderage` | ONNX Runtime | 1.3 MB | Jetson repo | `data` [1,3,96,96] | `fc1` [1,3] |
 | embeddinggemma-300m | `embeddinggemma-300m` | ONNX Runtime | **1,230 MB** | — | `input_ids` [N,2048], `attention_mask` [N,2048] | `sentence_embedding` [N,768] |
+
+The full-precision Buffalo_L files were copied from
+`person-identification-service/data/models/models/buffalo_l`, which matches the
+original archive. The rewritten files in
+`person-identification-service/data/models/buffalo_l` are FP32, not INT8, and
+are used as the calibration baseline for the Jetson Q/DQ exports. All graph
+nodes and initializer tensors are identical between the two FP32 sets; their
+binary differences are non-semantic ONNX metadata.
+
+The person-identification service requires all five Buffalo_L models and uses
+Triton for every inference request. The default profile connects to this
+repository with:
+
+```bash
+TRITON_GRPC_URL=triton:8701
+PERSON_ID_MODEL_PROFILE=full
+```
+
+Startup fails when Triton is unavailable or any required Buffalo_L model is not
+ready. The service does not fall back to local ONNX Runtime or CUDA execution.
 
 **Total model repo: ~1.65 GB** (QDQ active + FP32 backups + embeddinggemma FP32).
 
@@ -94,6 +122,7 @@ MB each. Generate them with the export/download/quantize scripts.
 | florence-2 | CUDAExecutionProvider | OpenVINOExecutionProvider |
 | reid-solider | CUDAExecutionProvider | OpenVINOExecutionProvider |
 | pose-rtmpose | CUDAExecutionProvider | OpenVINOExecutionProvider |
+| Buffalo_L face models | CUDAExecutionProvider | Qualification required |
 | embeddinggemma-300m | CUDAExecutionProvider | OpenVINOExecutionProvider |
 
 **NVIDIA**: Triton's ONNX Runtime selects `CUDAExecutionProvider`. QDQ format
@@ -101,6 +130,10 @@ uses standard FP32 ops so no specialized INT8 CUDA kernels are needed.
 
 **Intel Arc**: requires a Triton image with the OpenVINO backend and Intel
 Compute Runtime drivers. Run `configure_gpu.py --vendor intel` to activate.
+The five Buffalo_L models do not yet have checked-in Intel-specific Triton
+configs or an Intel regression report. Treat them as unsupported until their
+OpenVINO outputs pass the same face detection, embedding, landmark, pose, and
+attribute gates used for NVIDIA.
 
 ## Setup
 
@@ -279,6 +312,11 @@ curl -s http://localhost:8700/v2/models/florence-2-encoder/ready
 curl -s http://localhost:8700/v2/models/florence-2-decoder/ready
 curl -s http://localhost:8700/v2/models/reid-solider/ready
 curl -s http://localhost:8700/v2/models/pose-rtmpose/ready
+curl -s http://localhost:8700/v2/models/face-detector-scrfd/ready
+curl -s http://localhost:8700/v2/models/face-recognition-arcface/ready
+curl -s http://localhost:8700/v2/models/face-landmark-2d106/ready
+curl -s http://localhost:8700/v2/models/face-landmark-3d68/ready
+curl -s http://localhost:8700/v2/models/face-attribute-genderage/ready
 curl -s http://localhost:8700/v2/models/embeddinggemma-300m/ready
 ```
 

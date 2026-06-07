@@ -68,6 +68,11 @@ services:
       - ./triton-models/florence-2-decoder:/models/florence-2-decoder
       - ./triton-models/reid-solider:/models/reid-solider
       - ./triton-models/pose-rtmpose:/models/pose-rtmpose
+      - ./triton-models/face-detector-scrfd:/models/face-detector-scrfd
+      - ./triton-models/face-recognition-arcface:/models/face-recognition-arcface
+      - ./triton-models/face-landmark-2d106:/models/face-landmark-2d106
+      - ./triton-models/face-landmark-3d68:/models/face-landmark-3d68
+      - ./triton-models/face-attribute-genderage:/models/face-attribute-genderage
       - ./triton-models/embeddinggemma-300m:/models/embeddinggemma-300m
       - ./triton-models/depth-anything-v2:/models/depth-anything-v2
     deploy:
@@ -81,7 +86,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 60s
 
   # -----------------------------------------------------------------------
   # Tracking Orchestrator (Python — ML pipeline)

@@ -1,0 +1,24 @@
+# buffalo_l ArcFace w600k_r50 recognition model. Input/output batch is fixed at one.
+
+name: "face-recognition-arcface"
+platform: "tensorrt_plan"
+default_model_filename: "model.plan"
+max_batch_size: 0
+
+input [
+  {
+    name: "input.1"
+    data_type: TYPE_FP32
+    dims: [1, 3, 112, 112]
+  }
+]
+
+output [
+  {
+    name: "683"
+    data_type: TYPE_FP32
+    dims: [1, 512]
+  }
+]
+
+instance_group [{ kind: KIND_GPU count: 1 }]

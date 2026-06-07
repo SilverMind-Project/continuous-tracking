@@ -28,7 +28,7 @@ Results are streamed via Redis Streams (protobuf) to [Cognitive Companion](../co
 | `go2rtc` | 1984 | RTSP proxy sidecar |
 | `rtsp-ingress` | 8090 | Go RTSP ingest: camera registration, motion gating, MinIO upload |
 | `tracking-orchestrator` | 8500 | Python ML pipeline: detection, tracking, identity, signals |
-| `triton` | 8701 | ONNX model serving (YOLO, SOLIDER-REID, RTMPose) |
+| `triton` | 8701 | Model serving for YOLO, SOLIDER, RTMPose, and the five Buffalo_L face graphs |
 
 ## Key design points
 
@@ -37,6 +37,35 @@ Results are streamed via Redis Streams (protobuf) to [Cognitive Companion](../co
 - **PH evidence is first-class**: caregiver correction UIs consume real `tagged_keyframes` and repository-validated metadata. Do not fabricate image keys or coerce invalid JSONB into empty objects.
 - **Quality capture**: each PH carries a `mean_quality` field (EMA of observation quality scores) that travels to Cognitive Companion for display in location envelopes.
 - **No silent fallbacks**: stream consumers dead-letter unprocessable messages with a metric and warning log; they never silently skip.
+
+## Inference deployment profiles
+
+The default DGX profile serves canonical full-precision Buffalo_L models from
+[`triton-models`](triton-models/README.md). The Jetson Orin Nano Super profile
+serves explicit-Q/DQ models and target-built TensorRT plans from
+[`triton-models-jetson`](triton-models-jetson/README.md).
+
+The Jetson repository contains eight required graphs:
+
+- YOLO26L person detection
+- RTMPose-m pose estimation
+- SOLIDER body re-identification
+- SCRFD face detection
+- ArcFace recognition
+- 2D106 and 3D68 facial landmarks
+- gender and age attributes
+
+Depth Anything V2 is not loaded. The
+[`person-identification-service`](https://github.com/SilverMind-Project/person-identification-service)
+uses Triton as its only inference backend and switches profiles by changing
+`TRITON_GRPC_URL` and `PERSON_ID_MODEL_PROFILE`. Startup fails unless all five
+Buffalo_L models are ready.
+
+Public deployment and qualification guides:
+
+- [Jetson INT8 deployment runbook](docs/jetson-int8-deployment.md)
+- [Jetson CTS deployment](https://silvermind-project.github.io/hardware/jetson-cts)
+- [Model quantization and accelerator portability](https://silvermind-project.github.io/hardware/model-quantization)
 
 ## Quick start
 

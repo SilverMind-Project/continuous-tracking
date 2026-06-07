@@ -5,13 +5,14 @@
 
 services:
   triton:
-    image: nvcr.io/nvidia/tritonserver:24.08-py3-igpu
+    image: ${TRITON_JETSON_IMAGE:?Set a JetPack-compatible Triton iGPU image}
     container_name: cts-triton-jetson
     runtime: nvidia
     restart: unless-stopped
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_DISABLE_REQUIRE: "${NVIDIA_DISABLE_REQUIRE:-0}"
       CUDA_MODULE_LOADING: LAZY
     command: >
       tritonserver
@@ -21,7 +22,11 @@ services:
       --load-model=person-detector
       --load-model=pose-rtmpose
       --load-model=reid-solider
-      --load-model=depth-anything-v2
+      --load-model=face-detector-scrfd
+      --load-model=face-recognition-arcface
+      --load-model=face-landmark-2d106
+      --load-model=face-landmark-3d68
+      --load-model=face-attribute-genderage
       --strict-model-config=true
       --exit-on-error=true
       --grpc-port=8701
