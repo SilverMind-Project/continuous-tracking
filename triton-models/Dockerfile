@@ -12,7 +12,7 @@
 #   pip index versions torch --index-url https://download.pytorch.org/whl/cu<MAJOR><MINOR>
 # Update both the index URL suffix and the version pin together.
 
-FROM nvcr.io/nvidia/tritonserver:26.04-py3
+FROM nvcr.io/nvidia/tritonserver:26.05-py3
 
 RUN pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cu130 \
