@@ -60,6 +60,7 @@ from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdenti
 from .services.overlap_group_sync import fetch_adjacency_edges, fetch_overlap_groups
 from .services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
 from .storage.migrations import MigrationRunner
+from .storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
 from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
@@ -382,6 +383,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         signal_repo = PostgresDementiaSignalRepository(_pool)
         settings_repo = PostgresSettingsRepository(_pool)
         bbox_repo = PostgresBboxAnnotationRepository(_pool)
+        baseline_repo = PostgresBehaviorBaselineRepository(_pool)
     else:
         gallery_repo = None
         trajectory_repo = None
@@ -389,6 +391,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         signal_repo = None
         settings_repo = None
         bbox_repo = None
+        baseline_repo = None
 
     # -- Triton --
     triton_url = settings.as_str("triton.url")
@@ -584,6 +587,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         topology_repo=topology_repo_obj,
         copresence_repo=copresence_repo_obj,
         overlap_groups=declared_overlap_groups,
+        baseline_repo=baseline_repo,
     )
     await _pipeline.initialize(deps)
 

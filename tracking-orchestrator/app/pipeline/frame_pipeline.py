@@ -183,6 +183,7 @@ class PipelineDependencies:
     topology_repo: CameraTopologyRepository | None = None
     copresence_repo: CoPresenceRepository | None = None
     overlap_groups: list[OverlapGroup] | None = None
+    baseline_repo: BehaviorBaselineRepository | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -445,7 +446,9 @@ class FrameProcessingPipeline:
             )
             await self._signal_publisher.connect()
             # Build a baseline repository from the same trajectory source.
-            baseline_repo: BehaviorBaselineRepository = InMemoryBehaviorBaselineRepository()
+            baseline_repo: BehaviorBaselineRepository = (
+                deps.baseline_repo or InMemoryBehaviorBaselineRepository()
+            )
             self._signal_worker = DementiaSignalWorker(
                 trajectory_repo=_traj_repo,
                 signal_repo=self._signal_repo,
