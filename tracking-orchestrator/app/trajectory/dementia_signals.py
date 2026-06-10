@@ -496,7 +496,15 @@ class DementiaSignalWorker:
         window: list[PersonTrajectoryPoint],
         now: datetime,
     ) -> list[DementiaSignal]:
-        """Detect pacing: repetitive room entry pattern normalised for sampling rate."""
+        """Detect pacing: repetitive room entry pattern normalised for sampling rate.
+
+        Current value: room_changes / (observed_window_seconds / 60), i.e. transitions
+        per observed minute over the last pacing_window_minutes.
+
+        Baseline: per-30-minute-window transition rates from the last 30 days via
+        pacing_window_rates(window_minutes, now-30d, now).  Windows with fewer than
+        window_minutes * 0.5 points are excluded.  Compared via robust_z.
+        """
         pacing_cutoff = now - self._cfg.pacing_window
         pacing_points = [p for p in window if p.observed_at >= pacing_cutoff]
 
@@ -598,11 +606,18 @@ class DementiaSignalWorker:
         window: list[PersonTrajectoryPoint],
         now: datetime,
     ) -> list[DementiaSignal]:
-        """Detect sundowning: increased evening activity vs 14-day evening baseline.
+        """Detect sundowning: increased evening activity vs 14-day per-evening baseline.
 
-        Current evening (17:00-22:00 resident-local) room-transition rate is
-        compared against the distribution of evening-window rates over the
-        prior 14 days via robust_z.
+        Today's value: room-transition rate over the 17:00-22:00 resident-local window,
+        computed as evening_transitions / max(evening_observed_pairs, 1).
+
+        Baseline: one rate sample per prior local calendar day from
+        daily_window_rates(17, 22, tz_name, now-14d, now).  Rate per day is
+        transition_count / max(observed_points, 1).  Today's local date is excluded.
+
+        Compared via robust_z (modified z-score using median/MAD).
+        Severity: z >= 4.0 -> emergency, z >= 3.0 -> warning, z >= sundowning_z_threshold -> info.
+        Cold start (fewer than min_baseline_n prior evenings): emit info only when rate >= 0.03.
         """
         if len(window) < 2:
             return []
@@ -612,9 +627,6 @@ class DementiaSignalWorker:
         # Count evening transitions and observation points for today.
         evening_transitions = 0
         evening_points = 0
-        today_evening_start = now.replace(hour=17, minute=0, second=0, microsecond=0)
-        if now.hour < 17:
-            today_evening_start -= timedelta(days=1)
 
         for i in range(1, len(sorted_window)):
             p_prev = sorted_window[i - 1]
@@ -631,39 +643,28 @@ class DementiaSignalWorker:
         if evening_points < self._cfg.sundowning_min_evening_minutes:
             return []
 
-        # Rate for today's evening window.
         today_rate = evening_transitions / max(evening_points, 1)
 
-        # Build 14-day evening baseline from hourly_activity.
-        evening_rates: list[float] = []
-        if self._baseline_repo is not None:
-            hourly = await self._baseline_repo.hourly_activity(
-                identity_id,
-                since=now - timedelta(days=14),
-                until=now,
-            )
-            # Evening hours (17-21): sum transitions and observations.
-            evening_transition_total = sum(
-                h.transition_count for hr, h in hourly.items() if 17 <= hr < 22
-            )
-            evening_obs_total = sum(h.observed_minutes for hr, h in hourly.items() if 17 <= hr < 22)
-            if evening_obs_total > 0:
-                avg_evening_rate = evening_transition_total / evening_obs_total
-                evening_rates = [avg_evening_rate]  # daily aggregate
+        # Robust z-score against 14-day per-evening baseline (via daily_window_rates).
+        z_score_result = await self._compute_z_score(
+            value=today_rate,
+            signal_kind="sundowning_index",
+            identity_id=identity_id,
+            now=now,
+        )
 
         severity: DementiaSignalSeverity
-        if len(evening_rates) < 2:
-            # Fall back: use simple threshold (1.5x ratio → significant)
+        if z_score_result.z_score is None:
+            # Cold start: emit info only when rate is clearly elevated.
             if today_rate < 0.03:
                 return []
             severity = "info"
         else:
-            rz = robust_z(today_rate, evening_rates)
-            if rz.n < self._cfg.min_baseline_n or rz.modified_z < self._cfg.sundowning_z_threshold:
+            if z_score_result.z_score < self._cfg.sundowning_z_threshold:
                 return []
-            if rz.modified_z >= 4.0:
+            if z_score_result.z_score >= 4.0:
                 severity = "emergency"
-            elif rz.modified_z >= 3.0:
+            elif z_score_result.z_score >= 3.0:
                 severity = "warning"
             else:
                 severity = "info"
@@ -683,6 +684,8 @@ class DementiaSignalWorker:
                 signal_kind=kind,
                 severity=severity,
                 value=round(today_rate, 4),
+                baseline=z_score_result.baseline,
+                z_score=z_score_result.z_score,
                 window_start=w_start,
                 window_end=w_end,
                 emitted_at=w_end,
@@ -691,7 +694,6 @@ class DementiaSignalWorker:
                     "evening_transitions": evening_transitions,
                     "evening_points": evening_points,
                     "today_rate": round(today_rate, 4),
-                    "baseline_rates_count": len(evening_rates),
                 },
             )
         ]
@@ -816,8 +818,13 @@ class DementiaSignalWorker:
     ) -> list[DementiaSignal]:
         """Detect nighttime movement: room transitions 22:00-06:00 local.
 
-        Compared against the resident's 14-day nighttime-transition baseline
-        via robust_z; falls back to a flat threshold for cold starts.
+        Current value: raw transition count for tonight's 22:00-06:00 window.
+
+        Baseline: one transition-count sample per prior local calendar night from
+        daily_window_rates(22, 6, tz_name, now-14d, now).  The 22:00-06:00 window
+        wraps midnight; points before 06:00 are bucketed to the previous local date
+        so one night produces one sample.  The current night is excluded from the
+        baseline.  Compared via robust_z; falls back to a flat threshold for cold starts.
         """
         night_points = sorted(
             [
@@ -1166,7 +1173,17 @@ class DementiaSignalWorker:
         identity_id: str,
         now: datetime,
     ) -> list[float] | None:
-        """Return raw baseline samples for *signal_kind*, or None."""
+        """Return raw baseline samples for *signal_kind*, or None.
+
+        Each signal kind uses a purpose-shaped query:
+        - bathroom_dwell_anomaly: closed-dwell durations (seconds) over 30 days.
+        - sundowning_index: per-evening rate (transitions/observed_points) over 14 days,
+          today's local date excluded.
+        - nighttime_movement: per-night transition count over 14 days,
+          current night excluded.
+        - pacing: per-30-min-window transition rate (per minute) over 30 days.
+        - stillness_anomaly: still_seconds per historical episode over 30 days.
+        """
         assert self._baseline_repo is not None
 
         if signal_kind == "bathroom_dwell_anomaly":
@@ -1178,14 +1195,47 @@ class DementiaSignalWorker:
             )
             return durations if len(durations) >= self._cfg.min_baseline_n else None
 
-        if signal_kind in ("pacing", "sundowning_index", "nighttime_movement"):
-            hourly = await self._baseline_repo.hourly_activity(
+        if signal_kind == "sundowning_index":
+            raw = await self._baseline_repo.daily_window_rates(
                 identity_id,
+                17,
+                22,
+                self._cfg.tz_name,
+                since=now - timedelta(days=14),
+                until=now,
+            )
+            today_date = now.astimezone(self._cfg.tz).date()
+            samples = [
+                s.transition_count / max(s.observed_points, 1)
+                for s in raw
+                if s.local_date != today_date
+            ]
+            return samples if len(samples) >= self._cfg.min_baseline_n else None
+
+        if signal_kind == "nighttime_movement":
+            raw = await self._baseline_repo.daily_window_rates(
+                identity_id,
+                22,
+                6,
+                self._cfg.tz_name,
+                since=now - timedelta(days=14),
+                until=now,
+            )
+            now_local = now.astimezone(self._cfg.tz)
+            current_night_date = (
+                now_local.date() if now_local.hour >= 22 else (now_local - timedelta(days=1)).date()
+            )
+            samples = [float(s.transition_count) for s in raw if s.local_date != current_night_date]
+            return samples if len(samples) >= self._cfg.min_baseline_n else None
+
+        if signal_kind == "pacing":
+            rates = await self._baseline_repo.pacing_window_rates(
+                identity_id,
+                self._cfg.pacing_window_minutes,
                 since=now - timedelta(days=30),
                 until=now,
             )
-            samples = [float(h.transition_count) for h in hourly.values()]
-            return samples if len(samples) >= self._cfg.min_baseline_n else None
+            return rates if len(rates) >= self._cfg.min_baseline_n else None
 
         if signal_kind == "stillness_anomaly":
             episodes = await self._baseline_repo.stillness_episodes(
@@ -1318,10 +1368,12 @@ class SignalConfig:
     ) -> None:
         self.window = timedelta(hours=window_hours)
         self.tz = ZoneInfo(tz_name)
+        self.tz_name = tz_name
         self.min_baseline_n = min_baseline_n
         self.onset_consecutive_windows = onset_consecutive_windows
         self.cooldown_minutes = cooldown_minutes
         self.pacing_room_threshold = pacing_room_threshold
+        self.pacing_window_minutes = pacing_window_minutes
         self.pacing_window = timedelta(minutes=pacing_window_minutes)
         self.pacing_min_obs_density = pacing_min_obs_density
         self.nighttime_transition_threshold = nighttime_transition_threshold

@@ -8,13 +8,18 @@ signal kind and severity.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from app.domain import PersonTrajectoryPoint, RoomDwell
-from app.storage.base import InMemoryDementiaSignalRepository, InMemoryTrajectoryRepository
+from app.storage.base import (
+    InMemoryBehaviorBaselineRepository,
+    InMemoryDementiaSignalRepository,
+    InMemoryTrajectoryRepository,
+)
 from app.trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
+from app.trajectory.stats import robust_z as _robust_z
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -492,12 +497,12 @@ class _SpyBaselineRepository:
     """Wraps InMemoryBehaviorBaselineRepository and counts method calls."""
 
     def __init__(self, points: list, dwells: list) -> None:
-        from app.storage.base import InMemoryBehaviorBaselineRepository
-
         self._inner = InMemoryBehaviorBaselineRepository(points, dwells)
         self.dwell_durations_calls = 0
         self.hourly_activity_calls = 0
         self.stillness_episodes_calls = 0
+        self.daily_window_rates_calls = 0
+        self.pacing_window_rates_calls = 0
 
     async def dwell_durations(self, *args, **kwargs):
         self.dwell_durations_calls += 1
@@ -510,6 +515,14 @@ class _SpyBaselineRepository:
     async def stillness_episodes(self, *args, **kwargs):
         self.stillness_episodes_calls += 1
         return await self._inner.stillness_episodes(*args, **kwargs)
+
+    async def daily_window_rates(self, *args, **kwargs):
+        self.daily_window_rates_calls += 1
+        return await self._inner.daily_window_rates(*args, **kwargs)
+
+    async def pacing_window_rates(self, *args, **kwargs):
+        self.pacing_window_rates_calls += 1
+        return await self._inner.pacing_window_rates(*args, **kwargs)
 
 
 class TestIncrementalWindows:
@@ -621,3 +634,330 @@ class TestBaselineCache:
         # Second run within TTL — should use cache.
         await worker.run_once(now=_NOW + timedelta(minutes=1))
         assert spy.dwell_durations_calls == calls_after_first  # no new calls
+
+
+# ---------------------------------------------------------------------------
+# Task 1.2 — Baseline semantics: sundowning, nighttime movement, pacing
+# ---------------------------------------------------------------------------
+
+
+# Helper: build one historical evening's points (19 pts, last one switches room).
+# 19 points at 15-min intervals span 17:00-21:30 (all inside the 17-22 evening window).
+def _mk_hist_evening(
+    identity_id: str,
+    ph_id: str,
+    day_offset: int,
+    ref_now: datetime,
+) -> list[PersonTrajectoryPoint]:
+    base = (ref_now - timedelta(days=day_offset)).replace(
+        hour=17, minute=0, second=0, microsecond=0
+    )
+    return [
+        PersonTrajectoryPoint(
+            identity_id=identity_id,
+            ph_id=ph_id,
+            observed_at=base + timedelta(minutes=i * 15),
+            room_name="kitchen" if i < 18 else "hallway",
+            identity_confidence=0.9,
+        )
+        for i in range(19)
+    ]
+
+
+class TestSundowningWithBaseline:
+    """Task 1.2: sundowning uses daily_window_rates for per-evening z-score."""
+
+    @pytest.mark.asyncio
+    async def test_escalation_emits_warning_or_emergency(self) -> None:
+        """13 historical evenings at rate 1/19; today at rate 10/10 → z=inf → emergency."""
+        now = datetime(2026, 4, 23, 20, 0, 0, tzinfo=UTC)
+
+        # Historical: 13 prior evenings (days 1-13 before now), each 19 points / 1 transition.
+        hist_pts = []
+        for day in range(1, 14):
+            hist_pts.extend(_mk_hist_evening(_IDENTITY, _GT, day, now))
+
+        traj_repo = InMemoryTrajectoryRepository()
+        sig_repo = InMemoryDementiaSignalRepository()
+        baseline_repo = InMemoryBehaviorBaselineRepository(points=hist_pts)
+        cfg = SignalConfig(
+            tz_name="UTC",
+            onset_consecutive_windows=1,
+            sundowning_min_evening_minutes=5,
+        )
+        worker = DementiaSignalWorker(traj_repo, sig_repo, cfg=cfg, baseline_repo=baseline_repo)
+
+        # Today: 11 alternating points at 18:xx UTC → 10 pairs, all transitions → rate = 1.0.
+        for i in range(11):
+            room = "kitchen" if i % 2 == 0 else "hallway"
+            await traj_repo.save_trajectory_point(
+                PersonTrajectoryPoint(
+                    identity_id=_IDENTITY,
+                    ph_id=_GT,
+                    observed_at=now.replace(hour=18, minute=0, second=0) + timedelta(minutes=i * 5),
+                    room_name=room,
+                    identity_confidence=0.9,
+                )
+            )
+
+        signals = await worker.run_once(now=now)
+        sundowning = [s for s in signals if s.signal_kind == "sundowning_index"]
+        assert len(sundowning) == 1
+        assert sundowning[0].severity in ("warning", "emergency")
+        assert sundowning[0].z_score is not None
+
+    @pytest.mark.asyncio
+    async def test_quiet_rate_equals_median_no_signal(self) -> None:
+        """Today's rate = historical median (1/19) → z = 0 < threshold → no signal."""
+        now = datetime(2026, 4, 23, 20, 0, 0, tzinfo=UTC)
+
+        hist_pts = []
+        for day in range(1, 14):
+            hist_pts.extend(_mk_hist_evening(_IDENTITY, _GT, day, now))
+
+        traj_repo = InMemoryTrajectoryRepository()
+        sig_repo = InMemoryDementiaSignalRepository()
+        baseline_repo = InMemoryBehaviorBaselineRepository(points=hist_pts)
+        cfg = SignalConfig(
+            tz_name="UTC",
+            onset_consecutive_windows=1,
+            sundowning_min_evening_minutes=5,
+        )
+        worker = DementiaSignalWorker(traj_repo, sig_repo, cfg=cfg, baseline_repo=baseline_repo)
+
+        # Today: 20 points, only last switches room → 19 pairs, 1 transition.
+        # today_rate = 1/19 == historical median → z = 0, below threshold.
+        for i in range(20):
+            room = "kitchen" if i < 19 else "hallway"
+            await traj_repo.save_trajectory_point(
+                PersonTrajectoryPoint(
+                    identity_id=_IDENTITY,
+                    ph_id=_GT,
+                    observed_at=now.replace(hour=18, minute=0, second=0) + timedelta(minutes=i * 3),
+                    room_name=room,
+                    identity_confidence=0.9,
+                )
+            )
+
+        signals = await worker.run_once(now=now)
+        assert not any(s.signal_kind == "sundowning_index" for s in signals), (
+            "Sundowning must not fire when today_rate equals historical median"
+        )
+
+
+class TestNighttimeMovementWithBaseline:
+    """Task 1.2: nighttime movement uses daily_window_rates(22, 6) for nightly z-score."""
+
+    @pytest.mark.asyncio
+    async def test_elevated_tonight_fires(self) -> None:
+        """13 prior nights (2 transitions each); tonight 8 transitions → z=inf → emergency."""
+        # 12:30 AM UTC on April 24 — inside the April 23 night window.
+        now = datetime(2026, 4, 24, 0, 30, 0, tzinfo=UTC)
+
+        # Historical: nights of April 10-22 (days 2-14 ago from now).
+        # Each: bedroom@22:00, kitchen@23:00, bedroom@23:30 → 2 transitions.
+        hist_pts = []
+        for day in range(2, 15):
+            night_start = (now - timedelta(days=day)).replace(
+                hour=22, minute=0, second=0, microsecond=0
+            )
+            for offset, room in [(0, "bedroom"), (60, "kitchen"), (90, "bedroom")]:
+                hist_pts.append(
+                    PersonTrajectoryPoint(
+                        identity_id=_IDENTITY,
+                        ph_id=_GT,
+                        observed_at=night_start + timedelta(minutes=offset),
+                        room_name=room,
+                        identity_confidence=0.9,
+                    )
+                )
+
+        traj_repo = InMemoryTrajectoryRepository()
+        sig_repo = InMemoryDementiaSignalRepository()
+        baseline_repo = InMemoryBehaviorBaselineRepository(points=hist_pts)
+        cfg = SignalConfig(
+            tz_name="UTC",
+            onset_consecutive_windows=1,
+            nighttime_transition_threshold=3,
+        )
+        worker = DementiaSignalWorker(traj_repo, sig_repo, cfg=cfg, baseline_repo=baseline_repo)
+
+        # Tonight: 9 points with 8 transitions at April 23 22:xx.
+        tonight_base = datetime(2026, 4, 23, 22, 0, 0, tzinfo=UTC)
+        rooms = [
+            "bedroom",
+            "kitchen",
+            "bathroom",
+            "bedroom",
+            "kitchen",
+            "bathroom",
+            "bedroom",
+            "kitchen",
+            "bedroom",
+        ]
+        for i, room in enumerate(rooms):
+            await traj_repo.save_trajectory_point(
+                PersonTrajectoryPoint(
+                    identity_id=_IDENTITY,
+                    ph_id=_GT,
+                    observed_at=tonight_base + timedelta(minutes=i * 10),
+                    room_name=room,
+                    identity_confidence=0.9,
+                )
+            )
+
+        signals = await worker.run_once(now=now)
+        night_sigs = [s for s in signals if s.signal_kind == "nighttime_movement"]
+        assert night_sigs, "expected nighttime_movement signal"
+        assert night_sigs[0].severity in ("warning", "emergency")
+
+    @pytest.mark.asyncio
+    async def test_below_flat_threshold_no_signal(self) -> None:
+        """2 transitions tonight < nighttime_transition_threshold=3 → no signal."""
+        now = datetime(2026, 4, 24, 0, 30, 0, tzinfo=UTC)
+        traj_repo = InMemoryTrajectoryRepository()
+        sig_repo = InMemoryDementiaSignalRepository()
+        cfg = SignalConfig(
+            tz_name="UTC",
+            onset_consecutive_windows=1,
+            nighttime_transition_threshold=3,
+        )
+        worker = DementiaSignalWorker(traj_repo, sig_repo, cfg=cfg)
+
+        for offset, room in [(0, "bedroom"), (30, "kitchen"), (60, "bedroom")]:
+            await traj_repo.save_trajectory_point(
+                PersonTrajectoryPoint(
+                    identity_id=_IDENTITY,
+                    ph_id=_GT,
+                    observed_at=(
+                        datetime(2026, 4, 23, 23, 0, 0, tzinfo=UTC) + timedelta(minutes=offset)
+                    ),
+                    room_name=room,
+                    identity_confidence=0.9,
+                )
+            )
+
+        signals = await worker.run_once(now=now)
+        assert not any(s.signal_kind == "nighttime_movement" for s in signals)
+
+    @pytest.mark.asyncio
+    async def test_window_wraps_midnight_single_bucket(self) -> None:
+        """Points at 23:30 and 01:30 UTC both land in the same April 23 night bucket."""
+        p1 = PersonTrajectoryPoint(
+            identity_id=_IDENTITY,
+            ph_id=_GT,
+            observed_at=datetime(2026, 4, 23, 23, 30, 0, tzinfo=UTC),
+            room_name="bedroom",
+            identity_confidence=0.9,
+        )
+        p2 = PersonTrajectoryPoint(
+            identity_id=_IDENTITY,
+            ph_id=_GT,
+            observed_at=datetime(2026, 4, 24, 1, 30, 0, tzinfo=UTC),
+            room_name="kitchen",
+            identity_confidence=0.9,
+        )
+        repo = InMemoryBehaviorBaselineRepository(points=[p1, p2])
+        since = datetime(2026, 4, 20, 0, 0, 0, tzinfo=UTC)
+        until = datetime(2026, 4, 24, 6, 0, 0, tzinfo=UTC)
+
+        samples = await repo.daily_window_rates(_IDENTITY, 22, 6, "UTC", since=since, until=until)
+
+        assert len(samples) == 1, f"expected 1 night bucket, got {len(samples)}: {samples}"
+        assert samples[0].local_date == date(2026, 4, 23)
+        assert samples[0].transition_count == 1
+        assert samples[0].observed_points == 2
+
+
+class TestPacingWithBaseline:
+    """Task 1.2: pacing uses pacing_window_rates for per-window-rate z-score."""
+
+    @pytest.mark.asyncio
+    async def test_z_score_non_null_and_consistent_with_robust_z(self) -> None:
+        """Historical 30-min windows at 2/30 tpm; today at 0.5 tpm → z=inf, non-null."""
+        now = datetime(2026, 4, 23, 14, 0, 0, tzinfo=UTC)
+        since_30d = now - timedelta(days=30)
+
+        # Historical: 10 dense 30-min windows aligned to since_30d.
+        # Each: 15 points at 2-min intervals; rooms kitchen(13) + hallway + bedroom = 2 transitions.
+        hist_pts = []
+        for w in range(10):
+            window_base = since_30d + timedelta(minutes=w * 30)
+            for pt_idx in range(15):
+                room = "kitchen" if pt_idx < 13 else "hallway" if pt_idx == 13 else "bedroom"
+                hist_pts.append(
+                    PersonTrajectoryPoint(
+                        identity_id=_IDENTITY,
+                        ph_id=_GT,
+                        observed_at=window_base + timedelta(minutes=pt_idx * 2),
+                        room_name=room,
+                        identity_confidence=0.9,
+                    )
+                )
+
+        traj_repo = InMemoryTrajectoryRepository()
+        sig_repo = InMemoryDementiaSignalRepository()
+        baseline_repo = InMemoryBehaviorBaselineRepository(points=hist_pts)
+        cfg = SignalConfig(
+            tz_name="UTC",
+            onset_consecutive_windows=1,
+            pacing_room_threshold=4,
+            pacing_window_minutes=30,
+        )
+        worker = DementiaSignalWorker(traj_repo, sig_repo, cfg=cfg, baseline_repo=baseline_repo)
+
+        # Today: 13 alternating points over ~24 min → 12 transitions, rate ≈ 0.5 tpm.
+        for i in range(13):
+            room = "kitchen" if i % 2 == 0 else "hallway"
+            await traj_repo.save_trajectory_point(
+                PersonTrajectoryPoint(
+                    identity_id=_IDENTITY,
+                    ph_id=_GT,
+                    observed_at=now - timedelta(minutes=25 - i * 2),
+                    room_name=room,
+                    identity_confidence=0.9,
+                )
+            )
+
+        signals = await worker.run_once(now=now)
+        pacing = [s for s in signals if s.signal_kind == "pacing"]
+        assert pacing, "expected pacing signal"
+        assert pacing[0].z_score is not None
+
+        # Hand-verify: baseline rates are all 2/30; robust_z(current_rate, [2/30]*10)
+        # gives modified_z = inf (MAD=0, value ≠ median).
+        current_rate = pacing[0].value
+        baseline_samples = [2 / 30] * 10
+        hand = _robust_z(current_rate, baseline_samples)
+        import math
+
+        assert math.isinf(hand.modified_z), "expected inf z with degenerate baseline"
+        assert math.isinf(pacing[0].z_score)
+
+
+class TestTimezoneEveningWindow:
+    """Task 1.2: AT TIME ZONE -- 21:30 EST (02:30 UTC next day) lands in correct evening bucket."""
+
+    @pytest.mark.asyncio
+    async def test_new_york_21_30_est_lands_in_jan15_evening(self) -> None:
+        # Jan 15 2026 21:30 EST = Jan 16 2026 02:30 UTC (UTC-5 in January).
+        point_utc = datetime(2026, 1, 16, 2, 30, 0, tzinfo=UTC)
+        pt = PersonTrajectoryPoint(
+            identity_id=_IDENTITY,
+            ph_id=_GT,
+            observed_at=point_utc,
+            room_name="kitchen",
+            identity_confidence=0.9,
+        )
+        repo = InMemoryBehaviorBaselineRepository(points=[pt])
+        since = datetime(2026, 1, 10, 0, 0, 0, tzinfo=UTC)
+        until = datetime(2026, 1, 20, 0, 0, 0, tzinfo=UTC)
+
+        samples = await repo.daily_window_rates(
+            _IDENTITY, 17, 22, "America/New_York", since=since, until=until
+        )
+
+        assert len(samples) == 1, f"expected 1 evening sample, got {samples}"
+        # Must resolve to Jan 15 local (EST), not Jan 16 UTC.
+        assert samples[0].local_date == date(2026, 1, 15)
+        assert samples[0].observed_points == 1

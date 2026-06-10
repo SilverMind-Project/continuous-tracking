@@ -408,7 +408,176 @@ class TestBathroomDwellSignalWithPostgresBaseline:
         assert signal.baseline is not None, (
             "baseline must be non-null when baseline repo has 6+ samples"
         )
-        assert signal.identity_id == identity_id
+
+
+# ---------------------------------------------------------------------------
+# Test 3: InMemory/Postgres parity for daily_window_rates and pacing_window_rates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestDailyWindowRatesParity:
+    """PostgresBehaviorBaselineRepository.daily_window_rates must match InMemory on same data."""
+
+    @pytest.mark.asyncio
+    async def test_evening_window_parity(self, db_pool: asyncpg.Pool) -> None:
+        from app.domain import PersonTrajectoryPoint
+        from app.storage.base import InMemoryBehaviorBaselineRepository
+        from app.storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
+
+        await _truncate_tables(db_pool)
+        identity_id = "parity-dwr-" + str(uuid.uuid4())[:8]
+        ph_id = str(uuid.uuid4())
+        now = datetime(2026, 1, 20, 0, 0, 0, tzinfo=UTC)
+
+        # 5 evenings: each has 3 points (kitchen, kitchen, hallway → 1 transition).
+        pts: list[PersonTrajectoryPoint] = []
+        for day in range(1, 6):
+            base = (now - timedelta(days=day)).replace(hour=18, minute=0, second=0, microsecond=0)
+            for offset, room in [(0, "kitchen"), (60, "kitchen"), (120, "hallway")]:
+                pts.append(
+                    PersonTrajectoryPoint(
+                        identity_id=identity_id,
+                        ph_id=ph_id,
+                        observed_at=base + timedelta(minutes=offset),
+                        room_name=room,
+                        identity_confidence=0.9,
+                    )
+                )
+
+        async with db_pool.acquire() as conn:
+            await _ensure_identity(conn, identity_id)
+            await _ensure_ph(conn, ph_id, now)
+            for pt in pts:
+                await _insert_trajectory_point(conn, pt)
+
+        inmem = InMemoryBehaviorBaselineRepository(points=pts[:])
+        pg = PostgresBehaviorBaselineRepository(db_pool)
+        since = now - timedelta(days=7)
+
+        expected = await inmem.daily_window_rates(
+            identity_id, 17, 22, "UTC", since=since, until=now
+        )
+        actual = await pg.daily_window_rates(identity_id, 17, 22, "UTC", since=since, until=now)
+
+        assert len(actual) == len(expected), (
+            f"row count mismatch: pg={len(actual)} inmem={len(expected)}"
+        )
+        for act, exp in zip(actual, expected, strict=True):
+            assert act.local_date == exp.local_date
+            assert act.transition_count == exp.transition_count
+            assert act.observed_points == exp.observed_points
+
+    @pytest.mark.asyncio
+    async def test_nighttime_wrapping_window_parity(self, db_pool: asyncpg.Pool) -> None:
+        from app.domain import PersonTrajectoryPoint
+        from app.storage.base import InMemoryBehaviorBaselineRepository
+        from app.storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
+
+        await _truncate_tables(db_pool)
+        identity_id = "parity-night-" + str(uuid.uuid4())[:8]
+        ph_id = str(uuid.uuid4())
+        now = datetime(2026, 2, 10, 6, 0, 0, tzinfo=UTC)
+
+        # 4 nights: each night has a 23:30 and a 01:30 point spanning midnight.
+        pts: list[PersonTrajectoryPoint] = []
+        for day in range(1, 5):
+            night_start = (now - timedelta(days=day)).replace(
+                hour=23, minute=30, second=0, microsecond=0
+            )
+            early_morning = (now - timedelta(days=day - 1)).replace(
+                hour=1, minute=30, second=0, microsecond=0
+            )
+            pts.append(
+                PersonTrajectoryPoint(
+                    identity_id=identity_id,
+                    ph_id=ph_id,
+                    observed_at=night_start,
+                    room_name="bedroom",
+                    identity_confidence=0.9,
+                )
+            )
+            pts.append(
+                PersonTrajectoryPoint(
+                    identity_id=identity_id,
+                    ph_id=ph_id,
+                    observed_at=early_morning,
+                    room_name="kitchen",
+                    identity_confidence=0.9,
+                )
+            )
+
+        async with db_pool.acquire() as conn:
+            await _ensure_identity(conn, identity_id)
+            await _ensure_ph(conn, ph_id, now)
+            for pt in pts:
+                await _insert_trajectory_point(conn, pt)
+
+        inmem = InMemoryBehaviorBaselineRepository(points=pts[:])
+        pg = PostgresBehaviorBaselineRepository(db_pool)
+        since = now - timedelta(days=7)
+
+        expected = await inmem.daily_window_rates(identity_id, 22, 6, "UTC", since=since, until=now)
+        actual = await pg.daily_window_rates(identity_id, 22, 6, "UTC", since=since, until=now)
+
+        assert len(actual) == len(expected), (
+            f"row count mismatch: pg={len(actual)} inmem={len(expected)}"
+        )
+        for act, exp in zip(actual, expected, strict=True):
+            assert act.local_date == exp.local_date
+            assert act.transition_count == exp.transition_count
+            assert act.observed_points == exp.observed_points
+
+
+@pytest.mark.integration
+class TestPacingWindowRatesParity:
+    """PostgresBehaviorBaselineRepository.pacing_window_rates must match InMemory on same data."""
+
+    @pytest.mark.asyncio
+    async def test_dense_windows_parity(self, db_pool: asyncpg.Pool) -> None:
+        from app.domain import PersonTrajectoryPoint
+        from app.storage.base import InMemoryBehaviorBaselineRepository
+        from app.storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
+
+        await _truncate_tables(db_pool)
+        identity_id = "parity-pacing-" + str(uuid.uuid4())[:8]
+        ph_id = str(uuid.uuid4())
+        now = datetime(2026, 3, 1, 12, 0, 0, tzinfo=UTC)
+        since = now - timedelta(days=7)
+
+        # 5 dense 30-min windows (15 pts each, 2 transitions) aligned to since.
+        pts: list[PersonTrajectoryPoint] = []
+        for w in range(5):
+            window_base = since + timedelta(minutes=w * 30)
+            for pt_idx in range(15):
+                room = "kitchen" if pt_idx < 13 else "hallway" if pt_idx == 13 else "bedroom"
+                pts.append(
+                    PersonTrajectoryPoint(
+                        identity_id=identity_id,
+                        ph_id=ph_id,
+                        observed_at=window_base + timedelta(minutes=pt_idx * 2),
+                        room_name=room,
+                        identity_confidence=0.9,
+                    )
+                )
+
+        async with db_pool.acquire() as conn:
+            await _ensure_identity(conn, identity_id)
+            await _ensure_ph(conn, ph_id, now)
+            for pt in pts:
+                await _insert_trajectory_point(conn, pt)
+
+        inmem = InMemoryBehaviorBaselineRepository(points=pts[:])
+        pg = PostgresBehaviorBaselineRepository(db_pool)
+
+        expected = sorted(await inmem.pacing_window_rates(identity_id, 30, since=since, until=now))
+        actual = sorted(await pg.pacing_window_rates(identity_id, 30, since=since, until=now))
+
+        assert len(actual) == len(expected), (
+            f"window count mismatch: pg={len(actual)} inmem={len(expected)}"
+        )
+        for act, exp in zip(actual, expected, strict=True):
+            assert abs(act - exp) < 1e-6, f"rate mismatch: pg={act} inmem={exp}"
 
 
 # ---------------------------------------------------------------------------

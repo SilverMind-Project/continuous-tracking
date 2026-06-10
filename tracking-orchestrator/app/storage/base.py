@@ -33,6 +33,7 @@ from .misc import (
 )
 from .signals import (
     BehaviorBaselineRepository,
+    DailyWindowSample,
     DementiaSignalRepository,
     HourlyActivitySummary,
     InMemoryBehaviorBaselineRepository,
@@ -896,6 +897,7 @@ __all__ = [
     "CameraTopologyRepository",
     "CoPresenceRepository",
     "CorrectionRepository",
+    "DailyWindowSample",
     "DementiaSignalRepository",
     "GalleryRepository",
     "HourlyActivitySummary",
