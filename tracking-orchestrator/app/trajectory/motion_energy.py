@@ -140,6 +140,33 @@ class MotionEnergyTracker:
             sample_count=len(dq),
         )
 
+    def get_current_energy(self, global_track_id: GlobalTrackId) -> MotionEnergy | None:
+        """Return the most recently computed energy without updating state.
+
+        Returns None when no history exists for the track. Used by stages that
+        run before the frame's update call but need the previous frame's energy
+        without double-updating the internal deque.
+        """
+        dq = self._history.get(global_track_id)
+        if dq is None:
+            return None
+        pair_dq = self._pair_velocities.get(global_track_id)
+        if pair_dq is None or not pair_dq:
+            return MotionEnergy(
+                mean_keypoint_velocity_nu_s=0.0,
+                max_joint_velocity_nu_s=0.0,
+                still_fraction=1.0,
+                sample_count=len(dq),
+            )
+        velocities = [v for v, _ in pair_dq]
+        still_count = sum(1 for _, is_still in pair_dq if is_still)
+        return MotionEnergy(
+            mean_keypoint_velocity_nu_s=round(float(np.mean(velocities)), 6),
+            max_joint_velocity_nu_s=round(float(np.max(velocities)), 6),
+            still_fraction=round(still_count / len(pair_dq), 4),
+            sample_count=len(dq),
+        )
+
     def evict_track(self, global_track_id: GlobalTrackId) -> None:
         """Remove all history for a track (call on track close)."""
         self._history.pop(global_track_id, None)

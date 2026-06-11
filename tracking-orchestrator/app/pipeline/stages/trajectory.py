@@ -19,6 +19,7 @@ from .base import FrameStage
 if TYPE_CHECKING:
     from ...transport.dwell_publisher import DwellPublisher
     from ...transport.presence_publisher import PresencePublisher
+    from .fall_detection import FallDetectionStage
 
 logger = get_logger(__name__)
 
@@ -42,6 +43,7 @@ class ClosePHStage(FrameStage):
         prev_active_ph_ids: set[str] | None = None,
         presence_publisher: PresencePublisher | None = None,
         dwell_publisher: DwellPublisher | None = None,
+        fall_detection_stage: FallDetectionStage | None = None,
     ) -> None:
         self._trajectory_writer = trajectory_writer
         self._motion_energy_tracker = motion_energy_tracker
@@ -51,6 +53,7 @@ class ClosePHStage(FrameStage):
         )
         self._presence_publisher = presence_publisher
         self._dwell_publisher = dwell_publisher
+        self._fall_detection_stage = fall_detection_stage
         # Per-PH state for presence and dwell event emission.
         self._seen_ph_ids: set[str] = set()
         self._last_identity_by_ph: dict[str, str | None] = {}
@@ -152,6 +155,8 @@ class ClosePHStage(FrameStage):
                 self._motion_energy_tracker.evict_track(ph_id)
             if self._posture_tracker is not None:
                 self._posture_tracker.evict_track(ph_id)
+            if self._fall_detection_stage is not None:
+                self._fall_detection_stage.evict(ph_id)
 
             if self._presence_publisher is not None:
                 await self._presence_publisher.publish_disappeared(

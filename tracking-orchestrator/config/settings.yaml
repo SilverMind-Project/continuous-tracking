@@ -130,6 +130,54 @@ signal:
   # Minimum trajectory-point density (points/min) required to evaluate pacing.
   pacing_min_obs_density: 0.5
 
+# Fall detection fast path (Milestone 2)
+#
+# Threshold rationale:
+#
+# max_descent_rate_hps_threshold (0.8):
+#   Heights-per-second descent of the hip proxy. Controlled sitting is 0.2-0.4 hps;
+#   falls typically exceed 0.8 hps. Reference: lightweight pose fall detection
+#   papers (see VISION.md §3.1 citations).
+#
+# height_ratio_threshold (0.55):
+#   Hip height relative to standing anchor. 1.0 = upright; ~0.3 = floor.
+#   0.55 distinguishes floor-level lying from seated postures (~0.6-0.7).
+#
+# lying_score_threshold (0.4):
+#   Minimum posture lying score when keypoints ARE available. When keypoints
+#   are absent (person flat on floor) the rule passes regardless, since
+#   loss of pose right after a descent spike is itself fall evidence.
+#
+# floor_speed_max_m_s (2.0):
+#   Kalman floor speed above which the detection is likely a projection glitch.
+#   Actual falls occur at low-to-moderate floor translation; fast-moving
+#   bounding boxes are usually mis-calibrated camera artifacts.
+#
+# escalation_window_s (60):
+#   After emitting warning, check for post-event stillness within this window.
+#   One minute gives time for the initial motion to settle and a clear
+#   stillness pattern to emerge before escalating to emergency.
+#
+# cooldown_minutes (10):
+#   Repeated descent patterns within 10 min escalate severity rather
+#   than re-paging the caregiver.
+#
+# Defaults to disabled (enabled: false). Enable per-deployment after
+# fixture proofs pass, like the CTS robustness flags.
+fall_detection:
+  enabled: false
+  min_samples: 5
+  max_descent_rate_hps_threshold: 0.8
+  height_ratio_threshold: 0.55
+  lying_score_threshold: 0.4
+  floor_speed_max_m_s: 2.0
+  escalation_window_s: 60.0
+  stillness_motion_floor: 0.05
+  standing_clear_height_ratio: 0.75
+  standing_clear_lying_score: 0.2
+  cooldown_minutes: 10
+  resting_rooms: ["bed", "bedroom"]
+
 # Pipeline tuning
 pipeline:
   # Read by: main.py → FrameProcessingPipeline(max_concurrent_frames=)

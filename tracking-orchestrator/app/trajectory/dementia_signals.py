@@ -39,6 +39,7 @@ from ..storage.base import (
 from .signal_specs import (
     BATHROOM_DWELL_SPEC,
     EVENING_ACTIVITY_SPEC,
+    FALL_SUSPECTED_SPEC,
     NIGHTTIME_MOVEMENT_SPEC,
     NON_DIAGNOSTIC_DISCLAIMER,
     PACING_SPEC,
@@ -61,6 +62,7 @@ _SIGNAL_SPEC: dict[str, AlgorithmSpec] = {
     "stillness_anomaly": STILLNESS_SPEC,
     "absence": UNOBSERVED_GAP_SPEC,
     "bathroom_dwell_anomaly": BATHROOM_DWELL_SPEC,
+    "fall_suspected": FALL_SUSPECTED_SPEC,
 }
 
 

@@ -37,6 +37,8 @@ from ..pipeline.stages import (
     DetectionBackfillStage,
     DetectStage,
     FaceIdentityStage,
+    FallDetectionConfig,
+    FallDetectionStage,
     FetchStage,
     InferenceStage,
     KeyframeStage,
@@ -249,6 +251,9 @@ class PipelineConfig:
     # --- Signals ---
     signals: SignalConfig = field(default_factory=SignalConfig)
 
+    # --- Fall detection fast path (M2) ---
+    fall_detection: FallDetectionConfig = field(default_factory=FallDetectionConfig)
+
 
 # ---------------------------------------------------------------------------
 # Main pipeline class
@@ -327,6 +332,7 @@ class FrameProcessingPipeline:
         self._TRAIL_MAXLEN = _trail_maxlen
         # Frame batcher (optional; None when batch_window_s=0).
         self._batcher: FrameBatcher | None = None
+        self._fall_detection_stage: FallDetectionStage | None = None
         self._stage_runner: StageRunner | None = None
         self._post_detect_runner: StageRunner | None = None
         self._pre_world_runner: StageRunner | None = None
@@ -552,6 +558,21 @@ class FrameProcessingPipeline:
             ),
         ]
 
+        # Build fall detection stage when enabled; None otherwise.
+        if (
+            self._config.fall_detection.enabled
+            and self._signal_repo is not None
+            and self._signal_publisher is not None
+        ):
+            _fd_repo = self._signal_repo
+            _fd_pub = self._signal_publisher
+            self._fall_detection_stage = FallDetectionStage(
+                config=self._config.fall_detection,
+                signal_repo=_fd_repo,
+                signal_publisher=_fd_pub,
+                motion_energy_tracker=self._motion_energy_tracker,
+            )
+
         post_world_stages = [
             DetectionBackfillStage(),
             ClosePHStage(
@@ -561,11 +582,13 @@ class FrameProcessingPipeline:
                 prev_active_ph_ids=self._prev_active_ph_ids,
                 presence_publisher=self._presence_publisher,
                 dwell_publisher=self._dwell_publisher,
+                fall_detection_stage=self._fall_detection_stage,
             ),
             PostureStage(
                 camera_room_map=self._camera_room_map,
                 posture_strategy=self._posture_strategy,
             ),
+            *([self._fall_detection_stage] if self._fall_detection_stage is not None else []),
             TrajectoryStage(
                 trajectory_writer=self._trajectory_writer,
                 floor_projector=self._floor_projector,

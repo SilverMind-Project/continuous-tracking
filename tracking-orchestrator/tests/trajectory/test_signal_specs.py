@@ -40,7 +40,7 @@ _NOW = datetime(2026, 5, 23, 18, 0, 0, tzinfo=UTC)
 
 class TestAlgorithmSpecs:
     def test_every_signal_has_algorithm_spec(self) -> None:
-        """All 6 signal kinds must have an AlgorithmSpec."""
+        """All signal kinds must have an AlgorithmSpec."""
         expected_kinds = {
             "pacing",
             "sundowning_index",
@@ -48,6 +48,7 @@ class TestAlgorithmSpecs:
             "stillness_anomaly",
             "absence",
             "bathroom_dwell_anomaly",
+            "fall_suspected",
         }
         assert set(_SIGNAL_SPEC.keys()) == expected_kinds
 

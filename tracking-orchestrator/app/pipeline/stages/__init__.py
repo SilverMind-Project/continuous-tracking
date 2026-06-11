@@ -4,6 +4,7 @@ from .base import FrameStage, StageRunner
 from .detect import DetectStage
 from .detection_backfill import DetectionBackfillStage
 from .face_identity import FaceIdentityStage
+from .fall_detection import FallDetectionConfig, FallDetectionStage
 from .fetch import FetchStage
 from .inference import InferenceStage
 from .keyframes import KeyframeStage
@@ -21,6 +22,8 @@ __all__ = [
     "DetectStage",
     "DetectionBackfillStage",
     "FaceIdentityStage",
+    "FallDetectionConfig",
+    "FallDetectionStage",
     "FetchStage",
     "FrameStage",
     "InferenceStage",

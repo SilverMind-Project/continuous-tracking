@@ -97,6 +97,17 @@ BATHROOM_DWELL_SPEC = AlgorithmSpec(
     min_baseline_samples=5,
 )
 
+FALL_SUSPECTED_SPEC = AlgorithmSpec(
+    name="fall-pose-heuristic-v1",
+    version=1,
+    evidence_grade="observational_study",
+    clinical_label="Suspected Fall (Pose Heuristic)",
+    # Lightweight skeleton-based detection; see VISION.md §3.1 citations.
+    required_inputs=("pose_keypoints", "bbox", "posture_scores", "kalman_floor_speed"),
+    # Fast-path: emits on first trigger without baseline comparison.
+    min_baseline_samples=0,
+)
+
 
 @dataclass(frozen=True)
 class IdentitySignalContext:

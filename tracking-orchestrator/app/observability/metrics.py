@@ -164,6 +164,11 @@ class Metrics:
     cts_presence_events_published_total: Counter
     cts_dwell_events_published_total: Counter
 
+    # ---- Fall detection fast path (M2) ----
+    cts_fall_suspected_total: Counter
+    cts_fall_descent_rate: Histogram
+    cts_fall_suspected_unidentified_total: Counter
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -584,6 +589,21 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_dwell_events_published_total",
             "Dwell events published to tracking.dwell.",
             ["event_type"],
+        ),
+        # ---- Fall detection fast path (M2) ----
+        cts_fall_suspected_total=_counter(
+            "cts_fall_suspected_total",
+            "fall_suspected signals emitted by FallDetectionStage.",
+            ["severity"],
+        ),
+        cts_fall_descent_rate=_hist(
+            "cts_fall_descent_rate",
+            "Max descent rate (heights/s) at fall_suspected emission.",
+            (0.1, 0.25, 0.5, 0.8, 1.0, 1.5, 2.0, 3.0, 5.0),
+        ),
+        cts_fall_suspected_unidentified_total=_counter(
+            "cts_fall_suspected_unidentified_total",
+            "Fall detections suppressed because the PH had no committed identity.",
         ),
     )
 

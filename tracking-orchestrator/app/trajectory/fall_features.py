@@ -103,6 +103,12 @@ class FallFeatures:
     samples: int
     """Frame count in the buffer, for the detector's sufficiency gate."""
 
+    pose_available_now: bool
+    """True when the latest frame had at least one keypoint above the score
+    floor. False means pose was unavailable (person occluded or flat on
+    floor). Used by detector rule 4: absence of pose after a descent spike is
+    itself evidence of a fall."""
+
 
 @dataclass(frozen=True)
 class _Sample:
@@ -253,6 +259,7 @@ class FallFeatureExtractor:
         height_ratio = self._height_ratio(samples)
         post_motion = self._post_event_motion(samples, event_idx)
         floor_speed = samples[event_idx].floor_speed_m_s if event_idx is not None else None
+        pose_available = latest.vertical_y is not None
 
         return FallFeatures(
             max_descent_rate_hps=round(max_rate, 6),
@@ -261,6 +268,7 @@ class FallFeatureExtractor:
             post_event_motion_nu_s=(None if post_motion is None else round(post_motion, 6)),
             floor_speed_at_event_m_s=floor_speed,
             samples=n,
+            pose_available_now=pose_available,
         )
 
     def _max_descent(self, samples: list[_Sample], h_est: float) -> tuple[float, int | None]:

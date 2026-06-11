@@ -915,6 +915,7 @@ DementiaSignalKind = Literal[
     "inferred_dwell_exceeded",
     "presumed_location_unknown",
     "identity_disagreement",
+    "fall_suspected",
 ]
 
 DementiaSignalSeverity = Literal["info", "warning", "emergency"]

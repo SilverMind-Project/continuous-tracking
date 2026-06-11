@@ -39,6 +39,7 @@ from .pipeline.frame_pipeline import (
     PipelineDependencies,
     SignalConfig,
 )
+from .pipeline.stages.fall_detection import FallDetectionConfig
 from .pipeline.types import FaceIdCameraConfig
 from .routers import dashboard as dashboard_router_mod
 from .routers import gallery as gallery_router_mod
@@ -269,6 +270,24 @@ def _build_signal_config(s: Settings) -> SignalConfig:
     )
 
 
+def _build_fall_detection_config(s: Settings) -> FallDetectionConfig:
+    fd = s.section("fall_detection")
+    return FallDetectionConfig(
+        enabled=fd.as_bool("enabled"),
+        min_samples=fd.as_int("min_samples"),
+        max_descent_rate_hps_threshold=fd.as_float("max_descent_rate_hps_threshold"),
+        height_ratio_threshold=fd.as_float("height_ratio_threshold"),
+        lying_score_threshold=fd.as_float("lying_score_threshold"),
+        floor_speed_max_m_s=fd.as_float("floor_speed_max_m_s"),
+        escalation_window_s=fd.as_float("escalation_window_s"),
+        stillness_motion_floor=fd.as_float("stillness_motion_floor"),
+        standing_clear_height_ratio=fd.as_float("standing_clear_height_ratio"),
+        standing_clear_lying_score=fd.as_float("standing_clear_lying_score"),
+        cooldown_minutes=fd.as_int("cooldown_minutes"),
+        resting_rooms=tuple(fd.require("resting_rooms")),
+    )
+
+
 def _build_ph_unknown_purge_config(s: Settings) -> PHUnknownPurgeConfig:
     purge = s.section("person_hypotheses.unknown_purge")
     return PHUnknownPurgeConfig(
@@ -340,6 +359,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         world_tracker=world_tracker_config,
         sampler=sampler_config,
         signals=_build_signal_config(settings),
+        fall_detection=_build_fall_detection_config(settings),
         face_id=_build_face_id_config(settings, face_id_camera_configs),
         max_concurrent_frames=settings.as_int("pipeline.max_concurrent_frames"),
         shutdown_timeout=settings.as_float("pipeline.shutdown_timeout_s"),
