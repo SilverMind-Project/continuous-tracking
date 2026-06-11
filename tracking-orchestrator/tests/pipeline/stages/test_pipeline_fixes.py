@@ -13,10 +13,12 @@ from app.pipeline.frame_pipeline import (
     PipelineDependencies,
     SignalConfig,
 )
+from app.pipeline.gallery_cache import GalleryCache
 from app.storage.base import (
     InMemoryBboxAnnotationRepository,
     InMemoryTrajectoryRepository,
 )
+from app.storage.gallery import InMemoryGalleryRepository
 from app.transport.redis_streams import FrameReady
 
 
@@ -150,3 +152,100 @@ class TestCrossCameraPostDetectBatch:
         assert pre_runner.seen == ["cam-a:1", "cam-b:1", "cam-a:2"]
         assert sorted(post_runner.seen) == ["cam-a:1", "cam-a:2", "cam-b:1"]
         assert pipeline._transport.ack_frame.await_count == 3  # type: ignore[union-attr]
+
+
+class _CountingGalleryRepo(InMemoryGalleryRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.call_count = 0
+
+    async def list_gallery_entries_for_tracklets(
+        self,
+        tracklet_ids: set[str],
+        limit: int = 20,
+    ) -> list:
+        self.call_count += 1
+        return await super().list_gallery_entries_for_tracklets(tracklet_ids, limit)
+
+
+class TestGalleryCacheLifecycle:
+    @pytest.mark.asyncio
+    async def test_cross_camera_path_invalidates_cache_each_round(self) -> None:
+        """The gallery cache must be cleared once per world-tracking round on the
+        cross-camera batched path so round-2 queries cannot hit round-1 cached data."""
+        pipeline = FrameProcessingPipeline(PipelineConfig(signals=SignalConfig(enabled=False)))
+        pipeline._transport = AsyncMock()
+
+        repo = _CountingGalleryRepo()
+        # large max_age_s so the staleness backstop never fires during the test
+        cache = GalleryCache(repo, max_age_s=999.0)
+        cache.invalidate()
+        pipeline._gallery_cache = cache  # type: ignore[assignment]
+
+        class FakeReadingRunner:
+            def __init__(self) -> None:
+                self.seen: list[str] = []
+
+            async def run(self, ctx: object) -> None:
+                import typing
+
+                ctx = typing.cast(object, ctx)
+                # Simulate a stage that reads from the gallery cache.
+                await pipeline._gallery_cache.list_gallery_entries_for_tracklets(  # type: ignore[union-attr]
+                    {"tracklet-shared"}
+                )
+                self.seen.append(f"{ctx.frame.camera_id}:{ctx.frame.frame_index}")  # type: ignore[attr-defined]
+
+        class FakeWorldStage:
+            async def run_many(self, contexts: object) -> None:
+                pass
+
+        pre_runner = FakeReadingRunner()
+        post_runner = FakeReadingRunner()
+        world_stage = FakeWorldStage()
+        pipeline._pre_world_runner = pre_runner  # type: ignore[assignment]
+        pipeline._post_world_runner = post_runner  # type: ignore[assignment]
+        pipeline._world_tracking_stage = world_stage  # type: ignore[assignment]
+
+        # Round 1: cam-a:1 + cam-b:1; Round 2: cam-a:2
+        frames = [
+            FrameReady(camera_id="cam-a", frame_index=1, minio_key="a1.jpg"),
+            FrameReady(camera_id="cam-b", frame_index=1, minio_key="b1.jpg"),
+            FrameReady(camera_id="cam-a", frame_index=2, minio_key="a2.jpg"),
+        ]
+        contexts = [pipeline._init_context(frame) for frame in frames]
+
+        await pipeline._process_cross_camera_post_detect_batch(contexts)
+
+        # Round 1: cam-a:1 misses cache -> repo call 1; cam-b:1 hits cache (same key)
+        # Round 2: cache cleared by _begin_tracker_round -> cam-a:2 misses cache -> repo call 2
+        assert repo.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_non_batched_path_invalidates_cache_each_frame(self) -> None:
+        """The gallery cache must be cleared on each _process_frame call so
+        gallery reads in frame N cannot return frame N-1 cached data."""
+        pipeline = FrameProcessingPipeline(PipelineConfig(signals=SignalConfig(enabled=False)))
+        pipeline._transport = AsyncMock()
+        pipeline._detector = object()  # non-None so _process_frame runs _stage_runner
+
+        repo = _CountingGalleryRepo()
+        cache = GalleryCache(repo, max_age_s=999.0)
+        cache.invalidate()
+        pipeline._gallery_cache = cache  # type: ignore[assignment]
+
+        class FakeStageRunner:
+            async def run(self, ctx: object) -> None:
+                await pipeline._gallery_cache.list_gallery_entries_for_tracklets(  # type: ignore[union-attr]
+                    {"tracklet-shared"}
+                )
+
+        pipeline._stage_runner = FakeStageRunner()  # type: ignore[assignment]
+
+        frame = FrameReady(camera_id="cam-a", frame_index=1, minio_key="a1.jpg")
+        await pipeline._process_frame(frame)
+        await pipeline._process_frame(frame)
+
+        # Frame 1: _begin_tracker_round clears cache, stage misses -> repo call 1
+        # Frame 2: _begin_tracker_round clears cache, stage misses -> repo call 2
+        assert repo.call_count == 2

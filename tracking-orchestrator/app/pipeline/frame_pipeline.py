@@ -866,6 +866,7 @@ class FrameProcessingPipeline:
             camera_contexts.sort(key=lambda ctx: ctx.frame.frame_index)
 
         while any(by_camera.values()):
+            self._begin_tracker_round()
             round_contexts: list[FrameContext] = []
             for camera_id in sorted(by_camera):
                 camera_contexts = by_camera[camera_id]
@@ -1063,10 +1064,18 @@ class FrameProcessingPipeline:
                     stage._room_transition_publisher = room_transition_publisher  # type: ignore[attr-defined]
                     break
 
-    async def _process_frame(self, frame: FrameReady) -> None:
-        """Process a single FrameReady through the full pipeline."""
+    def _begin_tracker_round(self) -> None:
+        """Invalidate the gallery cache at the start of each tracker round.
+
+        Any execution path that runs WorldTrackingStage must call this
+        method before the world-tracking stage executes.
+        """
         if self._gallery_cache is not None:
             self._gallery_cache.invalidate()
+
+    async def _process_frame(self, frame: FrameReady) -> None:
+        """Process a single FrameReady through the full pipeline."""
+        self._begin_tracker_round()
 
         if self._is_stale(frame):
             return

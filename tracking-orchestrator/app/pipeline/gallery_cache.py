@@ -7,10 +7,15 @@ invocation.  Not thread-safe; intended for single-consumer async use.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
+
+from structlog import get_logger
 
 from ..domain import GalleryEmbedding
 from ..storage.base import GalleryRepository
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -19,28 +24,42 @@ class GalleryCache:
 
     De-duplicates ``list_gallery_entries_for_tracklets`` and
     ``gallery_similarity`` calls within a single frame.  Call
-    :meth:`invalidate` at the start of each frame to clear stale
-    entries from the previous frame.
+    :meth:`invalidate` via ``_begin_tracker_round`` at the start of each
+    tracker round to clear stale entries from the previous round.
+
+    ``max_age_s`` is a programming-error backstop: if more than
+    ``max_age_s`` seconds elapse between invalidations the cache
+    self-invalidates and logs a warning rather than silently serving
+    stale gallery data.  It is not an operator-tunable knob.
     """
 
     _repo: GalleryRepository
+    max_age_s: float = 5.0
     _entries_by_tracklets: dict[frozenset[str], list[GalleryEmbedding]] = field(
         default_factory=dict
     )
     _similarity_cache: dict[tuple[frozenset[str], frozenset[str]], float] = field(
         default_factory=dict
     )
+    _invalidated_at: float = field(default_factory=time.monotonic, init=False)
 
     def invalidate(self) -> None:
-        """Clear all cached state.  Call at the top of each ``_process_frame``."""
+        """Clear all cached state.  Call via ``_begin_tracker_round``."""
         self._entries_by_tracklets.clear()
         self._similarity_cache.clear()
+        self._invalidated_at = time.monotonic()
+
+    def _check_stale(self) -> None:
+        if time.monotonic() - self._invalidated_at > self.max_age_s:
+            self.invalidate()
+            logger.warning("gallery_cache_stale_self_invalidated")
 
     async def list_gallery_entries_for_tracklets(
         self,
         tracklet_ids: set[str],
         limit: int = 20,
     ) -> list[GalleryEmbedding]:
+        self._check_stale()
         key = frozenset(tracklet_ids)
         if key not in self._entries_by_tracklets:
             self._entries_by_tracklets[key] = await self._repo.list_gallery_entries_for_tracklets(
@@ -54,6 +73,7 @@ class GalleryCache:
         tracklet_ids_b: set[str],
         limit: int = 20,
     ) -> float:
+        self._check_stale()
         key_a = frozenset(tracklet_ids_a)
         key_b = frozenset(tracklet_ids_b)
         cache_key = (key_a, key_b) if hash(key_a) <= hash(key_b) else (key_b, key_a)
