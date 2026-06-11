@@ -258,6 +258,14 @@ def _build_signal_config(s: Settings) -> SignalConfig:
         nighttime_transition_threshold=sig.as_int("nighttime_transition_threshold"),
         absence_threshold_minutes=sig.as_int("absence_threshold_minutes"),
         bathroom_absolute_threshold_seconds=sig.as_int("bathroom_absolute_threshold_seconds"),
+        min_baseline_n=sig.as_int("min_baseline_n"),
+        cooldown_minutes=sig.as_int("cooldown_minutes"),
+        onset_consecutive_windows=sig.as_int("onset_consecutive_windows"),
+        resting_rooms=tuple(sig.require("resting_rooms")),
+        sundowning_z_threshold=sig.as_float("sundowning_z_threshold"),
+        bathroom_z_threshold=sig.as_float("bathroom_z_threshold"),
+        bathroom_z_threshold_night=sig.as_float("bathroom_z_threshold_night"),
+        pacing_min_obs_density=sig.as_float("pacing_min_obs_density"),
     )
 
 

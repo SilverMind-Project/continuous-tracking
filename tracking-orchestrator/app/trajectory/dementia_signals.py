@@ -921,10 +921,12 @@ class DementiaSignalWorker:
             else:
                 severity = "info"
         else:
-            # Cold start: fall back to flat threshold.
-            if night_transitions >= 5:
+            # Cold start: flat tiers anchored to the configured gate so info is reachable.
+            # Tiers: info at gate, warning at gate+2, emergency at gate+4.
+            gate = self._cfg.nighttime_transition_threshold
+            if night_transitions >= gate + 4:
                 severity = "emergency"
-            elif night_transitions >= 3:
+            elif night_transitions >= gate + 2:
                 severity = "warning"
             else:
                 severity = "info"
@@ -1099,10 +1101,12 @@ class DementiaSignalWorker:
             self._hysteresis.clear_trigger(identity_id, "absence", episode_key="")
             return []
 
-        # Base severity.
-        if gap_minutes >= 120:
+        # Severity derived from configurable threshold so info is always reachable.
+        # Tiers: info at threshold, warning at threshold+60, emergency at threshold+120.
+        threshold = self._cfg.absence_threshold_minutes
+        if gap_minutes >= threshold + 120:
             severity: DementiaSignalSeverity = "emergency"
-        elif gap_minutes >= 60:
+        elif gap_minutes >= threshold + 60:
             severity = "warning"
         else:
             severity = "info"
@@ -1318,54 +1322,6 @@ class DementiaSignalWorker:
 
         return None
 
-    async def _compute_robust_z(
-        self,
-        value: float,
-        signal_kind: str,
-        identity_id: str,
-    ) -> ZScoreResult:
-        """Compute robust z-score using ``baseline_repo`` + ``robust_z``."""
-        assert self._baseline_repo is not None
-        now = datetime.now(UTC)
-
-        if signal_kind == "bathroom_dwell_anomaly":
-            durations = await self._baseline_repo.dwell_durations(
-                identity_id,
-                room_predicate="bath",
-                since=now - timedelta(days=30),
-                until=now,
-            )
-            if len(durations) < self._cfg.min_baseline_n:
-                return ZScoreResult(baseline=None, z_score=None)
-            rz = robust_z(value, durations)
-            return ZScoreResult(baseline=rz.median, z_score=rz.modified_z)
-
-        if signal_kind in ("pacing", "sundowning_index", "nighttime_movement"):
-            hourly = await self._baseline_repo.hourly_activity(
-                identity_id,
-                since=now - timedelta(days=30),
-                until=now,
-            )
-            samples = [float(h.transition_count) for h in hourly.values()]
-            if len(samples) < self._cfg.min_baseline_n:
-                return ZScoreResult(baseline=None, z_score=None)
-            rz = robust_z(value, samples)
-            return ZScoreResult(baseline=rz.median, z_score=rz.modified_z)
-
-        if signal_kind == "stillness_anomaly":
-            episodes = await self._baseline_repo.stillness_episodes(
-                identity_id,
-                since=now - timedelta(days=30),
-                until=now,
-            )
-            durations = [float(e.duration_seconds) for e in episodes]
-            if len(durations) < self._cfg.min_baseline_n:
-                return ZScoreResult(baseline=None, z_score=None)
-            rz = robust_z(value, durations)
-            return ZScoreResult(baseline=rz.median, z_score=rz.modified_z)
-
-        return ZScoreResult(baseline=None, z_score=None)
-
 
 def _bathroom_severity(z_score: float) -> DementiaSignalSeverity:
     if z_score >= 5.0:
@@ -1390,6 +1346,9 @@ class ZScoreResult:
 
 class SignalConfig:
     """Configuration for dementia signal computation.
+
+    Worker-layer config. The pipeline-layer mirror is frame_pipeline.SignalConfig.
+    Keep fields in sync; Milestone 6 task 3 will collapse the two into one.
 
     All thresholds carry docstrings citing their rationale.
     """

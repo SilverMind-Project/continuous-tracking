@@ -114,6 +114,21 @@ signal:
   nighttime_transition_threshold: 3
   absence_threshold_minutes: 90
   bathroom_absolute_threshold_seconds: 2700
+  # Advanced tuning: require this many baseline samples before using a robust z-score
+  min_baseline_n: 5
+  # Cooldown prevents re-alerting for the same episode; severity escalation still fires.
+  cooldown_minutes: 60
+  # Trigger must hold for this many consecutive runs before first emission.
+  onset_consecutive_windows: 2
+  # Room names (substrings) treated as resting rooms for stillness severity.
+  resting_rooms: ["bed", "bedroom"]
+  # Modified z-score gate for sundowning evening activity.
+  sundowning_z_threshold: 2.5
+  # Modified z-score gates for bathroom dwell anomaly (day / night paths).
+  bathroom_z_threshold: 3.5
+  bathroom_z_threshold_night: 4.0
+  # Minimum trajectory-point density (points/min) required to evaluate pacing.
+  pacing_min_obs_density: 0.5
 
 # Pipeline tuning
 pipeline:

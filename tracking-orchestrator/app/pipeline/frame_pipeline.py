@@ -129,11 +129,17 @@ def _group_frames_by_camera(frames: list[FrameReady]) -> dict[str, list[FrameRea
 
 @dataclass(frozen=True)
 class SignalConfig:
-    """Dementia signal thresholds and scheduling."""
+    """Dementia signal thresholds and scheduling.
+
+    Pipeline-layer config. Mirrors dementia_signals.SignalConfig (the worker-layer class).
+    Keep fields in sync; see app/trajectory/dementia_signals.py::SignalConfig for the
+    authoritative field list. Milestone 6 task 3 will collapse the two into one.
+    """
 
     interval_s: int = 60
     enabled: bool = True
     timezone: str = "UTC"
+    # Thresholds
     stillness_threshold_minutes: int = 60
     stillness_emergency_minutes: int = 120
     stillness_motion_floor: float = 0.02
@@ -142,6 +148,15 @@ class SignalConfig:
     nighttime_transition_threshold: int = 3
     absence_threshold_minutes: int = 90
     bathroom_absolute_threshold_seconds: int = 2700
+    # Hidden knobs now exposed via settings.yaml signal: block
+    min_baseline_n: int = 5
+    cooldown_minutes: int = 60
+    onset_consecutive_windows: int = 2
+    resting_rooms: tuple[str, ...] = ("bed", "bedroom")
+    sundowning_z_threshold: float = 2.5
+    bathroom_z_threshold: float = 3.5
+    bathroom_z_threshold_night: float = 4.0
+    pacing_min_obs_density: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -462,6 +477,14 @@ class FrameProcessingPipeline:
                     nighttime_transition_threshold=self._config.signals.nighttime_transition_threshold,
                     absence_threshold_minutes=self._config.signals.absence_threshold_minutes,
                     bathroom_absolute_threshold_seconds=self._config.signals.bathroom_absolute_threshold_seconds,
+                    min_baseline_n=self._config.signals.min_baseline_n,
+                    cooldown_minutes=self._config.signals.cooldown_minutes,
+                    onset_consecutive_windows=self._config.signals.onset_consecutive_windows,
+                    resting_rooms=self._config.signals.resting_rooms,
+                    sundowning_z_threshold=self._config.signals.sundowning_z_threshold,
+                    bathroom_z_threshold=self._config.signals.bathroom_z_threshold,
+                    bathroom_z_threshold_night=self._config.signals.bathroom_z_threshold_night,
+                    pacing_min_obs_density=self._config.signals.pacing_min_obs_density,
                 ),
                 baseline_repo=baseline_repo,
             )

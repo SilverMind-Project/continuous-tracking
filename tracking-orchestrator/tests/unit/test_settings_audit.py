@@ -80,6 +80,16 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert signal.absence_threshold_minutes == data["signal"]["absence_threshold_minutes"] == 90
     assert SignalConfig().absence_threshold_minutes == 90
+    assert signal.min_baseline_n == data["signal"]["min_baseline_n"] == 5
+    assert signal.cooldown_minutes == data["signal"]["cooldown_minutes"] == 60
+    assert signal.onset_consecutive_windows == data["signal"]["onset_consecutive_windows"] == 2
+    assert signal.resting_rooms == tuple(data["signal"]["resting_rooms"])
+    assert signal.sundowning_z_threshold == pytest.approx(data["signal"]["sundowning_z_threshold"])
+    assert signal.bathroom_z_threshold == pytest.approx(data["signal"]["bathroom_z_threshold"])
+    assert signal.bathroom_z_threshold_night == pytest.approx(
+        data["signal"]["bathroom_z_threshold_night"]
+    )
+    assert signal.pacing_min_obs_density == pytest.approx(data["signal"]["pacing_min_obs_density"])
     assert face_id.min_confidence == data["face_id"]["min_confidence"] == pytest.approx(0.6)
     assert FaceIdConfig().min_confidence == pytest.approx(0.6)
     assert resolver.cross_gt_face_propagation_threshold == pytest.approx(0.72)

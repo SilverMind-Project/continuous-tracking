@@ -384,17 +384,17 @@ class TestAbsenceDetector:
         assert absence[0].value >= 90.0
 
     @pytest.mark.asyncio
-    async def test_absence_severity_emergency_at_2h(self):
+    async def test_absence_severity_emergency_at_threshold_plus_120(self):
+        # emergency fires at threshold+120. With threshold=30, that is 150+ min.
         worker, traj_repo, _ = _make_worker(
             SignalConfig(
                 absence_threshold_minutes=30,
                 onset_consecutive_windows=1,
             )
         )
-        # Seed enough points to pass data-quality coverage gate.
-        # 5 points from 134 min ago to 130 min ago (1/min), last seen 130 min ago.
+        # 5 points from 155 min ago to 151 min ago; last seen 151 min ago (> 150).
         for i in range(5):
-            await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=130 + i))
+            await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=155 - i))
 
         signals = await worker.run_once(now=_NOW)
         absence = [s for s in signals if s.signal_kind == "absence"]
@@ -427,6 +427,124 @@ class TestAbsenceDetector:
         # No trajectory data at all — should not emit absence.
         signals = await worker.run_once(now=_NOW)
         assert not any(s.signal_kind == "absence" for s in signals)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "gap_minutes,threshold,expected_severity",
+        [
+            (89, 90, None),  # below gate: no signal
+            (90, 90, "info"),  # at gate: info
+            (149, 90, "info"),  # gate+59: still info
+            (150, 90, "warning"),  # gate+60: warning
+            (209, 90, "warning"),  # gate+119: still warning
+            (210, 90, "emergency"),  # gate+120: emergency
+        ],
+    )
+    async def test_absence_tiers_default_threshold(
+        self,
+        gap_minutes: int,
+        threshold: int,
+        expected_severity: str | None,
+    ) -> None:
+        """Absence tiers derive from configurable threshold: info/+60/+120."""
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                absence_threshold_minutes=threshold,
+                onset_consecutive_windows=1,
+            )
+        )
+        for i in range(5):
+            await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=gap_minutes + i))
+        signals = await worker.run_once(now=_NOW)
+        absence = [s for s in signals if s.signal_kind == "absence"]
+        if expected_severity is None:
+            assert not absence, f"expected no signal at gap={gap_minutes}"
+        else:
+            assert absence, f"expected signal at gap={gap_minutes}"
+            assert absence[0].severity == expected_severity, (
+                f"gap={gap_minutes} threshold={threshold}: "
+                f"expected {expected_severity!r}, got {absence[0].severity!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_absence_tiers_non_default_threshold(self) -> None:
+        """Tiers track a non-default gate (30 min): info at 30, warning at 90, emergency at 150."""
+        threshold = 30
+        cases = [(30, "info"), (90, "warning"), (150, "emergency")]
+        for gap, expected in cases:
+            worker, traj_repo, _ = _make_worker(
+                SignalConfig(
+                    absence_threshold_minutes=threshold,
+                    onset_consecutive_windows=1,
+                )
+            )
+            for i in range(5):
+                await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=gap + i))
+            signals = await worker.run_once(now=_NOW)
+            absence = [s for s in signals if s.signal_kind == "absence"]
+            assert absence, f"expected signal at gap={gap}"
+            assert absence[0].severity == expected, (
+                f"threshold={threshold} gap={gap}: expected {expected!r},"
+                f" got {absence[0].severity!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Nighttime cold-start tiers
+# ---------------------------------------------------------------------------
+
+
+class TestNighttimeColdStartTiers:
+    """Nighttime cold-start tiers anchor to the configured gate."""
+
+    @staticmethod
+    def _make_night_worker(gate: int) -> tuple:
+        """Return (worker, traj_repo) for nighttime tests with no baseline repo."""
+        return _make_worker(
+            SignalConfig(
+                nighttime_transition_threshold=gate,
+                onset_consecutive_windows=1,
+            )
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "transitions,expected_severity",
+        [
+            (2, None),  # below gate=3: no signal
+            (3, "info"),  # at gate: info
+            (4, "info"),  # gate+1: still info
+            (5, "warning"),  # gate+2: warning
+            (6, "warning"),  # gate+3: still warning
+            (7, "emergency"),  # gate+4: emergency
+        ],
+    )
+    async def test_cold_start_tiers_gate_3(
+        self,
+        transitions: int,
+        expected_severity: str | None,
+    ) -> None:
+        """Cold-start: {2: none, 3: info, 5: warning, 7: emergency} with gate=3."""
+        worker, traj_repo, _ = self._make_night_worker(gate=3)
+        now = datetime(2026, 4, 23, 2, 0, 0, tzinfo=UTC)
+        # Seed trajectory points with the right number of room transitions (22:00-06:00).
+        rooms: list[str] = []
+        for j in range(transitions + 1):
+            rooms.append("bedroom" if j % 2 == 0 else "bathroom")
+        for j, room in enumerate(rooms):
+            t = datetime(2026, 4, 23, 1, j * 5, 0, tzinfo=UTC)
+            await traj_repo.save_trajectory_point(_point(room, offset_minutes=0, now=t))
+
+        signals = await worker.run_once(now=now)
+        night = [s for s in signals if s.signal_kind == "nighttime_movement"]
+        if expected_severity is None:
+            assert not night, f"expected no signal at transitions={transitions}"
+        else:
+            assert night, f"expected signal at transitions={transitions}"
+            assert night[0].severity == expected_severity, (
+                f"transitions={transitions}: expected {expected_severity!r},"
+                f" got {night[0].severity!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
