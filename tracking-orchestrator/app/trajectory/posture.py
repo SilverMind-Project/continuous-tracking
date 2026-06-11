@@ -24,7 +24,7 @@ import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ..domain import BoundingBox, PostureType
+from ..domain import PostureType
 from ..inference.schemas import Keypoint, PoseResult
 from ..observability import metrics as _metrics
 
@@ -55,7 +55,8 @@ _KNEE_HIP_STANDING_BLOCK = 0.4  # norm_knee_dy below this → block standing (kn
 _MIN_EVIDENCE = 0.5  # minimum scorer output to commit a posture class
 
 # ── Motion threshold ──────────────────────────────────────────────────────────
-_WALKING_VELOCITY_THRESHOLD = 0.008  # mean keypoint velocity (normalised px/frame)
+# provisional, recalibrate after 1 week of live data; unit is nu/s (see motion_energy.py)
+_WALKING_VELOCITY_NU_S = 0.15  # mean keypoint velocity in normalized units per second
 
 # ── Multi-camera fusion ───────────────────────────────────────────────────────
 _CAMERA_STALE_AFTER_S: float = 10.0
@@ -601,7 +602,6 @@ def score_posture(
 
 def classify_posture(
     pose: PoseResult,
-    bbox: BoundingBox,
     motion_energy: float | None = None,
 ) -> PostureType:
     """Classify posture from COCO-17 keypoints and optional motion energy.
@@ -617,7 +617,7 @@ def classify_posture(
         return "lying"
     if scores.sitting >= scores.standing_walking:
         return "sitting"
-    if motion_energy is not None and motion_energy > _WALKING_VELOCITY_THRESHOLD:
+    if motion_energy is not None and motion_energy > _WALKING_VELOCITY_NU_S:
         return "walking"
     return "standing"
 
@@ -811,7 +811,7 @@ class GlobalPostureTracker:
             raw = "lying"
         elif fused["sitting"] >= fused["standing_walking"]:
             raw = "sitting"
-        elif motion_energy is not None and motion_energy > _WALKING_VELOCITY_THRESHOLD:
+        elif motion_energy is not None and motion_energy > _WALKING_VELOCITY_NU_S:
             raw = "walking"
         else:
             raw = "standing"

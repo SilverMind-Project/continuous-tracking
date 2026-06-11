@@ -245,11 +245,8 @@ class TrajectoryStage(FrameStage):
             if pose is not None and det_id is not None and self._motion_energy_tracker is not None:
                 bbox = snap.bbox
                 if bbox is not None:
-                    bbox_diag = (bbox.width**2 + bbox.height**2) ** 0.5
-                    me = self._motion_energy_tracker.update(
-                        snap.ph_id, pose, traj_time, bbox_diag_px=bbox_diag
-                    )
-                    gt_motion_energy = me.mean_keypoint_velocity_px_s
+                    me = self._motion_energy_tracker.update(snap.ph_id, pose, traj_time, bbox)
+                    gt_motion_energy = me.mean_keypoint_velocity_nu_s
                 posture_scores = ctx.det_posture_scores.get(det_id)
                 if posture_scores is not None and self._posture_tracker is not None:
                     gt_posture = self._posture_tracker.update(

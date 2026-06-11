@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from app.domain import BoundingBox
 from app.inference.schemas import Keypoint, PoseResult
 from app.trajectory.posture import (
     GlobalPostureTracker,
@@ -47,10 +46,6 @@ def _pose(**overrides: Keypoint) -> PoseResult:
     return PoseResult(keypoints=tuple(kps[name] for name in _COCO_NAMES))
 
 
-_BBOX_PORTRAIT = BoundingBox(x_min=100, y_min=100, x_max=300, y_max=500)
-_BBOX_WIDE = BoundingBox(x_min=100, y_min=100, x_max=500, y_max=250)
-
-
 # ---------------------------------------------------------------------------
 # classify_posture (stateless, per-frame)
 # ---------------------------------------------------------------------------
@@ -69,7 +64,7 @@ class TestClassifyPosture:
             left_ankle=_keypoint(0.4, 0.85),
             right_ankle=_keypoint(0.6, 0.85),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "standing"
+        assert classify_posture(pose) == "standing"
 
     def test_walking_from_motion_energy(self) -> None:
         """Same standing pose but with high motion energy → walking."""
@@ -83,7 +78,7 @@ class TestClassifyPosture:
             left_ankle=_keypoint(0.4, 0.85),
             right_ankle=_keypoint(0.6, 0.85),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT, motion_energy=0.012) == "walking"
+        assert classify_posture(pose, motion_energy=0.2) == "walking"
 
     def test_walking_from_motion_energy_no_ankles(self) -> None:
         """No ankle keypoints visible, but vertical torso + high motion → walking."""
@@ -97,7 +92,7 @@ class TestClassifyPosture:
             left_ankle=_keypoint(0.4, 0.85, score=0.1),
             right_ankle=_keypoint(0.6, 0.85, score=0.1),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT, motion_energy=0.012) == "walking"
+        assert classify_posture(pose, motion_energy=0.2) == "walking"
 
     def test_sitting_from_bent_knee(self) -> None:
         """Knee bent ~90° (chair sitting pose)."""
@@ -113,7 +108,7 @@ class TestClassifyPosture:
             left_ankle=_keypoint(0.65, 0.85),
             right_ankle=_keypoint(0.75, 0.85),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "sitting"
+        assert classify_posture(pose) == "sitting"
 
     def test_sitting_from_tilted_torso(self) -> None:
         """Torso tilted >30° with bent knees → sitting."""
@@ -127,7 +122,7 @@ class TestClassifyPosture:
             left_ankle=_keypoint(0.65, 0.85),
             right_ankle=_keypoint(0.85, 0.85),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "sitting"
+        assert classify_posture(pose) == "sitting"
 
     def test_lying_horizontal_torso_with_head(self) -> None:
         """Torso near horizontal AND head in line with torso → lying."""
@@ -138,7 +133,7 @@ class TestClassifyPosture:
             left_hip=_keypoint(0.65, 0.5),
             right_hip=_keypoint(0.75, 0.55),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "lying"
+        assert classify_posture(pose) == "lying"
 
     def test_tilted_torso_not_lying_without_head_alignment(self) -> None:
         """Torso near horizontal but head well above torso → not lying.
@@ -153,7 +148,7 @@ class TestClassifyPosture:
             left_hip=_keypoint(0.65, 0.5),
             right_hip=_keypoint(0.75, 0.55),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "sitting"
+        assert classify_posture(pose) == "sitting"
 
     def test_wide_bbox_does_not_force_lying(self) -> None:
         """A wide bbox with standing pose is NOT classified as lying."""
@@ -167,7 +162,7 @@ class TestClassifyPosture:
             left_ankle=_keypoint(0.4, 0.85),
             right_ankle=_keypoint(0.6, 0.85),
         )
-        assert classify_posture(pose, _BBOX_WIDE) == "standing"
+        assert classify_posture(pose) == "standing"
 
     def test_unknown_low_confidence_keypoints(self) -> None:
         """All keypoints below score floor → unknown."""
@@ -177,7 +172,7 @@ class TestClassifyPosture:
             left_hip=_keypoint(0.4, 0.55, score=0.1),
             right_hip=_keypoint(0.6, 0.55, score=0.1),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "unknown"
+        assert classify_posture(pose) == "unknown"
 
     def test_standing_fallback_vertical_torso_only(self) -> None:
         """Near-vertical torso with no knee/ankle info → standing fallback."""
@@ -191,7 +186,7 @@ class TestClassifyPosture:
             left_ankle=_keypoint(0.4, 0.85, score=0.1),
             right_ankle=_keypoint(0.6, 0.85, score=0.1),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "standing"
+        assert classify_posture(pose) == "standing"
 
     def test_sitting_knee_only_needs_higher_confidence(self) -> None:
         """Wide-knees pose at moderate confidence correctly classifies as sitting.
@@ -213,7 +208,7 @@ class TestClassifyPosture:
             left_ankle=_keypoint(0.2, 0.85, score=0.45),
             right_ankle=_keypoint(0.8, 0.85, score=0.45),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "sitting"
+        assert classify_posture(pose) == "sitting"
 
     def test_sitting_upright_foreshortened_knee(self) -> None:
         """Upright sitting: vertical torso, knees near hip height, ankles hanging below.
@@ -236,7 +231,7 @@ class TestClassifyPosture:
             left_ankle=_keypoint(0.4, 0.9),
             right_ankle=_keypoint(0.6, 0.9),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "sitting"
+        assert classify_posture(pose) == "sitting"
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +327,7 @@ class TestGlobalPostureTracker:
                 "cam-1",
                 scores=score_posture(pose),
                 active_camera_ids=["cam-1"],
-                motion_energy=0.012,
+                motion_energy=0.2,
             )
             == "walking"
         )
@@ -468,7 +463,7 @@ class TestSittingNotMisclassifiedAsStanding:
             left_ankle=_keypoint(0.2, 0.6, score=0.1),
             right_ankle=_keypoint(0.8, 0.6, score=0.1),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "sitting"
+        assert classify_posture(pose) == "sitting"
 
     def test_upright_sitter_frontal_camera_full_body(self) -> None:
         """Front-on camera, person sitting on a chair, all keypoints visible.
@@ -489,7 +484,7 @@ class TestSittingNotMisclassifiedAsStanding:
             left_ankle=_keypoint(0.2, 0.82),
             right_ankle=_keypoint(0.8, 0.82),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "sitting"
+        assert classify_posture(pose) == "sitting"
 
     def test_one_leg_extended_sitter(self) -> None:
         """Person sitting with one leg stretched out (e.g. on a sofa).
@@ -513,7 +508,7 @@ class TestSittingNotMisclassifiedAsStanding:
             right_knee=_keypoint(0.8, 0.54),
             right_ankle=_keypoint(0.95, 0.56),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "sitting"
+        assert classify_posture(pose) == "sitting"
 
     def test_standing_is_not_suppressed_by_new_veto(self) -> None:
         """Confirm a genuine standing pose still classifies as standing.
@@ -532,7 +527,7 @@ class TestSittingNotMisclassifiedAsStanding:
             left_ankle=_keypoint(0.4, 0.88),
             right_ankle=_keypoint(0.6, 0.88),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT) == "standing"
+        assert classify_posture(pose) == "standing"
 
     def test_walking_stride_not_classified_as_sitting(self) -> None:
         """Mid-stride walker: one knee bent (stride leg), one extended (support leg).
@@ -554,4 +549,4 @@ class TestSittingNotMisclassifiedAsStanding:
             right_knee=_keypoint(0.62, 0.62),
             right_ankle=_keypoint(0.67, 0.82),
         )
-        assert classify_posture(pose, _BBOX_PORTRAIT, motion_energy=0.015) == "walking"
+        assert classify_posture(pose, motion_energy=0.2) == "walking"

@@ -77,7 +77,7 @@ class RTMPosePostureStrategy:
         try:
             if pose_result is None:
                 return "unknown"
-            return classify_posture(pose_result, detection.bbox)
+            return classify_posture(pose_result)
         except Exception:  # noqa: BLE001
             return "unknown"
 

@@ -199,6 +199,6 @@ class TestMultiCameraFusionEndToEnd:
         result_no_me = tracker.update("gt-1", "cam-1", scores, ["cam-1"], motion_energy=None)
         assert result_no_me == "standing"
         # Standing is committed; 2 consecutive walking frames needed to flip hysteresis.
-        tracker.update("gt-1", "cam-1", scores, ["cam-1"], motion_energy=0.02)
-        result_with_me = tracker.update("gt-1", "cam-1", scores, ["cam-1"], motion_energy=0.02)
+        tracker.update("gt-1", "cam-1", scores, ["cam-1"], motion_energy=0.2)
+        result_with_me = tracker.update("gt-1", "cam-1", scores, ["cam-1"], motion_energy=0.2)
         assert result_with_me == "walking"

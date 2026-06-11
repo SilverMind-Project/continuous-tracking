@@ -6,7 +6,6 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from app.domain import BoundingBox
 from app.inference.schemas import COCO_KEYPOINTS, Keypoint, PoseResult
 from app.trajectory.posture import (
     GlobalPostureTracker,
@@ -105,7 +104,7 @@ class TestScorePosture:
 
     def test_classify_posture_consistent_with_score_posture_standing(self) -> None:
         pose = _standing_pose()
-        label = classify_posture(pose, BoundingBox(x_min=0, y_min=0, x_max=200, y_max=200))
+        label = classify_posture(pose)
         scores = score_posture(pose)
         assert label in ("standing", "walking")
         assert scores.standing_walking >= scores.lying
@@ -113,7 +112,7 @@ class TestScorePosture:
 
     def test_classify_posture_consistent_with_score_posture_lying(self) -> None:
         pose = _lying_pose()
-        label = classify_posture(pose, BoundingBox(x_min=0, y_min=0, x_max=200, y_max=200))
+        label = classify_posture(pose)
         scores = score_posture(pose)
         assert label == "lying"
         assert scores.lying >= scores.sitting

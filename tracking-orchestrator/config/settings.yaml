@@ -79,9 +79,12 @@ face_id:
 #   Desk work, reading, and TV watching routinely exceed 30 min without clinical concern.
 #   Reference: Alzheimer's Association caregiver guidelines; NICE NG97.
 #
-# stillness_motion_floor (0.02):
-#   Normal breathing and micro-adjustments produce ambient motion energy ≈ 0.01-0.02.
-#   The original 0.005 floor was below normal physiological ambient motion.
+# stillness_motion_floor (0.05):
+#   Unit: mean keypoint displacement in normalized units per second (nu/s) -- absolute
+#   pixel displacement / bbox_diagonal_px / dt. Still persons produce ~0.02-0.04 nu/s
+#   (breathing + micro-adjustments ~2-3 px/frame at 5 fps, 340 px bbox_diag).
+#   Floor is set at the p95 of still segments (0.05 nu/s). Provisional: recalibrate
+#   after 1 week of live data using scripts/calibrate_motion_energy.py.
 #
 # pacing_room_threshold (8):
 #   Purpose-driven ambulation (kitchen→living room→bathroom) routinely produces 5-6
@@ -105,7 +108,7 @@ signal:
   enabled: true
   stillness_threshold_minutes: 60
   stillness_emergency_minutes: 120
-  stillness_motion_floor: 0.02
+  stillness_motion_floor: 0.05
   pacing_room_threshold: 8
   pacing_window_minutes: 30
   nighttime_transition_threshold: 3
