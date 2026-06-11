@@ -88,3 +88,16 @@ class WorldTrackerConfig:
     dedup_residual_coeff_k: float = 1.0
     dedup_max_distance_ceiling_m: float = 1.5
     dedup_require_no_face_conflict: bool = True
+
+    # ---- Low-confidence detection recovery (M2.3 BYTE-style second association) ----
+    # When enabled, YOLO detections in [low_confidence_floor, detector_confidence) are
+    # kept and offered in a second association pass against already-open PHs only, with a
+    # tightened geometric gate (recovery_gate_chi2, 95% chi-squared with 2 dof vs the
+    # primary 99%). They can never spawn a new PH, seed the gallery, update appearance
+    # EMAs, or contribute identity evidence.  Guardrail: the only ghost-persistence risk
+    # is "PH closes a few seconds later than it should" — never a phantom person or
+    # identity contamination. Ships dark (default false); enable per-deployment after
+    # fixture proofs pass, same as other CTS robustness flags.
+    enable_low_confidence_recovery: bool = False
+    low_confidence_floor: float = 0.25
+    recovery_gate_chi2: float = 5.99  # chi-squared 95% with 2 dof

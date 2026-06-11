@@ -169,6 +169,10 @@ class Metrics:
     cts_fall_descent_rate: Histogram
     cts_fall_suspected_unidentified_total: Counter
 
+    # ---- Low-confidence detection recovery (M2.3) ----
+    worldtracker_low_band_matches_total: Counter
+    worldtracker_low_band_dropped_total: Counter
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -604,6 +608,15 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         cts_fall_suspected_unidentified_total=_counter(
             "cts_fall_suspected_unidentified_total",
             "Fall detections suppressed because the PH had no committed identity.",
+        ),
+        # ---- Low-confidence detection recovery (M2.3) ----
+        worldtracker_low_band_matches_total=_counter(
+            "cts_worldtracker_low_band_matches_total",
+            "PHs updated via low-confidence second association pass (M2.3).",
+        ),
+        worldtracker_low_band_dropped_total=_counter(
+            "cts_worldtracker_low_band_dropped_total",
+            "Low-band observations dropped (no open PH within recovery gate).",
         ),
     )
 

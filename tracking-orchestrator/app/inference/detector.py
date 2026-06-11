@@ -82,6 +82,59 @@ class PersonDetector:
 
         return [decode_output(raw_batch[i], *meta[i], conf_threshold=self._conf) for i in range(n)]
 
+    @property
+    def conf_threshold(self) -> float:
+        """The primary confidence threshold this detector was configured with."""
+        return self._conf
+
     async def detect(self, image: npt.NDArray[np.uint8]) -> list[DetectionBox]:
         """Detect persons in a single RGB image."""
         return (await self.detect_batch([image]))[0]
+
+    async def detect_batch_at_threshold(
+        self,
+        images: list[npt.NDArray[np.uint8]],
+        threshold: float,
+    ) -> list[list[DetectionBox]]:
+        """Run detection at *threshold* in one Triton call.
+
+        Returns all boxes with confidence >= *threshold*.  The caller is
+        responsible for partitioning into high/low bands and applying
+        cross-band IoU dedup.
+        """
+        if not images:
+            return []
+        if self._static_batch_size > 0 and len(images) > self._static_batch_size:
+            results: list[list[DetectionBox]] = []
+            for start in range(0, len(images), self._static_batch_size):
+                chunk = images[start : start + self._static_batch_size]
+                results.extend(await self._detect_model_batch_at(chunk, threshold))
+            return results
+        return await self._detect_model_batch_at(images, threshold)
+
+    async def _detect_model_batch_at(
+        self,
+        images: list[npt.NDArray[np.uint8]],
+        threshold: float,
+    ) -> list[list[DetectionBox]]:
+        preprocessed: list[npt.NDArray[np.float32]] = []
+        meta: list[tuple[int, int, int, int, float]] = []
+        for img in images:
+            tensor, px, py, scale = letterbox_preprocess(img, DETECTOR_INPUT_SIZE)
+            preprocessed.append(tensor)
+            meta.append((img.shape[0], img.shape[1], px, py, scale))
+
+        n = len(preprocessed)
+        if self._static_batch_size > 0:
+            pad = self._static_batch_size - n
+            if pad > 0:
+                preprocessed.extend([preprocessed[0]] * pad)
+
+        batch = np.stack(preprocessed)
+        outputs = await self._client.infer(
+            model_name=self._model_name,
+            inputs=[("images", batch)],
+            output_names=["output0"],
+        )
+        raw_batch = outputs["output0"]
+        return [decode_output(raw_batch[i], *meta[i], conf_threshold=threshold) for i in range(n)]

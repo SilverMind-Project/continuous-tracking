@@ -525,9 +525,16 @@ class FrameProcessingPipeline:
 
         # ---- Build the stage runner (order matters) ----
         fetch_stage = FetchStage(frame_fetcher=self._frame_fetcher)
+        wt_cfg = self._config.world_tracker
+        _high_threshold = (
+            getattr(self._detector, "conf_threshold", 0.7) if self._detector is not None else 0.7
+        )
         detect_stage = DetectStage(
             detector=self._detector,  # type: ignore[arg-type]
             iou_dedup_threshold=self._config.detection_iou_dedup_threshold,
+            enable_low_confidence_recovery=wt_cfg.enable_low_confidence_recovery,
+            low_confidence_floor=wt_cfg.low_confidence_floor,
+            high_threshold=_high_threshold,
         )
         world_tracking_stage = WorldTrackingStage(
             tracker=self._world_tracker,

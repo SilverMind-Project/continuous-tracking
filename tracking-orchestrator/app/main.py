@@ -232,6 +232,10 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         # Group appearance dedup
         enable_group_appearance_dedup=wt.as_bool("enable_group_appearance_dedup"),
         dedup_group_appearance_min_sim=wt.as_float("dedup_group_appearance_min_sim"),
+        # Low-confidence detection recovery (M2.3)
+        enable_low_confidence_recovery=wt.as_bool("enable_low_confidence_recovery"),
+        low_confidence_floor=wt.as_float("low_confidence_floor"),
+        recovery_gate_chi2=wt.as_float("recovery_gate_chi2"),
     )
 
 

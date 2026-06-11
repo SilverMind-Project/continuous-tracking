@@ -368,6 +368,25 @@ world_tracker:
   enable_group_appearance_dedup: true
   dedup_group_appearance_min_sim: 0.75
 
+  # ---- Low-confidence detection recovery (M2.3 BYTE-style second association) ----
+  # Default OFF. Enable per-deployment after fixture proofs pass (same rollout
+  # pattern as M1-M6). When on, YOLO detections in [low_confidence_floor,
+  # pipeline.detector_confidence) are offered in a second association pass
+  # against already-open PHs only, with a tightened geometric gate.
+  # False-negative risk: defended by stillness pathway (defense in depth).
+  # False-positive (ghost) risk: bounded — a stale ghost PH can at most delay
+  # PH close by ph_close_grace_s; it cannot spawn a new PH or contaminate
+  # identity/gallery state (observation_count and gallery_mean are never updated
+  # by the low-band pass, and low-band observations are not persisted).
+  enable_low_confidence_recovery: false
+  # Minimum YOLO confidence to include in the low band (detections below this
+  # are discarded; detections at or above pipeline.detector_confidence remain
+  # on the primary high-confidence path unaffected).
+  low_confidence_floor: 0.25
+  # Chi-squared gate for the second association pass (95% with 2 dof = 5.99,
+  # tighter than the primary 9.21 to bound ghost-persistence risk).
+  recovery_gate_chi2: 5.99
+
 # Environment label (dev / staging / production)
 env: production
 

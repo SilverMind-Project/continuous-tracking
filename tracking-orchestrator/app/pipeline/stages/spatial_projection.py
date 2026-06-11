@@ -36,3 +36,16 @@ class SpatialProjectionStage(FrameStage):
             floor_residuals[idx] = residual_m if floor_point.calibrated else None
         ctx._floor_points_by_index = floor_points
         ctx._floor_residuals_by_index = floor_residuals
+
+        # Project low-band detections (recovery path; no-op when list is empty).
+        if ctx.low_band_detections:
+            lb_floor_points: dict[int, FloorPoint] = {}
+            for idx, det in enumerate(ctx.low_band_detections):
+                bbox = BoundingBox(
+                    x_min=int(det.x1 * ew),
+                    y_min=int(det.y1 * eh),
+                    x_max=int(det.x2 * ew),
+                    y_max=int(det.y2 * eh),
+                )
+                lb_floor_points[idx] = self._projection.project_detection(ctx.frame.camera_id, bbox)
+            ctx._low_band_floor_points_by_index = lb_floor_points

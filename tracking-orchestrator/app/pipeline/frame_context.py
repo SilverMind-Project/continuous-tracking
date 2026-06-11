@@ -59,6 +59,13 @@ class FrameContext:
     raw_detections: list[DetectionBox] = field(default_factory=list)
     # Stable detection IDs assigned per kept box (idx → detection_id).
     _detection_ids: dict[int, str] = field(default_factory=dict)
+    # Low-confidence recovery band: detections in [low_confidence_floor, high_threshold).
+    # Empty when enable_low_confidence_recovery is false (exact today's path).
+    low_band_detections: list[DetectionBox] = field(default_factory=list)
+
+    # --- Stage: spatial_projection (pre-computed floor points, keyed by
+    # index into low_band_detections; consumed by WorldTrackingStage) ---
+    _low_band_floor_points_by_index: dict[int, FloorPoint] = field(default_factory=dict)
 
     # --- Stage: spatial_projection (pre-computed floor points, keyed by
     # index into raw_detections; consumed by inference stage) ---

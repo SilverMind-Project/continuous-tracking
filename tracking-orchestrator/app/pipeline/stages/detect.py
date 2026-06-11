@@ -71,9 +71,15 @@ class DetectStage(FrameStage):
         self,
         detector: PersonDetector,
         iou_dedup_threshold: float = 0.55,
+        enable_low_confidence_recovery: bool = False,
+        low_confidence_floor: float = 0.25,
+        high_threshold: float = 0.7,
     ) -> None:
         self._detector = detector
         self._iou_dedup_threshold = iou_dedup_threshold
+        self._enable_low_confidence_recovery = enable_low_confidence_recovery
+        self._low_confidence_floor = low_confidence_floor
+        self._high_threshold = high_threshold
 
     async def run(self, ctx: FrameContext) -> None:
         await self.run_batch([ctx])
@@ -83,8 +89,19 @@ class DetectStage(FrameStage):
             return
 
         images: list[npt.NDArray[np.uint8]] = [ctx.require_image() for ctx in contexts]
-        detections_by_frame = await self._detect_images(images)
 
+        if self._enable_low_confidence_recovery:
+            await self._run_batch_with_recovery(contexts, images)
+        else:
+            await self._run_batch_standard(contexts, images)
+
+    async def _run_batch_standard(
+        self,
+        contexts: list[FrameContext],
+        images: list[npt.NDArray[np.uint8]],
+    ) -> None:
+        """Standard path — byte-identical to the pre-M2.3 behavior."""
+        detections_by_frame = await self._detect_images(images)
         for ctx, image, detections in zip(contexts, images, detections_by_frame, strict=True):
             logger.debug(
                 "detections_raw",
@@ -98,10 +115,71 @@ class DetectStage(FrameStage):
             if detections and self._iou_dedup_threshold < 1.0:
                 detections = _iou_dedup_detections(detections, self._iou_dedup_threshold)
             ctx.raw_detections = detections
-
-            # Assign a stable detection_id to each kept detection so evidence
-            # records from later stages can cross-reference by the same ID.
             ctx._detection_ids = {idx: str(uuid.uuid4()) for idx in range(len(detections))}
+
+    async def _run_batch_with_recovery(
+        self,
+        contexts: list[FrameContext],
+        images: list[npt.NDArray[np.uint8]],
+    ) -> None:
+        """Low-confidence recovery path: one Triton call at the band floor,
+        then partition into high (>=high_threshold) and low (band) sets.
+
+        High band: exactly today's raw_detections (only these seed gallery,
+        ReID, face, and can spawn PHs).
+        Low band: stored in ctx.low_band_detections for a second association
+        pass in WorldTracker; they cannot spawn PHs or contribute identity
+        evidence.
+        """
+        all_detections_by_frame = await self._detect_images_at_threshold(
+            images, self._low_confidence_floor
+        )
+        for ctx, image, all_detections in zip(
+            contexts, images, all_detections_by_frame, strict=True
+        ):
+            all_detections = _filter_small_bboxes(all_detections)
+
+            high: list[DetectionBox] = [
+                d for d in all_detections if d.confidence >= self._high_threshold
+            ]
+            low: list[DetectionBox] = [
+                d
+                for d in all_detections
+                if self._low_confidence_floor <= d.confidence < self._high_threshold
+            ]
+
+            if high and self._iou_dedup_threshold < 1.0:
+                high = _iou_dedup_detections(high, self._iou_dedup_threshold)
+            if low and self._iou_dedup_threshold < 1.0:
+                low = _iou_dedup_detections(low, self._iou_dedup_threshold)
+
+            # Cross-band dedup: drop any low-band box overlapping a kept high-band box.
+            if low and high:
+                low = [
+                    lb
+                    for lb in low
+                    if not any(
+                        _bbox_iou(
+                            [lb.x1, lb.y1, lb.x2, lb.y2],
+                            [hb.x1, hb.y1, hb.x2, hb.y2],
+                        )
+                        > self._iou_dedup_threshold
+                        for hb in high
+                    )
+                ]
+
+            logger.debug(
+                "detections_partitioned",
+                camera_id=ctx.frame.camera_id,
+                frame_index=ctx.frame.frame_index,
+                high_count=len(high),
+                low_band_count=len(low),
+                image_shape=f"{image.shape[0]}x{image.shape[1]}",
+            )
+
+            ctx.raw_detections = high
+            ctx._detection_ids = {idx: str(uuid.uuid4()) for idx in range(len(high))}
+            ctx.low_band_detections = low
 
     async def _detect_images(
         self,
@@ -118,3 +196,16 @@ class DetectStage(FrameStage):
             msg = "detector must provide detect_batch(images) or detect(image)"
             raise TypeError(msg)
         return [await detect(image) for image in images]
+
+    async def _detect_images_at_threshold(
+        self,
+        images: list[npt.NDArray[np.uint8]],
+        threshold: float,
+    ) -> list[list[DetectionBox]]:
+        detect_at = getattr(self._detector, "detect_batch_at_threshold", None)
+        if detect_at is not None:
+            result = await detect_at(images, threshold)
+            if isinstance(result, list) and len(result) == len(images):
+                return result
+        # Fallback for test fakes that don't implement detect_batch_at_threshold.
+        return await self._detect_images(images)

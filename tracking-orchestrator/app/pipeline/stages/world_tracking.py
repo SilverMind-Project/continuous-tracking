@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from structlog import get_logger
 
+from ...calibration.state import calibration_state
 from ...domain import (
     BoundingBox,
     FaceAnchor,
@@ -18,11 +19,13 @@ from ...domain import (
     OrientationBin,
     WorldObservation,
 )
+from ...observability import metrics as _metrics
 from ...tracking.world.config import WorldTrackerConfig
 from ...tracking.world.tracker import WorldTracker, WorldTrackerResult
 from ...tracking.world.transit_detector import TransitDetector
 from ...transport.room_transition_publisher import RoomTransitionPublisher
 from ..frame_context import FrameContext
+from ..privacy import PrivacyZoneFilter
 from ._room_maps import camera_room_names, room_polygon_snapshot
 from .base import FrameStage
 
@@ -142,6 +145,11 @@ class WorldTrackingStage(FrameStage):
                     uncalibrated_count=uncalibrated_count,
                 )
 
+        # Build low-band observations for the second association pass.
+        low_band_observations: list[WorldObservation] = []
+        for ctx in contexts:
+            low_band_observations.extend(self._build_low_band_observations(ctx))
+
         batch_time = max((ctx.event_time for ctx in contexts), default=contexts[0].event_time)
         cc_face_anchors = await self._match_cc_assertions(
             observations=observations,
@@ -172,6 +180,7 @@ class WorldTrackingStage(FrameStage):
             room_names=room_names,
             face_anchors=all_face_anchors,
             face_evidence=face_evidence or None,
+            low_band_observations=low_band_observations or None,
         )
 
         await self._publish_transit_events(result, batch_time)
@@ -188,6 +197,74 @@ class WorldTrackingStage(FrameStage):
                 snapshots=len(result.snapshots),
                 continuations=len(result.continuations),
             )
+
+    def _build_low_band_observations(self, ctx: FrameContext) -> list[WorldObservation]:
+        """Build minimal WorldObservation objects for low-confidence-band detections.
+
+        Applies privacy zone filtering (drop zones respected) and floor projection
+        (pre-computed by SpatialProjectionStage).  Skips ReID, pose, and face evidence.
+        Returns an empty list when there are no low-band detections.
+        """
+        if not ctx.low_band_detections:
+            return []
+
+        privacy_filter = PrivacyZoneFilter.from_state(
+            calibration_state,
+            ctx.frame.camera_id,
+            frame_width=ctx.effective_width,
+            frame_height=ctx.effective_height,
+        )
+        ew = ctx.effective_width
+        eh = ctx.effective_height
+        dropped = 0
+        observations: list[WorldObservation] = []
+        for idx, det in enumerate(ctx.low_band_detections):
+            foot_x = (det.x1 + det.x2) / 2.0
+            foot_y = det.y2
+            if privacy_filter.is_active() and privacy_filter.should_drop((foot_x, foot_y)):
+                dropped += 1
+                continue
+
+            fp = ctx._low_band_floor_points_by_index.get(idx)
+            if fp is None:
+                continue
+
+            if not fp.calibrated:
+                bbox = BoundingBox(
+                    x_min=int(det.x1 * ew),
+                    y_min=int(det.y1 * eh),
+                    x_max=int(det.x2 * ew),
+                    y_max=int(det.y2 * eh),
+                )
+                fp = _synthetic_floor_point(bbox, ew, eh, ctx.frame.camera_id)
+
+            observations.append(
+                WorldObservation(
+                    camera_id=ctx.frame.camera_id,
+                    frame_index=ctx.frame.frame_index,
+                    captured_at=ctx.event_time,
+                    floor_point=fp,
+                    bbox=BoundingBox(
+                        x_min=int(det.x1 * ew),
+                        y_min=int(det.y1 * eh),
+                        x_max=int(det.x2 * ew),
+                        y_max=int(det.y2 * eh),
+                    ),
+                    embedding=[],
+                    detection_confidence=det.confidence,
+                    height_estimate_m=None,
+                    face_anchor=None,
+                    detection_id="",
+                    quality=0.0,
+                )
+            )
+
+        if dropped:
+            _metrics.metrics.privacy_detections_dropped_total.labels(
+                camera_id=ctx.frame.camera_id
+            ).inc(dropped)
+
+        return observations
 
     def _build_observations(self, ctx: FrameContext) -> tuple[list[WorldObservation], int]:
         # Build observations first (without face anchors), so we can use

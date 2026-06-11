@@ -263,6 +263,7 @@ class WorldTracker:
         room_names: dict[str, str] | None = None,
         face_anchors: list[FaceAnchor] | None = None,
         face_evidence: list[FaceEvidence] | None = None,
+        low_band_observations: list[WorldObservation] | None = None,
     ) -> WorldTrackerResult:
         """Run one frame of the world tracker.
 
@@ -745,8 +746,105 @@ class WorldTracker:
                     reason="new_observation"
                 ).inc()
 
+        # 5a. Low-confidence second association pass (M2.3 BYTE-style recovery).
+        # Offers low-band detections to unmatched PHs under a tightened geometric gate.
+        # Geometry-only cost (alpha_app=0): no embeddings, no identity evidence.
+        # Matched PHs get Kalman state + last_seen_at update only; observation_count,
+        # gallery_mean, and view_prototypes are intentionally unchanged to prevent
+        # ghost persistence from contaminating identity or appearance state.
+        # Low-band observations are NOT persisted (WorldObservation has no
+        # low_confidence field; adding a DB column is out of scope for M2.3).
+        lb_matched_ph_indices: set[int] = set()
+        if cfg.enable_low_confidence_recovery and low_band_observations:
+            lb_obs_raw, _ = dedup_observations(
+                low_band_observations, cfg, overlap_groups=self._overlap_groups or None
+            )
+            # Build the subset of still-unmatched-after-pass-1 PH indices.
+            unmatched_after_pass1 = assignment.unmatched_phs
+            if unmatched_after_pass1 and lb_obs_raw:
+                lb_obs_vecs = _unpack_observations(lb_obs_raw)
+                lb_ph_states = [predicted_states[i] for i in unmatched_after_pass1]
+                lb_ph_gallery = [ph_vecs.gallery_means[i] for i in unmatched_after_pass1]
+                lb_ph_identities = [ph_vecs.identity_ids[i] for i in unmatched_after_pass1]
+                lb_ph_heights = [ph_vecs.heights[i] for i in unmatched_after_pass1]
+                lb_ph_prototypes = [ph_vecs.view_prototypes[i] for i in unmatched_after_pass1]
+                # Geometry-only cost: set alpha_app=0 and tighten the gate.
+                recovery_cfg = replace(cfg, gate_chi2=cfg.recovery_gate_chi2, alpha_app=0.0)
+                lb_assignment = associate(
+                    ph_states=lb_ph_states,
+                    ph_gallery_means=lb_ph_gallery,
+                    ph_identity_ids=lb_ph_identities,
+                    ph_heights=lb_ph_heights,
+                    obs_floor_points=lb_obs_vecs.floor_points,
+                    obs_embeddings=[None] * len(lb_obs_raw),
+                    obs_face_person_ids=[None] * len(lb_obs_raw),
+                    obs_face_confidences=[0.0] * len(lb_obs_raw),
+                    obs_height_estimates=lb_obs_vecs.heights,
+                    cfg=recovery_cfg,
+                    obs_calibrated=lb_obs_vecs.calibrated,
+                    ph_view_prototypes=lb_ph_prototypes,
+                )
+                for local_ph_idx, lb_obs_idx in lb_assignment.matched:
+                    ph_idx = unmatched_after_pass1[local_ph_idx]
+                    ph = active_phs[ph_idx]
+                    ks = predicted_states[ph_idx]
+                    obs = lb_obs_raw[lb_obs_idx]
+                    fx = obs.floor_point.x_mm / 1000.0
+                    fy = obs.floor_point.y_mm / 1000.0
+                    new_state = update(ks, fx, fy, cfg.observation_noise_m)
+                    # Kalman + last_seen_at update only; do NOT touch observation_count,
+                    # gallery_mean, view_prototypes, or mean_quality.
+                    recovered = PersonHypothesis(
+                        ph_id=ph.ph_id,
+                        state_mean=(
+                            float(new_state.mean[0]),
+                            float(new_state.mean[1]),
+                            float(new_state.mean[2]),
+                            float(new_state.mean[3]),
+                        ),
+                        state_cov=tuple(float(v) for v in new_state.covariance.flatten()),
+                        born_at=ph.born_at,
+                        last_seen_at=obs.captured_at,
+                        last_seen_camera=obs.camera_id,
+                        observation_count=ph.observation_count,
+                        current_identity_id=ph.current_identity_id,
+                        current_identity_committed_at=ph.current_identity_committed_at,
+                        gallery_mean=ph.gallery_mean,
+                        height_estimate_m=ph.height_estimate_m,
+                        active_cameras=ph.active_cameras | frozenset([obs.camera_id]),
+                        last_floor_speed_m_s=speed_m_s(
+                            (
+                                float(new_state.mean[0]),
+                                float(new_state.mean[1]),
+                                float(new_state.mean[2]),
+                                float(new_state.mean[3]),
+                            )
+                        ),
+                        mean_quality=ph.mean_quality,
+                        view_prototypes=ph.view_prototypes,
+                        metadata=ph.metadata,
+                        last_posture=ph.last_posture,
+                    )
+                    updated_phs.append(recovered)
+                    lb_matched_ph_indices.add(ph_idx)
+                    _metrics.metrics.worldtracker_low_band_matches_total.inc()
+                    logger.debug(
+                        "low_band_recovery_match",
+                        ph_id=ph.ph_id,
+                        camera_id=obs.camera_id,
+                        confidence=round(obs.detection_confidence, 3),
+                    )
+                dropped_lb = len(lb_assignment.unmatched_obs)
+                if dropped_lb:
+                    _metrics.metrics.worldtracker_low_band_dropped_total.inc(dropped_lb)
+
         # 7. Close PHs that have not been observed for ph_close_grace_s.
+        # PHs matched in the low-band second pass (5a) already have their state
+        # advanced and last_seen_at refreshed; skip them here so they are not
+        # double-counted or prematurely closed.
         for ph_idx in assignment.unmatched_phs:
+            if ph_idx in lb_matched_ph_indices:
+                continue
             ph = active_phs[ph_idx]
             updated_phs.append(
                 _advance_unmatched_ph(ph, predicted_states[ph_idx], now, cfg.ph_close_grace_s)
