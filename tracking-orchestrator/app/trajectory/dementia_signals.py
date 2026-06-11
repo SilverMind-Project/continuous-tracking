@@ -74,20 +74,40 @@ class SignalHysteresis:
 
     - **onset debounce**: a trigger must hold for ``min_consecutive`` runs
       before the first emission.
-    - **cooldown**: after emission, the same (identity, kind) will not re-emit
+    - **cooldown**: after emission, the same (identity, kind, episode) will not re-emit
       for ``cooldown_minutes`` unless severity *escalates*.
     - **severity monotonic**: within an episode, severity only goes up;
       it closes when the trigger clears.
+    - **per-run idempotency**: within a single worker run (between ``begin_run``
+      calls), repeated ``should_emit`` calls for the same
+      ``(identity_id, signal_kind, episode_key)`` are idempotent and never
+      advance the onset counter more than once.
     """
 
     def __init__(self, min_consecutive: int = 2) -> None:
         self._min_consecutive = min_consecutive
-        # (identity_id, signal_kind) -> consecutive runs with trigger held
-        self._consecutive_count: dict[tuple[str, str], int] = {}
-        # (identity_id, signal_kind) -> last emission time (UTC)
-        self._last_emission: dict[tuple[str, str], datetime] = {}
-        # (identity_id, signal_kind) -> current episode severity (or None if closed)
-        self._episode_severity: dict[tuple[str, str], DementiaSignalSeverity | None] = {}
+        # (identity_id, signal_kind, episode_key) -> consecutive runs with trigger held
+        self._consecutive_count: dict[tuple[str, str, str], int] = {}
+        # (identity_id, signal_kind, episode_key) -> last emission time (UTC)
+        self._last_emission: dict[tuple[str, str, str], datetime] = {}
+        # (identity_id, signal_kind, episode_key) -> current episode severity or None
+        self._episode_severity: dict[tuple[str, str, str], DementiaSignalSeverity | None] = {}
+        # Per-run evaluation results; cleared by begin_run().
+        self._run_results: dict[tuple[str, str, str], bool] = {}
+
+    def begin_run(self, now: datetime) -> None:
+        """Mark the start of a worker run; resets per-run guards and evicts stale state.
+
+        Evicts episode keys last emitted more than 48 h ago. Worker runs every
+        60 s; 48 h covers any open dwell of clinical interest.
+        """
+        self._run_results.clear()
+        evict_before = now - timedelta(hours=48)
+        stale = [k for k, t in self._last_emission.items() if t < evict_before]
+        for k in stale:
+            self._consecutive_count.pop(k, None)
+            self._last_emission.pop(k, None)
+            self._episode_severity.pop(k, None)
 
     def should_emit(
         self,
@@ -96,10 +116,31 @@ class SignalHysteresis:
         severity: DementiaSignalSeverity,
         now: datetime,
         cooldown_minutes: int,
+        episode_key: str = "",
     ) -> bool:
-        """Return True if a signal should be emitted given hysteresis rules."""
-        key = (identity_id, signal_kind)
+        """Return True if a signal should be emitted given hysteresis rules.
 
+        Idempotent within one run for the same (identity, kind, episode_key):
+        a second call returns the same answer as the first without advancing
+        the onset counter.
+        """
+        key = (identity_id, signal_kind, episode_key)
+
+        # Per-run idempotency: return cached answer without touching state.
+        if key in self._run_results:
+            return self._run_results[key]
+
+        result = self._evaluate(key, severity, now, cooldown_minutes)
+        self._run_results[key] = result
+        return result
+
+    def _evaluate(
+        self,
+        key: tuple[str, str, str],
+        severity: DementiaSignalSeverity,
+        now: datetime,
+        cooldown_minutes: int,
+    ) -> bool:
         # Severity escalation within episode: always emit.
         current_sev = self._episode_severity.get(key)
         if current_sev is not None:
@@ -109,8 +150,8 @@ class SignalHysteresis:
                 self._consecutive_count[key] = self._min_consecutive  # bypass debounce
                 self._last_emission[key] = now
                 return True
-            # Re-upsert at equal severity → no-op (the DB upsert is idempotent,
-            # but we suppress duplicate emissions to avoid re-alerting).
+            # Re-upsert at equal severity → no-op (DB upsert is idempotent,
+            # but suppress duplicate emissions to avoid re-alerting).
             return False
 
         # Onset debounce: count consecutive trigger holds.
@@ -119,7 +160,7 @@ class SignalHysteresis:
         if count < self._min_consecutive:
             return False
 
-        # Cooldown check (skip for escalated severity handled above).
+        # Cooldown check (escalation handled above).
         last = self._last_emission.get(key)
         if last is not None and (now - last).total_seconds() < cooldown_minutes * 60:
             return False
@@ -129,16 +170,27 @@ class SignalHysteresis:
         self._last_emission[key] = now
         return True
 
-    def clear_trigger(self, identity_id: str, signal_kind: str) -> None:
-        """Reset the consecutive counter and close the episode for *signal_kind*."""
-        key = (identity_id, signal_kind)
+    def clear_trigger(self, identity_id: str, signal_kind: str, episode_key: str = "") -> None:
+        """Reset the consecutive counter and close the episode for (signal_kind, episode_key)."""
+        key = (identity_id, signal_kind, episode_key)
         self._consecutive_count.pop(key, None)
         self._episode_severity.pop(key, None)
 
-    def close_episode(self, identity_id: str, signal_kind: str) -> None:
+    def close_episode(self, identity_id: str, signal_kind: str, episode_key: str = "") -> None:
         """Mark the episode as resolved (no longer active)."""
-        key = (identity_id, signal_kind)
+        key = (identity_id, signal_kind, episode_key)
         self._episode_severity.pop(key, None)
+
+    def clear_kind(self, identity_id: str, signal_kind: str) -> None:
+        """Clear all episode state for (identity_id, signal_kind) across all episode keys.
+
+        Does not clear _last_emission so cooldown still applies after re-trigger.
+        """
+        prefix = (identity_id, signal_kind)
+        for k in [k for k in self._consecutive_count if k[:2] == prefix]:
+            self._consecutive_count.pop(k, None)
+        for k in [k for k in self._episode_severity if k[:2] == prefix]:
+            self._episode_severity.pop(k, None)
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +292,8 @@ class DementiaSignalWorker:
         t_start = time.monotonic()
         if now is None:
             now = datetime.now(UTC)
+
+        self._hysteresis.begin_run(now)
 
         identities = await self._get_tracked_identities(now)
         sem = asyncio.Semaphore(max(1, self._cfg.max_concurrent_identities))
@@ -472,19 +526,20 @@ class DementiaSignalWorker:
             and (now - d.entered_at).total_seconds() >= self._cfg.stillness_threshold_minutes * 60
         )
         if not any_stillness:
-            self._hysteresis.clear_trigger(identity_id, "stillness_anomaly")
+            # No qualifying dwell: wipe all per-episode state for this identity/kind.
+            self._hysteresis.clear_kind(identity_id, "stillness_anomaly")
 
         # bathroom: clear if no open bathroom dwell
         any_bath = any(d for d in open_dwells if "bath" in d.room_name.lower())
         if not any_bath:
-            self._hysteresis.clear_trigger(identity_id, "bathroom_dwell_anomaly")
+            self._hysteresis.clear_trigger(identity_id, "bathroom_dwell_anomaly", episode_key="")
 
         # absence: clear if there are recent points
         if window:
             most_recent = max(p.observed_at for p in window)
             gap_minutes = (now - most_recent).total_seconds() / 60.0
             if gap_minutes < self._cfg.absence_threshold_minutes:
-                self._hysteresis.clear_trigger(identity_id, "absence")
+                self._hysteresis.clear_trigger(identity_id, "absence", episode_key="")
 
     # ------------------------------------------------------------------
     # 3.4  Pacing — normalised for observation density
@@ -563,10 +618,10 @@ class DementiaSignalWorker:
         else:
             severity = "info"
 
-        # Hysteresis.
+        # Hysteresis. Pacing fires at most once per run (one eval per identity per run).
         kind: DementiaSignalKind = "pacing"
         if not self._hysteresis.should_emit(
-            identity_id, kind, severity, now, self._cfg.cooldown_minutes
+            identity_id, kind, severity, now, self._cfg.cooldown_minutes, episode_key=""
         ):
             return []
 
@@ -669,9 +724,10 @@ class DementiaSignalWorker:
             else:
                 severity = "info"
 
+        # Hysteresis. Sundowning fires at most once per run (one eval per identity per run).
         kind: DementiaSignalKind = "sundowning_index"
         if not self._hysteresis.should_emit(
-            identity_id, kind, severity, now, self._cfg.cooldown_minutes
+            identity_id, kind, severity, now, self._cfg.cooldown_minutes, episode_key=""
         ):
             return []
 
@@ -718,7 +774,7 @@ class DementiaSignalWorker:
         # Current (open) bathroom dwell.
         open_bathroom = [d for d in bathroom_dwells if d.exited_at is None]
         if not open_bathroom:
-            self._hysteresis.clear_trigger(identity_id, "bathroom_dwell_anomaly")
+            self._hysteresis.clear_trigger(identity_id, "bathroom_dwell_anomaly", episode_key="")
             return []
 
         current = open_bathroom[-1]
@@ -751,7 +807,9 @@ class DementiaSignalWorker:
                     else self._cfg.bathroom_z_threshold
                 )
                 if z_result.z_score < threshold:
-                    self._hysteresis.clear_trigger(identity_id, "bathroom_dwell_anomaly")
+                    self._hysteresis.clear_trigger(
+                        identity_id, "bathroom_dwell_anomaly", episode_key=""
+                    )
                     return []
                 severity_val = _bathroom_severity(z_result.z_score)
                 z_score_val = z_result.z_score
@@ -773,15 +831,18 @@ class DementiaSignalWorker:
             variance = sum((d - mean_dur) ** 2 for d in durations) / (len(durations) - 1)
             std_dur = math.sqrt(variance) if variance > 0 else 0.0
             if std_dur == 0 or current_dur <= mean_dur + 2 * std_dur:
-                self._hysteresis.clear_trigger(identity_id, "bathroom_dwell_anomaly")
+                self._hysteresis.clear_trigger(
+                    identity_id, "bathroom_dwell_anomaly", episode_key=""
+                )
                 return []
             z_score_val = (current_dur - mean_dur) / std_dur
             baseline_val = mean_dur
             severity = _bathroom_severity(z_score_val)
 
+        # Hysteresis. Bathroom fires at most once per run (one eval per identity per run).
         kind: DementiaSignalKind = "bathroom_dwell_anomaly"
         if not self._hysteresis.should_emit(
-            identity_id, kind, severity, now, self._cfg.cooldown_minutes
+            identity_id, kind, severity, now, self._cfg.cooldown_minutes, episode_key=""
         ):
             return []
 
@@ -841,7 +902,7 @@ class DementiaSignalWorker:
                 night_transitions += 1
 
         if night_transitions < self._cfg.nighttime_transition_threshold:
-            self._hysteresis.clear_trigger(identity_id, "nighttime_movement")
+            self._hysteresis.clear_trigger(identity_id, "nighttime_movement", episode_key="")
             return []
 
         # Try robust_z against 14-day baseline.
@@ -868,9 +929,10 @@ class DementiaSignalWorker:
             else:
                 severity = "info"
 
+        # Hysteresis. Nighttime fires at most once per run (one eval per identity per run).
         kind: DementiaSignalKind = "nighttime_movement"
         if not self._hysteresis.should_emit(
-            identity_id, kind, severity, now, self._cfg.cooldown_minutes
+            identity_id, kind, severity, now, self._cfg.cooldown_minutes, episode_key=""
         ):
             return []
 
@@ -968,8 +1030,15 @@ class DementiaSignalWorker:
                     severity = "warning"
 
             kind: DementiaSignalKind = "stillness_anomaly"
+            # Each dwell is a distinct episode; stable key survives across runs.
+            ep_key = f"{dwell.entered_at.isoformat()}|{dwell.room_name}"
             if not self._hysteresis.should_emit(
-                identity_id, kind, severity, now, self._cfg.cooldown_minutes
+                identity_id,
+                kind,
+                severity,
+                now,
+                self._cfg.cooldown_minutes,
+                episode_key=ep_key,
             ):
                 continue
 
@@ -1027,7 +1096,7 @@ class DementiaSignalWorker:
         gap_minutes = (now - most_recent).total_seconds() / 60.0
 
         if gap_minutes < self._cfg.absence_threshold_minutes:
-            self._hysteresis.clear_trigger(identity_id, "absence")
+            self._hysteresis.clear_trigger(identity_id, "absence", episode_key="")
             return []
 
         # Base severity.
@@ -1057,10 +1126,11 @@ class DementiaSignalWorker:
                 if expected_absence_prior > 0.5 and severity != "info":
                     severity = "info" if severity == "warning" else "warning"
 
+        # Hysteresis. Absence fires at most once per run (one eval per identity per run).
         kind: DementiaSignalKind = "absence"
         open_marker = "open"
         if not self._hysteresis.should_emit(
-            identity_id, kind, severity, now, self._cfg.cooldown_minutes
+            identity_id, kind, severity, now, self._cfg.cooldown_minutes, episode_key=""
         ):
             return []
 

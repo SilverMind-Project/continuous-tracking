@@ -18,7 +18,7 @@ from app.storage.base import (
     InMemoryDementiaSignalRepository,
     InMemoryTrajectoryRepository,
 )
-from app.trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
+from app.trajectory.dementia_signals import DementiaSignalWorker, SignalConfig, SignalHysteresis
 from app.trajectory.stats import robust_z as _robust_z
 
 # ---------------------------------------------------------------------------
@@ -961,3 +961,230 @@ class TestTimezoneEveningWindow:
         # Must resolve to Jan 15 local (EST), not Jan 16 UTC.
         assert samples[0].local_date == date(2026, 1, 15)
         assert samples[0].observed_points == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 1.3 -- Hysteresis correctness: per-episode keying + per-run idempotency
+# ---------------------------------------------------------------------------
+
+
+def _still_dwell(
+    room: str,
+    entered_offset_minutes: float,
+    still_minutes: int = 90,
+    now: datetime = _NOW,
+    ph_id: str = _GT,
+) -> RoomDwell:
+    """Open dwell with substantial still_seconds and below-floor motion energy."""
+    entered_at = now - timedelta(minutes=entered_offset_minutes)
+    return RoomDwell(
+        dwell_id=str(uuid.uuid4()),
+        identity_id=_IDENTITY,
+        ph_id=ph_id,
+        room_name=room,
+        entered_at=entered_at,
+        still_seconds=still_minutes * 60,
+        min_motion_energy=0.001,  # below the 0.02 motion floor
+    )
+
+
+class TestHysteresisCorrectness:
+    """Task 1.3 regression and correctness tests for SignalHysteresis."""
+
+    # ------------------------------------------------------------------
+    # Test 1 (regression): two qualifying stillness dwells in run 1 must
+    # not satisfy min_consecutive=2 on their own.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_two_dwells_in_run1_emit_nothing_run2_emits(self) -> None:
+        """Bug regression: two qualifying dwells in one run must not satisfy debounce.
+
+        With the old code a second dwell inside a single run incremented the
+        shared (identity, kind) counter from 1 to 2 and triggered an immediate
+        emission.  The correct behaviour: each dwell is its own episode; run 1
+        advances both episode counters to 1 (below threshold=2) and emits nothing;
+        run 2 advances both to 2 and emits.
+
+        InMemoryTrajectoryRepository stores open dwells keyed by (identity_id, ph_id)
+        so two concurrent open dwells must use distinct ph_ids.
+        """
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                stillness_threshold_minutes=30,
+                onset_consecutive_windows=2,
+            )
+        )
+        await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=121))
+
+        dwell_a = _still_dwell("kitchen", 100, still_minutes=60, ph_id="ph-a")
+        dwell_b = _still_dwell("living_room", 90, still_minutes=60, ph_id="ph-b")
+        for d in (dwell_a, dwell_b):
+            await traj_repo.save_room_dwell(d)
+
+        run1 = await worker.run_once(now=_NOW)
+        stillness_run1 = [s for s in run1 if s.signal_kind == "stillness_anomaly"]
+        assert len(stillness_run1) == 0, (
+            f"Run 1 must not emit (debounce not yet satisfied), got {stillness_run1}"
+        )
+
+        run2 = await worker.run_once(now=_NOW + timedelta(minutes=2))
+        stillness_run2 = [s for s in run2 if s.signal_kind == "stillness_anomaly"]
+        assert len(stillness_run2) >= 1, "Run 2 must emit after two consecutive holds"
+
+    # ------------------------------------------------------------------
+    # Test 2: two concurrent distinct stillness episodes both emit (after debounce).
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_two_concurrent_episodes_both_emit(self) -> None:
+        """Distinct episode keys track independently; both emit after debounce.
+
+        Uses distinct ph_ids so both open dwells coexist in InMemoryTrajectoryRepository.
+        """
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                stillness_threshold_minutes=30,
+                onset_consecutive_windows=2,
+            )
+        )
+        await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=121))
+
+        dwell_a = _still_dwell("kitchen", 100, still_minutes=60, ph_id="ph-a")
+        dwell_b = _still_dwell("living_room", 90, still_minutes=60, ph_id="ph-b")
+        for d in (dwell_a, dwell_b):
+            await traj_repo.save_room_dwell(d)
+
+        await worker.run_once(now=_NOW)
+        run2 = await worker.run_once(now=_NOW + timedelta(minutes=2))
+
+        stillness = [s for s in run2 if s.signal_kind == "stillness_anomaly"]
+        assert len(stillness) == 2, (
+            f"Both episodes must emit on run 2, got {len(stillness)} stillness signal(s)"
+        )
+        rooms = {s.context["room_name"] for s in stillness}
+        assert rooms == {"kitchen", "living_room"}
+
+    # ------------------------------------------------------------------
+    # Test 3: same episode_key evaluated twice within one run is idempotent;
+    # subsequent run still requires the second consecutive hold.
+    # ------------------------------------------------------------------
+
+    def test_same_key_twice_in_run_is_idempotent(self) -> None:
+        """Per-run idempotency: counter advances at most once per (identity, kind, ep) per run."""
+        h = SignalHysteresis(min_consecutive=2)
+        now = _NOW
+
+        h.begin_run(now)
+        r1 = h.should_emit(_IDENTITY, "stillness_anomaly", "warning", now, 60, episode_key="ep1")
+        r2 = h.should_emit(_IDENTITY, "stillness_anomaly", "warning", now, 60, episode_key="ep1")
+
+        # Both calls must return the same value (False: counter is 1, below threshold=2).
+        assert r1 == r2 == False, (  # noqa: E712
+            "First run with threshold=2 must return False; both calls must agree"
+        )
+
+        # Second run: counter advances from 1 to 2 -- must emit now.
+        now2 = now + timedelta(minutes=2)
+        h.begin_run(now2)
+        r3 = h.should_emit(_IDENTITY, "stillness_anomaly", "warning", now2, 60, episode_key="ep1")
+        assert r3 is True, "Second run must emit once onset threshold is reached"
+
+    # ------------------------------------------------------------------
+    # Test 4: severity escalation within an episode bypasses cooldown.
+    # ------------------------------------------------------------------
+
+    def test_severity_escalation_bypasses_cooldown(self) -> None:
+        """Escalating severity within an open episode always emits regardless of cooldown."""
+        h = SignalHysteresis(min_consecutive=1)
+        now = _NOW
+
+        # Episode fires on run 1 at "warning".
+        h.begin_run(now)
+        assert h.should_emit(_IDENTITY, "stillness_anomaly", "warning", now, 60, episode_key="ep")
+
+        # Run 2, same severity: still in cooldown (2 minutes elapsed < 60-minute cooldown).
+        now2 = now + timedelta(minutes=2)
+        h.begin_run(now2)
+        assert not h.should_emit(
+            _IDENTITY, "stillness_anomaly", "warning", now2, 60, episode_key="ep"
+        ), "Same severity within cooldown must not re-emit"
+
+        # Run 2 (same run), escalated to "emergency": bypasses cooldown.
+        assert h.should_emit(
+            _IDENTITY, "stillness_anomaly", "emergency", now2, 60, episode_key="ep2"
+        ), "New episode key with escalated severity must emit after fresh debounce"
+
+        # For clarity: test escalation on the *same* episode key in a *later* run.
+        now3 = now + timedelta(minutes=5)
+        h.begin_run(now3)
+        assert h.should_emit(
+            _IDENTITY, "stillness_anomaly", "emergency", now3, 60, episode_key="ep"
+        ), "Escalated severity on existing open episode must bypass cooldown"
+
+    # ------------------------------------------------------------------
+    # Test 5: eviction -- episode last emitted 49 h ago is forgotten after begin_run.
+    # ------------------------------------------------------------------
+
+    def test_eviction_after_48h(self) -> None:
+        """Episode keys last emitted more than 48 h ago are evicted and require full debounce."""
+        h = SignalHysteresis(min_consecutive=2)
+        now = _NOW
+
+        # Build up an emitting episode (2 consecutive runs).
+        h.begin_run(now)
+        h.should_emit(_IDENTITY, "stillness_anomaly", "warning", now, 60, episode_key="old")
+        h.begin_run(now + timedelta(minutes=1))
+        fired = h.should_emit(
+            _IDENTITY,
+            "stillness_anomaly",
+            "warning",
+            now + timedelta(minutes=1),
+            60,
+            episode_key="old",
+        )
+        assert fired, "Episode must have fired before eviction test"
+
+        # Jump 49 hours: begin_run must evict the episode.
+        now_evicted = now + timedelta(hours=49)
+        h.begin_run(now_evicted)
+
+        # First call after eviction: counter starts from 0 again, must not emit.
+        r1 = h.should_emit(
+            _IDENTITY, "stillness_anomaly", "warning", now_evicted, 60, episode_key="old"
+        )
+        assert not r1, "Evicted episode must require full debounce again (run 1 of 2)"
+
+        # Second run: counter reaches threshold and emits.
+        now_evicted2 = now_evicted + timedelta(minutes=2)
+        h.begin_run(now_evicted2)
+        r2 = h.should_emit(
+            _IDENTITY, "stillness_anomaly", "warning", now_evicted2, 60, episode_key="old"
+        )
+        assert r2, "Evicted episode must emit again after full debounce"
+
+    # ------------------------------------------------------------------
+    # Test 6: cooldown across episodes is independent.
+    # ------------------------------------------------------------------
+
+    def test_episode_cooldown_independence(self) -> None:
+        """Episode A's cooldown must not suppress a distinct new episode B."""
+        h = SignalHysteresis(min_consecutive=1)
+        now = _NOW
+
+        # Episode A fires.
+        h.begin_run(now)
+        assert h.should_emit(_IDENTITY, "stillness_anomaly", "warning", now, 60, episode_key="A")
+
+        # Episode B has a completely fresh key; must emit independently in the same run.
+        assert h.should_emit(_IDENTITY, "stillness_anomaly", "warning", now, 60, episode_key="B")
+
+        # Verify A is still in cooldown while B is also in cooldown (both fired this run).
+        now2 = now + timedelta(minutes=5)
+        h.begin_run(now2)
+        assert not h.should_emit(
+            _IDENTITY, "stillness_anomaly", "warning", now2, 60, episode_key="A"
+        ), "Episode A must be in cooldown"
+        assert not h.should_emit(
+            _IDENTITY, "stillness_anomaly", "warning", now2, 60, episode_key="B"
+        ), "Episode B must be in cooldown"
