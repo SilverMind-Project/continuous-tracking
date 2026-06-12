@@ -9,7 +9,9 @@ from structlog import get_logger
 
 from ...domain import FloorPoint, PostureType
 from ...inference.schemas import PoseResult
+from ...storage.gait import GaitBoutRepository
 from ...tracking.floor_projector import FloorProjector
+from ...trajectory.gait import WalkingBoutSegmenter
 from ...trajectory.motion_energy import MotionEnergyTracker
 from ...trajectory.posture import GlobalPostureTracker
 from ...trajectory.trajectory_writer import TrajectoryWriter
@@ -44,6 +46,8 @@ class ClosePHStage(FrameStage):
         presence_publisher: PresencePublisher | None = None,
         dwell_publisher: DwellPublisher | None = None,
         fall_detection_stage: FallDetectionStage | None = None,
+        gait_segmenter: WalkingBoutSegmenter | None = None,
+        gait_bout_repo: GaitBoutRepository | None = None,
     ) -> None:
         self._trajectory_writer = trajectory_writer
         self._motion_energy_tracker = motion_energy_tracker
@@ -54,6 +58,8 @@ class ClosePHStage(FrameStage):
         self._presence_publisher = presence_publisher
         self._dwell_publisher = dwell_publisher
         self._fall_detection_stage = fall_detection_stage
+        self._gait_segmenter = gait_segmenter
+        self._gait_bout_repo = gait_bout_repo
         # Per-PH state for presence and dwell event emission.
         self._seen_ph_ids: set[str] = set()
         self._last_identity_by_ph: dict[str, str | None] = {}
@@ -157,6 +163,10 @@ class ClosePHStage(FrameStage):
                 self._posture_tracker.evict_track(ph_id)
             if self._fall_detection_stage is not None:
                 self._fall_detection_stage.evict(ph_id)
+            if self._gait_segmenter is not None and self._gait_bout_repo is not None:
+                bout = self._gait_segmenter.flush_ph(ph_id, closed_at=close_time)
+                if bout is not None:
+                    await self._gait_bout_repo.upsert_bout(bout)
 
             if self._presence_publisher is not None:
                 await self._presence_publisher.publish_disappeared(
@@ -194,11 +204,15 @@ class TrajectoryStage(FrameStage):
         floor_projector: FloorProjector | None = None,
         motion_energy_tracker: MotionEnergyTracker | None = None,
         posture_tracker: GlobalPostureTracker | None = None,
+        gait_segmenter: WalkingBoutSegmenter | None = None,
+        gait_bout_repo: GaitBoutRepository | None = None,
     ) -> None:
         self._trajectory_writer = trajectory_writer
         self._floor_projector = floor_projector
         self._motion_energy_tracker = motion_energy_tracker
         self._posture_tracker = posture_tracker
+        self._gait_segmenter = gait_segmenter
+        self._gait_bout_repo = gait_bout_repo
 
     async def run(self, ctx: FrameContext) -> None:
         if not ctx.world_snapshots or not self._trajectory_writer:
@@ -283,7 +297,27 @@ class TrajectoryStage(FrameStage):
                 identity_confidence=identity_confidence,
                 posture=gt_posture,
                 motion_energy=gt_motion_energy,
+                floor_speed_m_s=snap.floor_speed_m_s,
             )
+
+            # Feed gait segmenter only for identified PHs (FK requires identity).
+            if (
+                self._gait_segmenter is not None
+                and self._gait_bout_repo is not None
+                and snap.identity_id is not None
+                and snap.floor_speed_m_s is not None
+            ):
+                bout = self._gait_segmenter.ingest(
+                    ph_id=snap.ph_id,
+                    identity_id=snap.identity_id,
+                    captured_at=traj_time,
+                    floor_speed_m_s=snap.floor_speed_m_s,
+                    floor_x_m=snap.floor_x_m,
+                    floor_y_m=snap.floor_y_m,
+                    room_name=snap.room_name,
+                )
+                if bout is not None:
+                    await self._gait_bout_repo.upsert_bout(bout)
 
     def _find_pose_for_ph(
         self, ctx: FrameContext, ph_id: str

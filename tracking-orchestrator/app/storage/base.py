@@ -40,6 +40,7 @@ from .signals import (
     InMemoryDementiaSignalRepository,
     StillnessEpisode,
 )
+from .gait import GaitBoutRepository, InMemoryGaitBoutRepository
 from .trajectory import (
     InMemoryKeyframeRepository,
     InMemoryTrajectoryRepository,

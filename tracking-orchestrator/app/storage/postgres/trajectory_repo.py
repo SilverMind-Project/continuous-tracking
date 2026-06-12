@@ -21,8 +21,8 @@ logger = get_logger(__name__)
 _SQL_INSERT_TRAJECTORY = """
 INSERT INTO continuous_tracking.person_trajectories
     (observed_at, identity_id, ph_id, room_name,
-     ground_x, ground_y, posture, identity_confidence, motion_energy)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ground_x, ground_y, posture, identity_confidence, motion_energy, floor_speed_m_s)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 """
 
 _SQL_INSERT_DWELL = """
@@ -58,7 +58,7 @@ LIMIT 1
 
 _SQL_LIST_TRAJECTORY = """
 SELECT identity_id, ph_id, observed_at, room_name,
-       ground_x, ground_y, posture, identity_confidence, motion_energy
+       ground_x, ground_y, posture, identity_confidence, motion_energy, floor_speed_m_s
 FROM continuous_tracking.person_trajectories
 WHERE TRUE
 """
@@ -98,6 +98,7 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
                 point.posture,
                 point.identity_confidence,
                 point.motion_energy,
+                point.floor_speed_m_s,
             )
 
     async def save_room_dwell(self, dwell: RoomDwell) -> None:
@@ -218,6 +219,7 @@ def _row_to_point(row: Any) -> PersonTrajectoryPoint:
         posture=row["posture"],
         identity_confidence=float(row["identity_confidence"]),
         motion_energy=row.get("motion_energy"),
+        floor_speed_m_s=row.get("floor_speed_m_s"),
     )
 
 

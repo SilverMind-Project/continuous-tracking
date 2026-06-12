@@ -69,6 +69,7 @@ class TrajectoryWriter:
         identity_confidence: float = 0.0,
         posture: PostureType = "unknown",
         motion_energy: float | None = None,
+        floor_speed_m_s: float | None = None,
     ) -> PersonTrajectoryPoint:
         """Write one trajectory point and update the room dwell state.
 
@@ -96,6 +97,7 @@ class TrajectoryWriter:
             posture=posture,
             identity_confidence=identity_confidence,
             motion_energy=motion_energy,
+            floor_speed_m_s=floor_speed_m_s,
         )
         await self._repo.save_trajectory_point(point)
 

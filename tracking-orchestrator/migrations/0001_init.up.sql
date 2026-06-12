@@ -202,6 +202,7 @@ CREATE TABLE IF NOT EXISTS person_trajectories (
                             CHECK (posture IN ('standing', 'sitting', 'walking', 'lying', 'unknown')),
     identity_confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     motion_energy       DOUBLE PRECISION,
+    floor_speed_m_s     DOUBLE PRECISION,
     PRIMARY KEY (id, observed_at)
 );
 
@@ -251,6 +252,27 @@ CREATE INDEX IF NOT EXISTS idx_room_dwells_open
 
 CREATE INDEX IF NOT EXISTS idx_room_dwells_room
     ON room_dwells (room_name, entered_at DESC);
+
+-- =============================================================================
+-- Gait bouts: discrete walking episodes persisted by WalkingBoutSegmenter.
+-- bout_id is UUID5 over (identity_id, started_at.isoformat()) for idempotent
+-- re-processing upserts.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS gait_bouts (
+    bout_id          UUID PRIMARY KEY,
+    identity_id      TEXT NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    started_at       TIMESTAMPTZ NOT NULL,
+    ended_at         TIMESTAMPTZ NOT NULL,
+    duration_s       DOUBLE PRECISION NOT NULL,
+    distance_m       DOUBLE PRECISION NOT NULL,
+    median_speed_m_s DOUBLE PRECISION NOT NULL,
+    p95_speed_m_s    DOUBLE PRECISION NOT NULL,
+    sample_count     INTEGER NOT NULL,
+    rooms            TEXT[] NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_gait_bouts_identity
+    ON gait_bouts (identity_id, started_at DESC);
 
 -- =============================================================================
 -- Tagged keyframes: periodic and triggered frame samples with annotations.

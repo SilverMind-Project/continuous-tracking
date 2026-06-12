@@ -403,6 +403,34 @@ world_tracker:
   # tighter than the primary 9.21 to bound ghost-persistence risk).
   recovery_gate_chi2: 5.99
 
+# Gait and mobility analytics (Milestone 3)
+#
+# Threshold rationale:
+#
+# bout_min_speed_m_s (0.3):
+#   Captures the slow tail of impaired indoor walking (~0.4-1.0 m/s comfortable)
+#   without triggering on postural sway or standing drift.
+#
+# bout_min_duration_s (3.0):
+#   Eliminates incidental steps and balance corrections; 3 s is roughly 2-4
+#   strides at 0.5 m/s and is the shortest clinically meaningful gait sample.
+#
+# bout_close_grace_s (2.0):
+#   Bridges brief dips below threshold (momentary slow turns, doorway hesitation)
+#   without merging truly separate bouts.  Matches the inter-bout gap used in
+#   validated wearable gait algorithms.
+#
+# max_plausible_speed_m_s (2.5):
+#   Above this value the floor projection is almost certainly a calibration
+#   glitch (no ambulatory elderly person walks faster than ~2 m/s indoors).
+#   Glitch samples are excluded without closing the active bout.
+gait:
+  enabled: true
+  bout_min_speed_m_s: 0.3
+  bout_min_duration_s: 3.0
+  bout_close_grace_s: 2.0
+  max_plausible_speed_m_s: 2.5
+
 # Environment label (dev / staging / production)
 env: production
 

@@ -68,10 +68,12 @@ from ..storage.base import (
     CameraTopologyRepository,
     CoPresenceRepository,
     DementiaSignalRepository,
+    GaitBoutRepository,
     GalleryRepository,
     InMemoryBboxAnnotationRepository,
     InMemoryBehaviorBaselineRepository,
     InMemoryDementiaSignalRepository,
+    InMemoryGaitBoutRepository,
     InMemoryGalleryRepository,
     InMemoryKeyframeRepository,
     InMemoryPHRepository,
@@ -91,6 +93,7 @@ from ..tracking.world.config import WorldTrackerConfig
 from ..tracking.world.tracker import WorldTracker
 from ..trajectory.dementia_signals import DementiaSignalWorker
 from ..trajectory.dementia_signals import SignalConfig as DementiaSignalConfig
+from ..trajectory.gait import GaitConfig, WalkingBoutSegmenter
 from ..trajectory.motion_energy import MotionEnergyTracker
 from ..trajectory.posture import GlobalPostureTracker
 from ..trajectory.posture_strategy import PostureStrategy
@@ -202,6 +205,7 @@ class PipelineDependencies:
     copresence_repo: CoPresenceRepository | None = None
     overlap_groups: list[OverlapGroup] | None = None
     baseline_repo: BehaviorBaselineRepository | None = None
+    gait_bout_repo: GaitBoutRepository | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -337,6 +341,8 @@ class FrameProcessingPipeline:
         # Frame batcher (optional; None when batch_window_s=0).
         self._batcher: FrameBatcher | None = None
         self._fall_detection_stage: FallDetectionStage | None = None
+        self._gait_segmenter: WalkingBoutSegmenter | None = None
+        self._gait_bout_repo: GaitBoutRepository | None = None
         self._stage_runner: StageRunner | None = None
         self._post_detect_runner: StageRunner | None = None
         self._pre_world_runner: StageRunner | None = None
@@ -449,6 +455,11 @@ class FrameProcessingPipeline:
         # trajectories written by the writer.
         _traj_repo = deps.trajectory_repo or InMemoryTrajectoryRepository()
         self._trajectory_writer = TrajectoryWriter(repo=_traj_repo)
+
+        # Gait bout segmenter and repository (enabled by default; adds only
+        # arithmetic + one insert per bout, no behavioural risk).
+        self._gait_bout_repo = deps.gait_bout_repo or InMemoryGaitBoutRepository()
+        self._gait_segmenter = WalkingBoutSegmenter(GaitConfig())
 
         keyframe_repo = deps.keyframe_repo or InMemoryKeyframeRepository(bbox_repo=self._bbox_repo)
         self._keyframe_sampler = KeyframeSampler(
@@ -606,6 +617,8 @@ class FrameProcessingPipeline:
                 presence_publisher=self._presence_publisher,
                 dwell_publisher=self._dwell_publisher,
                 fall_detection_stage=self._fall_detection_stage,
+                gait_segmenter=self._gait_segmenter,
+                gait_bout_repo=self._gait_bout_repo,
             ),
             PostureStage(
                 camera_room_map=self._camera_room_map,
@@ -617,6 +630,8 @@ class FrameProcessingPipeline:
                 floor_projector=self._floor_projector,
                 motion_energy_tracker=self._motion_energy_tracker,
                 posture_tracker=self._posture_tracker,
+                gait_segmenter=self._gait_segmenter,
+                gait_bout_repo=self._gait_bout_repo,
             ),
             KeyframeStage(
                 keyframe_sampler=self._keyframe_sampler,

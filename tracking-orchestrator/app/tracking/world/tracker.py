@@ -378,6 +378,7 @@ class WorldTracker:
         ph_obs_meta: dict[
             str, tuple[int, BoundingBox | None, float]
         ] = {}  # ph_id -> (frame_index, bbox, detection_confidence)
+        ph_floor_calibrated: dict[str, bool] = {}  # ph_id -> obs.floor_point.calibrated this frame
         # Representative observation per PH updated this frame. Consumed after
         # identity resolution (step 9) to seed the multi-view gallery with the
         # COMMITTED identity. Seeding inside step 4 used the pre-resolution
@@ -462,6 +463,7 @@ class WorldTracker:
                 obs.bbox,
                 obs.detection_confidence,
             )
+            ph_floor_calibrated[ph.ph_id] = obs.floor_point.calibrated
             # Map all source detection IDs (not just the representative) to this PH.
             for src_det_id in src_ids:
                 if src_det_id:
@@ -689,6 +691,7 @@ class WorldTracker:
                 obs.bbox,
                 obs.detection_confidence,
             )
+            ph_floor_calibrated[new_ph.ph_id] = obs.floor_point.calibrated
             # Defer gallery seeding to after identity resolution (step 9).
             seed_obs_by_ph[new_ph.ph_id] = obs
             # Save the PH first so the FK constraint on world_observations is satisfied.
@@ -969,6 +972,11 @@ class WorldTracker:
                     room_name=room_name,
                     mean_quality=ph.mean_quality,
                     active_cameras=ph.active_cameras,
+                    floor_speed_m_s=(
+                        speed_m_s(ph.state_mean)
+                        if ph_floor_calibrated.get(ph.ph_id, False)
+                        else None
+                    ),
                 )
             )
 
