@@ -36,10 +36,13 @@ from ..storage.base import (
     DementiaSignalRepository,
     TrajectoryRepository,
 )
+from ..storage.gait import GaitDailyRepository
+from .gait import GaitDailyRecord
 from .signal_specs import (
     BATHROOM_DWELL_SPEC,
     EVENING_ACTIVITY_SPEC,
     FALL_SUSPECTED_SPEC,
+    GAIT_SLOWING_SPEC,
     NIGHTTIME_MOVEMENT_SPEC,
     NON_DIAGNOSTIC_DISCLAIMER,
     PACING_SPEC,
@@ -47,7 +50,7 @@ from .signal_specs import (
     UNOBSERVED_GAP_SPEC,
     AlgorithmSpec,
 )
-from .stats import robust_z
+from .stats import robust_z, weighted_median
 
 _SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 _ALGORITHM_VERSION = 3  # Phase 3: robust baselines + hysteresis + detector rewrites
@@ -63,6 +66,7 @@ _SIGNAL_SPEC: dict[str, AlgorithmSpec] = {
     "absence": UNOBSERVED_GAP_SPEC,
     "bathroom_dwell_anomaly": BATHROOM_DWELL_SPEC,
     "fall_suspected": FALL_SUSPECTED_SPEC,
+    "gait_slowing": GAIT_SLOWING_SPEC,
 }
 
 
@@ -270,11 +274,13 @@ class DementiaSignalWorker:
         signal_repo: DementiaSignalRepository,
         cfg: SignalConfig | None = None,
         baseline_repo: BehaviorBaselineRepository | None = None,
+        gait_daily_repo: GaitDailyRepository | None = None,
     ) -> None:
         self._trajectory_repo = trajectory_repo
         self._signal_repo = signal_repo
         self._cfg = cfg or SignalConfig()
         self._baseline_repo = baseline_repo
+        self._gait_daily_repo = gait_daily_repo
         self._hysteresis = SignalHysteresis(
             min_consecutive=self._cfg.onset_consecutive_windows,
         )
@@ -434,6 +440,7 @@ class DementiaSignalWorker:
         signals.extend(await self._compute_nighttime_movement(identity_id, window, now))
         signals.extend(await self._compute_stillness_anomaly(identity_id, dwells, now))
         signals.extend(await self._compute_absence(identity_id, window, now))
+        signals.extend(await self._compute_gait_slowing(identity_id, now))
 
         # Apply algorithm metadata and data quality gating.
         quality_ok, mean_conf, coverage = self._check_data_quality(identity_id, window)
@@ -1161,8 +1168,119 @@ class DementiaSignalWorker:
         ]
 
     # ------------------------------------------------------------------
+    # 3.3  Gait slowing — 56-day two-window trend
+    # ------------------------------------------------------------------
+
+    async def _compute_gait_slowing(
+        self,
+        identity_id: str,
+        now: datetime,
+    ) -> list[DementiaSignal]:
+        """Detect sustained gait speed decline using a 56-day two-window comparison.
+
+        Compares duration-weighted median speed for the recent 28 days against the
+        prior 28 days.  Fires when the decline is both absolute (>= max(0.08, 10% of
+        baseline)) and statistically robust (modified z <= -2.0).
+
+        Clinical anchoring: sustained gait speed below ~0.8 m/s and meaningful
+        decline on the order of 0.1 m/s are conventionally clinically relevant
+        (PMC8968722).  This signal compares within-person, so the absolute floor is
+        context rather than trigger.
+        """
+        if self._gait_daily_repo is None:
+            return []
+
+        now_local = now.astimezone(self._cfg.tz)
+        now_date = now_local.date()
+        since_date = now_date - timedelta(days=56)
+        until_date = now_date - timedelta(days=1)  # exclude today's partial day
+        recent_start = now_date - timedelta(days=28)
+
+        all_days = await self._gait_daily_repo.list_days(
+            identity_id=identity_id,
+            since=since_date,
+            until=until_date,
+        )
+
+        def _qualifying(days: list[GaitDailyRecord]) -> list[GaitDailyRecord]:
+            return [d for d in days if d.bout_count >= 3 and d.total_walking_s >= 60]
+
+        baseline_days = _qualifying([d for d in all_days if d.local_date < recent_start])
+        recent_days = _qualifying([d for d in all_days if d.local_date >= recent_start])
+
+        if len(baseline_days) < 10 or len(recent_days) < 10:
+            self._hysteresis.clear_trigger(identity_id, "gait_slowing", episode_key="")
+            return []
+
+        baseline_median = weighted_median(
+            [d.median_speed_m_s for d in baseline_days],
+            [d.total_walking_s for d in baseline_days],
+        )
+        recent_median = weighted_median(
+            [d.median_speed_m_s for d in recent_days],
+            [d.total_walking_s for d in recent_days],
+        )
+
+        # Robust z of the recent weighted-median against the baseline daily medians.
+        baseline_samples = [d.median_speed_m_s for d in baseline_days]
+        rz = robust_z(recent_median, baseline_samples)
+
+        decline_floor = max(0.08, 0.10 * baseline_median)
+        if recent_median > baseline_median - decline_floor or rz.modified_z > -2.0:
+            self._hysteresis.clear_trigger(identity_id, "gait_slowing", episode_key="")
+            return []
+
+        pct_decline = (
+            (baseline_median - recent_median) / baseline_median if baseline_median > 0 else 0.0
+        )
+        severity: DementiaSignalSeverity = (
+            "warning" if (pct_decline > 0.20 or recent_median < 0.6) else "info"
+        )
+
+        kind: DementiaSignalKind = "gait_slowing"
+        if not self._hysteresis.should_emit(
+            identity_id, kind, severity, now, self._cooldown_for(kind), episode_key=""
+        ):
+            return []
+
+        window_start = now - timedelta(days=28)
+        recent_series = [
+            {"date": str(d.local_date), "speed_m_s": round(d.median_speed_m_s, 3)}
+            for d in recent_days
+        ]
+
+        return [
+            DementiaSignal(
+                signal_id=_stable_signal_id(identity_id, kind, window_start, now),
+                identity_id=identity_id,
+                signal_kind=kind,
+                severity=severity,
+                value=round(recent_median, 3),
+                baseline=round(baseline_median, 3),
+                z_score=round(rz.modified_z, 4),
+                window_start=window_start,
+                window_end=now,
+                emitted_at=now,
+                algorithm_version=_ALGORITHM_VERSION,
+                context={
+                    "recent_median_m_s": round(recent_median, 3),
+                    "baseline_median_m_s": round(baseline_median, 3),
+                    "recent_day_count": len(recent_days),
+                    "baseline_day_count": len(baseline_days),
+                    "modified_z": round(rz.modified_z, 4),
+                    "pct_decline": round(pct_decline, 3),
+                    "recent_series": recent_series,
+                },
+            )
+        ]
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _cooldown_for(self, kind: str) -> int:
+        """Return cooldown minutes for kind, applying per-kind overrides from config."""
+        return self._cfg.kind_cooldown_minutes.get(kind, self._cfg.cooldown_minutes)
 
     def _is_resting_room(self, room_name: str) -> bool:
         """Return True if the room is in the configured resting-room set."""
@@ -1365,6 +1483,9 @@ class SignalConfig:
         # Hysteresis / debounce
         onset_consecutive_windows: int = 2,
         cooldown_minutes: int = 60,
+        # Per-kind cooldown overrides (minutes). Kinds not listed use cooldown_minutes.
+        # gait_slowing: 7 days — a daily re-page about a monthly trend is noise.
+        gait_slowing_cooldown_minutes: int = 10080,
         # Pacing
         # 8 transitions in 30 min: distinguishes purposeful ambulation from dementia pacing
         pacing_room_threshold: int = 8,
@@ -1403,6 +1524,9 @@ class SignalConfig:
         self.min_baseline_n = min_baseline_n
         self.onset_consecutive_windows = onset_consecutive_windows
         self.cooldown_minutes = cooldown_minutes
+        self.kind_cooldown_minutes: dict[str, int] = {
+            "gait_slowing": gait_slowing_cooldown_minutes,
+        }
         self.pacing_room_threshold = pacing_room_threshold
         self.pacing_window_minutes = pacing_window_minutes
         self.pacing_window = timedelta(minutes=pacing_window_minutes)

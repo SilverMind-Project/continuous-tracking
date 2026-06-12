@@ -108,6 +108,21 @@ FALL_SUSPECTED_SPEC = AlgorithmSpec(
     min_baseline_samples=0,
 )
 
+GAIT_SLOWING_SPEC = AlgorithmSpec(
+    name="gait-slowing-v1",
+    version=1,
+    evidence_grade="observational_study",
+    clinical_label="Gait Slowing",
+    # Sustained gait speed decline is among the best-validated predictors of cognitive
+    # decline (PMC8968722; Frontiers fdgth.2025.1698551).  Passive in-home camera
+    # measurement validated in cognitively impaired populations (Hegde et al.,
+    # Alzheimer's & Dementia 2025, dad2.70085).  Within-person two-window comparison
+    # (recent 28 d vs prior 28 d); absolute floor ~0.8 m/s and meaningful decline on
+    # the order of 0.1 m/s are clinically relevant (PMC8968722).
+    required_inputs=("gait_daily", "floor_speed_m_s"),
+    min_baseline_samples=10,
+)
+
 
 @dataclass(frozen=True)
 class IdentitySignalContext:

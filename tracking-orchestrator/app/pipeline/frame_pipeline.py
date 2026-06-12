@@ -532,6 +532,7 @@ class FrameProcessingPipeline:
                     pacing_min_obs_density=self._config.signals.pacing_min_obs_density,
                 ),
                 baseline_repo=baseline_repo,
+                gait_daily_repo=deps.gait_daily_repo,
             )
 
         # Frame batcher — buffer frames for parallel cross-camera processing.
