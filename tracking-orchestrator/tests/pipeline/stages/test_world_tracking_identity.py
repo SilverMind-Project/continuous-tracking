@@ -23,7 +23,6 @@ from app.pipeline.frame_pipeline import (
     FrameProcessingPipeline,
     PipelineConfig,
     PipelineDependencies,
-    SignalConfig,
 )
 from app.storage.base import (
     InMemoryPHRepository,
@@ -288,7 +287,7 @@ class TestPipelineWiring:
 
             config = PipelineConfig(
                 allow_skeleton=True,
-                signals=SignalConfig(enabled=False),  # type: ignore[call-arg]
+                signals_enabled=False,
                 transport=TransportConfig(),  # type: ignore[arg-type]
             )
             pipeline = FrameProcessingPipeline(config)

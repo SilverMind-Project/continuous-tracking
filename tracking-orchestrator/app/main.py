@@ -37,7 +37,6 @@ from .pipeline.frame_pipeline import (
     FaceIdConfig,
     PipelineConfig,
     PipelineDependencies,
-    SignalConfig,
 )
 from .pipeline.reid_policy import AdaptiveReidConfig
 from .pipeline.stages.fall_detection import FallDetectionConfig
@@ -75,6 +74,7 @@ from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
 from .tracking.identity_resolver import ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
+from .trajectory.dementia_signals import SignalConfig
 from .trajectory.depth_posture_strategy import DepthPostureStrategy
 from .trajectory.fused_posture_strategy import FusedPostureStrategy
 from .trajectory.posture_strategy import RTMPosePostureStrategy
@@ -254,26 +254,42 @@ def _build_sampler_config(s: Settings) -> SamplerConfig:
 
 def _build_signal_config(s: Settings) -> SignalConfig:
     sig = s.section("signal")
+    agitation = s.section("signal.agitation")
     return SignalConfig(
-        interval_s=sig.as_int("interval_s"),
-        enabled=sig.as_bool("enabled"),
-        timezone=s.as_str("app.timezone"),
+        window_hours=sig.as_int("window_hours"),
+        tz_name=s.as_str("app.timezone"),
+        min_baseline_n=sig.as_int("min_baseline_n"),
+        onset_consecutive_windows=sig.as_int("onset_consecutive_windows"),
+        cooldown_minutes=sig.as_int("cooldown_minutes"),
+        gait_slowing_cooldown_minutes=sig.as_int("gait_slowing_cooldown_minutes"),
+        agitation_cooldown_minutes=agitation.as_int("agitation_cooldown_minutes"),
+        pacing_room_threshold=sig.as_int("pacing_room_threshold"),
+        pacing_window_minutes=sig.as_int("pacing_window_minutes"),
+        pacing_min_obs_density=sig.as_float("pacing_min_obs_density"),
+        nighttime_transition_threshold=sig.as_int("nighttime_transition_threshold"),
         stillness_threshold_minutes=sig.as_int("stillness_threshold_minutes"),
         stillness_emergency_minutes=sig.as_int("stillness_emergency_minutes"),
         stillness_motion_floor=sig.as_float("stillness_motion_floor"),
-        pacing_room_threshold=sig.as_int("pacing_room_threshold"),
-        pacing_window_minutes=sig.as_int("pacing_window_minutes"),
-        nighttime_transition_threshold=sig.as_int("nighttime_transition_threshold"),
-        absence_threshold_minutes=sig.as_int("absence_threshold_minutes"),
-        bathroom_absolute_threshold_seconds=sig.as_int("bathroom_absolute_threshold_seconds"),
-        min_baseline_n=sig.as_int("min_baseline_n"),
-        cooldown_minutes=sig.as_int("cooldown_minutes"),
-        onset_consecutive_windows=sig.as_int("onset_consecutive_windows"),
         resting_rooms=tuple(sig.require("resting_rooms")),
-        sundowning_z_threshold=sig.as_float("sundowning_z_threshold"),
         bathroom_z_threshold=sig.as_float("bathroom_z_threshold"),
         bathroom_z_threshold_night=sig.as_float("bathroom_z_threshold_night"),
-        pacing_min_obs_density=sig.as_float("pacing_min_obs_density"),
+        bathroom_absolute_threshold_seconds=sig.as_int("bathroom_absolute_threshold_seconds"),
+        sundowning_z_threshold=sig.as_float("sundowning_z_threshold"),
+        sundowning_min_evening_minutes=sig.as_int("sundowning_min_evening_minutes"),
+        absence_threshold_minutes=sig.as_int("absence_threshold_minutes"),
+        baseline_cache_ttl_minutes=sig.as_int("baseline_cache_ttl_minutes"),
+        max_concurrent_identities=sig.as_int("max_concurrent_identities"),
+        incremental_enabled=sig.as_bool("incremental_enabled"),
+        agitation_enabled=agitation.as_bool("agitation_enabled"),
+        agitation_window_minutes=agitation.as_int("agitation_window_minutes"),
+        agitation_min_observed_minutes=agitation.as_int("agitation_min_observed_minutes"),
+        agitation_composite_threshold=agitation.as_float("agitation_composite_threshold"),
+        agitation_z_threshold=agitation.as_float("agitation_z_threshold"),
+        agitation_warning_composite=agitation.as_float("agitation_warning_composite"),
+        agitation_warning_z=agitation.as_float("agitation_warning_z"),
+        agitation_weight_in_place=agitation.as_float("agitation_weight_in_place"),
+        agitation_weight_entropy=agitation.as_float("agitation_weight_entropy"),
+        agitation_weight_excursion=agitation.as_float("agitation_weight_excursion"),
     )
 
 
@@ -366,6 +382,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         world_tracker=world_tracker_config,
         sampler=sampler_config,
         signals=_build_signal_config(settings),
+        signals_enabled=settings.as_bool("signal.enabled"),
+        signal_interval_s=settings.as_int("signal.interval_s"),
         fall_detection=_build_fall_detection_config(settings),
         face_id=_build_face_id_config(settings, face_id_camera_configs),
         max_concurrent_frames=settings.as_int("pipeline.max_concurrent_frames"),

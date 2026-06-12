@@ -11,7 +11,6 @@ from app.pipeline.frame_pipeline import (
     FrameProcessingPipeline,
     PipelineConfig,
     PipelineDependencies,
-    SignalConfig,
 )
 from app.pipeline.gallery_cache import GalleryCache
 from app.storage.base import (
@@ -19,6 +18,7 @@ from app.storage.base import (
     InMemoryTrajectoryRepository,
 )
 from app.storage.gallery import InMemoryGalleryRepository
+from app.trajectory.dementia_signals import SignalConfig
 from app.transport.redis_streams import FrameReady
 
 
@@ -62,13 +62,28 @@ class TestInMemoryTrajectoryRepoSharing:
 
             await pipeline.stop()
 
+    @pytest.mark.asyncio
+    async def test_pipeline_passes_signal_config_directly_to_worker(self) -> None:
+        signal_config = SignalConfig(window_hours=12, max_concurrent_identities=2)
+        pipeline = FrameProcessingPipeline(
+            PipelineConfig(allow_skeleton=True, signals=signal_config)
+        )
+
+        with _mock_redis_deps():
+            await pipeline.initialize()
+
+            assert pipeline._signal_worker is not None
+            assert pipeline._signal_worker._cfg is signal_config
+
+            await pipeline.stop()
+
 
 class TestKeyframeBboxRepoReuse:
     @pytest.mark.asyncio
     async def test_default_keyframe_repo_uses_injected_bbox_repo(self) -> None:
         """Default in-memory keyframe storage writes bboxes to the injected bbox repo."""
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+            PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
 
         injected_bbox_repo = InMemoryBboxAnnotationRepository()
@@ -91,7 +106,7 @@ class TestKeyframeBboxRepoReuse:
     async def test_default_keyframe_repo_uses_pipeline_bbox_repo_default(self) -> None:
         """Default in-memory keyframe storage writes bboxes to the pipeline fallback."""
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+            PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
 
         with _mock_redis_deps():
@@ -113,7 +128,7 @@ class TestCrossCameraPostDetectBatch:
     @pytest.mark.asyncio
     async def test_world_tracking_receives_one_round_from_each_camera(self) -> None:
         """Detector batching must not split overlapping cameras before world tracking."""
-        pipeline = FrameProcessingPipeline(PipelineConfig(signals=SignalConfig(enabled=False)))
+        pipeline = FrameProcessingPipeline(PipelineConfig(signals_enabled=False))
         pipeline._transport = AsyncMock()
 
         class FakeRunner:
@@ -173,7 +188,7 @@ class TestGalleryCacheLifecycle:
     async def test_cross_camera_path_invalidates_cache_each_round(self) -> None:
         """The gallery cache must be cleared once per world-tracking round on the
         cross-camera batched path so round-2 queries cannot hit round-1 cached data."""
-        pipeline = FrameProcessingPipeline(PipelineConfig(signals=SignalConfig(enabled=False)))
+        pipeline = FrameProcessingPipeline(PipelineConfig(signals_enabled=False))
         pipeline._transport = AsyncMock()
 
         repo = _CountingGalleryRepo()
@@ -225,7 +240,7 @@ class TestGalleryCacheLifecycle:
     async def test_non_batched_path_invalidates_cache_each_frame(self) -> None:
         """The gallery cache must be cleared on each _process_frame call so
         gallery reads in frame N cannot return frame N-1 cached data."""
-        pipeline = FrameProcessingPipeline(PipelineConfig(signals=SignalConfig(enabled=False)))
+        pipeline = FrameProcessingPipeline(PipelineConfig(signals_enabled=False))
         pipeline._transport = AsyncMock()
         pipeline._detector = object()  # non-None so _process_frame runs _stage_runner
 

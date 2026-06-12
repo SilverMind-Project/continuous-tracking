@@ -213,7 +213,11 @@ class Settings:
 
     def section(self, dotted_key: str) -> SettingsSection:
         """Retrieve a required mapping-valued config section."""
-        value = self.require(dotted_key)
+        self._ensure_loaded()
+        if dotted_key in self._data:
+            value = _interpolate(self._data[dotted_key], self._env)
+        else:
+            value = self.require(dotted_key)
         if not isinstance(value, dict):
             raise TypeError(f"Setting section must be a mapping: {dotted_key}")
         return SettingsSection(dotted_key, value, self._env)

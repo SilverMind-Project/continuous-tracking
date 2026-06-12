@@ -109,6 +109,7 @@ face_id:
 signal:
   interval_s: 60
   enabled: true
+  window_hours: 24
   stillness_threshold_minutes: 60
   stillness_emergency_minutes: 120
   stillness_motion_floor: 0.05
@@ -132,6 +133,14 @@ signal:
   bathroom_z_threshold_night: 4.0
   # Minimum trajectory-point density (points/min) required to evaluate pacing.
   pacing_min_obs_density: 0.5
+  # Per-kind override: gait trends should not re-page more than weekly.
+  gait_slowing_cooldown_minutes: 10080
+  # Minimum evening coverage before evaluating sundowning.
+  sundowning_min_evening_minutes: 30
+  # Worker scalability controls.
+  baseline_cache_ttl_minutes: 60
+  max_concurrent_identities: 4
+  incremental_enabled: true
 
 # Agitation index signal (Milestone 4)
 #

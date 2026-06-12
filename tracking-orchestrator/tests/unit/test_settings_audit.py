@@ -18,10 +18,11 @@ from app.main import (
     _build_signal_config,
     _build_world_tracker_config,
 )
-from app.pipeline.frame_pipeline import FaceIdConfig, PipelineConfig, SignalConfig
+from app.pipeline.frame_pipeline import FaceIdConfig, PipelineConfig
 from app.sampling.keyframe_sampler import SamplerConfig
 from app.tracking.identity_resolver import ResolverConfig
 from app.tracking.world.config import WorldTrackerConfig
+from app.trajectory.dementia_signals import SignalConfig
 
 SETTINGS_PATH = Path(__file__).resolve().parents[2] / "config" / "settings.yaml"
 
@@ -97,6 +98,15 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     assert world_tracker.dedup_max_distance_ceiling_m == pytest.approx(1.5)
 
 
+def test_signal_config_defaults_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch)
+    loaded = _build_signal_config(settings)
+    defaults = SignalConfig()
+
+    for field in fields(SignalConfig):
+        assert getattr(defaults, field.name) == getattr(loaded, field.name), field.name
+
+
 def test_no_dead_settings() -> None:
     data = _yaml()
 
@@ -122,6 +132,8 @@ def test_no_dead_settings() -> None:
         section_data = data[section]
         assert isinstance(section_data, dict)
         for key in section_data:
+            if section == "signal" and key in {"enabled", "interval_s"}:
+                continue
             assert f'"{key}"' in source or f'"{section}.{key}"' in source
 
     dataclass_fields = {
@@ -133,7 +145,7 @@ def test_no_dead_settings() -> None:
     }
     externally_supplied = {
         (FaceIdConfig, "camera_configs"),
-        (SignalConfig, "timezone"),
+        (SignalConfig, "tz_name"),
         # sampling gate, default-off, no settings.yaml key (M4 may add one).
         (ResolverConfig, "coherence_shadow_sample_rate"),
     }
@@ -144,7 +156,13 @@ def test_no_dead_settings() -> None:
                 continue
             assert f"{field.name}=" in source
 
+    signal_source = inspect.getsource(_build_signal_config)
+    for key in data["signal.agitation"]:
+        assert f'"{key}"' in signal_source
+
     pipeline_source = inspect.getsource(PipelineConfig)
     main_source = Path("app/main.py").read_text()
     assert "min_keyframe_detection_confidence" in pipeline_source
     assert '"pipeline.min_keyframe_detection_confidence"' in main_source
+    assert '"signal.enabled"' in main_source
+    assert '"signal.interval_s"' in main_source

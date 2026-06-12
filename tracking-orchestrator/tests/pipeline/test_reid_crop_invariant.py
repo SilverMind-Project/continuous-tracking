@@ -15,7 +15,6 @@ from app.pipeline.frame_pipeline import (
     FrameProcessingPipeline,
     PipelineConfig,
     PipelineDependencies,
-    SignalConfig,
 )
 from app.transport.redis_streams import FrameReady
 
@@ -71,7 +70,7 @@ class TestReidCropInvariant:
                 return await fake_embed(crops)
 
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+            PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
 
         with _mock_redis_deps():

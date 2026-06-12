@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -1608,128 +1609,98 @@ class ZScoreResult:
         self.z_score = z_score
 
 
+@dataclass(frozen=True)
 class SignalConfig:
     """Configuration for dementia signal computation.
-
-    Worker-layer config. The pipeline-layer mirror is frame_pipeline.SignalConfig.
-    Keep fields in sync; Milestone 6 task 3 will collapse the two into one.
 
     All thresholds carry docstrings citing their rationale.
     """
 
-    def __init__(
-        self,
-        # General
-        window_hours: int = 24,
-        tz_name: str = "UTC",
-        # Baseline
-        min_baseline_n: int = 5,
-        # Hysteresis / debounce
-        onset_consecutive_windows: int = 2,
-        cooldown_minutes: int = 60,
-        # Per-kind cooldown overrides (minutes). Kinds not listed use cooldown_minutes.
-        # gait_slowing: 7 days — a daily re-page about a monthly trend is noise.
-        gait_slowing_cooldown_minutes: int = 10080,
-        # agitation_index: 120 min — transient bursts excluded by onset debounce;
-        # 120 min prevents re-alerting after a resolved episode.
-        agitation_cooldown_minutes: int = 120,
-        # Pacing
-        # 8 transitions in 30 min: distinguishes purposeful ambulation from dementia pacing
-        pacing_room_threshold: int = 8,
-        pacing_window_minutes: int = 30,
-        pacing_min_obs_density: float = 0.5,  # minimum points/min to evaluate
-        # Nighttime movement
-        # 3 transitions = one bathroom trip plus return and one more; 2 is a single bathroom trip
-        nighttime_transition_threshold: int = 3,
-        # Stillness
-        # 60 min: desk work, reading, TV watching routinely exceed 30 min without clinical concern
-        stillness_threshold_minutes: int = 60,
-        stillness_emergency_minutes: int = 120,
-        # 0.02: normal physiological ambient motion (breathing, micro-adjustments) ≈ 0.01-0.02
-        stillness_motion_floor: float = 0.02,
-        resting_rooms: tuple[str, ...] = ("bed", "bedroom"),
-        # Bathroom
-        bathroom_z_threshold: float = 3.5,
-        bathroom_z_threshold_night: float = 4.0,
-        # 45 min cold-start fallback: constipation (common with dementia medications) routinely
-        # extends bathroom time beyond 30 min before a personal baseline can be established
-        bathroom_absolute_threshold_seconds: int = 2700,
-        # Sundowning
-        sundowning_z_threshold: float = 2.5,
-        sundowning_min_evening_minutes: int = 30,
-        # Absence
-        # 90 min: cameras do not cover every room; reduces false alerts from normal gaps
-        absence_threshold_minutes: int = 90,
-        # Phase 4: scalability
-        baseline_cache_ttl_minutes: int = 60,
-        max_concurrent_identities: int = 4,
-        incremental_enabled: bool = True,
-        # Agitation index (M4) — flag-gated; default false until caregiver annotation
-        # loop (M4 task 3) provides validation evidence.
-        agitation_enabled: bool = False,
-        # 30 min rolling window matches the CMAI assessment interval and pacing window.
-        agitation_window_minutes: int = 30,
-        # Minimum observed trajectory points (1-per-point proxy for minutes) to evaluate.
-        # 15 min of coverage required so a sparse observation window doesn't produce
-        # a composite index that is dominated by missing data.
-        agitation_min_observed_minutes: int = 15,
-        # Composite trigger gate (absolute): composite must reach 0.5 before z-score
-        # comparison so the baseline self-exclusion rule cannot fire on near-zero values.
-        agitation_composite_threshold: float = 0.5,
-        # Robust z-score gate: signal fires only when the composite is >= 3.0 standard
-        # deviations above the personal baseline median.
-        agitation_z_threshold: float = 3.0,
-        # Warning-tier thresholds: composite >= 0.7 AND z >= 4.0 indicate sustained,
-        # high-amplitude restlessness that warrants caregiver attention within hours.
-        agitation_warning_composite: float = 0.7,
-        agitation_warning_z: float = 4.0,
-        # Feature weights (v1, heuristic): in_place_motion_ratio weighted highest because
-        # it is computable on uncalibrated cameras and is the least confoundable feature.
-        # direction_change_entropy and short_excursion_rate require metric floor positions.
-        agitation_weight_in_place: float = 0.5,
-        agitation_weight_entropy: float = 0.3,
-        agitation_weight_excursion: float = 0.2,
-    ) -> None:
-        self.window = timedelta(hours=window_hours)
-        self.tz = ZoneInfo(tz_name)
-        self.tz_name = tz_name
-        self.min_baseline_n = min_baseline_n
-        self.onset_consecutive_windows = onset_consecutive_windows
-        self.cooldown_minutes = cooldown_minutes
-        self.kind_cooldown_minutes: dict[str, int] = {
-            "gait_slowing": gait_slowing_cooldown_minutes,
-            "agitation_index": agitation_cooldown_minutes,
+    # General
+    window_hours: int = 24
+    tz_name: str = "America/New_York"
+    # Baseline
+    min_baseline_n: int = 5
+    # Hysteresis / debounce
+    onset_consecutive_windows: int = 2
+    cooldown_minutes: int = 60
+    # Per-kind cooldown overrides (minutes). Kinds not listed use cooldown_minutes.
+    # gait_slowing: 7 days; a daily re-page about a monthly trend is noise.
+    gait_slowing_cooldown_minutes: int = 10080
+    # agitation_index: transient bursts are excluded by onset debounce;
+    # 120 min prevents re-alerting after a resolved episode.
+    agitation_cooldown_minutes: int = 120
+    # Pacing: 8 transitions in 30 min distinguishes purposeful ambulation from pacing.
+    pacing_room_threshold: int = 8
+    pacing_window_minutes: int = 30
+    pacing_min_obs_density: float = 0.5
+    # Nighttime movement: 3 transitions is one bathroom round trip plus one more.
+    nighttime_transition_threshold: int = 3
+    # Stillness: 60 min avoids alerting on desk work, reading, or television.
+    stillness_threshold_minutes: int = 60
+    stillness_emergency_minutes: int = 120
+    # Production's 0.05 floor filters ambient motion and minor pose jitter.
+    stillness_motion_floor: float = 0.05
+    resting_rooms: tuple[str, ...] = ("bed", "bedroom")
+    # Bathroom
+    bathroom_z_threshold: float = 3.5
+    bathroom_z_threshold_night: float = 4.0
+    # 45 min cold-start fallback accommodates constipation before a baseline exists.
+    bathroom_absolute_threshold_seconds: int = 2700
+    # Sundowning
+    sundowning_z_threshold: float = 2.5
+    sundowning_min_evening_minutes: int = 30
+    # Absence: cameras do not cover every room, so normal gaps should not alert.
+    absence_threshold_minutes: int = 90
+    # Phase 4 scalability
+    baseline_cache_ttl_minutes: int = 60
+    max_concurrent_identities: int = 4
+    incremental_enabled: bool = True
+    # Agitation index is flag-gated pending caregiver validation evidence.
+    agitation_enabled: bool = False
+    # 30 min rolling window matches the CMAI assessment and pacing intervals.
+    agitation_window_minutes: int = 30
+    # Require 15 observed minutes so missing data cannot dominate the index.
+    agitation_min_observed_minutes: int = 15
+    # Absolute gate prevents near-zero baseline self-exclusion from firing.
+    agitation_composite_threshold: float = 0.5
+    # Robust z-score gate for deviation above the personal baseline median.
+    agitation_z_threshold: float = 3.0
+    # Warning requires both sustained high amplitude and a strong z-score.
+    agitation_warning_composite: float = 0.7
+    agitation_warning_z: float = 4.0
+    # Heuristic feature weights; in-place motion is available without calibration.
+    agitation_weight_in_place: float = 0.5
+    agitation_weight_entropy: float = 0.3
+    agitation_weight_excursion: float = 0.2
+
+    @property
+    def window(self) -> timedelta:
+        return timedelta(hours=self.window_hours)
+
+    @property
+    def tz(self) -> ZoneInfo:
+        return ZoneInfo(self.tz_name)
+
+    @property
+    def kind_cooldown_minutes(self) -> dict[str, int]:
+        return {
+            "gait_slowing": self.gait_slowing_cooldown_minutes,
+            "agitation_index": self.agitation_cooldown_minutes,
         }
-        self.pacing_room_threshold = pacing_room_threshold
-        self.pacing_window_minutes = pacing_window_minutes
-        self.pacing_window = timedelta(minutes=pacing_window_minutes)
-        self.pacing_min_obs_density = pacing_min_obs_density
-        self.nighttime_transition_threshold = nighttime_transition_threshold
-        self.stillness_threshold_minutes = stillness_threshold_minutes
-        self.stillness_emergency_minutes = stillness_emergency_minutes
-        self.stillness_motion_floor = stillness_motion_floor
-        self.resting_rooms = resting_rooms
-        self.bathroom_z_threshold = bathroom_z_threshold
-        self.bathroom_z_threshold_night = bathroom_z_threshold_night
-        self.bathroom_absolute_threshold_seconds = bathroom_absolute_threshold_seconds
-        self.sundowning_z_threshold = sundowning_z_threshold
-        self.sundowning_min_evening_minutes = sundowning_min_evening_minutes
-        self.absence_threshold_minutes = absence_threshold_minutes
-        self.baseline_cache_ttl_minutes = baseline_cache_ttl_minutes
-        self.max_concurrent_identities = max_concurrent_identities
-        self.incremental_enabled = incremental_enabled
-        self.agitation_enabled = agitation_enabled
-        self.agitation_window_minutes = agitation_window_minutes
-        self.agitation_min_observed_minutes = agitation_min_observed_minutes
-        self.agitation_composite_threshold = agitation_composite_threshold
-        self.agitation_z_threshold = agitation_z_threshold
-        self.agitation_warning_composite = agitation_warning_composite
-        self.agitation_warning_z = agitation_warning_z
-        self.agitation_weights = (
-            agitation_weight_in_place,
-            agitation_weight_entropy,
-            agitation_weight_excursion,
+
+    @property
+    def pacing_window(self) -> timedelta:
+        return timedelta(minutes=self.pacing_window_minutes)
+
+    @property
+    def agitation_weights(self) -> tuple[float, float, float]:
+        return (
+            self.agitation_weight_in_place,
+            self.agitation_weight_entropy,
+            self.agitation_weight_excursion,
         )
-        self.restlessness_cfg = RestlessnessConfig(
-            window_minutes=agitation_window_minutes,
-        )
+
+    @property
+    def restlessness_cfg(self) -> RestlessnessConfig:
+        return RestlessnessConfig(window_minutes=self.agitation_window_minutes)

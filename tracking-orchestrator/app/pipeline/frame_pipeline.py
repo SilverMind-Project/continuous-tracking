@@ -100,8 +100,7 @@ from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
 from ..tracking.world.config import WorldTrackerConfig
 from ..tracking.world.tracker import WorldTracker
-from ..trajectory.dementia_signals import DementiaSignalWorker
-from ..trajectory.dementia_signals import SignalConfig as DementiaSignalConfig
+from ..trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
 from ..trajectory.gait import GaitAggregator, GaitConfig, WalkingBoutSegmenter
 from ..trajectory.motion_energy import MotionEnergyTracker
 from ..trajectory.posture import GlobalPostureTracker
@@ -140,38 +139,6 @@ def _group_frames_by_camera(frames: list[FrameReady]) -> dict[str, list[FrameRea
 # ---------------------------------------------------------------------------
 # Pipeline configuration
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class SignalConfig:
-    """Dementia signal thresholds and scheduling.
-
-    Pipeline-layer config. Mirrors dementia_signals.SignalConfig (the worker-layer class).
-    Keep fields in sync; see app/trajectory/dementia_signals.py::SignalConfig for the
-    authoritative field list. Milestone 6 task 3 will collapse the two into one.
-    """
-
-    interval_s: int = 60
-    enabled: bool = True
-    timezone: str = "UTC"
-    # Thresholds
-    stillness_threshold_minutes: int = 60
-    stillness_emergency_minutes: int = 120
-    stillness_motion_floor: float = 0.02
-    pacing_room_threshold: int = 8
-    pacing_window_minutes: int = 30
-    nighttime_transition_threshold: int = 3
-    absence_threshold_minutes: int = 90
-    bathroom_absolute_threshold_seconds: int = 2700
-    # Hidden knobs now exposed via settings.yaml signal: block
-    min_baseline_n: int = 5
-    cooldown_minutes: int = 60
-    onset_consecutive_windows: int = 2
-    resting_rooms: tuple[str, ...] = ("bed", "bedroom")
-    sundowning_z_threshold: float = 2.5
-    bathroom_z_threshold: float = 3.5
-    bathroom_z_threshold_night: float = 4.0
-    pacing_min_obs_density: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -265,6 +232,8 @@ class PipelineConfig:
 
     # --- Signals ---
     signals: SignalConfig = field(default_factory=SignalConfig)
+    signals_enabled: bool = True
+    signal_interval_s: int = 60
 
     # --- Fall detection fast path (M2) ---
     fall_detection: FallDetectionConfig = field(default_factory=FallDetectionConfig)
@@ -482,7 +451,7 @@ class FrameProcessingPipeline:
         self._gait_bout_repo = deps.gait_bout_repo or InMemoryGaitBoutRepository()
         self._gait_daily_repo = deps.gait_daily_repo or InMemoryGaitDailyRepository()
         gait_cfg = GaitConfig(
-            tz_name=self._config.signals.timezone,
+            tz_name=self._config.signals.tz_name,
             aggregate_interval_s=self._config.gait_aggregate_interval_s,
             min_daily_bouts=self._config.gait_min_daily_bouts,
             min_daily_walking_s=self._config.gait_min_daily_walking_s,
@@ -508,7 +477,7 @@ class FrameProcessingPipeline:
 
         # Signal worker — computes dementia signals from trajectory/dwell data.
         self._signal_repo = deps.signal_repo or InMemoryDementiaSignalRepository()
-        if self._config.signals.enabled:
+        if self._config.signals_enabled:
             self._signal_publisher = SignalPublisher(
                 redis_url=self._config.transport.redis_url,
                 stream=self._config.transport.signals_stream,
@@ -521,25 +490,7 @@ class FrameProcessingPipeline:
             self._signal_worker = DementiaSignalWorker(
                 trajectory_repo=_traj_repo,
                 signal_repo=self._signal_repo,
-                cfg=DementiaSignalConfig(
-                    tz_name=self._config.signals.timezone,
-                    stillness_threshold_minutes=self._config.signals.stillness_threshold_minutes,
-                    stillness_emergency_minutes=self._config.signals.stillness_emergency_minutes,
-                    stillness_motion_floor=self._config.signals.stillness_motion_floor,
-                    pacing_room_threshold=self._config.signals.pacing_room_threshold,
-                    pacing_window_minutes=self._config.signals.pacing_window_minutes,
-                    nighttime_transition_threshold=self._config.signals.nighttime_transition_threshold,
-                    absence_threshold_minutes=self._config.signals.absence_threshold_minutes,
-                    bathroom_absolute_threshold_seconds=self._config.signals.bathroom_absolute_threshold_seconds,
-                    min_baseline_n=self._config.signals.min_baseline_n,
-                    cooldown_minutes=self._config.signals.cooldown_minutes,
-                    onset_consecutive_windows=self._config.signals.onset_consecutive_windows,
-                    resting_rooms=self._config.signals.resting_rooms,
-                    sundowning_z_threshold=self._config.signals.sundowning_z_threshold,
-                    bathroom_z_threshold=self._config.signals.bathroom_z_threshold,
-                    bathroom_z_threshold_night=self._config.signals.bathroom_z_threshold_night,
-                    pacing_min_obs_density=self._config.signals.pacing_min_obs_density,
-                ),
+                cfg=self._config.signals,
                 baseline_repo=baseline_repo,
                 gait_daily_repo=deps.gait_daily_repo,
             )
@@ -813,7 +764,7 @@ class FrameProcessingPipeline:
         """Periodic dementia signal computation and gait aggregation loop.
 
         One scheduler loop drives two jobs:
-          1. DementiaSignalWorker.run_once()  — every signals.interval_s (default 60 s)
+          1. DementiaSignalWorker.run_once() — every signal_interval_s (default 60 s)
           2. GaitAggregator.run_once()        — every gait.aggregate_interval_s (default 3600 s)
 
         The GaitAggregator tracks its own last-run timestamp internally via
@@ -824,14 +775,14 @@ class FrameProcessingPipeline:
 
         logger.info(
             "Signal loop started",
-            interval_s=self._config.signals.interval_s,
+            interval_s=self._config.signal_interval_s,
         )
 
         first_run = True
         while not self._stop_event.is_set():
             try:
                 if not first_run:
-                    await asyncio.sleep(self._config.signals.interval_s)
+                    await asyncio.sleep(self._config.signal_interval_s)
                 else:
                     first_run = False
                 if self._stop_event.is_set():

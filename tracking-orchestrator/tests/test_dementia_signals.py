@@ -156,7 +156,11 @@ class TestSundowningDetector:
     @pytest.mark.asyncio
     async def test_sundowning_detected_high_evening_activity(self):
         worker, traj_repo, _ = _make_worker(
-            SignalConfig(sundowning_min_evening_minutes=5, onset_consecutive_windows=1)
+            SignalConfig(
+                tz_name="UTC",
+                sundowning_min_evening_minutes=5,
+                onset_consecutive_windows=1,
+            )
         )
         now = datetime(2026, 4, 23, 20, 0, 0, tzinfo=UTC)  # 20:00
 
@@ -504,6 +508,7 @@ class TestNighttimeColdStartTiers:
         """Return (worker, traj_repo) for nighttime tests with no baseline repo."""
         return _make_worker(
             SignalConfig(
+                tz_name="UTC",
                 nighttime_transition_threshold=gate,
                 onset_consecutive_windows=1,
             )

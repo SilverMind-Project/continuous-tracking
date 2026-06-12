@@ -20,7 +20,6 @@ from app.pipeline.frame_pipeline import (
     FrameProcessingPipeline,
     PipelineConfig,
     PipelineDependencies,
-    SignalConfig,
 )
 from app.services.camera_room_map import (
     CameraRoomBinding,
@@ -381,7 +380,7 @@ class TestFullPipelineIntegration:
     async def test_full_pipeline_tracking_and_event_emission(self) -> None:
         """Process frames and verify tracking events are published."""
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+            PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
         with _mock_redis_deps() as (mock_transport, _mock_rev, _mock_scene):
             # Realistic detector: one person in each frame.
@@ -433,7 +432,7 @@ class TestFullPipelineIntegration:
     async def test_pipeline_empty_frame_skeleton_mode(self) -> None:
         """Skeleton mode (no detector) produces zero-detection events."""
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+            PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
         with _mock_redis_deps() as (mock_transport, _mock_rev, _mock_scene):
             await pipeline.initialize()  # no detector → skeleton mode
@@ -461,7 +460,7 @@ class TestFullPipelineIntegration:
     async def test_pipeline_graceful_degradation_on_minio_miss(self) -> None:
         """Pipeline does not crash when MinIO fetch fails (empty image fallback)."""
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+            PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
         with _mock_redis_deps() as (mock_transport, _mock_rev, _mock_scene):
             mock_detector = AsyncMock()
@@ -504,7 +503,7 @@ class TestCameraRowUpsert:
         """Every new ``camera_id`` triggers exactly one upsert; subsequent
         frames from the same camera don't repeat the call."""
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+            PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
         with _mock_redis_deps():
             await pipeline.initialize()
@@ -532,7 +531,7 @@ class TestCameraRowUpsert:
         from app.domain import CameraConfig
 
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+            PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
         with _mock_redis_deps():
             await pipeline.initialize()
@@ -563,7 +562,7 @@ class TestCameraRowUpsert:
     async def test_upsert_runs_before_process_frame(self) -> None:
         """The FK anchor must land before any tracking row is written."""
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+            PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
         with _mock_redis_deps():
             await pipeline.initialize()
@@ -615,7 +614,7 @@ class TestFrameFailureCounter:
     async def test_processing_failure_increments_counter_and_does_not_ack(self) -> None:
         """A frame whose _process_frame raises increments frames_failed_total."""
         pipeline = FrameProcessingPipeline(
-            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+            PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
         with _mock_redis_deps() as (mock_transport, _mock_rev, _mock_scene):
             await pipeline.initialize()
