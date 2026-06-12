@@ -1,0 +1,51 @@
+# YOLO26L person detector — ONNX Runtime backend (NVIDIA GPU), dynamic-batch variant.
+#
+# Model file: triton-models/person-detector-dynamic/1/model.onnx
+# Export:     python triton-models/scripts/export_yolo.py --weights yolo26l.pt --dynamic-batch
+#
+# Differences from person-detector (static batch-8):
+#   - ONNX graph exported with dynamic=True: batch dimension is symbolic.
+#   - max_batch_size: 8 — Triton handles batching; dims below exclude the batch axis.
+#   - dynamic_batching: Triton may queue requests up to 2 ms to fill preferred batch sizes.
+#   - PersonDetector selects this model via triton.person_detector_model and
+#     triton.detector_dynamic_batch: true in settings.yaml.
+#
+# Output tensor "output0" shape per sample: [300, 6]
+#   300 = maximum detections per image
+#   6   = x1, y1, x2, y2 (letterbox pixel space), confidence, class_id
+#
+# Jetson INT8 re-qualification is a documented follow-up; this config is DGX/FP32 only.
+# See triton-models/person-detector-dynamic/BENCH.md for throughput evidence.
+
+name: "person-detector-dynamic"
+platform: "onnxruntime_onnx"
+default_model_filename: "model.onnx"
+max_batch_size: 8
+
+dynamic_batching {
+  preferred_batch_size: [4, 8]
+  max_queue_delay_microseconds: 2000
+}
+
+input [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [3, 640, 640]
+  }
+]
+
+output [
+  {
+    name: "output0"
+    data_type: TYPE_FP32
+    dims: [300, 6]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]

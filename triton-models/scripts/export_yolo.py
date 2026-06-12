@@ -7,10 +7,16 @@ The ONNX file works on both NVIDIA and Intel Arc GPUs:
 Usage (on the target GPU machine):
     pip install ultralytics>=8.4.0
 
-    # NVIDIA
+    # Static batch-8 (default, used by person-detector and Jetson)
     python triton-models/scripts/export_yolo.py \\
         --weights yolo26l.pt \\
         --out triton-models/person-detector/1/model.onnx
+
+    # Dynamic batch (used by person-detector-dynamic, DGX/FP32 only)
+    python triton-models/scripts/export_yolo.py \\
+        --weights yolo26l.pt \\
+        --dynamic-batch \\
+        --out triton-models/person-detector-dynamic/1/model.onnx
 
     # Intel Arc (requires Intel Extension for PyTorch)
     python triton-models/scripts/export_yolo.py \\
@@ -29,11 +35,11 @@ IMPORTANT — verify output shape before deploying to Triton:
     python -c "
     import onnx
     m = onnx.load('triton-models/person-detector/1/model.onnx')
-    dims = [d.dim_value for d in m.graph.output[0].type.tensor_type.shape.dim]
+    dims = [d.dim_param or d.dim_value
+            for d in m.graph.output[0].type.tensor_type.shape.dim]
     print('output0 dims:', dims)
-    # Expected: [batch_size, 300, 6]
-    # If you see [batch, 84, 8400] the NMS head was not preserved — upgrade
-    # ultralytics and retry, or open an issue against the model export.
+    # Static export: [8, 300, 6]
+    # Dynamic export: ['batch', 300, 6]  (batch is a symbolic dim_param)
     "
 """
 
@@ -44,7 +50,14 @@ import shutil
 from pathlib import Path
 
 
-def export(weights: Path, out: Path, batch: int, imgsz: int, device: str) -> None:
+def export(
+    weights: Path,
+    out: Path,
+    batch: int,
+    imgsz: int,
+    device: str,
+    dynamic_batch: bool,
+) -> None:
     try:
         from ultralytics import YOLO  # type: ignore[import-untyped]
     except ImportError as exc:
@@ -55,25 +68,42 @@ def export(weights: Path, out: Path, batch: int, imgsz: int, device: str) -> Non
         model.export(
             format="onnx",
             imgsz=imgsz,
-            batch=batch,
+            # dynamic=True exports the batch dim as a symbolic dim_param so the
+            # ONNX graph accepts any batch size 1..N.  batch=1 here is the
+            # reference size used during tracing; it does not cap the runtime batch.
+            batch=1 if dynamic_batch else batch,
             device=device,
             simplify=True,
-            dynamic=False,
+            dynamic=dynamic_batch,
             opset=17,
         )
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(result, out)
-    print(f"Exported ONNX → {out}")
-    print(f"Input:  images  [batch={batch}, 3, {imgsz}, {imgsz}]")
-    print(f"Output: output0 [batch={batch}, 300, 6]  (NMS-free)")
-    print()
-    print("Verify output shape before deploying:")
-    print(
-        f"  python -c \"import onnx; m=onnx.load('{out}'); "
-        'print([d.dim_value for d in m.graph.output[0].type.tensor_type.shape.dim])"'
-    )
-    print(f"  Expected: [{batch}, 300, 6]")
+
+    if dynamic_batch:
+        print(f"Exported dynamic-batch ONNX → {out}")
+        print(f"Input:  images  [batch (symbolic), 3, {imgsz}, {imgsz}]")
+        print(f"Output: output0 [batch (symbolic), 300, 6]  (NMS-free)")
+        print()
+        print("Verify batch dimension is symbolic before deploying:")
+        print(
+            f"  python -c \"import onnx; m=onnx.load('{out}'); "
+            "print([d.dim_param or d.dim_value "
+            "for d in m.graph.output[0].type.tensor_type.shape.dim])\""
+        )
+        print("  Expected: ['batch', 300, 6]  (first element is a non-empty string)")
+    else:
+        print(f"Exported static-batch ONNX → {out}")
+        print(f"Input:  images  [batch={batch}, 3, {imgsz}, {imgsz}]")
+        print(f"Output: output0 [batch={batch}, 300, 6]  (NMS-free)")
+        print()
+        print("Verify output shape before deploying:")
+        print(
+            f"  python -c \"import onnx; m=onnx.load('{out}'); "
+            'print([d.dim_value for d in m.graph.output[0].type.tensor_type.shape.dim])"'
+        )
+        print(f"  Expected: [{batch}, 300, 6]")
 
 
 def main() -> None:
@@ -92,8 +122,18 @@ def main() -> None:
         default="0",
         help="GPU device: '0' for NVIDIA CUDA, 'xpu' for Intel Arc",
     )
+    parser.add_argument(
+        "--dynamic-batch",
+        action="store_true",
+        default=False,
+        help=(
+            "Export with a symbolic batch dimension (for person-detector-dynamic). "
+            "Output path defaults to triton-models/person-detector/1/model.onnx; "
+            "pass --out triton-models/person-detector-dynamic/1/model.onnx explicitly."
+        ),
+    )
     args = parser.parse_args()
-    export(args.weights, args.out, args.batch, args.imgsz, args.device)
+    export(args.weights, args.out, args.batch, args.imgsz, args.device, args.dynamic_batch)
 
 
 if __name__ == "__main__":

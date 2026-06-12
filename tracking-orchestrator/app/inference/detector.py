@@ -32,11 +32,16 @@ class PersonDetector:
         model_name: str = DETECTOR_MODEL_NAME,
         conf_threshold: float = DETECTOR_CONF_THRESHOLD,
         static_batch_size: int = _DEFAULT_DETECTOR_STATIC_BATCH_SIZE,
+        dynamic_batch: bool = False,
     ) -> None:
         self._client = client
         self._model_name = model_name
         self._conf = conf_threshold
         self._static_batch_size = static_batch_size
+        # When True: send the actual frame count to a variable-batch ONNX export
+        # (person-detector-dynamic). No padding is added; static_batch_size is
+        # ignored. When False (default): pad to static_batch_size as before.
+        self._dynamic_batch = dynamic_batch
 
     async def detect_batch(
         self,
@@ -46,7 +51,11 @@ class PersonDetector:
         if not images:
             return []
 
-        if self._static_batch_size > 0 and len(images) > self._static_batch_size:
+        if (
+            not self._dynamic_batch
+            and self._static_batch_size > 0
+            and len(images) > self._static_batch_size
+        ):
             results: list[list[DetectionBox]] = []
             for start in range(0, len(images), self._static_batch_size):
                 chunk = images[start : start + self._static_batch_size]
@@ -67,7 +76,7 @@ class PersonDetector:
             meta.append((img.shape[0], img.shape[1], px, py, scale))
 
         n = len(preprocessed)
-        if self._static_batch_size > 0:
+        if not self._dynamic_batch and self._static_batch_size > 0:
             pad = self._static_batch_size - n
             if pad > 0:
                 preprocessed.extend([preprocessed[0]] * pad)
@@ -104,7 +113,11 @@ class PersonDetector:
         """
         if not images:
             return []
-        if self._static_batch_size > 0 and len(images) > self._static_batch_size:
+        if (
+            not self._dynamic_batch
+            and self._static_batch_size > 0
+            and len(images) > self._static_batch_size
+        ):
             results: list[list[DetectionBox]] = []
             for start in range(0, len(images), self._static_batch_size):
                 chunk = images[start : start + self._static_batch_size]
@@ -125,7 +138,7 @@ class PersonDetector:
             meta.append((img.shape[0], img.shape[1], px, py, scale))
 
         n = len(preprocessed)
-        if self._static_batch_size > 0:
+        if not self._dynamic_batch and self._static_batch_size > 0:
             pad = self._static_batch_size - n
             if pad > 0:
                 preprocessed.extend([preprocessed[0]] * pad)

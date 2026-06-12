@@ -37,6 +37,10 @@ triton:
   url: "${TRITON_GRPC_URL}"
   person_detector_model: person-detector
   detector_static_batch_size: 8
+  # Enable dynamic-batch detector (person-detector-dynamic). False = static
+  # batch-8 (default, Jetson-compatible). Set person_detector_model to
+  # person-detector-dynamic when enabling this flag.
+  detector_dynamic_batch: false
   reid_model: reid-solider
   pose_model: pose-rtmpose
   pose_enabled: true

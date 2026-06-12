@@ -441,6 +441,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     triton_timeout_ms = settings.as_int("triton.timeout_ms")
     detector_model_name = settings.as_str("triton.person_detector_model")
     detector_static_batch_size = settings.as_int("triton.detector_static_batch_size")
+    detector_dynamic_batch = settings.as_bool("triton.detector_dynamic_batch")
     detector_confidence = settings.as_float("pipeline.detector_confidence")
     reid_model_name = settings.as_str("triton.reid_model")
     pose_enabled = settings.as_bool("triton.pose_enabled")
@@ -486,6 +487,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 model_name=detector_model_name,
                 conf_threshold=detector_confidence,
                 static_batch_size=detector_static_batch_size,
+                dynamic_batch=detector_dynamic_batch,
             )
             reid_embedder = ReidEmbedder(
                 _triton_client,

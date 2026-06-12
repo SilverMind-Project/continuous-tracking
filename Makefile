@@ -14,7 +14,7 @@ PROTO_FILES    := \
 	proto/continuoustracking/v1/signals.proto \
 	proto/continuoustracking/v1/scene.proto
 
-.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all go-install go-env-check go-tools go-lint go-test go-build go-check
+.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -91,6 +91,11 @@ test-integration: venv ## Run integration tests (testcontainer Postgres required
 ci: check-all test-integration ## Authoritative CI gate: full check + integration proofs
 
 check-all: check go-check proto-lint ## Run the full repo quality gate
+
+detector-equivalence: venv ## Run the detector equivalence gate (requires GPU + Triton; not part of make ci)
+	# Requires: TRITON_GRPC_URL, DETECTOR_CALIB_IMAGES_DIR (path to private calibration images).
+	# See triton-models/scripts/verify_detector_equivalence.py for full usage.
+	cd tracking-orchestrator && ../$(PYTHON) ../triton-models/scripts/verify_detector_equivalence.py
 
 go-install: ## Install the pinned Go toolchain into ./tools
 	@sh scripts/install-go.sh
