@@ -123,6 +123,24 @@ GAIT_SLOWING_SPEC = AlgorithmSpec(
     min_baseline_samples=10,
 )
 
+AGITATION_MOTOR_SPEC = AlgorithmSpec(
+    name="agitation-motor-heuristic-v1",
+    version=1,
+    # Experimental: no ground-truth-labelled dataset for this deployment.
+    # Validated approaches exist (skeletal + physiological fusion PMC12741316;
+    # privacy-protecting behaviours-of-risk detection s12938-023-01065-3) but
+    # direct comparison against CMAI scores has not yet been performed here.
+    evidence_grade="experimental",
+    clinical_label="Restlessness Elevated (Agitation Motor Index)",
+    required_inputs=(
+        "trajectory_points",
+        "motion_energy",
+        "floor_speed_m_s",
+        "agitation_window_baseline",
+    ),
+    min_baseline_samples=5,
+)
+
 
 @dataclass(frozen=True)
 class IdentitySignalContext:

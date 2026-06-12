@@ -65,6 +65,22 @@ class StillnessEpisode:
     occurred_at: datetime
 
 
+@dataclass(frozen=True)
+class AgitationWindowRecord:
+    """One 30-minute agitation composite index sample.
+
+    Stored in ``agitation_windows`` and used as the personal baseline for
+    robust_z comparison.  The composite is the raw [0, 1] heuristic index
+    (not an emitted signal value) so the baseline-from-raw-behavior rule
+    is satisfied.
+    """
+
+    identity_id: str
+    window_start: datetime
+    composite: float
+    computed_at: datetime
+
+
 class BehaviorBaselineRepository(ABC):
     """Summarise raw trajectory/dwell history for robust signal baselines.
 
@@ -133,6 +149,36 @@ class BehaviorBaselineRepository(ABC):
         so that sparse coverage periods do not produce spurious zero-rate samples.
         """
 
+    @abstractmethod
+    async def agitation_window_samples(
+        self,
+        identity_id: str,
+        since: datetime,
+        until: datetime,
+    ) -> list[float]:
+        """Return historical 30-minute agitation composite index values.
+
+        Each value is the raw [0, 1] composite from a prior evaluation window,
+        stored by ``save_agitation_window``.  The caller must exclude the
+        current window from the query range (pass ``until`` before the current
+        window start) so the baseline self-exclusion rule holds.
+        """
+
+    @abstractmethod
+    async def save_agitation_window(
+        self,
+        identity_id: str,
+        window_start: datetime,
+        composite: float,
+    ) -> None:
+        """Persist one 30-minute agitation composite sample for future baselining.
+
+        Called after each ``_compute_agitation`` evaluation regardless of
+        whether a signal is emitted.  The raw composite (not the signal) is
+        stored so baselines are derived from raw behaviour, not emitted signals.
+        Rows older than 90 days are candidates for retention-policy cleanup.
+        """
+
 
 class InMemoryBehaviorBaselineRepository(BehaviorBaselineRepository):
     """In-memory baseline repository backed by trajectory/dwell lists."""
@@ -144,6 +190,7 @@ class InMemoryBehaviorBaselineRepository(BehaviorBaselineRepository):
     ) -> None:
         self.points: list[PersonTrajectoryPoint] = points or []
         self.dwells: list[RoomDwell] = dwells or []
+        self._agitation_windows: list[AgitationWindowRecord] = []
 
     async def dwell_durations(
         self,
@@ -314,6 +361,35 @@ class InMemoryBehaviorBaselineRepository(BehaviorBaselineRepository):
                 rates.append(transitions / window_minutes)
             bucket_start = bucket_end
         return rates
+
+    async def agitation_window_samples(
+        self,
+        identity_id: str,
+        since: datetime,
+        until: datetime,
+    ) -> list[float]:
+        return [
+            r.composite
+            for r in self._agitation_windows
+            if r.identity_id == identity_id and r.window_start >= since and r.window_start < until
+        ]
+
+    async def save_agitation_window(
+        self,
+        identity_id: str,
+        window_start: datetime,
+        composite: float,
+    ) -> None:
+        from datetime import UTC
+
+        self._agitation_windows.append(
+            AgitationWindowRecord(
+                identity_id=identity_id,
+                window_start=window_start,
+                composite=composite,
+                computed_at=datetime.now(UTC),
+            )
+        )
 
 
 class InMemoryDementiaSignalRepository(DementiaSignalRepository):

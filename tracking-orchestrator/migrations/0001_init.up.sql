@@ -511,6 +511,25 @@ CREATE TABLE IF NOT EXISTS co_presence_links (
 );
 
 -- =============================================================================
+-- Agitation windows (M4): raw composite index baseline series
+-- =============================================================================
+-- Stores one 30-minute agitation composite per identity per window.
+-- Used exclusively as the personal baseline for robust_z comparison in the
+-- agitation_index detector.  Derived from raw trajectory features, not from
+-- emitted signals, satisfying the baseline-from-raw-behavior rule.
+-- 90-day retention: rows older than 90 days may be purged by a cleanup job.
+CREATE TABLE IF NOT EXISTS agitation_windows (
+    identity_id   TEXT        NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    window_start  TIMESTAMPTZ NOT NULL,
+    composite     FLOAT8      NOT NULL,
+    computed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (identity_id, window_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agitation_windows_identity_start
+    ON agitation_windows (identity_id, window_start DESC);
+
+-- =============================================================================
 -- Continuous aggregates (non-transactional)
 -- =============================================================================
 CREATE MATERIALIZED VIEW IF NOT EXISTS continuous_tracking.dementia_signals_daily

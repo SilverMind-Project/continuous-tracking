@@ -31,6 +31,9 @@ const (
 	DementiaSignalKind_DEMENTIA_SIGNAL_KIND_NIGHTTIME_MOVEMENT     DementiaSignalKind = 4
 	DementiaSignalKind_DEMENTIA_SIGNAL_KIND_STILLNESS_ANOMALY      DementiaSignalKind = 5
 	DementiaSignalKind_DEMENTIA_SIGNAL_KIND_ABSENCE                DementiaSignalKind = 6
+	DementiaSignalKind_DEMENTIA_SIGNAL_KIND_FALL_SUSPECTED         DementiaSignalKind = 7
+	DementiaSignalKind_DEMENTIA_SIGNAL_KIND_GAIT_SLOWING           DementiaSignalKind = 8
+	DementiaSignalKind_DEMENTIA_SIGNAL_KIND_AGITATION_INDEX        DementiaSignalKind = 9
 )
 
 // Enum value maps for DementiaSignalKind.
@@ -43,6 +46,9 @@ var (
 		4: "DEMENTIA_SIGNAL_KIND_NIGHTTIME_MOVEMENT",
 		5: "DEMENTIA_SIGNAL_KIND_STILLNESS_ANOMALY",
 		6: "DEMENTIA_SIGNAL_KIND_ABSENCE",
+		7: "DEMENTIA_SIGNAL_KIND_FALL_SUSPECTED",
+		8: "DEMENTIA_SIGNAL_KIND_GAIT_SLOWING",
+		9: "DEMENTIA_SIGNAL_KIND_AGITATION_INDEX",
 	}
 	DementiaSignalKind_value = map[string]int32{
 		"DEMENTIA_SIGNAL_KIND_UNSPECIFIED":            0,
@@ -52,6 +58,9 @@ var (
 		"DEMENTIA_SIGNAL_KIND_NIGHTTIME_MOVEMENT":     4,
 		"DEMENTIA_SIGNAL_KIND_STILLNESS_ANOMALY":      5,
 		"DEMENTIA_SIGNAL_KIND_ABSENCE":                6,
+		"DEMENTIA_SIGNAL_KIND_FALL_SUSPECTED":         7,
+		"DEMENTIA_SIGNAL_KIND_GAIT_SLOWING":           8,
+		"DEMENTIA_SIGNAL_KIND_AGITATION_INDEX":        9,
 	}
 )
 
@@ -354,7 +363,7 @@ const file_continuoustracking_v1_signals_proto_rawDesc = "" +
 	"\x11algorithm_version\x18\x0e \x01(\x05R\x10algorithmVersion\x12%\n" +
 	"\x0ealgorithm_name\x18\x0f \x01(\tR\ralgorithmName\x12%\n" +
 	"\x0eevidence_grade\x18\x10 \x01(\tR\revidenceGrade\x12.\n" +
-	"\x13algorithm_spec_json\x18\x11 \x01(\tR\x11algorithmSpecJson*\xb2\x02\n" +
+	"\x13algorithm_spec_json\x18\x11 \x01(\tR\x11algorithmSpecJson*\xac\x03\n" +
 	"\x12DementiaSignalKind\x12$\n" +
 	" DEMENTIA_SIGNAL_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bDEMENTIA_SIGNAL_KIND_PACING\x10\x01\x12)\n" +
@@ -362,7 +371,10 @@ const file_continuoustracking_v1_signals_proto_rawDesc = "" +
 	"+DEMENTIA_SIGNAL_KIND_BATHROOM_DWELL_ANOMALY\x10\x03\x12+\n" +
 	"'DEMENTIA_SIGNAL_KIND_NIGHTTIME_MOVEMENT\x10\x04\x12*\n" +
 	"&DEMENTIA_SIGNAL_KIND_STILLNESS_ANOMALY\x10\x05\x12 \n" +
-	"\x1cDEMENTIA_SIGNAL_KIND_ABSENCE\x10\x06*\xb3\x01\n" +
+	"\x1cDEMENTIA_SIGNAL_KIND_ABSENCE\x10\x06\x12'\n" +
+	"#DEMENTIA_SIGNAL_KIND_FALL_SUSPECTED\x10\a\x12%\n" +
+	"!DEMENTIA_SIGNAL_KIND_GAIT_SLOWING\x10\b\x12(\n" +
+	"$DEMENTIA_SIGNAL_KIND_AGITATION_INDEX\x10\t*\xb3\x01\n" +
 	"\x16DementiaSignalSeverity\x12(\n" +
 	"$DEMENTIA_SIGNAL_SEVERITY_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dDEMENTIA_SIGNAL_SEVERITY_INFO\x10\x01\x12$\n" +

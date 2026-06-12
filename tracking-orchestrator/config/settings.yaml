@@ -134,6 +134,44 @@ signal:
   # Minimum trajectory-point density (points/min) required to evaluate pacing.
   pacing_min_obs_density: 0.5
 
+# Agitation index signal (Milestone 4)
+#
+# Defaults to disabled (agitation_enabled: false). Enable per-deployment only
+# after caregiver annotation feedback (M4 task 3) provides validation evidence.
+# Evidence grade: experimental. Severity capped at warning.
+#
+# Threshold rationale:
+#
+# agitation_composite_threshold (0.5):
+#   Absolute gate before z-score comparison. Below 0.5 the composite is
+#   dominated by missing calibration or low motion; z-score comparison at
+#   near-zero values is numerically unstable.
+#
+# agitation_z_threshold (3.0):
+#   Modified z-score gate (robust_z). 3.0 corresponds roughly to p>0.999
+#   under a Gaussian; chosen conservatively for an experimental signal.
+#
+# agitation_warning_composite / agitation_warning_z (0.7 / 4.0):
+#   Warning tier requires both high absolute composite (0.7) and a strong
+#   z-score (4.0) to reduce false positives from brief periods of elevated
+#   activity (exercise, social events).
+#
+# agitation_cooldown_minutes (120):
+#   120 min prevents re-alerting after an episode resolves; onset debounce
+#   (min_consecutive=2) already excludes single-window transient bursts.
+signal.agitation:
+  agitation_enabled: false
+  agitation_window_minutes: 30
+  agitation_min_observed_minutes: 15
+  agitation_composite_threshold: 0.5
+  agitation_z_threshold: 3.0
+  agitation_warning_composite: 0.7
+  agitation_warning_z: 4.0
+  agitation_cooldown_minutes: 120
+  agitation_weight_in_place: 0.5
+  agitation_weight_entropy: 0.3
+  agitation_weight_excursion: 0.2
+
 # Fall detection fast path (Milestone 2)
 #
 # Threshold rationale:

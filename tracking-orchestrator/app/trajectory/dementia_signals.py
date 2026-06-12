@@ -38,7 +38,9 @@ from ..storage.base import (
 )
 from ..storage.gait import GaitDailyRepository
 from .gait import GaitDailyRecord
+from .restlessness import RestlessnessConfig, compute_restlessness
 from .signal_specs import (
+    AGITATION_MOTOR_SPEC,
     BATHROOM_DWELL_SPEC,
     EVENING_ACTIVITY_SPEC,
     FALL_SUSPECTED_SPEC,
@@ -67,6 +69,7 @@ _SIGNAL_SPEC: dict[str, AlgorithmSpec] = {
     "bathroom_dwell_anomaly": BATHROOM_DWELL_SPEC,
     "fall_suspected": FALL_SUSPECTED_SPEC,
     "gait_slowing": GAIT_SLOWING_SPEC,
+    "agitation_index": AGITATION_MOTOR_SPEC,
 }
 
 
@@ -441,6 +444,8 @@ class DementiaSignalWorker:
         signals.extend(await self._compute_stillness_anomaly(identity_id, dwells, now))
         signals.extend(await self._compute_absence(identity_id, window, now))
         signals.extend(await self._compute_gait_slowing(identity_id, now))
+        if self._cfg.agitation_enabled:
+            signals.extend(await self._compute_agitation(identity_id, window, now))
 
         # Apply algorithm metadata and data quality gating.
         quality_ok, mean_conf, coverage = self._check_data_quality(identity_id, window)
@@ -1275,6 +1280,145 @@ class DementiaSignalWorker:
         ]
 
     # ------------------------------------------------------------------
+    # 4.2  Agitation index — in-place restlessness motor heuristic
+    # ------------------------------------------------------------------
+
+    async def _compute_agitation(
+        self,
+        identity_id: str,
+        window: list[PersonTrajectoryPoint],
+        now: datetime,
+    ) -> list[DementiaSignal]:
+        """Detect intra-room agitation from restlessness motor features.
+
+        Computes a composite [0, 1] index from three restlessness features
+        over the last 30 minutes, then compares against the person's
+        personal baseline via robust_z.  No cold-start fallback: an
+        experimental signal must stay silent rather than guess until
+        enough baseline windows have accumulated (min_baseline_n samples).
+
+        Weights (v1, heuristic):
+          0.5 * in_place_motion_ratio
+          + 0.3 * direction_change_entropy  (0 if uncalibrated)
+          + 0.2 * min(short_excursion_rate / 6.0, 1.0)  (0 if uncalibrated)
+
+        The in_place_motion_ratio term is weighted highest because it is
+        computable on uncalibrated cameras and is the least confoundable
+        feature.  Weights live in config as ``agitation_weights_v1``.
+
+        The current window's composite is persisted to ``agitation_windows``
+        after every evaluation so future runs can baseline against it.
+        """
+        agitation_window = timedelta(minutes=self._cfg.agitation_window_minutes)
+        cutoff = now - agitation_window
+        window_pts = [p for p in window if p.observed_at >= cutoff]
+
+        features = compute_restlessness(window_pts, self._cfg.restlessness_cfg)
+
+        if features.observed_minutes < self._cfg.agitation_min_observed_minutes:
+            return []
+        if features.in_place_motion_ratio is None:
+            return []
+
+        w = self._cfg.agitation_weights
+        composite = (
+            w[0] * features.in_place_motion_ratio
+            + w[1] * (features.direction_change_entropy or 0.0)
+            + w[2] * min((features.short_excursion_rate or 0.0) / 6.0, 1.0)
+        )
+        composite = round(min(max(composite, 0.0), 1.0), 4)
+
+        # Persist the raw composite for future baseline use (regardless of trigger).
+        # window_start is the earliest point in the evaluated window.
+        window_start = min(p.observed_at for p in window_pts) if window_pts else cutoff
+        if self._baseline_repo is not None:
+            await self._baseline_repo.save_agitation_window(identity_id, window_start, composite)
+
+        # No cold-start fallback for experimental signals.
+        if composite < self._cfg.agitation_composite_threshold:
+            self._hysteresis.clear_trigger(identity_id, "agitation_index", episode_key="")
+            return []
+
+        # Baseline comparison: exclude the current window by querying until window_start.
+        samples = await self._fetch_agitation_baseline(identity_id, window_start, now)
+        if samples is None or len(samples) < self._cfg.min_baseline_n:
+            # No baseline yet: stay silent (experimental signal, no cold-start fallback).
+            self._hysteresis.clear_trigger(identity_id, "agitation_index", episode_key="")
+            return []
+
+        rz = robust_z(composite, samples)
+        if rz.modified_z < self._cfg.agitation_z_threshold:
+            self._hysteresis.clear_trigger(identity_id, "agitation_index", episode_key="")
+            return []
+
+        if (
+            composite >= self._cfg.agitation_warning_composite
+            and rz.modified_z >= self._cfg.agitation_warning_z
+        ):
+            severity: DementiaSignalSeverity = "warning"
+        else:
+            severity = "info"
+
+        kind: DementiaSignalKind = "agitation_index"
+        if not self._hysteresis.should_emit(
+            identity_id,
+            kind,
+            severity,
+            now,
+            self._cooldown_for(kind),
+            episode_key="",
+        ):
+            return []
+
+        window_end = max(p.observed_at for p in window_pts) if window_pts else now
+        return [
+            DementiaSignal(
+                signal_id=_stable_signal_id(identity_id, kind, window_start, window_end),
+                identity_id=identity_id,
+                signal_kind=kind,
+                severity=severity,
+                value=composite,
+                baseline=round(rz.median, 4),
+                z_score=round(rz.modified_z, 4),
+                window_start=window_start,
+                window_end=window_end,
+                emitted_at=now,
+                algorithm_version=_ALGORITHM_VERSION,
+                context={
+                    "composite": composite,
+                    "in_place_motion_ratio": features.in_place_motion_ratio,
+                    "direction_change_entropy": features.direction_change_entropy,
+                    "short_excursion_rate": features.short_excursion_rate,
+                    "motion_energy_p75": features.motion_energy_p75,
+                    "observed_minutes": features.observed_minutes,
+                    "weights_version": "v1",
+                    "baseline_n": len(samples),
+                    "disclaimer": (
+                        "Experimental signal. No ground-truth validation "
+                        "against CMAI scores has been performed for this deployment."
+                    ),
+                },
+            )
+        ]
+
+    async def _fetch_agitation_baseline(
+        self,
+        identity_id: str,
+        window_start: datetime,
+        now: datetime,
+    ) -> list[float] | None:
+        """Return historical agitation composite samples excluding the current window."""
+        if self._baseline_repo is None:
+            return None
+        since = now - timedelta(days=90)
+        samples = await self._baseline_repo.agitation_window_samples(
+            identity_id,
+            since=since,
+            until=window_start,
+        )
+        return samples
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
@@ -1486,6 +1630,9 @@ class SignalConfig:
         # Per-kind cooldown overrides (minutes). Kinds not listed use cooldown_minutes.
         # gait_slowing: 7 days — a daily re-page about a monthly trend is noise.
         gait_slowing_cooldown_minutes: int = 10080,
+        # agitation_index: 120 min — transient bursts excluded by onset debounce;
+        # 120 min prevents re-alerting after a resolved episode.
+        agitation_cooldown_minutes: int = 120,
         # Pacing
         # 8 transitions in 30 min: distinguishes purposeful ambulation from dementia pacing
         pacing_room_threshold: int = 8,
@@ -1517,6 +1664,31 @@ class SignalConfig:
         baseline_cache_ttl_minutes: int = 60,
         max_concurrent_identities: int = 4,
         incremental_enabled: bool = True,
+        # Agitation index (M4) — flag-gated; default false until caregiver annotation
+        # loop (M4 task 3) provides validation evidence.
+        agitation_enabled: bool = False,
+        # 30 min rolling window matches the CMAI assessment interval and pacing window.
+        agitation_window_minutes: int = 30,
+        # Minimum observed trajectory points (1-per-point proxy for minutes) to evaluate.
+        # 15 min of coverage required so a sparse observation window doesn't produce
+        # a composite index that is dominated by missing data.
+        agitation_min_observed_minutes: int = 15,
+        # Composite trigger gate (absolute): composite must reach 0.5 before z-score
+        # comparison so the baseline self-exclusion rule cannot fire on near-zero values.
+        agitation_composite_threshold: float = 0.5,
+        # Robust z-score gate: signal fires only when the composite is >= 3.0 standard
+        # deviations above the personal baseline median.
+        agitation_z_threshold: float = 3.0,
+        # Warning-tier thresholds: composite >= 0.7 AND z >= 4.0 indicate sustained,
+        # high-amplitude restlessness that warrants caregiver attention within hours.
+        agitation_warning_composite: float = 0.7,
+        agitation_warning_z: float = 4.0,
+        # Feature weights (v1, heuristic): in_place_motion_ratio weighted highest because
+        # it is computable on uncalibrated cameras and is the least confoundable feature.
+        # direction_change_entropy and short_excursion_rate require metric floor positions.
+        agitation_weight_in_place: float = 0.5,
+        agitation_weight_entropy: float = 0.3,
+        agitation_weight_excursion: float = 0.2,
     ) -> None:
         self.window = timedelta(hours=window_hours)
         self.tz = ZoneInfo(tz_name)
@@ -1526,6 +1698,7 @@ class SignalConfig:
         self.cooldown_minutes = cooldown_minutes
         self.kind_cooldown_minutes: dict[str, int] = {
             "gait_slowing": gait_slowing_cooldown_minutes,
+            "agitation_index": agitation_cooldown_minutes,
         }
         self.pacing_room_threshold = pacing_room_threshold
         self.pacing_window_minutes = pacing_window_minutes
@@ -1545,3 +1718,18 @@ class SignalConfig:
         self.baseline_cache_ttl_minutes = baseline_cache_ttl_minutes
         self.max_concurrent_identities = max_concurrent_identities
         self.incremental_enabled = incremental_enabled
+        self.agitation_enabled = agitation_enabled
+        self.agitation_window_minutes = agitation_window_minutes
+        self.agitation_min_observed_minutes = agitation_min_observed_minutes
+        self.agitation_composite_threshold = agitation_composite_threshold
+        self.agitation_z_threshold = agitation_z_threshold
+        self.agitation_warning_composite = agitation_warning_composite
+        self.agitation_warning_z = agitation_warning_z
+        self.agitation_weights = (
+            agitation_weight_in_place,
+            agitation_weight_entropy,
+            agitation_weight_excursion,
+        )
+        self.restlessness_cfg = RestlessnessConfig(
+            window_minutes=agitation_window_minutes,
+        )

@@ -20,6 +20,24 @@ from ..signals import (
     StillnessEpisode,
 )
 
+_SQL_AGITATION_WINDOW_SAMPLES = """
+SELECT composite
+FROM continuous_tracking.agitation_windows
+WHERE identity_id = $1
+  AND window_start >= $2
+  AND window_start < $3
+ORDER BY window_start
+"""
+
+_SQL_SAVE_AGITATION_WINDOW = """
+INSERT INTO continuous_tracking.agitation_windows
+    (identity_id, window_start, composite, computed_at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (identity_id, window_start) DO UPDATE
+    SET composite = EXCLUDED.composite,
+        computed_at = EXCLUDED.computed_at
+"""
+
 logger = get_logger(__name__)
 
 _SQL_DWELL_DURATIONS = """
@@ -303,3 +321,49 @@ class PostgresBehaviorBaselineRepository(BehaviorBaselineRepository):
                 window_minutes=window_minutes,
             )
             return []
+
+    async def agitation_window_samples(
+        self,
+        identity_id: str,
+        since: datetime,
+        until: datetime,
+    ) -> list[float]:
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    _SQL_AGITATION_WINDOW_SAMPLES,
+                    identity_id,
+                    since,
+                    until,
+                )
+            return [float(row["composite"]) for row in rows]
+        except Exception:
+            logger.exception(
+                "baseline_repo.agitation_window_samples_failed",
+                identity_id=identity_id,
+            )
+            return []
+
+    async def save_agitation_window(
+        self,
+        identity_id: str,
+        window_start: datetime,
+        composite: float,
+    ) -> None:
+        from datetime import UTC
+
+        computed_at = datetime.now(UTC)
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    _SQL_SAVE_AGITATION_WINDOW,
+                    identity_id,
+                    window_start,
+                    composite,
+                    computed_at,
+                )
+        except Exception:
+            logger.exception(
+                "baseline_repo.save_agitation_window_failed",
+                identity_id=identity_id,
+            )

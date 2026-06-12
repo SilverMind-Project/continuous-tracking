@@ -50,6 +50,7 @@ class TestAlgorithmSpecs:
             "bathroom_dwell_anomaly",
             "fall_suspected",
             "gait_slowing",
+            "agitation_index",
         }
         assert set(_SIGNAL_SPEC.keys()) == expected_kinds
 
