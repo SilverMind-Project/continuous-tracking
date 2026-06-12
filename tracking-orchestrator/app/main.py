@@ -39,6 +39,7 @@ from .pipeline.frame_pipeline import (
     PipelineDependencies,
     SignalConfig,
 )
+from .pipeline.reid_policy import AdaptiveReidConfig
 from .pipeline.stages.fall_detection import FallDetectionConfig
 from .pipeline.types import FaceIdCameraConfig
 from .routers import dashboard as dashboard_router_mod
@@ -381,6 +382,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "pipeline.min_keyframe_detection_confidence"
         ),
         live_publish_max_hz=settings.as_float("pipeline.live_publish_max_hz"),
+        adaptive_reid=AdaptiveReidConfig(
+            enabled=settings.as_bool("pipeline.adaptive_reid.enabled"),
+            shadow=settings.as_bool("pipeline.adaptive_reid.shadow"),
+            refresh_interval_s=settings.as_float("pipeline.adaptive_reid.refresh_interval_s"),
+            proximity_gate_m=settings.as_float("pipeline.adaptive_reid.proximity_gate_m"),
+        ),
     )
     _pipeline = FrameProcessingPipeline(config)
 

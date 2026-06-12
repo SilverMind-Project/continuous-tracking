@@ -16,10 +16,13 @@ from ...domain import BoundingBox, Detection, FloorPoint
 from ...inference.evidence import AppearanceEvidence, PersonDetectionEvidence, PoseEvidence
 from ...inference.pose import PoseEstimator
 from ...inference.schemas import DetectionBox, Embedding, PoseResult
+from ...observability import metrics as _metrics
 from ...pipeline.crop_quality import CropQuality
 from ...pipeline.crops import crop_detection, is_degenerate
 from ...tracking.orientation import estimate_body_orientation
+from ...tracking.world.tracker import WorldTracker
 from ..frame_context import FrameContext
+from ..reid_policy import ReidNeedPolicy
 from ..types import ReidEmbedderProtocol
 from .base import FrameStage
 
@@ -39,6 +42,8 @@ class InferenceStage(FrameStage):
         detector_model_version: str = "",
         detector_preprocess_w: int = 640,
         detector_preprocess_h: int = 640,
+        reid_policy: ReidNeedPolicy | None = None,
+        world_tracker: WorldTracker | None = None,
     ) -> None:
         self._reid_embedder = reid_embedder
         self._pose_estimator = pose_estimator
@@ -48,6 +53,8 @@ class InferenceStage(FrameStage):
         self._detector_model_version = detector_model_version
         self._detector_preprocess_w = detector_preprocess_w
         self._detector_preprocess_h = detector_preprocess_h
+        self._reid_policy = reid_policy
+        self._world_tracker = world_tracker
 
     async def run(self, ctx: FrameContext) -> None:
         detections = ctx.raw_detections
@@ -58,8 +65,41 @@ class InferenceStage(FrameStage):
         crops = [crop_detection(image, det) for det in detections]
         ctx.crops = crops
 
+        # --- Adaptive ReID cadence policy (M5.1) ---
+        # Evaluated synchronously before embed_batch() so no GPU time is wasted.
+        _skip_embed = False
+        _skip_reason = ""
+        _matched_ph_id: str | None = None
+
+        if self._reid_policy is not None:
+            open_phs = self._world_tracker.last_open_phs if self._world_tracker is not None else []
+            should_embed, reason, matched_ph_id = self._reid_policy.should_embed_frame(
+                detections=detections,
+                floor_points=ctx._floor_points_by_index,
+                open_phs=open_phs,
+                face_anchors=ctx.face_anchors,
+                camera_id=ctx.frame.camera_id,
+                now=ctx.event_time,
+            )
+            cfg = self._reid_policy._config
+            if not should_embed:
+                # Both live and shadow: record the skip decision in metrics.
+                _metrics.metrics.cts_reid_skipped_total.labels(reason=reason).inc()
+                if cfg.shadow:
+                    logger.debug(
+                        "reid_would_skip_shadow",
+                        reason=reason,
+                        camera_id=ctx.frame.camera_id,
+                    )
+                else:
+                    _skip_embed = True
+                    _skip_reason = reason
+                    _matched_ph_id = matched_ph_id
+            else:
+                _matched_ph_id = matched_ph_id
+
         async def _do_reid() -> list[Embedding]:
-            if self._reid_embedder is not None:
+            if self._reid_embedder is not None and not _skip_embed:
                 return await self._reid_embedder.embed_batch(crops)
             return []
 
@@ -70,6 +110,12 @@ class InferenceStage(FrameStage):
 
         embeddings, pose_results = await asyncio.gather(_do_reid(), _do_pose())
         ctx.embeddings = embeddings
+
+        # Update ReID cadence policy and metrics after the embed decision.
+        if self._reid_policy is not None and not _skip_embed:
+            _metrics.metrics.cts_reid_executed_total.inc()
+            if _matched_ph_id is not None:
+                self._reid_policy.record_embed(_matched_ph_id, ctx.event_time)
 
         ew = ctx.effective_width
         eh = ctx.effective_height

@@ -252,6 +252,19 @@ class WorldTracker:
         # for a held identity instead of emitting a sentinel 0.0 that the UI shows
         # as null. Lost on restart (self-heals on next resolution); pruned on close.
         self._last_identity_confidence: dict[str, float] = {}
+        # Snapshot of open PHs from the most recent step() call. Exposed via
+        # last_open_phs so ReidNeedPolicy (InferenceStage) can evaluate proximity
+        # without issuing an async DB query. Empty until the first step().
+        self._last_open_phs: list[PersonHypothesis] = []
+
+    @property
+    def last_open_phs(self) -> list[PersonHypothesis]:
+        """Open PHs from the most recent step() call.
+
+        Synchronous snapshot for ReidNeedPolicy proximity checks.
+        Empty until the first step() completes.
+        """
+        return self._last_open_phs
 
     async def step(
         self,
@@ -289,6 +302,8 @@ class WorldTracker:
 
         # 1. Load active PHs and predict forward.
         active_phs = await self._ph_repo.list_open()
+        # Cache for ReidNeedPolicy (InferenceStage proximity check next frame).
+        self._last_open_phs = list(active_phs)
         predicted_states: list[KalmanState] = []
         for ph in active_phs:
             ks = KalmanState(

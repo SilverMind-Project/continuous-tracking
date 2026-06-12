@@ -232,7 +232,7 @@ def update_view_prototypes(
     Returns:
         Updated tuple of ViewPrototype instances.
     """
-    if embedding is None:
+    if not embedding:
         return existing
 
     emb_tuple = tuple(float(v) for v in embedding)

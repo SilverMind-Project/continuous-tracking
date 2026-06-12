@@ -18,8 +18,9 @@ def update_gallery_mean(
     """Online exponential moving average of ReID embeddings.
 
     Returns None when no embedding data is available.
+    An empty list is treated the same as None (no update).
     """
-    if new_embedding is None:
+    if not new_embedding:
         return current_mean
 
     emb = np.asarray(new_embedding, dtype=np.float32)

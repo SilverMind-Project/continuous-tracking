@@ -32,6 +32,7 @@ from ..observability import metrics as _metrics
 from ..pipeline.batcher import FrameBatcher
 from ..pipeline.frame_context import FrameContext
 from ..pipeline.gallery_cache import GalleryCache
+from ..pipeline.reid_policy import AdaptiveReidConfig, ReidNeedPolicy
 from ..pipeline.stages import (
     ClosePHStage,
     DetectionBackfillStage,
@@ -253,6 +254,9 @@ class PipelineConfig:
 
     # --- Fall detection fast path (M2) ---
     fall_detection: FallDetectionConfig = field(default_factory=FallDetectionConfig)
+
+    # --- Adaptive ReID cadence (M5.1) ---
+    adaptive_reid: AdaptiveReidConfig = field(default_factory=AdaptiveReidConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +551,16 @@ class FrameProcessingPipeline:
         # or reordering a stage cannot silently corrupt batched paths.
         io_stages = [fetch_stage, detect_stage]
 
+        # Build adaptive ReID policy when enabled or in shadow mode.
+        _reid_policy: ReidNeedPolicy | None = None
+        if (
+            self._config.adaptive_reid.enabled or self._config.adaptive_reid.shadow
+        ) and self._reid_embedder is not None:
+            _reid_policy = ReidNeedPolicy(
+                config=self._config.adaptive_reid,
+                prior_maintenance_max_age_s=self._config.resolver.prior_maintenance_max_age_s,
+            )
+
         pre_world_stages = [
             PrivacyStage(),
             SpatialProjectionStage(projection_service=self._spatial_projection),
@@ -554,6 +568,8 @@ class FrameProcessingPipeline:
                 reid_embedder=self._reid_embedder,
                 pose_estimator=self._pose_estimator,
                 pose_enabled=self._config.pose_enabled,
+                reid_policy=_reid_policy,
+                world_tracker=self._world_tracker,
             ),
             FaceIdentityStage(
                 face_id_client=self._face_id_client,

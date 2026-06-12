@@ -223,6 +223,18 @@ pipeline:
     # Read by: main.py → PipelineConfig(identity_rewrite_on_face_commit=)
     rewrite_on_face_commit: true
 
+  # Adaptive ReID cadence (M5.1): skip SOLIDER embeddings in unambiguous
+  # single-resident steady-state frames.  Ships shadow-first: the policy
+  # evaluates and counts would-skip decisions without actually skipping.
+  # Flip enabled: true only after shadow rate >= 60 % on single-resident replay.
+  adaptive_reid:
+    enabled: false
+    shadow: true
+    # Seconds between mandatory re-embeddings per PH even in steady state.
+    refresh_interval_s: 10.0
+    # Coarse proximity gate (metres) for matching a detection to nearby PHs.
+    proximity_gate_m: 2.0
+
 # Cognitive Companion — camera config source and API gateway
 cognitive_companion:
   url: "${CC_API_URL}"

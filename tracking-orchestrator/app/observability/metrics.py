@@ -173,6 +173,10 @@ class Metrics:
     worldtracker_low_band_matches_total: Counter
     worldtracker_low_band_dropped_total: Counter
 
+    # ---- Adaptive ReID cadence (M5.1) ----
+    cts_reid_executed_total: Counter
+    cts_reid_skipped_total: Counter
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -617,6 +621,16 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         worldtracker_low_band_dropped_total=_counter(
             "cts_worldtracker_low_band_dropped_total",
             "Low-band observations dropped (no open PH within recovery gate).",
+        ),
+        # ---- Adaptive ReID cadence (M5.1) ----
+        cts_reid_executed_total=_counter(
+            "cts_reid_executed_total",
+            "Frames where SOLIDER-ReID embed_batch was called.",
+        ),
+        cts_reid_skipped_total=_counter(
+            "cts_reid_skipped_total",
+            "Frames where adaptive policy skipped ReID (or would have skipped in shadow mode).",
+            ["reason"],
         ),
     )
 
