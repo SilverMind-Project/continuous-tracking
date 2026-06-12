@@ -1,0 +1,53 @@
+{
+  "persons": [
+    "alice"
+  ],
+  "detection_truth": {
+    "det-turn-front-0": "alice",
+    "det-turn-front-1": "alice",
+    "det-turn-front-2": "alice",
+    "det-turn-front-3": "alice",
+    "det-turn-front-4": "alice",
+    "det-turn-front-5": "alice",
+    "det-turn-front-6": "alice",
+    "det-turn-front-7": "alice",
+    "det-turn-front-8": "alice",
+    "det-turn-front-9": "alice",
+    "det-turn-mid-0": "alice",
+    "det-turn-mid-1": "alice",
+    "det-turn-mid-2": "alice",
+    "det-turn-mid-3": "alice",
+    "det-turn-mid-4": "alice",
+    "det-turn-mid-5": "alice",
+    "det-turn-mid-6": "alice",
+    "det-turn-mid-7": "alice",
+    "det-turn-side-0": "alice",
+    "det-turn-side-1": "alice",
+    "det-turn-side-2": "alice",
+    "det-turn-side-3": "alice",
+    "det-turn-side-4": "alice",
+    "det-turn-side-5": "alice",
+    "det-turn-back-0": "alice",
+    "det-turn-back-1": "alice",
+    "det-turn-back-2": "alice",
+    "det-turn-back-3": "alice",
+    "det-turn-back-4": "alice",
+    "det-turn-back-5": "alice",
+    "det-turn-back-6": "alice",
+    "det-turn-back-7": "alice",
+    "det-turn-back-8": "alice",
+    "det-turn-back-9": "alice",
+    "det-turn-back-10": "alice",
+    "det-turn-back-11": "alice",
+    "det-turn-back-12": "alice",
+    "det-turn-back-13": "alice"
+  },
+  "events": [
+    {
+      "type": "exit",
+      "person": "alice",
+      "at_step": 18,
+      "duration_frames": 12
+    }
+  ]
+}

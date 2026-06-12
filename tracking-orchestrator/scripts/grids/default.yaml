@@ -1,0 +1,48 @@
+# Default association parameter sweep grid for WorldTracker.
+#
+# Each key under `params` is a WorldTrackerConfig field name.
+# The driver generates the full Cartesian product of all value lists.
+#
+# Current shipped values are included in every list so the sweep
+# always scores the baseline; alternatives bracket it above and below.
+#
+# Fixtures: all committed synthetic fixtures under tests/fixtures/frame_replays/.
+# (New fixtures are picked up automatically.)
+
+seed: 42
+
+params:
+  # Geometric gate: chi-squared threshold with 2 degrees of freedom.
+  #   5.99  = 95th percentile (tighter gate, fewer false associations)
+  #   9.21  = 99th percentile (current shipped value)
+  #  13.82  = 99.9th percentile (looser gate)
+  gate_chi2:
+    - 5.99
+    - 9.21
+    - 13.82
+
+  # Cost matrix geometry weight.
+  alpha_geo:
+    - 0.4
+    - 0.5
+    - 0.6
+
+  # Cost matrix appearance weight.
+  alpha_app:
+    - 0.3
+    - 0.4
+    - 0.5
+
+  # Kalman observation noise (metres).
+  observation_noise_m:
+    - 0.15
+    - 0.25
+
+  # PH close grace period (seconds without observation before closing).
+  ph_close_grace_s:
+    - 3.0
+    - 5.0
+    - 8.0
+
+# alpha_geo + alpha_app must not exceed 1.0; the driver filters illegal combos.
+# alpha_height = 1 - alpha_geo - alpha_app.

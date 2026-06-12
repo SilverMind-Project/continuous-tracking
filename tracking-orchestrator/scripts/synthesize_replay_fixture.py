@@ -6,16 +6,25 @@ to WorldTracker.step()), encoded as a JSON array of observation dicts:
     [u32 BE length][JSON bytes] [u32 BE length][JSON bytes] ...
 
 Each observation dict contains:
-    camera_id           str
-    frame_index         int
-    captured_at_iso     str   (ISO-8601 with timezone)
-    floor_x_mm          int
-    floor_y_mm          int
-    embedding           list[float]
-    detection_confidence float
-    bbox                dict  x_min/y_min/y_max/y_max
-    calibrated          bool  (default True; M1 added)
-    face_anchor         dict | None  (optional; M1 added)
+    camera_id               str
+    frame_index             int
+    captured_at_iso         str   (ISO-8601 with timezone)
+    floor_x_mm              int
+    floor_y_mm              int
+    embedding               list[float]
+    detection_confidence    float
+    bbox                    dict  x_min/y_min/y_max/y_max
+    detection_id            str   (deterministic; used by truth sidecar)
+    quality                 float
+    calibrated              bool  (default True)
+    face_anchor             dict | None
+    orientation             int   (OrientationBin value; 4=UNKNOWN default)
+    orientation_confidence  float (default 0.0)
+
+Each fixture also gets a sidecar ``<name>.truth.json``:
+    persons:          list[str]  true person labels
+    detection_truth:  dict[str, str]  detection_id → person label
+    events:           list[dict]  handoffs/exits
 
 Run this script directly to regenerate the fixtures:
 
@@ -38,6 +47,13 @@ FIXTURES_DIR = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "
 BASE_TIME = datetime(2026, 5, 28, 9, 0, 0, tzinfo=UTC)
 FRAME_INTERVAL_S = 0.5
 
+# OrientationBin values (mirrors app.domain.OrientationBin)
+ORI_FRONT = 0
+ORI_BACK = 1
+ORI_LEFT = 2
+ORI_RIGHT = 3
+ORI_UNKNOWN = 4
+
 
 def _obs(
     camera_id: str,
@@ -49,12 +65,12 @@ def _obs(
     *,
     calibrated: bool = True,
     face_anchor: dict | None = None,
-    detection_id: str | None = None,
+    detection_id: str,
     detection_confidence: float = 0.92,
     quality: float = 0.5,
+    orientation: int = ORI_UNKNOWN,
+    orientation_confidence: float = 0.0,
 ) -> dict:
-    import uuid as _uuid
-
     obs_time = BASE_TIME + timedelta(seconds=step * FRAME_INTERVAL_S)
     result: dict = {
         "camera_id": camera_id,
@@ -65,9 +81,11 @@ def _obs(
         "embedding": embedding,
         "detection_confidence": detection_confidence,
         "bbox": {"x_min": 100, "y_min": 100, "x_max": 300, "y_max": 400},
-        "detection_id": detection_id if detection_id else str(_uuid.uuid4()),
+        "detection_id": detection_id,
         "quality": quality,
         "calibrated": calibrated,
+        "orientation": orientation,
+        "orientation_confidence": orientation_confidence,
     }
     if face_anchor is not None:
         fa = dict(face_anchor)
@@ -77,7 +95,7 @@ def _obs(
     return result
 
 
-def _write(path: Path, frames: list[list[dict]]) -> None:
+def _write(path: Path, frames: list[list[dict]], truth: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as f:
         for observations in frames:
@@ -87,87 +105,142 @@ def _write(path: Path, frames: list[list[dict]]) -> None:
     size_kb = path.stat().st_size // 1024
     print(f"wrote {path.name}: {len(frames)} steps, {size_kb} KB")
 
+    truth_path = path.with_suffix(".truth.json")
+    with truth_path.open("w") as tf:
+        json.dump(truth, tf, indent=2)
+    print(f"wrote {truth_path.name}")
+
+
+def _make_truth(persons: list[str], frames: list[list[dict]], labels: list[list[str]]) -> dict:
+    """Build the truth sidecar from per-frame per-observation person labels."""
+    detection_truth: dict[str, str] = {}
+    for frame_obs, frame_labels in zip(frames, labels, strict=True):
+        for obs, label in zip(frame_obs, frame_labels, strict=True):
+            detection_truth[obs["detection_id"]] = label
+    return {"persons": persons, "detection_truth": detection_truth, "events": []}
+
+
+def _make_truth_with_events(
+    persons: list[str],
+    frames: list[list[dict]],
+    labels: list[list[str]],
+    events: list[dict],
+) -> dict:
+    t = _make_truth(persons, frames, labels)
+    t["events"] = events
+    return t
+
 
 # ── Existing fixtures (unchanged behavior) ──────────────────────────────
 
 
-def two_cameras_one_room() -> list[list[dict]]:
+def two_cameras_one_room() -> tuple[list[list[dict]], dict]:
     """One person walking under two overlapping cameras in one room."""
     emb_a = [0.90, 0.10, 0.00]
     emb_a2 = [0.88, 0.12, 0.00]
     frames: list[list[dict]] = []
+    labels: list[list[str]] = []
 
     for i in range(10):
         fx = 3000 + i * 200
-        frames.append([_obs("cam-1", i, i, fx, 5000, emb_a)])
+        det_id = f"det-2c1r-c1-{i}"
+        frames.append([_obs("cam-1", i, i, fx, 5000, emb_a, detection_id=det_id)])
+        labels.append(["p1"])
 
     for i in range(10):
         step = 10 + i
         fx = 5000 + i * 200
+        det_id_1 = f"det-2c1r-c1-{step}"
+        det_id_2 = f"det-2c1r-c2-{step}"
         frames.append(
             [
-                _obs("cam-1", step, step, fx, 5000, emb_a),
-                _obs("cam-2", step, step, fx, 5000, emb_a2),
+                _obs("cam-1", step, step, fx, 5000, emb_a, detection_id=det_id_1),
+                _obs("cam-2", step, step, fx, 5000, emb_a2, detection_id=det_id_2),
             ]
         )
+        labels.append(["p1", "p1"])
 
     for i in range(10):
         step = 20 + i
         fx = 7000 + i * 200
-        frames.append([_obs("cam-2", step, step, fx, 5000, emb_a2)])
+        det_id = f"det-2c1r-c2-{step}"
+        frames.append([_obs("cam-2", step, step, fx, 5000, emb_a2, detection_id=det_id)])
+        labels.append(["p1"])
 
-    return frames
+    truth = _make_truth(["p1"], frames, labels)
+    return frames, truth
 
 
-def two_rooms_two_people() -> list[list[dict]]:
+def two_rooms_two_people() -> tuple[list[list[dict]], dict]:
     """Two people in two non-overlapping rooms that never merge."""
     emb_a = [1.00, 0.00, 0.00]
     emb_b = [0.00, 1.00, 0.00]
     frames: list[list[dict]] = []
+    labels: list[list[str]] = []
 
     for i in range(20):
         step = i
         fxa = 2000 + i * 50
         fxb = 15000 + i * 50
+        det_a = f"det-2r2p-a-{i}"
+        det_b = f"det-2r2p-b-{i}"
         frames.append(
             [
-                _obs("cam-1", step, step, fxa, 2000, emb_a),
-                _obs("cam-2", step, step, fxb, 15000, emb_b),
+                _obs("cam-1", step, step, fxa, 2000, emb_a, detection_id=det_a),
+                _obs("cam-2", step, step, fxb, 15000, emb_b, detection_id=det_b),
             ]
         )
+        labels.append(["p1", "p2"])
 
-    return frames
+    truth = _make_truth(["p1", "p2"], frames, labels)
+    return frames, truth
 
 
-def hallway_bathroom_door() -> list[list[dict]]:
+def hallway_bathroom_door() -> tuple[list[list[dict]], dict]:
     """One senior at a bathroom door seen by hallway + doorway camera."""
     emb_hall = [0.85, 0.15, 0.00]
     emb_door = [0.83, 0.17, 0.00]
     frames: list[list[dict]] = []
+    labels: list[list[str]] = []
 
     for i in range(10):
         fx = 3000 + i * 150
-        frames.append([_obs("cam-hall", i, i, fx, 8000, emb_hall)])
+        det_id = f"det-hbd-hall-{i}"
+        frames.append([_obs("cam-hall", i, i, fx, 8000, emb_hall, detection_id=det_id)])
+        labels.append(["p1"])
 
     for i in range(10):
         step = 10 + i
         fx = 4500 + i * 20
+        det_h = f"det-hbd-hall-{step}"
+        det_d = f"det-hbd-door-{step}"
         frames.append(
             [
-                _obs("cam-hall", step, step, fx, 8000, emb_hall),
-                _obs("cam-door", step, step, fx + 30, 8050, emb_door),
+                _obs("cam-hall", step, step, fx, 8000, emb_hall, detection_id=det_h),
+                _obs("cam-door", step, step, fx + 30, 8050, emb_door, detection_id=det_d),
             ]
         )
+        labels.append(["p1", "p1"])
 
-    for _ in range(8):
+    for i in range(8):
+        step = 20 + i
         frames.append([])
+        labels.append([])
 
     for i in range(10):
         step = 28 + i
         fx = 4700 - i * 150
-        frames.append([_obs("cam-hall", step, step, fx, 8000, emb_hall)])
+        det_id = f"det-hbd-hall-ret-{i}"
+        frames.append([_obs("cam-hall", step, step, fx, 8000, emb_hall, detection_id=det_id)])
+        labels.append(["p1"])
 
-    return frames
+    truth = _make_truth_with_events(
+        ["p1"],
+        frames,
+        labels,
+        events=[{"type": "exit", "person": "p1", "at_step": 20, "duration_frames": 8}],
+    )
+    return frames, truth
 
 
 # ── M1 new fixtures ─────────────────────────────────────────────────────
@@ -182,7 +255,6 @@ def _mk_face(
     step: int,
     quality: float = 0.9,
 ) -> dict:
-    """Build a face_anchor dict for the fixture."""
     return {
         "person_id": person_id,
         "confidence": confidence,
@@ -194,11 +266,10 @@ def _mk_face(
 
 
 def _lerp(a: list[float], b: list[float], t: float) -> list[float]:
-    """Linear interpolation between two embedding vectors."""
     return [round(a[i] + (b[i] - a[i]) * t, 6) for i in range(len(a))]
 
 
-def single_camera_turn() -> list[list[dict]]:
+def single_camera_turn() -> tuple[list[list[dict]], dict]:
     """One person, one uncalibrated camera, turning from front to back.
 
     Frames 0-9:   front-facing, face anchor present (high confidence).
@@ -223,10 +294,12 @@ def single_camera_turn() -> list[list[dict]]:
     emb_back = [0.50, 0.45, 0.05]
     camera_id = "cam-turn"
     frames: list[list[dict]] = []
+    labels: list[list[str]] = []
 
     # Frames 0-9: front-facing with face anchor
     for i in range(10):
         fx = 3000 + i * 100
+        det_id = f"det-turn-front-{i}"
         frames.append(
             [
                 _obs(
@@ -241,21 +314,25 @@ def single_camera_turn() -> list[list[dict]]:
                         "alice",
                         0.85,
                         camera_id=camera_id,
-                        detection_id=f"det-turn-front-{i}",
+                        detection_id=det_id,
                         step=i,
                     ),
-                    detection_id=f"det-turn-front-{i}",
+                    detection_id=det_id,
+                    orientation=ORI_FRONT,
+                    orientation_confidence=0.85,
                 )
             ]
         )
+        labels.append(["alice"])
 
     # Frames 10-17: turning -- face weakens, embedding drifts front->side
     for i in range(8):
         step = 10 + i
         fx = 4000 + i * 100
-        t = (i + 1) / 8.0  # 0.125 -> 1.0
+        t = (i + 1) / 8.0
         emb = _lerp(emb_front, emb_side, t)
-        conf = round(0.75 - i * 0.03125, 2)  # 0.75 -> 0.53
+        conf = round(0.75 - i * 0.03125, 2)
+        det_id = f"det-turn-mid-{i}"
         frames.append(
             [
                 _obs(
@@ -270,26 +347,29 @@ def single_camera_turn() -> list[list[dict]]:
                         "alice",
                         conf,
                         camera_id=camera_id,
-                        detection_id=f"det-turn-mid-{i}",
+                        detection_id=det_id,
                         step=step,
                     ),
-                    detection_id=f"det-turn-mid-{i}",
+                    detection_id=det_id,
+                    orientation=ORI_LEFT,
+                    orientation_confidence=round(0.5 + i * 0.05, 2),
                 )
             ]
         )
+        labels.append(["alice"])
 
-    # Frames 18-29: EMPTY -- occlusion gap (12 frames x 0.5 s = 6 s).
-    # This exceeds ph_close_grace_s (5 s), forcing PH close + respawn.
-    for i in range(12):
-        step = 18 + i
+    # Frames 18-29: EMPTY -- occlusion gap
+    for _ in range(12):
         frames.append([])
+        labels.append([])
 
-    # Frames 30-35: side-on -- no face anchor, embedding drifts side->back
+    # Frames 30-35: side-on -- no face anchor
     for i in range(6):
         step = 30 + i
         fx = 4800 + i * 100
         t = i / 5.0 if i > 0 else 0.0
         emb = _lerp(emb_side, emb_back, t)
+        det_id = f"det-turn-side-{i}"
         frames.append(
             [
                 _obs(
@@ -300,15 +380,19 @@ def single_camera_turn() -> list[list[dict]]:
                     5000,
                     emb,
                     calibrated=False,
-                    detection_id=f"det-turn-side-{i}",
+                    detection_id=det_id,
+                    orientation=ORI_LEFT,
+                    orientation_confidence=0.4,
                 )
             ]
         )
+        labels.append(["alice"])
 
-    # Frames 36-49: back-on -- no face anchor, embedding = back
+    # Frames 36-49: back-on -- no face anchor
     for i in range(14):
         step = 36 + i
         fx = 5400 + i * 100
+        det_id = f"det-turn-back-{i}"
         frames.append(
             [
                 _obs(
@@ -319,23 +403,35 @@ def single_camera_turn() -> list[list[dict]]:
                     5000,
                     emb_back,
                     calibrated=False,
-                    detection_id=f"det-turn-back-{i}",
+                    detection_id=det_id,
+                    orientation=ORI_BACK,
+                    orientation_confidence=0.8,
                 )
             ]
         )
+        labels.append(["alice"])
 
-    return frames
+    truth = _make_truth_with_events(
+        ["alice"],
+        frames,
+        labels,
+        events=[
+            {"type": "exit", "person": "alice", "at_step": 18, "duration_frames": 12},
+        ],
+    )
+    return frames, truth
 
 
-def cross_camera_handoff() -> list[list[dict]]:
+def cross_camera_handoff() -> tuple[list[list[dict]], dict]:
     """One person, two uncalibrated cameras, non-overlapping in time.
 
     Camera A frames 0-15, camera B frames 16-30.  Face anchor on camera A
     only at frames 0-4.  Same identity embedding (with slight view change).
     """
     emb_a = [0.85, 0.15, 0.00]
-    emb_b = [0.80, 0.20, 0.00]  # slightly different (view change between cams)
+    emb_b = [0.80, 0.20, 0.00]
     frames: list[list[dict]] = []
+    labels: list[list[str]] = []
 
     # Camera A: frames 0-15
     for i in range(16):
@@ -351,6 +447,7 @@ def cross_camera_handoff() -> list[list[dict]]:
             if i <= 4
             else None
         )
+        det_id = f"det-handoff-a-{i}"
         frames.append(
             [
                 _obs(
@@ -362,24 +459,27 @@ def cross_camera_handoff() -> list[list[dict]]:
                     emb_a,
                     calibrated=False,
                     face_anchor=fa,
-                    detection_id=f"det-handoff-a-{i}",
+                    detection_id=det_id,
+                    orientation=ORI_FRONT if i <= 4 else ORI_UNKNOWN,
+                    orientation_confidence=0.8 if i <= 4 else 0.0,
                 )
             ]
         )
+        labels.append(["alice"])
 
-    # Gap: 32 empty frames (16 s > ph_close_grace_s = 15 s).
-    # This ensures the PH closes before camera B starts, demonstrating
-    # the cross-camera disconnect that M5 must fix.
+    # Gap: 32 empty frames (16 s > ph_close_grace_s = 15 s)
     gap_start = 16
     gap_frames = 32
     for _ in range(gap_frames):
         frames.append([])
+        labels.append([])
 
     # Camera B: frames after gap
     cam_b_start = gap_start + gap_frames
     for i in range(15):
         step = cam_b_start + i
         fx = 8000 + i * 200
+        det_id = f"det-handoff-b-{i}"
         frames.append(
             [
                 _obs(
@@ -390,15 +490,32 @@ def cross_camera_handoff() -> list[list[dict]]:
                     5000,
                     emb_b,
                     calibrated=False,
-                    detection_id=f"det-handoff-b-{i}",
+                    detection_id=det_id,
+                    orientation=ORI_UNKNOWN,
                 )
             ]
         )
+        labels.append(["alice"])
 
-    return frames
+    truth = _make_truth_with_events(
+        ["alice"],
+        frames,
+        labels,
+        events=[
+            {"type": "exit", "person": "alice", "at_step": 16, "duration_frames": 32},
+            {
+                "type": "handoff",
+                "person": "alice",
+                "from_camera": "cam-handoff-a",
+                "to_camera": "cam-handoff-b",
+                "at_step": cam_b_start,
+            },
+        ],
+    )
+    return frames, truth
 
 
-def two_people_one_room() -> list[list[dict]]:
+def two_people_one_room() -> tuple[list[list[dict]], dict]:
     """Two enrolled people, one uncalibrated camera, crossing paths.
 
     Person A (alice): embedding close to [1.0, 0.0, 0.0], face anchor at start.
@@ -411,32 +528,22 @@ def two_people_one_room() -> list[list[dict]]:
     emb_b = [0.01, 0.96, 0.03]
     camera_id = "cam-cross"
     frames: list[list[dict]] = []
+    labels: list[list[str]] = []
 
     for i in range(26):
-        # Person A: starts at x=3m, moves to x=8m
         fxa = 3000 + i * 200
-        # Person B: starts at x=8m, moves to x=3m
         fxb = 8000 - i * 200
 
+        det_a = f"det-cross-a-{i}"
+        det_b = f"det-cross-b-{i}"
+
         fa_a = (
-            _mk_face(
-                "alice",
-                0.84,
-                camera_id=camera_id,
-                detection_id=f"det-cross-a-{i}",
-                step=i,
-            )
+            _mk_face("alice", 0.84, camera_id=camera_id, detection_id=det_a, step=i)
             if i <= 4
             else None
         )
         fa_b = (
-            _mk_face(
-                "bob",
-                0.83,
-                camera_id=camera_id,
-                detection_id=f"det-cross-b-{i}",
-                step=i,
-            )
+            _mk_face("bob", 0.83, camera_id=camera_id, detection_id=det_b, step=i)
             if i <= 4
             else None
         )
@@ -452,7 +559,9 @@ def two_people_one_room() -> list[list[dict]]:
                     emb_a,
                     calibrated=False,
                     face_anchor=fa_a,
-                    detection_id=f"det-cross-a-{i}",
+                    detection_id=det_a,
+                    orientation=ORI_FRONT if i <= 4 else ORI_UNKNOWN,
+                    orientation_confidence=0.8 if i <= 4 else 0.0,
                 ),
                 _obs(
                     camera_id,
@@ -463,15 +572,19 @@ def two_people_one_room() -> list[list[dict]]:
                     emb_b,
                     calibrated=False,
                     face_anchor=fa_b,
-                    detection_id=f"det-cross-b-{i}",
+                    detection_id=det_b,
+                    orientation=ORI_FRONT if i <= 4 else ORI_UNKNOWN,
+                    orientation_confidence=0.8 if i <= 4 else 0.0,
                 ),
             ]
         )
+        labels.append(["alice", "bob"])
 
-    return frames
+    truth = _make_truth(["alice", "bob"], frames, labels)
+    return frames, truth
 
 
-def resident_plus_stranger() -> list[list[dict]]:
+def resident_plus_stranger() -> tuple[list[list[dict]], dict]:
     """One enrolled resident + one unenrolled stranger, one camera, crossing paths.
 
     Resident (alice): has face anchor at frames 0-4.
@@ -482,22 +595,20 @@ def resident_plus_stranger() -> list[list[dict]]:
     the stranger's track.
     """
     emb_resident = [0.90, 0.10, 0.00]
-    emb_stranger = [0.30, 0.50, 0.20]  # far from resident in embedding space
+    emb_stranger = [0.30, 0.50, 0.20]
     camera_id = "cam-guard"
     frames: list[list[dict]] = []
+    labels: list[list[str]] = []
 
     for i in range(30):
         fxa = 3000 + i * 150
         fxb = 7500 - i * 150
 
+        det_res = f"det-guard-res-{i}"
+        det_str = f"det-guard-str-{i}"
+
         fa_resident = (
-            _mk_face(
-                "alice",
-                0.86,
-                camera_id=camera_id,
-                detection_id=f"det-guard-res-{i}",
-                step=i,
-            )
+            _mk_face("alice", 0.86, camera_id=camera_id, detection_id=det_res, step=i)
             if i <= 4
             else None
         )
@@ -513,7 +624,9 @@ def resident_plus_stranger() -> list[list[dict]]:
                     emb_resident,
                     calibrated=False,
                     face_anchor=fa_resident,
-                    detection_id=f"det-guard-res-{i}",
+                    detection_id=det_res,
+                    orientation=ORI_FRONT if i <= 4 else ORI_UNKNOWN,
+                    orientation_confidence=0.8 if i <= 4 else 0.0,
                 ),
                 _obs(
                     camera_id,
@@ -523,23 +636,258 @@ def resident_plus_stranger() -> list[list[dict]]:
                     5000,
                     emb_stranger,
                     calibrated=False,
-                    detection_id=f"det-guard-str-{i}",
+                    detection_id=det_str,
+                    orientation=ORI_UNKNOWN,
                 ),
             ]
         )
+        labels.append(["alice", "stranger"])
 
-    return frames
+    truth = _make_truth(["alice", "stranger"], frames, labels)
+    return frames, truth
+
+
+# ── New fixtures for M5.3 sweep ─────────────────────────────────────────
+
+
+def uncalibrated_pacing() -> tuple[list[list[dict]], dict]:
+    """One person, one uncalibrated home camera, pacing back and forth.
+
+    Designed to stress the revival path: person disappears for 3 frames
+    (< ph_close_grace_s=5s at 0.5s interval → 1.5s gap) and reappears,
+    then disappears for 12 frames (6s > grace → PH must close+respawn).
+
+    Frames  0-14:  walking forward (x 3000→5800)
+    Frames 15-17:  EMPTY (3 frames = 1.5s < grace; PH coasts)
+    Frames 18-29:  walking back (x 5600→3400)
+    Frames 30-41:  EMPTY (12 frames = 6s > grace; PH closes)
+    Frames 42-55:  walking forward again (x 3000→5600)
+
+    calibrated=False throughout.
+    """
+    emb = [0.80, 0.18, 0.02]
+    camera_id = "cam-pace"
+    frames: list[list[dict]] = []
+    labels: list[list[str]] = []
+
+    # Phase 1: walk forward
+    for i in range(15):
+        step = i
+        fx = 3000 + i * 190
+        det_id = f"det-pace-fwd-{i}"
+        frames.append(
+            [_obs(camera_id, i, step, fx, 5000, emb, calibrated=False, detection_id=det_id)]
+        )
+        labels.append(["p1"])
+
+    # Short gap: 3 empty frames
+    for _ in range(3):
+        frames.append([])
+        labels.append([])
+
+    # Phase 2: walk back
+    for i in range(12):
+        step = 18 + i
+        fx = 5600 - i * 183
+        det_id = f"det-pace-bk-{i}"
+        frames.append(
+            [_obs(camera_id, step, step, fx, 5000, emb, calibrated=False, detection_id=det_id)]
+        )
+        labels.append(["p1"])
+
+    # Long gap: 12 empty frames (forces PH close)
+    for _ in range(12):
+        frames.append([])
+        labels.append([])
+
+    # Phase 3: walk forward again (new PH or revival)
+    for i in range(14):
+        step = 42 + i
+        fx = 3000 + i * 190
+        det_id = f"det-pace-fwd2-{i}"
+        frames.append(
+            [_obs(camera_id, step, step, fx, 5000, emb, calibrated=False, detection_id=det_id)]
+        )
+        labels.append(["p1"])
+
+    truth = _make_truth_with_events(
+        ["p1"],
+        frames,
+        labels,
+        events=[
+            {"type": "gap", "person": "p1", "at_step": 15, "duration_frames": 3},
+            {"type": "exit", "person": "p1", "at_step": 30, "duration_frames": 12},
+        ],
+    )
+    return frames, truth
+
+
+def uncalibrated_two_people_home() -> tuple[list[list[dict]], dict]:
+    """Two people on a single uncalibrated home camera.
+
+    Alice: enrolled, has face anchor at start. Bob: unenrolled, no face anchor.
+    They stay on distinct sides of the room (no crossing), testing that
+    two PHs remain distinct throughout on an uncalibrated camera.
+
+    Frames 0-24: alice left side, bob right side. Both always visible.
+    """
+    emb_alice = [0.92, 0.07, 0.01]
+    emb_bob = [0.05, 0.88, 0.07]
+    camera_id = "cam-home-2p"
+    frames: list[list[dict]] = []
+    labels: list[list[str]] = []
+
+    for i in range(25):
+        fxa = 2000 + i * 100  # alice: 2m → 4.4m
+        fxb = 8000 + i * 80  # bob: 8m → 9.92m (well separated)
+
+        det_a = f"det-home2p-a-{i}"
+        det_b = f"det-home2p-b-{i}"
+
+        fa_a = (
+            _mk_face("alice", 0.87, camera_id=camera_id, detection_id=det_a, step=i)
+            if i <= 3
+            else None
+        )
+
+        frames.append(
+            [
+                _obs(
+                    camera_id,
+                    i,
+                    i,
+                    fxa,
+                    5000,
+                    emb_alice,
+                    calibrated=False,
+                    face_anchor=fa_a,
+                    detection_id=det_a,
+                    orientation=ORI_FRONT if i <= 3 else ORI_UNKNOWN,
+                    orientation_confidence=0.85 if i <= 3 else 0.0,
+                ),
+                _obs(
+                    camera_id,
+                    i,
+                    i,
+                    fxb,
+                    5000,
+                    emb_bob,
+                    calibrated=False,
+                    detection_id=det_b,
+                    orientation=ORI_UNKNOWN,
+                ),
+            ]
+        )
+        labels.append(["alice", "bob"])
+
+    truth = _make_truth(["alice", "bob"], frames, labels)
+    return frames, truth
+
+
+def mixed_calibration_entry() -> tuple[list[list[dict]], dict]:
+    """One person entering a home via a calibrated entry camera, then moving through
+    an uncalibrated room camera.
+
+    cam-entry (calibrated): frames 0-9. Person enters, floor point valid.
+    cam-room  (uncalibrated): frames 10-24. Person moves through room.
+
+    Tests that the tracker can associate across calibration boundaries.
+    """
+    emb = [0.88, 0.11, 0.01]
+    frames: list[list[dict]] = []
+    labels: list[list[str]] = []
+
+    # Entry camera (calibrated)
+    for i in range(10):
+        step = i
+        fx = 1000 + i * 300  # 1m → 3.7m in entry zone
+        det_id = f"det-mixed-entry-{i}"
+        frames.append(
+            [
+                _obs(
+                    "cam-entry",
+                    i,
+                    step,
+                    fx,
+                    2000,
+                    emb,
+                    calibrated=True,
+                    detection_id=det_id,
+                    face_anchor=(
+                        _mk_face(
+                            "alice",
+                            0.82,
+                            camera_id="cam-entry",
+                            detection_id=det_id,
+                            step=step,
+                        )
+                        if i <= 2
+                        else None
+                    ),
+                    orientation=ORI_FRONT if i <= 2 else ORI_UNKNOWN,
+                    orientation_confidence=0.8 if i <= 2 else 0.0,
+                )
+            ]
+        )
+        labels.append(["alice"])
+
+    # Room camera (uncalibrated)
+    for i in range(15):
+        step = 10 + i
+        det_id = f"det-mixed-room-{i}"
+        frames.append(
+            [
+                _obs(
+                    "cam-room",
+                    i,
+                    step,
+                    5000 + i * 200,
+                    5000,
+                    emb,
+                    calibrated=False,
+                    detection_id=det_id,
+                    orientation=ORI_UNKNOWN,
+                )
+            ]
+        )
+        labels.append(["alice"])
+
+    truth = _make_truth_with_events(
+        ["alice"],
+        frames,
+        labels,
+        events=[
+            {
+                "type": "handoff",
+                "person": "alice",
+                "from_camera": "cam-entry",
+                "to_camera": "cam-room",
+                "at_step": 10,
+            },
+        ],
+    )
+    return frames, truth
 
 
 def main() -> None:
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
-    _write(FIXTURES_DIR / "two_cameras_one_room.bin", two_cameras_one_room())
-    _write(FIXTURES_DIR / "two_rooms_two_people.bin", two_rooms_two_people())
-    _write(FIXTURES_DIR / "hallway_bathroom_door.bin", hallway_bathroom_door())
-    _write(FIXTURES_DIR / "single_camera_turn.bin", single_camera_turn())
-    _write(FIXTURES_DIR / "cross_camera_handoff.bin", cross_camera_handoff())
-    _write(FIXTURES_DIR / "two_people_one_room.bin", two_people_one_room())
-    _write(FIXTURES_DIR / "resident_plus_stranger.bin", resident_plus_stranger())
+
+    fixtures: list[tuple[str, tuple[list[list[dict]], dict]]] = [
+        ("two_cameras_one_room", two_cameras_one_room()),
+        ("two_rooms_two_people", two_rooms_two_people()),
+        ("hallway_bathroom_door", hallway_bathroom_door()),
+        ("single_camera_turn", single_camera_turn()),
+        ("cross_camera_handoff", cross_camera_handoff()),
+        ("two_people_one_room", two_people_one_room()),
+        ("resident_plus_stranger", resident_plus_stranger()),
+        ("uncalibrated_pacing", uncalibrated_pacing()),
+        ("uncalibrated_two_people_home", uncalibrated_two_people_home()),
+        ("mixed_calibration_entry", mixed_calibration_entry()),
+    ]
+
+    for name, (frames, truth) in fixtures:
+        _write(FIXTURES_DIR / f"{name}.bin", frames, truth)
+
     print("done")
 
 

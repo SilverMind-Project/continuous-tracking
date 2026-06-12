@@ -1,0 +1,55 @@
+{
+  "persons": [
+    "p1"
+  ],
+  "detection_truth": {
+    "det-hbd-hall-0": "p1",
+    "det-hbd-hall-1": "p1",
+    "det-hbd-hall-2": "p1",
+    "det-hbd-hall-3": "p1",
+    "det-hbd-hall-4": "p1",
+    "det-hbd-hall-5": "p1",
+    "det-hbd-hall-6": "p1",
+    "det-hbd-hall-7": "p1",
+    "det-hbd-hall-8": "p1",
+    "det-hbd-hall-9": "p1",
+    "det-hbd-hall-10": "p1",
+    "det-hbd-door-10": "p1",
+    "det-hbd-hall-11": "p1",
+    "det-hbd-door-11": "p1",
+    "det-hbd-hall-12": "p1",
+    "det-hbd-door-12": "p1",
+    "det-hbd-hall-13": "p1",
+    "det-hbd-door-13": "p1",
+    "det-hbd-hall-14": "p1",
+    "det-hbd-door-14": "p1",
+    "det-hbd-hall-15": "p1",
+    "det-hbd-door-15": "p1",
+    "det-hbd-hall-16": "p1",
+    "det-hbd-door-16": "p1",
+    "det-hbd-hall-17": "p1",
+    "det-hbd-door-17": "p1",
+    "det-hbd-hall-18": "p1",
+    "det-hbd-door-18": "p1",
+    "det-hbd-hall-19": "p1",
+    "det-hbd-door-19": "p1",
+    "det-hbd-hall-ret-0": "p1",
+    "det-hbd-hall-ret-1": "p1",
+    "det-hbd-hall-ret-2": "p1",
+    "det-hbd-hall-ret-3": "p1",
+    "det-hbd-hall-ret-4": "p1",
+    "det-hbd-hall-ret-5": "p1",
+    "det-hbd-hall-ret-6": "p1",
+    "det-hbd-hall-ret-7": "p1",
+    "det-hbd-hall-ret-8": "p1",
+    "det-hbd-hall-ret-9": "p1"
+  },
+  "events": [
+    {
+      "type": "exit",
+      "person": "p1",
+      "at_step": 20,
+      "duration_frames": 8
+    }
+  ]
+}

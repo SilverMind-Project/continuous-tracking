@@ -1,0 +1,41 @@
+{
+  "persons": [
+    "alice"
+  ],
+  "detection_truth": {
+    "det-mixed-entry-0": "alice",
+    "det-mixed-entry-1": "alice",
+    "det-mixed-entry-2": "alice",
+    "det-mixed-entry-3": "alice",
+    "det-mixed-entry-4": "alice",
+    "det-mixed-entry-5": "alice",
+    "det-mixed-entry-6": "alice",
+    "det-mixed-entry-7": "alice",
+    "det-mixed-entry-8": "alice",
+    "det-mixed-entry-9": "alice",
+    "det-mixed-room-0": "alice",
+    "det-mixed-room-1": "alice",
+    "det-mixed-room-2": "alice",
+    "det-mixed-room-3": "alice",
+    "det-mixed-room-4": "alice",
+    "det-mixed-room-5": "alice",
+    "det-mixed-room-6": "alice",
+    "det-mixed-room-7": "alice",
+    "det-mixed-room-8": "alice",
+    "det-mixed-room-9": "alice",
+    "det-mixed-room-10": "alice",
+    "det-mixed-room-11": "alice",
+    "det-mixed-room-12": "alice",
+    "det-mixed-room-13": "alice",
+    "det-mixed-room-14": "alice"
+  },
+  "events": [
+    {
+      "type": "handoff",
+      "person": "alice",
+      "from_camera": "cam-entry",
+      "to_camera": "cam-room",
+      "at_step": 10
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# Smoke grid for CI: 2-point grid on 1 fixture (must complete < 30 s).
+# Used by tests/integration/test_sweep_smoke.py.
+
+seed: 42
+
+# Only one fixture for CI speed; the smoke test overrides this.
+fixtures:
+  - two_rooms_two_people
+
+params:
+  gate_chi2:
+    - 5.99
+    - 9.21
+  observation_noise_m:
+    - 0.15
+    - 0.25

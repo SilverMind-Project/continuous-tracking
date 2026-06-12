@@ -1,0 +1,53 @@
+{
+  "persons": [
+    "alice"
+  ],
+  "detection_truth": {
+    "det-handoff-a-0": "alice",
+    "det-handoff-a-1": "alice",
+    "det-handoff-a-2": "alice",
+    "det-handoff-a-3": "alice",
+    "det-handoff-a-4": "alice",
+    "det-handoff-a-5": "alice",
+    "det-handoff-a-6": "alice",
+    "det-handoff-a-7": "alice",
+    "det-handoff-a-8": "alice",
+    "det-handoff-a-9": "alice",
+    "det-handoff-a-10": "alice",
+    "det-handoff-a-11": "alice",
+    "det-handoff-a-12": "alice",
+    "det-handoff-a-13": "alice",
+    "det-handoff-a-14": "alice",
+    "det-handoff-a-15": "alice",
+    "det-handoff-b-0": "alice",
+    "det-handoff-b-1": "alice",
+    "det-handoff-b-2": "alice",
+    "det-handoff-b-3": "alice",
+    "det-handoff-b-4": "alice",
+    "det-handoff-b-5": "alice",
+    "det-handoff-b-6": "alice",
+    "det-handoff-b-7": "alice",
+    "det-handoff-b-8": "alice",
+    "det-handoff-b-9": "alice",
+    "det-handoff-b-10": "alice",
+    "det-handoff-b-11": "alice",
+    "det-handoff-b-12": "alice",
+    "det-handoff-b-13": "alice",
+    "det-handoff-b-14": "alice"
+  },
+  "events": [
+    {
+      "type": "exit",
+      "person": "alice",
+      "at_step": 16,
+      "duration_frames": 32
+    },
+    {
+      "type": "handoff",
+      "person": "alice",
+      "from_camera": "cam-handoff-a",
+      "to_camera": "cam-handoff-b",
+      "at_step": 48
+    }
+  ]
+}

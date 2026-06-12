@@ -2,10 +2,11 @@
 
 Provides :func:`load_fixture` for reading length-prefixed JSON .bin fixture
 files and constructing :class:`WorldObservation` lists.  Also provides
-``FIXTURES_DIR`` and ``_ROOM_POLYGONS`` for reuse.
+``FIXTURES_DIR``, ``_ROOM_POLYGONS``, and :func:`load_truth` for reuse.
 
 Extended in M1 to support ``calibrated`` (default True for backward
 compatibility with existing fixtures) and ``face_anchor`` fields.
+Extended in M5.3 to support ``orientation`` and ``orientation_confidence``.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.domain import BoundingBox, FaceAnchor, FloorPoint, WorldObservation
+from app.domain import BoundingBox, FaceAnchor, FloorPoint, OrientationBin, WorldObservation
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "frame_replays"
 
@@ -61,6 +62,14 @@ def load_fixture(path: Path) -> list[list[WorldObservation]]:
                         ),
                     )
 
+                # ── orientation (optional, added in M5.3) ──
+                ori_raw = o.get("orientation", OrientationBin.UNKNOWN)
+                try:
+                    orientation = OrientationBin(int(ori_raw))
+                except (ValueError, KeyError):
+                    orientation = OrientationBin.UNKNOWN
+                orientation_confidence = float(o.get("orientation_confidence", 0.0))
+
                 frame_obs.append(
                     WorldObservation(
                         camera_id=o["camera_id"],
@@ -85,7 +94,24 @@ def load_fixture(path: Path) -> list[list[WorldObservation]]:
                         height_estimate_m=o.get("height_estimate_m"),
                         floor_residual_m=o.get("floor_residual_m"),
                         face_anchor=face_anchor,
+                        orientation=orientation,
+                        orientation_confidence=orientation_confidence,
                     )
                 )
             steps.append(frame_obs)
     return steps
+
+
+def load_truth(path: Path) -> dict:
+    """Load a truth sidecar JSON alongside a fixture binary.
+
+    Returns a dict with keys:
+        persons:          list[str]
+        detection_truth:  dict[str, str]  detection_id → person label
+        events:           list[dict]
+    """
+    truth_path = path.with_suffix(".truth.json")
+    if not truth_path.exists():
+        return {"persons": [], "detection_truth": {}, "events": []}
+    with truth_path.open() as f:
+        return json.load(f)

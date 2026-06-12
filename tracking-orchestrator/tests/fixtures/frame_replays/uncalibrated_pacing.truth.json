@@ -1,0 +1,62 @@
+{
+  "persons": [
+    "p1"
+  ],
+  "detection_truth": {
+    "det-pace-fwd-0": "p1",
+    "det-pace-fwd-1": "p1",
+    "det-pace-fwd-2": "p1",
+    "det-pace-fwd-3": "p1",
+    "det-pace-fwd-4": "p1",
+    "det-pace-fwd-5": "p1",
+    "det-pace-fwd-6": "p1",
+    "det-pace-fwd-7": "p1",
+    "det-pace-fwd-8": "p1",
+    "det-pace-fwd-9": "p1",
+    "det-pace-fwd-10": "p1",
+    "det-pace-fwd-11": "p1",
+    "det-pace-fwd-12": "p1",
+    "det-pace-fwd-13": "p1",
+    "det-pace-fwd-14": "p1",
+    "det-pace-bk-0": "p1",
+    "det-pace-bk-1": "p1",
+    "det-pace-bk-2": "p1",
+    "det-pace-bk-3": "p1",
+    "det-pace-bk-4": "p1",
+    "det-pace-bk-5": "p1",
+    "det-pace-bk-6": "p1",
+    "det-pace-bk-7": "p1",
+    "det-pace-bk-8": "p1",
+    "det-pace-bk-9": "p1",
+    "det-pace-bk-10": "p1",
+    "det-pace-bk-11": "p1",
+    "det-pace-fwd2-0": "p1",
+    "det-pace-fwd2-1": "p1",
+    "det-pace-fwd2-2": "p1",
+    "det-pace-fwd2-3": "p1",
+    "det-pace-fwd2-4": "p1",
+    "det-pace-fwd2-5": "p1",
+    "det-pace-fwd2-6": "p1",
+    "det-pace-fwd2-7": "p1",
+    "det-pace-fwd2-8": "p1",
+    "det-pace-fwd2-9": "p1",
+    "det-pace-fwd2-10": "p1",
+    "det-pace-fwd2-11": "p1",
+    "det-pace-fwd2-12": "p1",
+    "det-pace-fwd2-13": "p1"
+  },
+  "events": [
+    {
+      "type": "gap",
+      "person": "p1",
+      "at_step": 15,
+      "duration_frames": 3
+    },
+    {
+      "type": "exit",
+      "person": "p1",
+      "at_step": 30,
+      "duration_frames": 12
+    }
+  ]
+}
