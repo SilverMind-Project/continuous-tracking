@@ -1,15 +1,15 @@
 ---
 name: cts-signals
-description: How to add or modify a dementia signal in the tracking orchestrator - the detector method pattern, baseline repository contract, robust z-score rules, hysteresis API, severity/cold-start conventions, AlgorithmSpec metadata, kind plumbing across CTS/CC/docs, and the test matrix every signal needs.
+description: Use when adding or modifying a CTS dementia signal, detector, baseline, robust z-score rule, hysteresis behavior, severity policy, AlgorithmSpec, protobuf kind, CC plumbing, or signal test.
 ---
 
 # CTS Signals
 
-This skill makes "add or modify a dementia signal" a recipe. Six signals are active; Milestones 1-4 add or touch seven more. Every signal follows the same skeleton.
+This skill makes "add or modify a dementia signal" a recipe. Nine protobuf kinds are active: `pacing`, `sundowning_index`, `bathroom_dwell_anomaly`, `nighttime_movement`, `stillness_anomaly`, `absence`, `fall_suspected`, `gait_slowing`, and `agitation_index`.
 
 ## The golden rule
 
-> A new signal is a new detector method on `DementiaSignalWorker`, never a new `elif` branch in `_process_identity`. `_process_identity` calls `_compute_signals`, which calls every detector. Add your method there, in execution order.
+> A new windowed behavior signal is a new detector method on `DementiaSignalWorker`, never a new `elif` branch in `_process_identity`. Acute per-frame signals that require pipeline-only inputs, such as `fall_suspected`, belong in a pipeline stage and still follow the kind-plumbing and metadata rules below.
 
 Files:
 - Worker: `tracking-orchestrator/app/trajectory/dementia_signals.py`
@@ -32,6 +32,8 @@ DementiaSignalWorker.run_once(now)
         _compute_nighttime_movement()
         _compute_stillness_anomaly()
         _compute_absence()
+        _compute_gait_slowing()
+        _compute_agitation_index()
         _check_data_quality()         # demote warning/emergency to info if coverage < 0.1 or confidence < 0.3
         _apply_algorithm_metadata()   # stamp AlgorithmSpec fields onto DementiaSignal
       _clear_inactive()               # reset hysteresis for signals no longer triggered
@@ -173,7 +175,7 @@ When adding a new `DementiaSignalKind`, update all of these in the same PR:
    ```
    Verify the kind string appears in: `signal_config.py` kind list, `signal_narratives.py` (narrative text), `filters/builtin/dementia_signal.py` kind list.
 
-7. **Feed label and icon** in `cognitive-companion/frontend/src/views/admin/CTSSignalsView.vue` -- add to the `SIGNAL_ICONS` object (emoji key). The kind must also appear in the `SIGNAL_KINDS` array.
+7. **CC frontend kind inventories** -- grep for kind arrays and maps in `frontend/src/views/`, `frontend/src/components/pipeline/steps/index.js`, and Tracking panels. Add labels/icons where the surface has a kind-specific map, while preserving the generic unknown-kind fallback.
 
 8. **Dementia-signals docs table row** in the portal docs if a dementia-signals reference page exists.
 

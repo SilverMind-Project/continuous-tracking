@@ -8,9 +8,9 @@ Guidance for Claude Code agents working in this repository.
 
 | Skill | Use when |
 | --- | --- |
-| `.claude/skills/engineering-standards/SKILL.md` | Backend, storage, testing, logging, naming, and architecture work |
-| `.claude/skills/cts-pipeline/SKILL.md` | Frame pipeline stages, StageRunner contract, FrameContext, dedup/quality, and adding a new stage |
-| `.claude/skills/cts-signals/SKILL.md` | Adding or modifying a dementia signal: detector pattern, baseline contract, robust z-score, hysteresis, kind plumbing, and test matrix |
+| `.claude/skills/engineering-standards/SKILL.md` | CTS architecture, repositories, configuration, tests, wire formats, units, caches, security boundaries, logging, and naming |
+| `.claude/skills/cts-pipeline/SKILL.md` | Frame stages, execution paths, tracker-round side effects, batching, StageRunner/FrameContext, and replay fixture formats |
+| `.claude/skills/cts-signals/SKILL.md` | Dementia signals, detectors, baselines, robust z-scores, hysteresis, severity, protobuf/CC kind plumbing, and signal tests |
 
 ---
 
