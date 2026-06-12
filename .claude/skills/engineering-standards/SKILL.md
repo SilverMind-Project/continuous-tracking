@@ -1,9 +1,12 @@
 ---
 name: engineering-standards
-description: This skill covers **how** to build - library choices, data abstraction patterns, testing strategy, wire format, and security at boundaries. For **what** to build (milestones, domain rules, quality gate, linting configuration), see [CLAUDE.md](CLAUDE.md).
+description: Use when changing CTS architecture, repositories, configuration, tests, wire formats, units, caches, or security boundaries. For milestone and domain requirements, see CLAUDE.md.
 ---
 
 # Engineering Standards
+
+This skill documents the current codebase. Update it in the same PR that changes any behavior
+or contract it describes; task files own future deltas until their implementation lands.
 
 ## Architecture and SOLID Principles
 
@@ -12,7 +15,9 @@ description: This skill covers **how** to build - library choices, data abstract
 Every module, class, and function has exactly one reason to change.
 
 - **Pipeline stages** do one thing: fetch, detect, redact, project, infer, track, resolve, write, sample, revise, or publish. A stage that does two unrelated things is a bug.
-- **Services** coordinate; they do not own algorithms. `DementiaSignalWorker` schedules and coordinates; individual detectors own the algorithms.
+- **Services** coordinate; they do not own algorithms. `DementiaSignalWorker` schedules and
+  coordinates; individual detectors own the algorithms. See
+  [CTS Signals](../cts-signals/SKILL.md) for the detector contract.
 - **Domain objects** are pure data -- frozen dataclasses with no behavior beyond property accessors.
 
 ### Dependency Inversion
@@ -68,6 +73,30 @@ Rules:
 3. `Protocol` carries no state -- it is a pure structural interface.
 4. `InMemory` uses plain `dict` / `list`; never touches a database or network.
 5. `Postgres*` receives only an `asyncpg.Pool`; holds no other state.
+
+### Wiring completeness for repository Protocols
+
+A repository abstraction is done only when all three artifacts exist and production wiring is
+proved: a Postgres implementation, explicit injection through `app/main.py`, and an integration
+test exercising a production-shaped path. The Protocol plus InMemory implementation is not done.
+
+```python
+# RIGHT: app/main.py; proof: tests/integration/test_baseline_repo_postgres.py
+baseline_repo = PostgresBehaviorBaselineRepository(_pool)
+deps = PipelineDependencies(baseline_repo=baseline_repo)
+
+# WRONG: production silently reaches an InMemory default
+deps = PipelineDependencies()  # initialize() substitutes InMemoryBehaviorBaselineRepository
+```
+An optional dependency may have an InMemory default only for tests. The production constructor
+site must name the concrete class. For every repository Protocol or ABC in `app/storage/`, run:
+
+```bash
+grep -nE "class .*(Protocol|ABC)" tracking-orchestrator/app/storage/*.py
+grep -n "PostgresXRepository" tracking-orchestrator/app/main.py  # repeat for each X
+```
+
+Any missing counterpart requires a written justification comment at the wiring site.
 
 ### Go: interface contracts in `internal/`
 
@@ -423,6 +452,22 @@ Secrets (database DSNs, Redis URLs, MinIO credentials, API keys) come from envir
 
 Use Pydantic v2 models to validate configuration at application startup. Fail fast with a clear error message if required settings are missing or invalid. Never silently fall back to a default that produces incorrect behavior.
 
+### Flag lifecycle
+
+New behavior ships behind a `settings.yaml` flag defaulting to off. Its YAML comment states why
+the flag exists and what evidence is required before enablement.
+
+1. Add shadow mode when the behavior can run metrics-only without changing output.
+2. Add a fixture or replay proof and a named guardrail test for the worst forbidden failure.
+3. Append a dated enable note and the gating proofs to the CTS robustness rollout notes.
+4. Remove the flag one release after enablement proves stable; removal is its own small PR.
+
+**RIGHT:** `pipeline.adaptive_reid` combines an off-by-default flag, shadow mode, replay metrics,
+and identity-contamination guardrails in `app/pipeline/reid_policy.py` and
+`tests/integration/test_adaptive_reid_replay_equivalence.py`.
+
+**WRONG:** merge a default-on behavior flag with no replay proof, then leave it permanently true.
+
 ---
 
 ## API Design (FastAPI)
@@ -758,6 +803,40 @@ RTSP ingest uses go2rtc as a sidecar -- do not add `gortsplib` or `pion/rtp`.
 ---
 
 ## Domain-Specific Design Principles
+
+### Units are part of the interface
+
+Every dimensional numeric field names its unit: `_m`, `_m_s`, `_nu_s`, `_deg`, or `_px`. Its
+docstring also names the reference frame, such as image-normalized, crop-normalized, or
+floor-plane meters.
+
+Threshold constants sit beside a comment stating the unit and calibration source. Link the
+calibration script or fixture. Multiplying or dividing quantities from incompatible frames is a
+review-blocking defect even when typical-scale output looks plausible.
+
+```python
+# WRONG: crop-normalized displacement / bbox_diagonal_px / dt_s
+# RIGHT: app/trajectory/motion_energy.py converts to image px, then divides by bbox px and dt_s.
+frame_vel = float(np.mean(disp / scale) / dt)
+```
+
+The RIGHT implementation names the result `mean_keypoint_velocity_nu_s` and links
+`scripts/calibrate_motion_energy.py` beside `_STILL_VELOCITY_FLOOR_NU_S`.
+
+### Caches with temporal contracts
+
+A cache valid "per frame", "per round", or "per run" must name that epoch in its class docstring.
+Invalidate it at one structural chokepoint traversed by every execution path, not separately at
+each path entry. Add a staleness backstop that logs and degrades safely after missed invalidation.
+
+**RIGHT:** `app/pipeline/gallery_cache.py` documents a per-frame cache, self-invalidates after
+`max_age_s`, and logs `gallery_cache_stale_self_invalidated`. Both single-frame and batched paths
+call `FrameProcessingPipeline._begin_tracker_round()` in `app/pipeline/frame_pipeline.py`.
+
+**WRONG:** clear the gallery cache only in `_process_frame`; the cross-camera batch path then
+serves entries from the previous tracker round.
+
+Review checklist when adding an execution path: which epoch-scoped caches does this path reset?
 
 ### Frame pipeline stages
 
