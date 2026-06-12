@@ -464,7 +464,7 @@ RTSP ingest: go2rtc sidecar
 | ID | Severity | Description |
 | --- | --- | --- |
 | TD-003 | Medium | Revision stream consumer group pre-created by publisher instead of admin tooling |
-| TD-007 | Low | `PersonTrackingService` (CC) and CTS identity resolver run parallel identity paths; face anchors from person-identification-service are now integrated (Phase 2, May 2026) but not yet validated end-to-end |
+| TD-007 | Low | Validated by [`docs/identity-path-validation-2026-06.md`](docs/identity-path-validation-2026-06.md): CC face-based location conclusions are redundant when `cts.enabled=true`, but remain the non-CTS reCamera path and the owner of raw sightings/activity capture. Deprecate its identity/location writes behind an explicit CTS-aware boundary; keep non-CTS and non-location responsibilities until their consumers migrate. |
 | TD-008 | Medium | DepthEstimator (`app/inference/depth.py`) is implemented and importable but not wired into the live frame pipeline. It is used only during homography auto-calibration. M7 (Occluded Posture Detection) will wire it into the posture slow-path. Do not connect it to `FrameProcessingPipeline` before M7 is complete. |
 | TD-009 | Low | ReID crop invariant: `_crop_detection()` in `frame_pipeline.py` must always be called before `ReidEmbedder.embed_batch()`. Any refactor that moves or merges these calls must preserve this ordering or the gallery distances become meaningless. |
 

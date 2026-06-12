@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ from .inference.depth import DepthEstimator
 from .inference.detector import PersonDetector
 from .inference.pose import PoseEstimator
 from .inference.reid_embedder import ReidEmbedder
-from .inference.triton_client import TritonGrpcClient
+from .inference.triton_client import TritonClientProtocol, TritonGrpcClient
 from .pipeline import FrameProcessingPipeline
 from .pipeline.frame_pipeline import (
     FaceIdConfig,
@@ -87,6 +88,56 @@ logger = get_logger(__name__)
 _pipeline: FrameProcessingPipeline | None = None
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
+
+
+@dataclass(frozen=True)
+class _PostureComponents:
+    depth_estimator: DepthEstimator | None
+    posture_strategy: RTMPosePostureStrategy | FusedPostureStrategy
+
+
+async def _build_posture_components(
+    s: Settings,
+    triton_client: TritonClientProtocol | None,
+) -> _PostureComponents:
+    """Build posture dependencies from the single depth slow-path flag."""
+    fast_strategy = RTMPosePostureStrategy()
+    if not s.as_bool("pipeline.posture.depth_slow_path_enabled") or triton_client is None:
+        return _PostureComponents(
+            depth_estimator=None,
+            posture_strategy=fast_strategy,
+        )
+
+    depth_model_name = s.as_str("triton.depth_model")
+    if not await triton_client.is_model_ready(depth_model_name):
+        logger.warning(
+            "depth_model_not_ready",
+            model=depth_model_name,
+            hint="export_depth_anything_v2.py must be run to produce model.onnx",
+        )
+        return _PostureComponents(
+            depth_estimator=None,
+            posture_strategy=fast_strategy,
+        )
+
+    depth_estimator = DepthEstimator(
+        triton_client,
+        model_name=depth_model_name,
+    )
+    posture_strategy = FusedPostureStrategy(
+        fast=fast_strategy,
+        slow=DepthPostureStrategy(depth_estimator),
+        slow_path_min_interval_s=s.as_float("pipeline.posture.depth_slow_path_min_interval_s"),
+        slow_path_max_age_s=s.as_float("pipeline.posture.depth_slow_path_max_age_s"),
+    )
+    logger.info(
+        "Posture strategy: fused (RTMPose + Depth slow-path)",
+        slow_path_interval_s=s.as_float("pipeline.posture.depth_slow_path_min_interval_s"),
+    )
+    return _PostureComponents(
+        depth_estimator=depth_estimator,
+        posture_strategy=posture_strategy,
+    )
 
 
 def _normalize_dsn(dsn: str) -> str:
@@ -471,9 +522,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     reid_model_name = settings.as_str("triton.reid_model")
     pose_enabled = settings.as_bool("triton.pose_enabled")
     pose_model_name = settings.as_str("triton.pose_model")
-    depth_enabled = settings.as_bool("triton.depth_enabled")
-    depth_model_name = settings.as_str("triton.depth_model")
-    depth_estimator: DepthEstimator | None = None
+    _triton_client = None
     if triton_url:
         startup_wait_s = settings.as_int("triton.startup_wait_s")
         startup_retry_s = settings.as_int("triton.startup_retry_interval_s")
@@ -523,18 +572,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     _triton_client,
                     model_name=pose_model_name,
                 )
-            if depth_enabled:
-                if await _triton_client.is_model_ready(depth_model_name):
-                    depth_estimator = DepthEstimator(
-                        _triton_client,
-                        model_name=depth_model_name,
-                    )
-                else:
-                    logger.warning(
-                        "depth_model_not_ready",
-                        model=depth_model_name,
-                        hint="export_depth_anything_v2.py must be run to produce model.onnx",
-                    )
+
+    posture_components = await _build_posture_components(settings, _triton_client)
+    depth_estimator = posture_components.depth_estimator
+    posture_strategy = posture_components.posture_strategy
 
     # -- MinIO --
     minio_endpoint = settings.as_str("minio.endpoint")
@@ -570,29 +611,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         set_auto_calibration_context(auto_calibrator=None, frame_fetcher=_frame_fetcher)
         logger.info("auto_calibrator_disabled", reason="triton_not_connected_or_depth_disabled")
 
-    # -- Wire posture strategy --
-    fast_strategy = RTMPosePostureStrategy()
-
-    depth_slow_path_enabled = settings.as_bool("pipeline.posture.depth_slow_path_enabled")
-
-    if depth_estimator is not None and depth_slow_path_enabled:
-        slow_strategy = DepthPostureStrategy(depth_estimator)
-        posture_strategy: RTMPosePostureStrategy | FusedPostureStrategy = FusedPostureStrategy(
-            fast=fast_strategy,
-            slow=slow_strategy,
-            slow_path_min_interval_s=settings.as_float(
-                "pipeline.posture.depth_slow_path_min_interval_s"
-            ),
-            slow_path_max_age_s=settings.as_float("pipeline.posture.depth_slow_path_max_age_s"),
-        )
-        logger.info(
-            "Posture strategy: fused (RTMPose + Depth slow-path)",
-            slow_path_interval_s=settings.as_float(
-                "pipeline.posture.depth_slow_path_min_interval_s"
-            ),
-        )
-    else:
-        posture_strategy = fast_strategy
+    if depth_estimator is None:
         logger.info("Posture strategy: RTMPose only (depth slow-path disabled)")
 
     # -- PH repository (Postgres or in-memory fallback) --

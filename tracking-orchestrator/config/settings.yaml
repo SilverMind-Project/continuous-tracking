@@ -43,9 +43,7 @@ triton:
   reid_model: reid-solider
   pose_model: pose-rtmpose
   pose_enabled: true
-  # Reserved for future depth slow-path. See TD-008.
-  depth_enabled: true
-  # Reserved for future depth slow-path. See TD-008.
+  # Model address used only when pipeline.posture.depth_slow_path_enabled is true.
   depth_model: depth-anything-v2
   timeout_ms: 5000
   startup_wait_s: 120
@@ -239,7 +237,7 @@ pipeline:
   # Inference still runs every frame; this caps only the UI-facing stream.
   live_publish_max_hz: 3.0
 
-  # Reserved for future depth slow-path. See TD-008.
+  # Single switch for depth client construction and the future TD-008 slow-path.
   posture:
     # Read by: main.py → DepthPostureStrategy / FusedPostureStrategy
     depth_slow_path_enabled: false

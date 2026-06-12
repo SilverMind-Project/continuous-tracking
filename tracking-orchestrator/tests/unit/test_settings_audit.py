@@ -31,7 +31,6 @@ ENV_FOR_SETTINGS = {
 }
 
 INACTIVE_RESERVED = {
-    "triton.depth_enabled",
     "triton.depth_model",
     "pipeline.posture.depth_slow_path_enabled",
     "pipeline.posture.depth_slow_path_min_interval_s",
@@ -113,7 +112,6 @@ def test_no_dead_settings() -> None:
     removed_world_tracker_key = "evidence" + "_window_s"
     assert removed_world_tracker_key not in data["world_tracker"]
     assert {
-        "triton.depth_enabled",
         "triton.depth_model",
         "pipeline.posture.depth_slow_path_enabled",
         "pipeline.posture.depth_slow_path_min_interval_s",
