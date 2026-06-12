@@ -54,6 +54,8 @@ from .routers.live import router as live_router
 from .routers.live import set_context as set_live_context
 from .routers.ph import router as ph_router
 from .routers.ph import set_ph_repository, set_revision_publisher
+from .routers.gait import router as gait_router
+from .routers.gait import set_context as set_gait_context
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
 from .sampling.keyframe_sampler import SamplerConfig
@@ -778,6 +780,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if trajectory_repo is not None:
         set_trajectory_context(trajectory_repo=trajectory_repo)
 
+    if gait_daily_repo is not None:
+        set_gait_context(gait_daily_repo=gait_daily_repo)
+
     if gallery_repo is not None:
         gallery_router_mod.set_context(gallery_repo=gallery_repo, reid_embedder=reid_embedder)
 
@@ -859,6 +864,7 @@ def create_app() -> FastAPI:
     app.include_router(live_router)
     app.include_router(ph_router)
     app.include_router(trajectory_router)
+    app.include_router(gait_router)
 
     @app.get("/health")
     async def health() -> dict[str, object]:
