@@ -49,13 +49,13 @@ from .routers.calibration import set_auto_calibration_context
 from .routers.corrections import router as corrections_router
 from .routers.corrections import set_context as set_corrections_context
 from .routers.dashboard import router as dashboard_router
+from .routers.gait import router as gait_router
+from .routers.gait import set_context as set_gait_context
 from .routers.gallery import router as gallery_router
 from .routers.live import router as live_router
 from .routers.live import set_context as set_live_context
 from .routers.ph import router as ph_router
 from .routers.ph import set_ph_repository, set_revision_publisher
-from .routers.gait import router as gait_router
-from .routers.gait import set_context as set_gait_context
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
 from .sampling.keyframe_sampler import SamplerConfig
