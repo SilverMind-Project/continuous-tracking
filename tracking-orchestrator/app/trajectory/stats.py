@@ -54,6 +54,36 @@ def robust_z(value: float, samples: list[float]) -> RobustZ:
     )
 
 
+def weighted_median(values: list[float], weights: list[float]) -> float:
+    """Duration-weighted median of a non-empty parallel list of values and weights.
+
+    Sorts values by value, accumulates weights, and returns the value at the
+    50th percentile of cumulative weight.  Equal to the ordinary median when all
+    weights are identical.
+
+    Raises ValueError on empty input or mismatched lengths.
+    """
+    if not values:
+        raise ValueError("weighted_median requires at least one value")
+    if len(values) != len(weights):
+        raise ValueError("values and weights must have the same length")
+
+    total = sum(weights)
+    if total <= 0:
+        # Fall back to unweighted median when all weights are zero/negative.
+        return float(np.median(np.array(values, dtype=np.float64)))
+
+    pairs = sorted(zip(values, weights, strict=True), key=lambda p: p[0])
+    half = total / 2.0
+    cumulative = 0.0
+    for v, w in pairs:
+        cumulative += w
+        if cumulative >= half:
+            return v
+    # Should be unreachable; return last value as safety fallback.
+    return pairs[-1][0]
+
+
 def ewma(samples: list[float], halflife: float) -> float:
     """Exponentially-weighted moving average.
 

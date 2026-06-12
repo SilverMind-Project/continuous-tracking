@@ -275,6 +275,25 @@ CREATE INDEX IF NOT EXISTS idx_gait_bouts_identity
     ON gait_bouts (identity_id, started_at DESC);
 
 -- =============================================================================
+-- Gait daily: per-resident per-local-date walking summaries computed by
+-- GaitAggregator.  One row per (identity_id, local_date); upserted hourly.
+-- median_speed_m_s is the duration-weighted median of bout median speeds.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS gait_daily (
+    identity_id        TEXT NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
+    local_date         DATE NOT NULL,
+    bout_count         INTEGER NOT NULL,
+    total_walking_s    DOUBLE PRECISION NOT NULL,
+    total_distance_m   DOUBLE PRECISION NOT NULL,
+    median_speed_m_s   DOUBLE PRECISION NOT NULL,
+    mad_speed_m_s      DOUBLE PRECISION NOT NULL,
+    p95_speed_m_s      DOUBLE PRECISION NOT NULL,
+    sample_bout_ids    TEXT[] NOT NULL DEFAULT '{}',
+    computed_at        TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (identity_id, local_date)
+);
+
+-- =============================================================================
 -- Tagged keyframes: periodic and triggered frame samples with annotations.
 -- ph_id: FK to person_hypotheses (replaces tracklet_id and global_track_id).
 -- =============================================================================

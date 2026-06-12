@@ -97,4 +97,7 @@ async def db_pool(migrated_postgres_url: str) -> asyncpg.Pool:
             await conn.execute("TRUNCATE continuous_tracking.world_observations CASCADE")
             await conn.execute("TRUNCATE continuous_tracking.ph_revisions CASCADE")
             await conn.execute("TRUNCATE continuous_tracking.ph_merges CASCADE")
+            await conn.execute("TRUNCATE continuous_tracking.gait_bouts CASCADE")
+            await conn.execute("TRUNCATE continuous_tracking.gait_daily CASCADE")
+            await conn.execute("TRUNCATE continuous_tracking.identities CASCADE")
         await pool.close()

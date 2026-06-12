@@ -18,6 +18,12 @@ from ..domain import (
     WorldObservation,
 )
 from .annotations import BboxAnnotationRepository, InMemoryBboxAnnotationRepository
+from .gait import (
+    GaitBoutRepository,
+    GaitDailyRepository,
+    InMemoryGaitBoutRepository,
+    InMemoryGaitDailyRepository,
+)
 from .gallery import GalleryRepository, InMemoryGalleryRepository
 from .misc import (
     ActivityRepository,
@@ -40,7 +46,6 @@ from .signals import (
     InMemoryDementiaSignalRepository,
     StillnessEpisode,
 )
-from .gait import GaitBoutRepository, InMemoryGaitBoutRepository
 from .trajectory import (
     InMemoryKeyframeRepository,
     InMemoryTrajectoryRepository,
@@ -900,6 +905,8 @@ __all__ = [
     "CorrectionRepository",
     "DailyWindowSample",
     "DementiaSignalRepository",
+    "GaitBoutRepository",
+    "GaitDailyRepository",
     "GalleryRepository",
     "HourlyActivitySummary",
     "InMemoryActivityRepository",
@@ -910,6 +917,8 @@ __all__ = [
     "InMemoryCoPresenceRepository",
     "InMemoryCorrectionRepository",
     "InMemoryDementiaSignalRepository",
+    "InMemoryGaitBoutRepository",
+    "InMemoryGaitDailyRepository",
     "InMemoryGalleryRepository",
     "InMemoryKeyframeRepository",
     "InMemoryPHRepository",

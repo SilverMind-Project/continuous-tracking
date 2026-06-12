@@ -1,6 +1,6 @@
-"""Integration tests for PostgresGaitBoutRepository.
+"""Integration tests for PostgresGaitBoutRepository and PostgresGaitDailyRepository.
 
-Proves InMemory and Postgres behave identically across the full list_bouts
+Proves InMemory and Postgres behave identically across the full repository
 interface.  Runs against a real testcontainer (migrated schema).
 Marked @pytest.mark.integration — skipped by make check, included by make ci.
 """
@@ -8,14 +8,14 @@ Marked @pytest.mark.integration — skipped by make check, included by make ci.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import asyncpg
 import pytest
 
-from app.storage.gait import InMemoryGaitBoutRepository
-from app.storage.postgres.gait_repo import PostgresGaitBoutRepository
-from app.trajectory.gait import WalkingBout
+from app.storage.gait import InMemoryGaitBoutRepository, InMemoryGaitDailyRepository
+from app.storage.postgres.gait_repo import PostgresGaitBoutRepository, PostgresGaitDailyRepository
+from app.trajectory.gait import GaitDailyRecord, WalkingBout
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -202,3 +202,164 @@ class TestGaitBoutRepoParity:
 
         assert mem[0].rooms == bout.rooms
         assert pg[0].rooms == bout.rooms
+
+
+# ---------------------------------------------------------------------------
+# GaitDailyRepository parity
+# ---------------------------------------------------------------------------
+
+_DATE_1 = date(2026, 1, 14)
+_DATE_2 = date(2026, 1, 15)
+_DATE_3 = date(2026, 1, 16)
+
+
+def _daily(identity_id: str, local_date: date, bout_count: int = 4) -> GaitDailyRecord:
+    return GaitDailyRecord(
+        identity_id=identity_id,
+        local_date=local_date,
+        bout_count=bout_count,
+        total_walking_s=bout_count * 30.0,
+        total_distance_m=bout_count * 20.0,
+        median_speed_m_s=0.65,
+        mad_speed_m_s=0.05,
+        p95_speed_m_s=0.85,
+        sample_bout_ids=[str(uuid.uuid4()) for _ in range(bout_count)],
+        computed_at=_T0,
+    )
+
+
+@pytest.fixture
+def inmemory_daily_repo() -> InMemoryGaitDailyRepository:
+    return InMemoryGaitDailyRepository()
+
+
+@pytest.fixture
+async def postgres_daily_repo(db_pool: asyncpg.Pool) -> PostgresGaitDailyRepository:
+    async with db_pool.acquire() as conn:
+        for identity_id in {ALICE, BOB}:
+            await _ensure_identity(conn, identity_id)
+    return PostgresGaitDailyRepository(db_pool)
+
+
+DAILY_SCENARIO = [
+    _daily(ALICE, _DATE_1, bout_count=5),
+    _daily(ALICE, _DATE_2, bout_count=3),
+    _daily(BOB, _DATE_2, bout_count=6),
+    _daily(BOB, _DATE_3, bout_count=4),
+]
+
+
+async def _seed_daily(
+    repo: InMemoryGaitDailyRepository | PostgresGaitDailyRepository,
+) -> None:
+    for record in DAILY_SCENARIO:
+        await repo.upsert_day(record)
+
+
+@pytest.mark.integration
+class TestGaitDailyRepoParity:
+    """InMemory and Postgres must return identical results for every query."""
+
+    async def test_list_all_for_identity(
+        self,
+        inmemory_daily_repo: InMemoryGaitDailyRepository,
+        postgres_daily_repo: PostgresGaitDailyRepository,
+    ) -> None:
+        await _seed_daily(inmemory_daily_repo)
+        await _seed_daily(postgres_daily_repo)
+
+        mem = await inmemory_daily_repo.list_days(ALICE)
+        pg = await postgres_daily_repo.list_days(ALICE)
+
+        assert len(mem) == len(pg) == 2
+        assert all(r.identity_id == ALICE for r in mem)
+        assert all(r.identity_id == ALICE for r in pg)
+
+    async def test_date_filter_since(
+        self,
+        inmemory_daily_repo: InMemoryGaitDailyRepository,
+        postgres_daily_repo: PostgresGaitDailyRepository,
+    ) -> None:
+        await _seed_daily(inmemory_daily_repo)
+        await _seed_daily(postgres_daily_repo)
+
+        mem = await inmemory_daily_repo.list_days(ALICE, since=_DATE_2)
+        pg = await postgres_daily_repo.list_days(ALICE, since=_DATE_2)
+
+        assert len(mem) == len(pg) == 1
+        assert mem[0].local_date == _DATE_2
+        assert pg[0].local_date == _DATE_2
+
+    async def test_date_filter_until(
+        self,
+        inmemory_daily_repo: InMemoryGaitDailyRepository,
+        postgres_daily_repo: PostgresGaitDailyRepository,
+    ) -> None:
+        await _seed_daily(inmemory_daily_repo)
+        await _seed_daily(postgres_daily_repo)
+
+        mem = await inmemory_daily_repo.list_days(ALICE, until=_DATE_1)
+        pg = await postgres_daily_repo.list_days(ALICE, until=_DATE_1)
+
+        assert len(mem) == len(pg) == 1
+        assert mem[0].local_date == _DATE_1
+        assert pg[0].local_date == _DATE_1
+
+    async def test_sorted_oldest_first(
+        self,
+        inmemory_daily_repo: InMemoryGaitDailyRepository,
+        postgres_daily_repo: PostgresGaitDailyRepository,
+    ) -> None:
+        await _seed_daily(inmemory_daily_repo)
+        await _seed_daily(postgres_daily_repo)
+
+        for repo in (inmemory_daily_repo, postgres_daily_repo):
+            rows = await repo.list_days(ALICE)
+            dates = [r.local_date for r in rows]
+            assert dates == sorted(dates), "list_days must return oldest-first"
+
+    async def test_upsert_overwrites(
+        self,
+        inmemory_daily_repo: InMemoryGaitDailyRepository,
+        postgres_daily_repo: PostgresGaitDailyRepository,
+    ) -> None:
+        original = _daily(ALICE, _DATE_1, bout_count=5)
+        updated = _daily(ALICE, _DATE_1, bout_count=9)
+
+        for repo in (inmemory_daily_repo, postgres_daily_repo):
+            await repo.upsert_day(original)
+            await repo.upsert_day(updated)
+
+        mem = await inmemory_daily_repo.list_days(ALICE, since=_DATE_1, until=_DATE_1)
+        pg = await postgres_daily_repo.list_days(ALICE, since=_DATE_1, until=_DATE_1)
+
+        assert len(mem) == len(pg) == 1
+        assert mem[0].bout_count == 9
+        assert pg[0].bout_count == 9
+
+    async def test_sample_bout_ids_round_trip(
+        self,
+        inmemory_daily_repo: InMemoryGaitDailyRepository,
+        postgres_daily_repo: PostgresGaitDailyRepository,
+    ) -> None:
+        ids = [str(uuid.uuid4()) for _ in range(3)]
+        record = GaitDailyRecord(
+            identity_id=ALICE,
+            local_date=_DATE_3,
+            bout_count=3,
+            total_walking_s=90.0,
+            total_distance_m=60.0,
+            median_speed_m_s=0.7,
+            mad_speed_m_s=0.04,
+            p95_speed_m_s=0.9,
+            sample_bout_ids=ids,
+            computed_at=_T0,
+        )
+        await inmemory_daily_repo.upsert_day(record)
+        await postgres_daily_repo.upsert_day(record)
+
+        mem = await inmemory_daily_repo.list_days(ALICE, since=_DATE_3)
+        pg = await postgres_daily_repo.list_days(ALICE, since=_DATE_3)
+
+        assert mem[0].sample_bout_ids == ids
+        assert pg[0].sample_bout_ids == ids

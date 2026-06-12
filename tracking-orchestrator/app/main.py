@@ -64,6 +64,7 @@ from .services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
 from .storage.migrations import MigrationRunner
 from .storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
 from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
+from .storage.postgres.gait_repo import PostgresGaitDailyRepository
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
 from .storage.postgres.ph_repo import PostgresPHRepository
@@ -388,6 +389,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             refresh_interval_s=settings.as_float("pipeline.adaptive_reid.refresh_interval_s"),
             proximity_gate_m=settings.as_float("pipeline.adaptive_reid.proximity_gate_m"),
         ),
+        gait_aggregate_interval_s=settings.as_int("gait.aggregate_interval_s"),
+        gait_min_daily_bouts=settings.as_int("gait.min_daily_bouts"),
+        gait_min_daily_walking_s=settings.as_float("gait.min_daily_walking_s"),
     )
     _pipeline = FrameProcessingPipeline(config)
 
@@ -423,6 +427,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings_repo = PostgresSettingsRepository(_pool)
         bbox_repo = PostgresBboxAnnotationRepository(_pool)
         baseline_repo = PostgresBehaviorBaselineRepository(_pool)
+        gait_daily_repo = PostgresGaitDailyRepository(_pool)
     else:
         gallery_repo = None
         trajectory_repo = None
@@ -431,6 +436,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings_repo = None
         bbox_repo = None
         baseline_repo = None
+        gait_daily_repo = None
 
     # -- Triton --
     triton_url = settings.as_str("triton.url")
@@ -629,6 +635,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         copresence_repo=copresence_repo_obj,
         overlap_groups=declared_overlap_groups,
         baseline_repo=baseline_repo,
+        gait_daily_repo=gait_daily_repo,
     )
     await _pipeline.initialize(deps)
 

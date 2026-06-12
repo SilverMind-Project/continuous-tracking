@@ -20,8 +20,13 @@ from __future__ import annotations
 
 import math
 import uuid
+import zoneinfo
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..storage.gait import GaitBoutRepository, GaitDailyRepository
 
 # UUID namespace for stable bout IDs — arbitrary fixed UUID.
 _BOUT_NAMESPACE = uuid.UUID("a3e4f8c2-1b5d-4e7a-9f6c-2d0b3e8a1c5f")
@@ -48,9 +53,25 @@ class WalkingBout:
         return str(uuid.uuid5(_BOUT_NAMESPACE, key))
 
 
+@dataclass(frozen=True)
+class GaitDailyRecord:
+    """One day's aggregated gait statistics for one resident."""
+
+    identity_id: str
+    local_date: date
+    bout_count: int
+    total_walking_s: float
+    total_distance_m: float
+    median_speed_m_s: float
+    mad_speed_m_s: float
+    p95_speed_m_s: float
+    sample_bout_ids: list[str]
+    computed_at: datetime
+
+
 @dataclass
 class GaitConfig:
-    """Tunable thresholds for the WalkingBoutSegmenter."""
+    """Tunable thresholds for the WalkingBoutSegmenter and GaitAggregator."""
 
     bout_min_speed_m_s: float = 0.3
     bout_min_duration_s: float = 3.0
@@ -58,6 +79,14 @@ class GaitConfig:
     max_plausible_speed_m_s: float = 2.5
     # Bouts with median below this are discarded as standing-drift.
     min_median_speed_m_s: float = 0.2
+    # Aggregator: how often to recompute daily summaries (seconds).
+    aggregate_interval_s: int = 3600
+    # Aggregator: minimum bouts / walking seconds to treat a day as data-rich.
+    # A day below these thresholds still gets a row; the trend detector gates on it.
+    min_daily_bouts: int = 3
+    min_daily_walking_s: float = 60.0
+    # Aggregator: deployment timezone for local-date bucketing.
+    tz_name: str = "UTC"
 
 
 @dataclass
@@ -240,3 +269,105 @@ def _percentile(values: list[float], pct: int) -> float:
     # Nearest-rank: index = ceil(pct/100 * n) - 1, clamped.
     idx = max(0, min(n - 1, math.ceil(pct / 100.0 * n) - 1))
     return sorted_vals[idx]
+
+
+def _mad(values: list[float]) -> float:
+    """Median absolute deviation of a non-empty list."""
+    if not values:
+        return 0.0
+    med = _percentile(sorted(values), 50)
+    return _percentile([abs(v - med) for v in values], 50)
+
+
+class GaitAggregator:
+    """Recompute gait_daily rows for today and yesterday (local time).
+
+    Called from the existing _signal_loop in frame_pipeline.py at
+    ``gait.aggregate_interval_s`` cadence.  Uses the last-run timestamp tracked
+    internally so the same scheduler loop drives both signal computation and gait
+    aggregation without spawning a second asyncio task.
+    """
+
+    def __init__(
+        self,
+        bout_repo: GaitBoutRepository,
+        daily_repo: GaitDailyRepository,
+        config: GaitConfig | None = None,
+    ) -> None:
+        self._bout_repo = bout_repo
+        self._daily_repo = daily_repo
+        self._cfg = config or GaitConfig()
+        self._tz = zoneinfo.ZoneInfo(self._cfg.tz_name)
+        self._last_run_at: datetime | None = None
+
+    def due(self, now: datetime) -> bool:
+        """Return True if the aggregator interval has elapsed since last run."""
+        if self._last_run_at is None:
+            return True
+        elapsed = (now - self._last_run_at).total_seconds()
+        return elapsed >= self._cfg.aggregate_interval_s
+
+    async def run_once(self, now: datetime) -> None:
+        """Recompute today and yesterday for every identity with bouts in range.
+
+        ``now`` is a UTC datetime.  Local dates are derived from the configured
+        timezone so that a midnight boundary in America/New_York does not split
+        an evening session across two UTC days.
+        """
+        from datetime import UTC, timedelta
+
+        self._last_run_at = now
+
+        local_now = now.astimezone(self._tz)
+        today = local_now.date()
+        yesterday = today - timedelta(days=1)
+
+        # Window: midnight of yesterday (local) to now.
+        yesterday_start_local = datetime(
+            yesterday.year, yesterday.month, yesterday.day, tzinfo=self._tz
+        )
+        since = yesterday_start_local.astimezone(UTC)
+        until = now
+
+        bouts = await self._bout_repo.list_bouts(after=since, before=until, limit=50_000)
+
+        # Group by (identity_id, local_date).
+        grouped: dict[tuple[str, date], list[WalkingBout]] = {}
+        for bout in bouts:
+            local_date = bout.started_at.astimezone(self._tz).date()
+            if local_date not in (today, yesterday):
+                continue
+            grouped.setdefault((bout.identity_id, local_date), []).append(bout)
+
+        for (identity_id, local_date), day_bouts in grouped.items():
+            record = self._aggregate(identity_id, local_date, day_bouts, now)
+            await self._daily_repo.upsert_day(record)
+
+    def _aggregate(
+        self,
+        identity_id: str,
+        local_date: date,
+        bouts: list[WalkingBout],
+        computed_at: datetime,
+    ) -> GaitDailyRecord:
+        from .stats import weighted_median
+
+        speeds = [b.median_speed_m_s for b in bouts]
+        weights = [b.duration_s for b in bouts]
+
+        med_speed = weighted_median(speeds, weights) if speeds else 0.0
+        mad_speed = _mad(speeds)
+        p95_speed = _percentile(speeds, 95)
+
+        return GaitDailyRecord(
+            identity_id=identity_id,
+            local_date=local_date,
+            bout_count=len(bouts),
+            total_walking_s=sum(b.duration_s for b in bouts),
+            total_distance_m=sum(b.distance_m for b in bouts),
+            median_speed_m_s=med_speed,
+            mad_speed_m_s=mad_speed,
+            p95_speed_m_s=p95_speed,
+            sample_bout_ids=[b.bout_id for b in bouts],
+            computed_at=computed_at,
+        )

@@ -430,6 +430,12 @@ gait:
   bout_min_duration_s: 3.0
   bout_close_grace_s: 2.0
   max_plausible_speed_m_s: 2.5
+  # Aggregator: recompute today + yesterday daily summaries every hour.
+  aggregate_interval_s: 3600
+  # Aggregator: minimum bouts / walking seconds for the trend detector to treat
+  # a day as data-rich.  Sparse days still get a row; the signal gates on this.
+  min_daily_bouts: 3
+  min_daily_walking_s: 60
 
 # Environment label (dev / staging / production)
 env: production

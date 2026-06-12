@@ -69,11 +69,13 @@ from ..storage.base import (
     CoPresenceRepository,
     DementiaSignalRepository,
     GaitBoutRepository,
+    GaitDailyRepository,
     GalleryRepository,
     InMemoryBboxAnnotationRepository,
     InMemoryBehaviorBaselineRepository,
     InMemoryDementiaSignalRepository,
     InMemoryGaitBoutRepository,
+    InMemoryGaitDailyRepository,
     InMemoryGalleryRepository,
     InMemoryKeyframeRepository,
     InMemoryPHRepository,
@@ -93,7 +95,7 @@ from ..tracking.world.config import WorldTrackerConfig
 from ..tracking.world.tracker import WorldTracker
 from ..trajectory.dementia_signals import DementiaSignalWorker
 from ..trajectory.dementia_signals import SignalConfig as DementiaSignalConfig
-from ..trajectory.gait import GaitConfig, WalkingBoutSegmenter
+from ..trajectory.gait import GaitAggregator, GaitConfig, WalkingBoutSegmenter
 from ..trajectory.motion_energy import MotionEnergyTracker
 from ..trajectory.posture import GlobalPostureTracker
 from ..trajectory.posture_strategy import PostureStrategy
@@ -206,6 +208,7 @@ class PipelineDependencies:
     overlap_groups: list[OverlapGroup] | None = None
     baseline_repo: BehaviorBaselineRepository | None = None
     gait_bout_repo: GaitBoutRepository | None = None
+    gait_daily_repo: GaitDailyRepository | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -261,6 +264,11 @@ class PipelineConfig:
 
     # --- Adaptive ReID cadence (M5.1) ---
     adaptive_reid: AdaptiveReidConfig = field(default_factory=AdaptiveReidConfig)
+
+    # --- Gait daily aggregation (M3.2) ---
+    gait_aggregate_interval_s: int = 3600
+    gait_min_daily_bouts: int = 3
+    gait_min_daily_walking_s: float = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +351,8 @@ class FrameProcessingPipeline:
         self._fall_detection_stage: FallDetectionStage | None = None
         self._gait_segmenter: WalkingBoutSegmenter | None = None
         self._gait_bout_repo: GaitBoutRepository | None = None
+        self._gait_daily_repo: GaitDailyRepository | None = None
+        self._gait_aggregator: GaitAggregator | None = None
         self._stage_runner: StageRunner | None = None
         self._post_detect_runner: StageRunner | None = None
         self._pre_world_runner: StageRunner | None = None
@@ -456,10 +466,24 @@ class FrameProcessingPipeline:
         _traj_repo = deps.trajectory_repo or InMemoryTrajectoryRepository()
         self._trajectory_writer = TrajectoryWriter(repo=_traj_repo)
 
-        # Gait bout segmenter and repository (enabled by default; adds only
-        # arithmetic + one insert per bout, no behavioural risk).
+        # Gait bout segmenter, daily aggregator, and their repositories.
+        # Segmenter adds only arithmetic + one insert per bout (no behavioural risk).
+        # Aggregator runs inside _signal_loop at gait.aggregate_interval_s cadence
+        # so no additional asyncio task is created.
         self._gait_bout_repo = deps.gait_bout_repo or InMemoryGaitBoutRepository()
-        self._gait_segmenter = WalkingBoutSegmenter(GaitConfig())
+        self._gait_daily_repo = deps.gait_daily_repo or InMemoryGaitDailyRepository()
+        gait_cfg = GaitConfig(
+            tz_name=self._config.signals.timezone,
+            aggregate_interval_s=self._config.gait_aggregate_interval_s,
+            min_daily_bouts=self._config.gait_min_daily_bouts,
+            min_daily_walking_s=self._config.gait_min_daily_walking_s,
+        )
+        self._gait_segmenter = WalkingBoutSegmenter(gait_cfg)
+        self._gait_aggregator = GaitAggregator(
+            bout_repo=self._gait_bout_repo,
+            daily_repo=self._gait_daily_repo,
+            config=gait_cfg,
+        )
 
         keyframe_repo = deps.keyframe_repo or InMemoryKeyframeRepository(bbox_repo=self._bbox_repo)
         self._keyframe_sampler = KeyframeSampler(
@@ -777,7 +801,15 @@ class FrameProcessingPipeline:
         logger.info("Consume loop stopped")
 
     async def _signal_loop(self) -> None:
-        """Periodic dementia signal computation loop."""
+        """Periodic dementia signal computation and gait aggregation loop.
+
+        One scheduler loop drives two jobs:
+          1. DementiaSignalWorker.run_once()  — every signals.interval_s (default 60 s)
+          2. GaitAggregator.run_once()        — every gait.aggregate_interval_s (default 3600 s)
+
+        The GaitAggregator tracks its own last-run timestamp internally via
+        GaitAggregator.due(), so no second asyncio task is needed.
+        """
         assert self._signal_worker is not None
         assert self._signal_publisher is not None
 
@@ -795,9 +827,12 @@ class FrameProcessingPipeline:
                     first_run = False
                 if self._stop_event.is_set():
                     break
-                signals = await self._signal_worker.run_once(now=datetime.now(UTC))
+                now = datetime.now(UTC)
+                signals = await self._signal_worker.run_once(now=now)
                 if signals:
                     await self._signal_publisher.publish_batch(signals)
+                if self._gait_aggregator is not None and self._gait_aggregator.due(now):
+                    await self._gait_aggregator.run_once(now=now)
             except asyncio.CancelledError:
                 break
             except Exception:
