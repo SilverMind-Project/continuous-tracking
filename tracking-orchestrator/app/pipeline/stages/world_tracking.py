@@ -7,7 +7,6 @@ Wires TransitDetector and RoomTransitionPublisher.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from structlog import get_logger
 
@@ -22,16 +21,11 @@ from ...domain import (
 from ...observability import metrics as _metrics
 from ...tracking.world.config import WorldTrackerConfig
 from ...tracking.world.tracker import WorldTracker, WorldTrackerResult
-from ...tracking.world.transit_detector import TransitDetector
-from ...transport.room_transition_publisher import RoomTransitionPublisher
 from ..frame_context import FrameContext
 from ..privacy import PrivacyZoneFilter
+from ..types import LiveConfigHolder
 from ._room_maps import camera_room_names, room_polygon_snapshot
 from .base import FrameStage
-
-if TYPE_CHECKING:
-    from ...services.camera_room_map import CameraRoomMap, RoomPolygonMap
-    from ...services.transit_zone_map import TransitZoneMap
 
 logger = get_logger(__name__)
 
@@ -99,13 +93,9 @@ class WorldTrackingStage(FrameStage):
     def __init__(
         self,
         tracker: WorldTracker,
-        camera_room_map: CameraRoomMap,
-        room_polygon_map: RoomPolygonMap,
+        live_config: LiveConfigHolder,
         config: WorldTrackerConfig | None = None,
         enabled: bool = True,
-        transit_detector: TransitDetector | None = None,
-        transit_zone_map: TransitZoneMap | None = None,
-        room_transition_publisher: RoomTransitionPublisher | None = None,
         assertion_cache: object | None = None,
         anchor_match_window_s: float = 30.0,
         anchor_match_distance_m: float = 5.0,
@@ -113,12 +103,8 @@ class WorldTrackingStage(FrameStage):
     ) -> None:
         self._tracker = tracker
         self._config = config or WorldTrackerConfig()
-        self._room_polygon_map = room_polygon_map
-        self._camera_room_map = camera_room_map
+        self._live_config = live_config
         self._enabled = enabled
-        self._transit_detector = transit_detector
-        self._transit_zone_map = transit_zone_map
-        self._room_transition_publisher = room_transition_publisher
         self._assertion_cache = assertion_cache
         self._anchor_match_window_s = anchor_match_window_s
         self._anchor_match_distance_m = anchor_match_distance_m
@@ -165,12 +151,12 @@ class WorldTrackingStage(FrameStage):
         camera_ids = {ctx.frame.camera_id for ctx in contexts} | {
             obs.camera_id for obs in observations
         }
-        camera_room_map = await camera_room_names(self._camera_room_map, camera_ids)
+        camera_room_map = await camera_room_names(self._live_config.camera_room_map, camera_ids)
         for camera_id in sorted(camera_ids - set(camera_room_map)):
             if camera_id not in self._missing_room_binding_warnings:
                 self._missing_room_binding_warnings.add(camera_id)
                 logger.warning("world_tracking_camera_room_binding_missing", camera_id=camera_id)
-        room_polygons, room_names = await room_polygon_snapshot(self._room_polygon_map)
+        room_polygons, room_names = await room_polygon_snapshot(self._live_config.room_polygon_map)
 
         result = await self._tracker.step(
             observations=observations_with_faces,
@@ -381,21 +367,24 @@ class WorldTrackingStage(FrameStage):
         self, result: WorldTrackerResult, event_time: datetime
     ) -> None:
         # Detect transit zone crossings for each active PH.
+        transit_detector = self._live_config.transit_detector
+        transit_zone_map = self._live_config.transit_zone_map
+        room_transition_publisher = self._live_config.room_transition_publisher
         if (
-            self._transit_detector is None
-            or self._transit_zone_map is None
-            or self._room_transition_publisher is None
+            transit_detector is None
+            or transit_zone_map is None
+            or room_transition_publisher is None
         ):
             return
 
-        zones = await self._transit_zone_map.snapshot()
+        zones = await transit_zone_map.snapshot()
         if zones:
             # Build ph_id -> current_identity_id lookup for publishing.
             ph_identity: dict[str, str | None] = {
                 ph.ph_id: ph.current_identity_id for ph in result.updated_phs
             }
             for ph in result.updated_phs:
-                events = self._transit_detector.check(
+                events = transit_detector.check(
                     ph_id=ph.ph_id,
                     floor_x_m=ph.state_mean[0],
                     floor_y_m=ph.state_mean[1],
@@ -405,9 +394,7 @@ class WorldTrackingStage(FrameStage):
                 for event in events:
                     try:
                         identity_id = ph_identity.get(event.ph_id)
-                        await self._room_transition_publisher.publish(
-                            event, identity_id=identity_id
-                        )
+                        await room_transition_publisher.publish(event, identity_id=identity_id)
                     except Exception:
                         logger.exception(
                             "room_transition_publish_error",
@@ -419,7 +406,7 @@ class WorldTrackingStage(FrameStage):
         # which can at worst affect the first post-edit movement sample.
         for ph in result.updated_phs:
             if ph.closed_at is not None:
-                self._transit_detector.remove_ph(ph.ph_id)
+                transit_detector.remove_ph(ph.ph_id)
 
     @staticmethod
     def _populate_context(

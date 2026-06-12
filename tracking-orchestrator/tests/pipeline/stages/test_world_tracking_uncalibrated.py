@@ -111,6 +111,7 @@ async def test_world_tracking_stage_produces_observations_without_calibration():
     from app.domain import FloorPoint
     from app.pipeline.frame_context import FrameContext
     from app.pipeline.stages.world_tracking import WorldTrackingStage
+    from app.pipeline.types import LiveConfigHolder
     from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from app.transport.redis_streams import FrameReady
 
@@ -158,8 +159,7 @@ async def test_world_tracking_stage_produces_observations_without_calibration():
 
     stage = WorldTrackingStage(
         tracker=tracker_mock,
-        camera_room_map=CameraRoomMap(),
-        room_polygon_map=RoomPolygonMap(),
+        live_config=LiveConfigHolder(CameraRoomMap(), RoomPolygonMap()),
     )
     await stage.run(ctx)
 

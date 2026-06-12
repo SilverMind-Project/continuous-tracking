@@ -22,7 +22,12 @@ from app.pipeline.stages.revisions import RevisionsStage
 from app.pipeline.stages.spatial_projection import SpatialProjectionStage
 from app.pipeline.stages.trajectory import ClosePHStage, TrajectoryStage
 from app.pipeline.stages.world_tracking import WorldTrackingStage
+from app.pipeline.types import LiveConfigHolder
 from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+
+
+def _live_config() -> LiveConfigHolder:
+    return LiveConfigHolder(CameraRoomMap(), RoomPolygonMap())
 
 
 def _pre_world_stages() -> list:
@@ -45,7 +50,7 @@ def _post_world_stages() -> list:
             posture_tracker=None,  # type: ignore[arg-type]
             prev_active_ph_ids={},
         ),
-        PostureStage(camera_room_map=CameraRoomMap(), posture_strategy=None),  # type: ignore[arg-type]
+        PostureStage(live_config=_live_config(), posture_strategy=None),  # type: ignore[arg-type]
         TrajectoryStage(
             trajectory_writer=None,  # type: ignore[arg-type]
             floor_projector=None,  # type: ignore[arg-type]
@@ -64,7 +69,7 @@ def _post_world_stages() -> list:
             identity_rewrite_on_face_commit=True,
         ),
         TrailsStage(trail_by_tracklet={}, trail_maxlen=100),
-        PublishStage(transport=None, camera_room_map=CameraRoomMap()),  # type: ignore[arg-type]
+        PublishStage(transport=None, live_config=_live_config()),  # type: ignore[arg-type]
     ]
 
 
@@ -107,8 +112,7 @@ class TestStageRunnerSegments:
         post_world = _post_world_stages()
         world_stage = WorldTrackingStage(  # type: ignore[arg-type]
             tracker=None,
-            camera_room_map=CameraRoomMap(),
-            room_polygon_map=RoomPolygonMap(),
+            live_config=_live_config(),
             config=None,
         )
         all_post_detect = [*pre_world, world_stage, *post_world]

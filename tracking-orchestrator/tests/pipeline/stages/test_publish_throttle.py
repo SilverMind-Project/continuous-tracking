@@ -10,7 +10,8 @@ import pytest
 
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.publish import PublishStage
-from app.services.camera_room_map import CameraRoomMap
+from app.pipeline.types import LiveConfigHolder
+from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
 from app.transport.redis_streams import RedisStreamsTransport
 
 
@@ -38,8 +39,8 @@ def _make_ctx(camera_id: str = "cam-1") -> FrameContext:
     return ctx
 
 
-def _room_map() -> CameraRoomMap:
-    return CameraRoomMap()
+def _live_config() -> LiveConfigHolder:
+    return LiveConfigHolder(CameraRoomMap(), RoomPolygonMap())
 
 
 @pytest.mark.asyncio
@@ -48,7 +49,7 @@ async def test_publishes_first_frame():
     transport = MagicMock(spec=RedisStreamsTransport)
     transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, camera_room_map=_room_map(), live_publish_max_hz=3.0)
+    stage = PublishStage(transport=transport, live_config=_live_config(), live_publish_max_hz=3.0)
     ctx = _make_ctx("cam-1")
     await stage.run(ctx)
 
@@ -61,7 +62,7 @@ async def test_throttle_skips_intermediate_frames():
     transport = MagicMock(spec=RedisStreamsTransport)
     transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, camera_room_map=_room_map(), live_publish_max_hz=3.0)
+    stage = PublishStage(transport=transport, live_config=_live_config(), live_publish_max_hz=3.0)
     # Publish first frame.
     ctx1 = _make_ctx("cam-1")
     await stage.run(ctx1)
@@ -81,7 +82,7 @@ async def test_publishes_after_throttle_window_expires():
     transport = MagicMock(spec=RedisStreamsTransport)
     transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, camera_room_map=_room_map(), live_publish_max_hz=10.0)
+    stage = PublishStage(transport=transport, live_config=_live_config(), live_publish_max_hz=10.0)
     # Publish first frame.
     ctx1 = _make_ctx("cam-1")
     await stage.run(ctx1)
@@ -102,7 +103,7 @@ async def test_throttle_per_camera_independent():
     transport = MagicMock(spec=RedisStreamsTransport)
     transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, camera_room_map=_room_map(), live_publish_max_hz=3.0)
+    stage = PublishStage(transport=transport, live_config=_live_config(), live_publish_max_hz=3.0)
 
     # First frame for cam-1: published.
     await stage.run(_make_ctx("cam-1"))
@@ -117,7 +118,7 @@ async def test_zero_hz_disables_throttle():
     transport = MagicMock(spec=RedisStreamsTransport)
     transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, camera_room_map=_room_map(), live_publish_max_hz=0.0)
+    stage = PublishStage(transport=transport, live_config=_live_config(), live_publish_max_hz=0.0)
 
     # Two frames back-to-back, both should publish.
     await stage.run(_make_ctx("cam-1"))
@@ -131,6 +132,6 @@ async def test_default_max_hz_is_3():
     transport = MagicMock(spec=RedisStreamsTransport)
     transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, camera_room_map=_room_map())
+    stage = PublishStage(transport=transport, live_config=_live_config())
     assert stage._live_publish_max_hz == 3.0
     assert stage._throttle_interval_s == pytest.approx(1.0 / 3.0)

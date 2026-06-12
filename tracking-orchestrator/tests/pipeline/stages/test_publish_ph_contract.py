@@ -10,8 +10,13 @@ import pytest
 from app.domain import WorldFrameSnapshot
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.publish import PublishStage
-from app.services.camera_room_map import CameraRoomMap
+from app.pipeline.types import LiveConfigHolder
+from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
 from app.transport.redis_streams import RedisStreamsTransport
+
+
+def _live_config() -> LiveConfigHolder:
+    return LiveConfigHolder(CameraRoomMap(), RoomPolygonMap())
 
 
 def _make_snap(ph_id: str, identity_id: str | None = None) -> WorldFrameSnapshot:
@@ -59,7 +64,7 @@ async def test_publishes_identity_snapshots_for_known_and_unknown_phs():
     transport = MagicMock(spec=RedisStreamsTransport)
     transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, camera_room_map=CameraRoomMap())
+    stage = PublishStage(transport=transport, live_config=_live_config())
     ctx = _make_ctx(
         [
             _make_snap("ph-1", "alice"),
@@ -83,7 +88,7 @@ async def test_identities_built_from_snapshots():
     transport = MagicMock(spec=RedisStreamsTransport)
     transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, camera_room_map=CameraRoomMap())
+    stage = PublishStage(transport=transport, live_config=_live_config())
     ctx = _make_ctx([_make_snap("ph-1", "alice")])
     await stage.run(ctx)
 
@@ -99,7 +104,7 @@ async def test_wire_uses_ph_id_not_global_track_id():
     transport = MagicMock(spec=RedisStreamsTransport)
     transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, camera_room_map=CameraRoomMap())
+    stage = PublishStage(transport=transport, live_config=_live_config())
     ctx = _make_ctx([_make_snap("ph-a", "alice")])
     await stage.run(ctx)
 
@@ -120,7 +125,7 @@ async def test_identity_map_keyed_by_ph_id():
     transport = MagicMock(spec=RedisStreamsTransport)
     transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, camera_room_map=CameraRoomMap())
+    stage = PublishStage(transport=transport, live_config=_live_config())
     ctx = _make_ctx([_make_snap("ph-b", "bob")])
     await stage.run(ctx)
 

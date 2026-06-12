@@ -54,7 +54,14 @@ from ..pipeline.stages import (
     WorldTrackingStage,
 )
 from ..pipeline.stages._room_maps import camera_room_name
-from ..pipeline.types import FaceIdCameraConfig, FrameImageFetcher, ReidEmbedderProtocol
+from ..pipeline.types import (
+    FaceIdCameraConfig,
+    FrameImageFetcher,
+    LiveConfigHolder,
+    ReidEmbedderProtocol,
+    RoomTransitionPublisherProtocol,
+    TransitDetectorProtocol,
+)
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..services.camera_room_map import CameraRoomMap, RoomPolygonMap
 from ..services.identity_rewriter import (
@@ -360,8 +367,10 @@ class FrameProcessingPipeline:
         self._world_tracking_stage: WorldTrackingStage | None = None
         self._fetch_stage: FetchStage | None = None
         self._detect_stage: DetectStage | None = None
-        self._camera_room_map = CameraRoomMap()
-        self._room_polygon_map = RoomPolygonMap()
+        self._live_config = LiveConfigHolder(
+            camera_room_map=CameraRoomMap(),
+            room_polygon_map=RoomPolygonMap(),
+        )
 
     @property
     def is_running(self) -> bool:
@@ -578,8 +587,7 @@ class FrameProcessingPipeline:
         )
         world_tracking_stage = WorldTrackingStage(
             tracker=self._world_tracker,
-            camera_room_map=self._camera_room_map,
-            room_polygon_map=self._room_polygon_map,
+            live_config=self._live_config,
             config=self._config.world_tracker,
         )
 
@@ -646,7 +654,7 @@ class FrameProcessingPipeline:
                 gait_bout_repo=self._gait_bout_repo,
             ),
             PostureStage(
-                camera_room_map=self._camera_room_map,
+                live_config=self._live_config,
                 posture_strategy=self._posture_strategy,
             ),
             *([self._fall_detection_stage] if self._fall_detection_stage is not None else []),
@@ -675,7 +683,7 @@ class FrameProcessingPipeline:
             ),
             PublishStage(
                 transport=self._transport,
-                camera_room_map=self._camera_room_map,
+                live_config=self._live_config,
                 live_publish_max_hz=self._config.live_publish_max_hz,
             ),
         ]
@@ -1132,41 +1140,30 @@ class FrameProcessingPipeline:
         self._seen_cameras.add(camera_id)
 
     def set_camera_room_map(self, camera_room_map: CameraRoomMap) -> None:
-        """Inject the live CameraRoomMap into pipeline stages.
+        """Replace the live CameraRoomMap read by pipeline stages.
 
         Called at startup after the CCConfigSyncService is created.
         Stages that need room attribution read from this map.
         """
-        self._camera_room_map = camera_room_map
-        if self._stage_runner is None:
-            return
-        for stage in self._stage_runner._stages:
-            if hasattr(stage, "_camera_room_map"):
-                stage._camera_room_map = camera_room_map
+        self._live_config.camera_room_map = camera_room_map
 
     def set_room_polygon_map(self, room_polygon_map: RoomPolygonMap) -> None:
-        """Inject the live room polygon map into WorldTrackingStage."""
-        self._room_polygon_map = room_polygon_map
-        if self._world_tracking_stage is not None:
-            self._world_tracking_stage._room_polygon_map = room_polygon_map
+        """Replace the live room polygon map read by WorldTrackingStage."""
+        self._live_config.room_polygon_map = room_polygon_map
 
     def set_transit_config(
         self,
-        transit_detector: object,
+        transit_detector: TransitDetectorProtocol,
         transit_zone_map: TransitZoneMap,
-        room_transition_publisher: object,
+        room_transition_publisher: RoomTransitionPublisherProtocol,
     ) -> None:
-        """Inject transit zone dependencies into WorldTrackingStage.
+        """Replace transit dependencies read by WorldTrackingStage.
 
         Called at startup after the live transit-zone map is created.
         """
-        if self._stage_runner is not None:
-            for stage in self._stage_runner._stages:
-                if stage.name == "world_tracking":
-                    stage._transit_detector = transit_detector  # type: ignore[attr-defined]
-                    stage._transit_zone_map = transit_zone_map  # type: ignore[attr-defined]
-                    stage._room_transition_publisher = room_transition_publisher  # type: ignore[attr-defined]
-                    break
+        self._live_config.transit_detector = transit_detector
+        self._live_config.transit_zone_map = transit_zone_map
+        self._live_config.room_transition_publisher = room_transition_publisher
 
     def _begin_tracker_round(self) -> None:
         """Invalidate the gallery cache at the start of each tracker round.
@@ -1227,7 +1224,7 @@ class FrameProcessingPipeline:
         event_time = datetime.now(UTC)
 
         assert self._transport is not None
-        room_name = await camera_room_name(self._camera_room_map, frame.camera_id)
+        room_name = await camera_room_name(self._live_config.camera_room_map, frame.camera_id)
         await self._transport.publish_event(
             camera_id=frame.camera_id,
             event_time=event_time,

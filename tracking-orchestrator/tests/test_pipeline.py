@@ -6,7 +6,7 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -22,7 +22,11 @@ from app.pipeline.frame_pipeline import (
     PipelineDependencies,
     SignalConfig,
 )
-from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+from app.services.camera_room_map import (
+    CameraRoomBinding,
+    CameraRoomMap,
+    RoomPolygonMap,
+)
 from app.services.transit_zone_map import TransitZoneMap
 from app.transport.redis_streams import FrameReady
 
@@ -96,19 +100,49 @@ class TestPipelineSkeleton:
             assert pipeline._keyframe_sampler is not None  # M6
 
     @pytest.mark.asyncio
-    async def test_live_room_maps_are_injected_into_built_stages(
+    async def test_live_room_map_replacement_is_read_by_next_skeleton_frame(
         self, pipeline: FrameProcessingPipeline
     ) -> None:
-        """Startup live-map injection must update the already-built stage objects."""
-        with _mock_redis_deps():
+        """A stage/helper built before replacement must read the new live map."""
+        with _mock_redis_deps() as (mock_transport, _, _):
             await pipeline.initialize()
             camera_room_map = CameraRoomMap()
-            room_polygon_map = RoomPolygonMap()
-            transit_zone_map = TransitZoneMap()
-            transit_detector = object()
-            room_transition_publisher = object()
+            await camera_room_map.set_all(
+                [
+                    CameraRoomBinding(
+                        camera_id="cam-live",
+                        room_id="room-1",
+                        room_name="bedroom",
+                        bound_at=datetime.now(UTC),
+                    )
+                ]
+            )
 
             pipeline.set_camera_room_map(camera_room_map)
+            frame = FrameReady(
+                camera_id="cam-live",
+                minio_key="frames/cam-live/1.jpg",
+                frame_index=1,
+                capture_time_unix_ns=_NOW_NS,
+                received_time_unix_ns=_NOW_NS,
+                width=640,
+                height=480,
+            )
+            await pipeline._process_frame(frame)
+
+            assert mock_transport.publish_event.call_args.kwargs["room_name"] == "bedroom"
+
+    @pytest.mark.asyncio
+    async def test_live_config_setters_replace_holder_fields(
+        self, pipeline: FrameProcessingPipeline
+    ) -> None:
+        with _mock_redis_deps():
+            await pipeline.initialize()
+            room_polygon_map = RoomPolygonMap()
+            transit_zone_map = TransitZoneMap()
+            transit_detector = MagicMock()
+            room_transition_publisher = AsyncMock()
+
             pipeline.set_room_polygon_map(room_polygon_map)
             pipeline.set_transit_config(
                 transit_detector=transit_detector,
@@ -116,18 +150,10 @@ class TestPipelineSkeleton:
                 room_transition_publisher=room_transition_publisher,
             )
 
-            assert pipeline._world_tracking_stage is not None
-            assert pipeline._world_tracking_stage._camera_room_map is camera_room_map
-            assert pipeline._world_tracking_stage._room_polygon_map is room_polygon_map
-            assert pipeline._world_tracking_stage._transit_zone_map is transit_zone_map
-            assert pipeline._stage_runner is not None
-            mapped_stages = [
-                stage
-                for stage in pipeline._stage_runner._stages
-                if hasattr(stage, "_camera_room_map")
-            ]
-            assert mapped_stages
-            assert all(stage._camera_room_map is camera_room_map for stage in mapped_stages)
+            assert pipeline._live_config.room_polygon_map is room_polygon_map
+            assert pipeline._live_config.transit_detector is transit_detector
+            assert pipeline._live_config.transit_zone_map is transit_zone_map
+            assert pipeline._live_config.room_transition_publisher is room_transition_publisher
 
     @pytest.mark.asyncio
     async def test_skeleton_frame_processed(self, pipeline: FrameProcessingPipeline) -> None:

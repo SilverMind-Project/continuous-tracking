@@ -12,7 +12,12 @@ from app.domain import (
 )
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.publish import PublishStage
-from app.services.camera_room_map import CameraRoomMap
+from app.pipeline.types import LiveConfigHolder
+from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+
+
+def _live_config() -> LiveConfigHolder:
+    return LiveConfigHolder(CameraRoomMap(), RoomPolygonMap())
 
 
 def _make_snapshot(
@@ -83,7 +88,7 @@ class TestPublishIdentityFromSnapshots:
         ctx = _make_ctx(snapshots=[snap])
 
         transport = AsyncMock()
-        stage = PublishStage(transport=transport, camera_room_map=CameraRoomMap())
+        stage = PublishStage(transport=transport, live_config=_live_config())
         await stage.run(ctx)
 
         assert ctx.identities == {"ph-1": ("alice", 0.91)}
@@ -96,7 +101,7 @@ class TestPublishIdentityFromSnapshots:
         ctx = _make_ctx(snapshots=[snap_unknown, snap_none])
 
         transport = AsyncMock()
-        stage = PublishStage(transport=transport, camera_room_map=CameraRoomMap())
+        stage = PublishStage(transport=transport, live_config=_live_config())
         await stage.run(ctx)
 
         assert ctx.identities == {}
@@ -115,7 +120,7 @@ class TestPublishIdentityFromSnapshots:
         ctx = _make_ctx(snapshots=[snap], decisions=[decision])
 
         transport = AsyncMock()
-        stage = PublishStage(transport=transport, camera_room_map=CameraRoomMap())
+        stage = PublishStage(transport=transport, live_config=_live_config())
         await stage.run(ctx)
 
         assert ctx.identities["ph-1"] == ("alice", 0.8)

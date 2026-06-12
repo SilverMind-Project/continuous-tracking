@@ -12,7 +12,12 @@ from app.domain import BoundingBox, Detection
 from app.inference.schemas import COCO_KEYPOINTS, Keypoint, PoseResult
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.posture_stage import PostureStage
-from app.services.camera_room_map import CameraRoomBinding, CameraRoomMap
+from app.pipeline.types import LiveConfigHolder
+from app.services.camera_room_map import (
+    CameraRoomBinding,
+    CameraRoomMap,
+    RoomPolygonMap,
+)
 from app.trajectory.posture import (
     PostureScores,
     _score_upper_torso_lying,
@@ -33,6 +38,13 @@ async def _camera_room_map(camera_id: str, room_name: str) -> CameraRoomMap:
         ]
     )
     return room_map
+
+
+async def _live_config(camera_id: str, room_name: str) -> LiveConfigHolder:
+    return LiveConfigHolder(
+        camera_room_map=await _camera_room_map(camera_id, room_name),
+        room_polygon_map=RoomPolygonMap(),
+    )
 
 
 def _kp(x: float = 0.5, y: float = 0.5, score: float = 0.9) -> Keypoint:
@@ -168,7 +180,7 @@ class TestPostureStageBedroomPrior:
         )
 
         stage = PostureStage(
-            camera_room_map=await _camera_room_map("cam-bedroom", "bedroom"),
+            live_config=await _live_config("cam-bedroom", "bedroom"),
             posture_strategy=mock_strategy,
         )
 
@@ -204,7 +216,7 @@ class TestPostureStageBedroomPrior:
         )
 
         stage = PostureStage(
-            camera_room_map=await _camera_room_map("cam-living", "living room"),
+            live_config=await _live_config("cam-living", "living room"),
             posture_strategy=mock_strategy,
         )
 

@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import json
 import time as _time
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from structlog import get_logger
 
 from ...transport.redis_streams import RedisStreamsTransport
 from ..frame_context import FrameContext
+from ..types import LiveConfigHolder
 from ._room_maps import camera_room_name
 from .base import FrameStage
-
-if TYPE_CHECKING:
-    from ...services.camera_room_map import CameraRoomMap
 
 logger = get_logger(__name__)
 
@@ -25,11 +23,11 @@ class PublishStage(FrameStage):
     def __init__(
         self,
         transport: RedisStreamsTransport,
-        camera_room_map: CameraRoomMap,
+        live_config: LiveConfigHolder,
         live_publish_max_hz: float = 3.0,
     ) -> None:
         self._transport = transport
-        self._camera_room_map = camera_room_map
+        self._live_config = live_config
         self._live_publish_max_hz = live_publish_max_hz
         self._throttle_interval_s = 1.0 / live_publish_max_hz if live_publish_max_hz > 0 else 0.0
         # Per-camera last publish wall-clock timestamp (monotonic seconds).
@@ -153,7 +151,7 @@ class PublishStage(FrameStage):
                 if snap.get("identity_id")
             ],
         )
-        room_name = await camera_room_name(self._camera_room_map, ctx.frame.camera_id)
+        room_name = await camera_room_name(self._live_config.camera_room_map, ctx.frame.camera_id)
         if room_name is None and ctx.frame.camera_id not in self._missing_room_binding_warnings:
             self._missing_room_binding_warnings.add(ctx.frame.camera_id)
             logger.warning("publish_camera_room_binding_missing", camera_id=ctx.frame.camera_id)
