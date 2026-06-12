@@ -464,7 +464,6 @@ RTSP ingest: go2rtc sidecar
 | ID | Severity | Description |
 | --- | --- | --- |
 | TD-003 | Medium | Revision stream consumer group pre-created by publisher instead of admin tooling |
-| TD-006 | Low | `tracking.responses` stream (FrameResponse proto) has publisher but no consumer |
 | TD-007 | Low | `PersonTrackingService` (CC) and CTS identity resolver run parallel identity paths; face anchors from person-identification-service are now integrated (Phase 2, May 2026) but not yet validated end-to-end |
 | TD-008 | Medium | DepthEstimator (`app/inference/depth.py`) is implemented and importable but not wired into the live frame pipeline. It is used only during homography auto-calibration. M7 (Occluded Posture Detection) will wire it into the posture slow-path. Do not connect it to `FrameProcessingPipeline` before M7 is complete. |
 | TD-009 | Low | ReID crop invariant: `_crop_detection()` in `frame_pipeline.py` must always be called before `ReidEmbedder.embed_batch()`. Any refactor that moves or merges these calls must preserve this ordering or the gallery distances become meaningless. |

@@ -10,10 +10,12 @@ from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import pytest
+from prometheus_client import CollectorRegistry
 
 from app.calibration.state import AdjacencyEdge as CalibrationAdjacencyEdge
 from app.calibration.state import calibration_state
 from app.inference.schemas import DetectionBox
+from app.observability import metrics as _metrics_module
 from app.pipeline.frame_pipeline import (
     FrameProcessingPipeline,
     PipelineConfig,
@@ -64,7 +66,6 @@ class TestPipelineSkeleton:
                     "consumer_name": "test-1",
                     "frames_stream": "frames.ready",
                     "events_stream": "tracking.events",
-                    "responses_stream": "tracking.responses",
                     "revisions_stream": "tracking.revisions",
                     "signals_stream": "tracking.signals",
                     "scene_samples_stream": "scene.samples",
@@ -559,4 +560,50 @@ class TestCameraRowUpsert:
             await pipeline._handle_frame(self._frame("cam-z"))
 
             assert order == ["ensure_camera", "process_frame"]
+            await pipeline.stop()
+
+
+class TestFrameFailureCounter:
+    """Failure paths increment frames_failed_total; no frame is silently dropped."""
+
+    @pytest.fixture(autouse=True)
+    def isolated_registry(self) -> Generator[None, None, None]:
+        registry = CollectorRegistry()
+        original = _metrics_module.metrics
+        _metrics_module.metrics = _metrics_module.build_metrics(registry=registry)
+        yield
+        _metrics_module.metrics = original
+
+    def _frame(self, camera_id: str = "cam-1") -> FrameReady:
+        return FrameReady(
+            camera_id=camera_id,
+            minio_key=f"frames/{camera_id}/0.jpg",
+            frame_index=0,
+            capture_time_unix_ns=_NOW_NS,
+            received_time_unix_ns=_NOW_NS + 100_000_000,
+            width=640,
+            height=480,
+        )
+
+    @pytest.mark.asyncio
+    async def test_processing_failure_increments_counter_and_does_not_ack(self) -> None:
+        """A frame whose _process_frame raises increments frames_failed_total."""
+        pipeline = FrameProcessingPipeline(
+            PipelineConfig(allow_skeleton=True, signals=SignalConfig(enabled=False))
+        )
+        with _mock_redis_deps() as (mock_transport, _mock_rev, _mock_scene):
+            await pipeline.initialize()
+
+            async def _boom(frame: FrameReady) -> None:
+                raise RuntimeError("simulated stage failure")
+
+            pipeline._process_frame = _boom  # type: ignore[assignment, method-assign]
+
+            frame = self._frame()
+            await pipeline._handle_frame(frame)
+
+            counter = _metrics_module.metrics.frames_failed_total
+            value = counter.labels(camera_id="cam-1", reason="processing_error")._value.get()
+            assert value == 1.0, f"expected frames_failed_total=1, got {value}"
+            mock_transport.ack_frame.assert_not_called()
             await pipeline.stop()

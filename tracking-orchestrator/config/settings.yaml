@@ -17,7 +17,6 @@ redis:
   consumer_name: orchestrator-1
   frames_stream: frames.ready
   events_stream: tracking.events
-  responses_stream: tracking.responses
   revisions_stream: tracking.revisions
   signals_stream: tracking.signals
   scene_samples_stream: scene.samples

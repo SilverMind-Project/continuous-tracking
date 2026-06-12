@@ -151,6 +151,19 @@ For a 12-camera, 3-resident home:
   resident count scales beyond 5.
 - Redis at 1 GiB peak; AOF rewrite cadence default is fine.
 
+## Retiring the tracking.responses stream key (post-2026-06 upgrades)
+
+The `tracking.responses` Redis stream has no producer since the 2026-06
+release. It is safe to delete the key on existing deployments after upgrading:
+
+```bash
+kubectl -n cts exec sts/redis -- redis-cli DEL tracking.responses
+```
+
+The cognitive-companion drain subscriber will then idle on an empty stream
+without error. The `FrameResponse` proto message is retained in the schema
+for wire-format compatibility but is never populated.
+
 ## Replay testing
 
 The deterministic replay suite lives in

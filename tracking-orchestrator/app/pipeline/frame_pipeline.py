@@ -878,11 +878,9 @@ class FrameProcessingPipeline:
                     camera_id=frame.camera_id,
                     frame_index=frame.frame_index,
                 )
-                await self._transport.publish_response(
-                    frame,
-                    success=False,
-                    error_code="processing_error",
-                )
+                _metrics.metrics.frames_failed_total.labels(
+                    camera_id=frame.camera_id, reason="processing_error"
+                ).inc()
 
     async def _handle_cross_camera_batch(self, frames: list[FrameReady]) -> None:
         """Fetch and detect a mixed-camera frame batch with one Triton request.
@@ -938,11 +936,9 @@ class FrameProcessingPipeline:
                         frame_index=ctx.frame.frame_index,
                         error=str(result),
                     )
-                    await self._transport.publish_response(
-                        ctx.frame,
-                        success=False,
-                        error_code="fetch_error",
-                    )
+                    _metrics.metrics.frames_failed_total.labels(
+                        camera_id=ctx.frame.camera_id, reason="fetch_error"
+                    ).inc()
                 else:
                     fetched_contexts.append(ctx)
 
@@ -957,11 +953,9 @@ class FrameProcessingPipeline:
                     count=len(fetched_contexts),
                 )
                 for ctx in fetched_contexts:
-                    await self._transport.publish_response(
-                        ctx.frame,
-                        success=False,
-                        error_code="detector_error",
-                    )
+                    _metrics.metrics.frames_failed_total.labels(
+                        camera_id=ctx.frame.camera_id, reason="detector_error"
+                    ).inc()
                 return
 
             await self._process_cross_camera_post_detect_batch(fetched_contexts)
@@ -1005,11 +999,9 @@ class FrameProcessingPipeline:
                         camera_id=ctx.frame.camera_id,
                         frame_index=ctx.frame.frame_index,
                     )
-                    await self._transport.publish_response(
-                        ctx.frame,
-                        success=False,
-                        error_code="processing_error",
-                    )
+                    _metrics.metrics.frames_failed_total.labels(
+                        camera_id=ctx.frame.camera_id, reason="processing_error"
+                    ).inc()
 
             if not ready_contexts:
                 continue
@@ -1022,11 +1014,9 @@ class FrameProcessingPipeline:
                     count=len(ready_contexts),
                 )
                 for ctx in ready_contexts:
-                    await self._transport.publish_response(
-                        ctx.frame,
-                        success=False,
-                        error_code="processing_error",
-                    )
+                    _metrics.metrics.frames_failed_total.labels(
+                        camera_id=ctx.frame.camera_id, reason="processing_error"
+                    ).inc()
                 continue
 
             await asyncio.gather(
@@ -1055,11 +1045,9 @@ class FrameProcessingPipeline:
                 camera_id=ctx.frame.camera_id,
                 frame_index=ctx.frame.frame_index,
             )
-            await self._transport.publish_response(
-                ctx.frame,
-                success=False,
-                error_code="processing_error",
-            )
+            _metrics.metrics.frames_failed_total.labels(
+                camera_id=ctx.frame.camera_id, reason="processing_error"
+            ).inc()
 
     async def _process_post_detect_batch(self, contexts: list[FrameContext]) -> None:
         """Run stages after detection for one camera ordered context group."""
@@ -1084,11 +1072,9 @@ class FrameProcessingPipeline:
                     camera_id=ctx.frame.camera_id,
                     frame_index=ctx.frame.frame_index,
                 )
-                await self._transport.publish_response(
-                    ctx.frame,
-                    success=False,
-                    error_code="processing_error",
-                )
+                _metrics.metrics.frames_failed_total.labels(
+                    camera_id=ctx.frame.camera_id, reason="processing_error"
+                ).inc()
 
     async def _handle_batch(self, camera_id: str, frames: list[FrameReady]) -> None:
         """Process a batch of frames for one camera (called by FrameBatcher).
@@ -1121,11 +1107,9 @@ class FrameProcessingPipeline:
                         camera_id=frame.camera_id,
                         frame_index=frame.frame_index,
                     )
-                    await self._transport.publish_response(
-                        frame,
-                        success=False,
-                        error_code="processing_error",
-                    )
+                    _metrics.metrics.frames_failed_total.labels(
+                        camera_id=frame.camera_id, reason="processing_error"
+                    ).inc()
 
     async def _ensure_camera_row(self, camera_id: str) -> None:
         """Lazily seed an FK-anchor row in ``cameras`` on first sight per process.

@@ -135,7 +135,6 @@ def _build_transport_config(s: Settings) -> TransportConfig:
         consumer_name=s.as_str("redis.consumer_name"),
         frames_stream=s.as_str("redis.frames_stream"),
         events_stream=s.as_str("redis.events_stream"),
-        responses_stream=s.as_str("redis.responses_stream"),
         batch_max_wait_ms=s.as_int("redis.batch_max_wait_ms"),
         batch_max_size=s.as_int("redis.batch_max_size"),
         xack_timeout_ms=s.as_int("redis.xack_timeout_ms"),

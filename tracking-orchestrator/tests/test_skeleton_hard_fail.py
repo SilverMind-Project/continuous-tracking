@@ -45,7 +45,6 @@ def _config(**kwargs: object) -> PipelineConfig:
                 "consumer_name": "test-1",
                 "frames_stream": "frames.ready",
                 "events_stream": "tracking.events",
-                "responses_stream": "tracking.responses",
                 "revisions_stream": "tracking.revisions",
                 "signals_stream": "tracking.signals",
                 "scene_samples_stream": "scene.samples",

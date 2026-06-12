@@ -15,7 +15,7 @@ required.
 | `tracking.revisions` | `revision` | `continuoustracking.v1.IdentityRevision` | `tracking-orchestrator` | `cognitive-companion` |
 | `tracking.signals` | `signal` | `continuoustracking.v1.DementiaSignal` | `tracking-orchestrator` | `cognitive-companion` |
 | `scene.samples` | `sample` | `continuoustracking.v1.SceneSample` | `tracking-orchestrator` | `cognitive-companion` (worker not yet implemented) |
-| `tracking.responses` | `response` | `continuoustracking.v1.FrameResponse` | `tracking-orchestrator` | (none yet; reserved for ingress metrics) |
+| ~~`tracking.responses`~~ | `response` | `continuoustracking.v1.FrameResponse` | (retired 2026-06, TD-006) | `cognitive-companion` drain (idle) |
 
 Field names mirror the message they carry so `XRANGE` output is
 self-explanatory.

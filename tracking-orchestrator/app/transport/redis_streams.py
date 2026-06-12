@@ -9,6 +9,11 @@ JSON, no base64.
 
 The Redis client runs with ``decode_responses=False`` so binary proto
 payloads round-trip unchanged.
+
+``tracking.responses`` (FrameResponse) was retired in 2026-06 (TD-006):
+the publisher was removed and failure observability moved to the
+``cts_frames_failed_total`` Prometheus counter. The proto message is
+kept deprecated for wire-format compatibility with the CC drain subscriber.
 """
 
 from __future__ import annotations
@@ -36,7 +41,6 @@ logger = get_logger(__name__)
 # field name doubles as a content hint for ``XRANGE`` debugging.
 FIELD_FRAME = "frame"
 FIELD_EVENT = "event"
-FIELD_RESPONSE = "response"
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +57,6 @@ class TransportConfig:
     consumer_name: str = "orchestrator-1"
     frames_stream: str = "frames.ready"
     events_stream: str = "tracking.events"
-    responses_stream: str = "tracking.responses"
     batch_max_wait_ms: int = 100
     batch_max_size: int = 8
     xack_timeout_ms: int = 5000
@@ -91,16 +94,6 @@ class RedisStreamsTransport:
 
     - :meth:`consume_frames` -- async generator yielding FrameReady messages.
     - :meth:`publish_event` -- emit a TrackingEvent.
-    - :meth:`publish_response` -- emit a FrameResponse for XACK metrics.
-
-    Usage::
-
-        transport = RedisStreamsTransport(config)
-        await transport.connect()
-        async for frame in transport.consume_frames():
-            ...
-            await transport.publish_response(frame, success=True)
-        await transport.disconnect()
     """
 
     def __init__(self, config: TransportConfig | None = None) -> None:
@@ -296,42 +289,6 @@ class RedisStreamsTransport:
         )
         logger.debug("Published tracking event", event_id=event_id, message_id=message_id)
         return message_id
-
-    async def publish_response(
-        self,
-        frame: FrameReady,
-        success: bool,
-        detection_count: int = 0,
-        error_code: str = "",
-        processing_latency_us: int = 0,
-    ) -> str:
-        """Publish a ``FrameResponse`` proto to ``tracking.responses``."""
-        if self._redis is None:
-            return ""
-
-        response = frame_pb2.FrameResponse(
-            camera_id=frame.camera_id,
-            frame_index=frame.frame_index,
-            success=success,
-            error_code=error_code,
-            detection_count=detection_count,
-            processing_latency_us=processing_latency_us,
-            completed_time_unix_ns=int(datetime.now(UTC).timestamp() * 1e9),
-        )
-
-        message_id_bytes = await self._redis.xadd(
-            self._config.responses_stream,
-            proto_encode(response, field=FIELD_RESPONSE),  # type: ignore[arg-type]
-            maxlen=10000,
-            approximate=True,
-        )
-        outcome = "success" if success else (error_code or "processing_error")
-        metrics.metrics.tracking_responses_published_total.labels(outcome=outcome).inc()
-        return (
-            message_id_bytes.decode("ascii")
-            if isinstance(message_id_bytes, bytes)
-            else str(message_id_bytes)
-        )
 
     async def stream_length(self, stream: str | None = None) -> int:
         if self._redis is None:
