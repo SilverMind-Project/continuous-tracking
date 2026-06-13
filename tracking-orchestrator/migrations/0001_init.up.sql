@@ -202,7 +202,6 @@ CREATE TABLE IF NOT EXISTS person_trajectories (
                             CHECK (posture IN ('standing', 'sitting', 'walking', 'lying', 'unknown')),
     identity_confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     motion_energy       DOUBLE PRECISION,
-    floor_speed_m_s     DOUBLE PRECISION,
     PRIMARY KEY (id, observed_at)
 );
 
@@ -252,46 +251,6 @@ CREATE INDEX IF NOT EXISTS idx_room_dwells_open
 
 CREATE INDEX IF NOT EXISTS idx_room_dwells_room
     ON room_dwells (room_name, entered_at DESC);
-
--- =============================================================================
--- Gait bouts: discrete walking episodes persisted by WalkingBoutSegmenter.
--- bout_id is UUID5 over (identity_id, started_at.isoformat()) for idempotent
--- re-processing upserts.
--- =============================================================================
-CREATE TABLE IF NOT EXISTS gait_bouts (
-    bout_id          UUID PRIMARY KEY,
-    identity_id      TEXT NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
-    started_at       TIMESTAMPTZ NOT NULL,
-    ended_at         TIMESTAMPTZ NOT NULL,
-    duration_s       DOUBLE PRECISION NOT NULL,
-    distance_m       DOUBLE PRECISION NOT NULL,
-    median_speed_m_s DOUBLE PRECISION NOT NULL,
-    p95_speed_m_s    DOUBLE PRECISION NOT NULL,
-    sample_count     INTEGER NOT NULL,
-    rooms            TEXT[] NOT NULL DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_gait_bouts_identity
-    ON gait_bouts (identity_id, started_at DESC);
-
--- =============================================================================
--- Gait daily: per-resident per-local-date walking summaries computed by
--- GaitAggregator.  One row per (identity_id, local_date); upserted hourly.
--- median_speed_m_s is the duration-weighted median of bout median speeds.
--- =============================================================================
-CREATE TABLE IF NOT EXISTS gait_daily (
-    identity_id        TEXT NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
-    local_date         DATE NOT NULL,
-    bout_count         INTEGER NOT NULL,
-    total_walking_s    DOUBLE PRECISION NOT NULL,
-    total_distance_m   DOUBLE PRECISION NOT NULL,
-    median_speed_m_s   DOUBLE PRECISION NOT NULL,
-    mad_speed_m_s      DOUBLE PRECISION NOT NULL,
-    p95_speed_m_s      DOUBLE PRECISION NOT NULL,
-    sample_bout_ids    TEXT[] NOT NULL DEFAULT '{}',
-    computed_at        TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (identity_id, local_date)
-);
 
 -- =============================================================================
 -- Tagged keyframes: periodic and triggered frame samples with annotations.
@@ -509,25 +468,6 @@ CREATE TABLE IF NOT EXISTS co_presence_links (
     CONSTRAINT uq_copresence_ph_pair UNIQUE (ph_id_a, ph_id_b),
     CONSTRAINT chk_ph_a_lt_ph_b CHECK (ph_id_a < ph_id_b)
 );
-
--- =============================================================================
--- Agitation windows (M4): raw composite index baseline series
--- =============================================================================
--- Stores one 30-minute agitation composite per identity per window.
--- Used exclusively as the personal baseline for robust_z comparison in the
--- agitation_index detector.  Derived from raw trajectory features, not from
--- emitted signals, satisfying the baseline-from-raw-behavior rule.
--- 90-day retention: rows older than 90 days may be purged by a cleanup job.
-CREATE TABLE IF NOT EXISTS agitation_windows (
-    identity_id   TEXT        NOT NULL REFERENCES identities(identity_id) ON DELETE CASCADE,
-    window_start  TIMESTAMPTZ NOT NULL,
-    composite     FLOAT8      NOT NULL,
-    computed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (identity_id, window_start)
-);
-
-CREATE INDEX IF NOT EXISTS idx_agitation_windows_identity_start
-    ON agitation_windows (identity_id, window_start DESC);
 
 -- =============================================================================
 -- Continuous aggregates (non-transactional)
