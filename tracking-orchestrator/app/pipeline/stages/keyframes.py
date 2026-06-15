@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from ...domain import TaggedKeyframe
 from ...observability import metrics as _metrics
-from ...sampling.keyframe_sampler import KeyframeSampler
+from ...sampling.keyframe_sampler import FrameBbox, KeyframeSampler
 from ...transport.scene_publisher import SceneSamplesPublisher
 from ..frame_context import FrameContext
 from .base import FrameStage
@@ -36,6 +36,34 @@ class KeyframeStage(FrameStage):
         sample_time = ctx.event_time
 
         det_by_ph: dict[str, object] = {d.ph_id: d for d in ctx.domain_detections if d.ph_id}
+
+        # A keyframe image contains every person visible in the frame, so each
+        # sampled keyframe carries one bbox per detection -- not just the bbox
+        # of the PH that triggered the sample. Build this set once per frame.
+        identity_by_ph: dict[str, str] = {
+            snap.ph_id: (snap.identity_id or "")
+            for snap in ctx.world_snapshots
+            if snap.camera_id == ctx.frame.camera_id
+        }
+        frame_bboxes: list[FrameBbox] = []
+        for det in det_by_ph.values():
+            det_bbox = getattr(det, "bbox", None)
+            if det_bbox is None:
+                continue
+            ph_id = getattr(det, "ph_id", "")
+            frame_bboxes.append(
+                FrameBbox(
+                    ph_id=ph_id,
+                    bbox=(
+                        float(det_bbox.x_min),
+                        float(det_bbox.y_min),
+                        float(det_bbox.x_max),
+                        float(det_bbox.y_max),
+                    ),
+                    confidence=float(getattr(det, "confidence", 1.0)),
+                    identity_id=identity_by_ph.get(ph_id) or None,
+                )
+            )
 
         for snap in ctx.world_snapshots:
             if snap.camera_id != ctx.frame.camera_id:
@@ -90,6 +118,7 @@ class KeyframeStage(FrameStage):
                     detection_frame_width=ctx.effective_width,
                     detection_frame_height=ctx.effective_height,
                     detection_identity_id=identity_id or None,
+                    frame_bboxes=frame_bboxes,
                 )
             else:
                 sampled = await self._keyframe_sampler.maybe_sample(
@@ -103,6 +132,7 @@ class KeyframeStage(FrameStage):
                     detection_frame_width=ctx.effective_width,
                     detection_frame_height=ctx.effective_height,
                     detection_identity_id=identity_id or None,
+                    frame_bboxes=frame_bboxes,
                 )
             if sampled is not None and self._scene_publisher:
                 await self._scene_publisher.publish(sampled)

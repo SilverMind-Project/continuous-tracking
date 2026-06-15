@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
+from app.sampling.keyframe_sampler import FrameBbox, KeyframeSampler, SamplerConfig
 from app.storage.base import InMemoryBboxAnnotationRepository, InMemoryKeyframeRepository
 
 _T0 = datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC)
@@ -92,6 +92,58 @@ async def test_trigger_sample_saves_bbox_annotation(
     assert ann.x1 == 50.0
     assert ann.frame_width == 1280
     assert ann.identity_id is None
+
+
+async def test_frame_bboxes_persist_every_person(
+    sampler: KeyframeSampler,
+    bbox_repo: InMemoryBboxAnnotationRepository,
+) -> None:
+    """A keyframe with two people in the frame stores both bboxes under the
+    same keyframe_id, so the annotation editor shows every identity."""
+    kf = await sampler.maybe_sample(
+        ph_id="ph-amma",
+        camera_id="cam02",
+        minio_key="frame.jpg",
+        captured_at=_T0,
+        annotations=_ANNS,
+        detection_frame_width=1920,
+        detection_frame_height=1080,
+        frame_bboxes=[
+            FrameBbox("ph-amma", (10.0, 20.0, 100.0, 200.0), 0.95, "amma"),
+            FrameBbox("ph-grandma", (300.0, 40.0, 420.0, 260.0), 0.82, "grandma"),
+        ],
+    )
+    assert kf is not None
+
+    results = await bbox_repo.get_bbox_annotations_for_keyframe(kf.keyframe_id)
+    assert len(results) == 2
+    by_identity = {a.identity_id: a for a in results}
+    assert set(by_identity) == {"amma", "grandma"}
+    assert by_identity["grandma"].ph_id == "ph-grandma"
+    assert by_identity["grandma"].x1 == 300.0
+    assert all(a.frame_width == 1920 for a in results)
+
+
+async def test_frame_bboxes_take_precedence_over_single_detection(
+    sampler: KeyframeSampler,
+    bbox_repo: InMemoryBboxAnnotationRepository,
+) -> None:
+    """When frame_bboxes is given, the single detection_* args are ignored."""
+    kf = await sampler.maybe_sample(
+        ph_id="ph-amma",
+        camera_id="cam02",
+        minio_key="frame.jpg",
+        captured_at=_T0,
+        annotations=_ANNS,
+        detection_bbox=(1.0, 2.0, 3.0, 4.0),
+        detection_identity_id="ignored",
+        frame_bboxes=[FrameBbox("ph-amma", (10.0, 20.0, 100.0, 200.0), 0.95, "amma")],
+    )
+    assert kf is not None
+    results = await bbox_repo.get_bbox_annotations_for_keyframe(kf.keyframe_id)
+    assert len(results) == 1
+    assert results[0].identity_id == "amma"
+    assert results[0].x1 == 10.0
 
 
 async def test_maybe_sample_no_bbox_when_within_interval(

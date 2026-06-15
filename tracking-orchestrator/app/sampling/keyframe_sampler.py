@@ -19,6 +19,21 @@ from ..storage.base import KeyframeRepository
 
 
 @dataclass(frozen=True)
+class FrameBbox:
+    """One detection's bounding box within a sampled frame.
+
+    A keyframe image typically contains every person visible in the frame,
+    so a keyframe carries one ``FrameBbox`` per detection -- not just the
+    bbox of the PH that triggered the sample.
+    """
+
+    ph_id: str
+    bbox: tuple[float, float, float, float]
+    confidence: float
+    identity_id: str | None = None
+
+
+@dataclass(frozen=True)
 class SamplerConfig:
     """Configuration for the keyframe sampler."""
 
@@ -82,8 +97,16 @@ class KeyframeSampler:
         detection_frame_width: int = 0,
         detection_frame_height: int = 0,
         detection_identity_id: str | None = None,
+        frame_bboxes: list[FrameBbox] | None = None,
     ) -> TaggedKeyframe | None:
-        """Sample a periodic keyframe if the interval has elapsed."""
+        """Sample a periodic keyframe if the interval has elapsed.
+
+        When ``frame_bboxes`` is provided it is the authoritative set of
+        bounding boxes for the whole frame (one per detected person) and the
+        single ``detection_*`` arguments are ignored. This lets the keyframe
+        carry every person visible in the image rather than only the PH that
+        triggered the sample.
+        """
         if captured_at is None:
             captured_at = datetime.now(UTC)
         if annotations is None:
@@ -110,8 +133,9 @@ class KeyframeSampler:
             tag_reason="periodic",
             expires_at=expires_at,
         )
-        bbox_annotations = _bbox_annotations_for_keyframe(
+        bbox_annotations = _bbox_annotations_for_sample(
             keyframe=keyframe,
+            frame_bboxes=frame_bboxes,
             detection_bbox=detection_bbox,
             detection_confidence=detection_confidence,
             detection_frame_width=detection_frame_width,
@@ -137,11 +161,16 @@ class KeyframeSampler:
         detection_frame_width: int = 0,
         detection_frame_height: int = 0,
         detection_identity_id: str | None = None,
+        frame_bboxes: list[FrameBbox] | None = None,
     ) -> TaggedKeyframe:
         """Force a keyframe sample outside the periodic schedule.
 
         Valid tag_reason values:
         'identity_changed', 'hazard', 'dwell_start'.
+
+        When ``frame_bboxes`` is provided it is the authoritative set of
+        bounding boxes for the whole frame (one per detected person) and the
+        single ``detection_*`` arguments are ignored.
         """
         if captured_at is None:
             captured_at = datetime.now(UTC)
@@ -163,8 +192,9 @@ class KeyframeSampler:
             tag_reason=tag_reason,  # type: ignore[arg-type]
             expires_at=expires_at,
         )
-        bbox_annotations = _bbox_annotations_for_keyframe(
+        bbox_annotations = _bbox_annotations_for_sample(
             keyframe=keyframe,
+            frame_bboxes=frame_bboxes,
             detection_bbox=detection_bbox,
             detection_confidence=detection_confidence,
             detection_frame_width=detection_frame_width,
@@ -180,15 +210,41 @@ class KeyframeSampler:
         self._last_sample.pop(ph_id, None)
 
 
-def _bbox_annotations_for_keyframe(
+def _bbox_annotations_for_sample(
     *,
     keyframe: TaggedKeyframe,
+    frame_bboxes: list[FrameBbox] | None,
     detection_bbox: tuple[float, float, float, float] | None,
     detection_confidence: float,
     detection_frame_width: int,
     detection_frame_height: int,
     detection_identity_id: str | None,
 ) -> list[BboxAnnotation]:
+    """Build the bbox annotations to persist alongside a keyframe.
+
+    When ``frame_bboxes`` is supplied, persist one annotation per detected
+    person in the frame so the keyframe carries every visible identity.
+    Otherwise fall back to the single triggering detection.
+    """
+    now = datetime.now(UTC)
+    if frame_bboxes is not None:
+        return [
+            BboxAnnotation(
+                keyframe_id=keyframe.keyframe_id,
+                ph_id=fb.ph_id,
+                camera_id=keyframe.camera_id,
+                x1=fb.bbox[0],
+                y1=fb.bbox[1],
+                x2=fb.bbox[2],
+                y2=fb.bbox[3],
+                detection_confidence=fb.confidence,
+                frame_width=detection_frame_width,
+                frame_height=detection_frame_height,
+                identity_id=fb.identity_id,
+                created_at=now,
+            )
+            for fb in frame_bboxes
+        ]
     if detection_bbox is None:
         return []
     return [
@@ -204,6 +260,6 @@ def _bbox_annotations_for_keyframe(
             frame_width=detection_frame_width,
             frame_height=detection_frame_height,
             identity_id=detection_identity_id,
-            created_at=datetime.now(UTC),
+            created_at=now,
         )
     ]
