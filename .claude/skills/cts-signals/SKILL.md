@@ -132,6 +132,8 @@ Returns True if the signal should be emitted. Internal logic in order:
 - `emergency` is reserved for kinds where a caregiver should act within minutes. Currently: `stillness_anomaly` (lying posture) and `bathroom_dwell_anomaly` (z >= 5.0).
 - Trend signals (`sundowning_index`) and experimental kinds cap at `warning`.
 - Data quality demotion: if `identity_confidence_mean < 0.3` OR `coverage_ratio < 0.1`, `warning` and `emergency` are demoted to `info` before emission. The signal is still emitted (so the upsert records it), but caregiver notifications should filter on severity.
+- Dementia signals may gate on the persisted `position_sigma_m` / `footpoint_reliable` fields
+  once M08 lands. Low-confidence trajectory points should not escalate pacing/wandering.
 
 ## Stable IDs and idempotency
 

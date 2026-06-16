@@ -11,6 +11,7 @@ Guidance for Claude Code agents working in this repository.
 | `.claude/skills/engineering-standards/SKILL.md` | CTS architecture, repositories, configuration, tests, wire formats, units, caches, security boundaries, logging, and naming |
 | `.claude/skills/cts-pipeline/SKILL.md` | Frame stages, execution paths, tracker-round side effects, batching, StageRunner/FrameContext, and replay fixture formats |
 | `.claude/skills/cts-signals/SKILL.md` | Dementia signals, detectors, baselines, robust z-scores, hysteresis, severity, protobuf/CC kind plumbing, and signal tests |
+| `.claude/skills/cts-spatial-fusion/SKILL.md` | Floor-plane localization, homography Jacobian, measurement covariance, cross-camera fusion, Kalman/ZUPT, primary camera selection, and posture geometry weighting |
 
 ---
 
@@ -467,6 +468,7 @@ RTSP ingest: go2rtc sidecar
 | TD-007 | Low | Validated by [`docs/identity-path-validation-2026-06.md`](docs/identity-path-validation-2026-06.md): CC face-based location conclusions are redundant when `cts.enabled=true`, but remain the non-CTS reCamera path and the owner of raw sightings/activity capture. Deprecate its identity/location writes behind an explicit CTS-aware boundary; keep non-CTS and non-location responsibilities until their consumers migrate. |
 | TD-008 | Medium | DepthEstimator (`app/inference/depth.py`) is implemented and importable but not wired into the live frame pipeline. It is used only during homography auto-calibration. M7 (Occluded Posture Detection) will wire it into the posture slow-path. Do not connect it to `FrameProcessingPipeline` before M7 is complete. |
 | TD-009 | Low | ReID crop invariant: `_crop_detection()` in `frame_pipeline.py` must always be called before `ReidEmbedder.embed_batch()`. Any refactor that moves or merges these calls must preserve this ordering or the gallery distances become meaningless. |
+| TD-010 | Low | Floor-region visibility fix (Track G): harvest a floor-region polygon from `FloorPlaneFitter` inliers and return it on `/internal/calibration/auto`; CC then projects that boundary (not the image border) for the visibility polygon. Reuses Depth Anything v2 (no new model); non-blocking. Plan: `../cognitive-companion/guided-companion-trackG-floor-geometry.md`. |
 
 ---
 

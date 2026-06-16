@@ -62,7 +62,7 @@ The list is configuration-dependent. A conditional stage must name its enabling 
 | 4 | `SpatialProjectionStage` | `spatial_projection.py` | Always | Apply per-camera homography matrix to compute calibrated `FloorPoint` for every detection; runs before inference so the dedup pass can use floor positions |
 | 5 | `InferenceStage` | `inference.py` | Always wired; ReID and pose work depend on their configured clients and flags | SOLIDER-REID appearance embedding + RTMPose pose estimation; both run per-detection |
 | 6 | `FaceIdentityStage` | `face_identity.py` | Always wired; remote calls require `face_id.enabled`, a non-empty `face_id.url`, and per-camera face ID enabled | Rate-limited ArcFace calls to `person-identification-service`; produces `FaceAnchor` per detection. With no client, the stage returns without work |
-| 7 | `WorldTrackingStage` | `world_tracking.py` | Always | Builds `WorldObservation`s (synthetic virtual-tile floor point for uncalibrated cameras), then delegates to `WorldTracker.step`: (a) Kalman predict all open PHs, (b) pre-association cross-camera dedup, (c) Hungarian association over floor-plane cost matrix, (d) PH update/spawn/close, (e) Bayesian identity resolution |
+| 7 | `WorldTrackingStage` | `world_tracking.py` | Always | Builds `WorldObservation`s (`ObservationGeometry` and per-observation covariance for calibrated cameras; synthetic virtual-tile floor point for uncalibrated cameras), then delegates to `WorldTracker.step`: (a) Kalman predict all open PHs, (b) pre-association cross-camera dedup, (c) Hungarian association over floor-plane cost matrix, (d) PH update/spawn/close, (e) Bayesian identity resolution |
 | 8 | `DetectionBackfillStage` | `detection_backfill.py` | Always | Writes `ph_id` onto each detection from the WorldTracker's assignment map; downstream stages read `detection.ph_id` not a separate map |
 | 9 | `ClosePHStage` | `trajectory.py` | Always | Closes PHs that were active in the previous frame but absent in this one (`terminated_ph_ids = prev_active_ph_ids - current_ph_ids`); calls `TrajectoryWriter.close_track` to finalize dwell segments. Defined alongside `TrajectoryStage` in `trajectory.py`, not in `frame_pipeline.py` |
 | 10 | `PostureStage` | `posture_stage.py` | Always | Keypoint geometry classifier per detection: `lying`, `sitting`, `standing`, `unknown` |
@@ -128,7 +128,7 @@ Fall fixtures carry bbox, keypoints, posture scores, floor speed, motion energy,
 
 ## Quality capture: where it happens and what travels downstream
 
-`CropQuality` (`app/pipeline/crop_quality.py`) is the single scorer. It is called inside `WorldTracker.step()` to compute per-observation quality (used for dedup representative selection) and to update `PersonHypothesis.mean_quality` (EMA: `0.1 * obs.quality + 0.9 * prev`).
+`CropQuality` (`app/pipeline/crop_quality.py`) is the single scorer. It is called inside `WorldTracker.step()` to compute per-observation quality and to update `PersonHypothesis.mean_quality` (EMA: `0.1 * obs.quality + 0.9 * prev`). Crop quality now scales `Σ_px` in the observation model rather than directly weighting dedup fusion.
 
 `mean_quality` travels via the `IdentitySnapshot` proto field to the CC side, where `TrackingEventSubscriber` stores it in the presence segment and `PersonLocationEnvelope` surfaces it as the `quality` field. Do not add a second scorer; do not compute quality on the CC side.
 

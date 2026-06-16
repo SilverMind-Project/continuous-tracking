@@ -855,6 +855,12 @@ Review checklist when adding an execution path: which epoch-scoped caches does t
 - **Unknown geometry is not perfect geometry.** No geometry score of 1.0 for uncalibrated cameras. Use neutral scoring or reject.
 - **Attach projection once.** Project before tracking. Carry the same point into tracklets, trajectories, and proto events.
 - **Ground-plane homography is not person height.** Do not claim physical height from bbox projection without a documented geometry model.
+- **Measurement uncertainty is anisotropic and centralized.** Per-observation covariance is
+  `R = J·Σ_px·Jᵀ + R_cal` in m², computed only in `app/tracking/world/observation_model.py`.
+  No Jacobian or covariance math anywhere else. See the cts-spatial-fusion skill.
+- **Fuse random noise, never systematic bias.** Inverse-covariance fusion shrinks covariance
+  ~1/N; apply it only to the random term and add a non-shrinking bias floor from calibration
+  residuals. Fusing the bias term away makes the estimate jump on camera-set changes.
 
 ### Identity evidence and gallery governance
 
@@ -890,8 +896,15 @@ The pre-association floor-point dedup pass (`app/tracking/world/dedup.py`) runs 
 1. **Different-camera gate.** Only pairs from different cameras are candidates; same-camera pairs are always separate observations.
 2. **Geometric gate.** Both detections must have `calibrated=True` floor points within `dedup_max_distance_m` (default: 0.6 m) of each other.
 3. **No-face-conflict gate.** When `dedup_require_no_face_conflict=True` (default), pairs where both detections carry committed and conflicting face anchors are not merged.
+4. **Representative fusion is inverse-covariance, not crop-quality mean.** The cluster
+   representative's floor point and covariance come from information-form fusion of the
+   members' random covariances plus a bias floor (see cts-spatial-fusion). Crop quality is no
+   longer the fusion weight (it remains an input to Σ_px scaling only).
 
-The union-find algorithm identifies connected components; each cluster elects a representative via `_select_representative()` (highest quality, ties broken deterministically). `associate()` keeps its 1-to-1 contract because only representatives enter it; cluster membership is passed separately so the winning PH can be updated with all contributing camera IDs.
+The union-find algorithm identifies connected components; each cluster produces a representative
+observation with a fused floor point and covariance. `associate()` keeps its 1-to-1 contract
+because only representatives enter it; cluster membership is passed separately so the winning PH
+can be updated with all contributing camera IDs.
 
 Adding a new dedup gate condition: modify `dedup_observations()` only; do not add gate logic to `associate()` or `WorldTracker.step()`.
 
@@ -902,7 +915,7 @@ PH keyframes are evidence, not synthetic references. `get_keyframes()` reads `co
 ### Quality-capture rule
 
 Observation and PH quality is computed by the single `CropQuality` scorer (`app/pipeline/crop_quality.py`). There is no second scorer. The same scorer is used for:
-- Per-observation quality scores passed to `dedup_observations()` for representative selection.
+- Per-observation quality scores that scale `Σ_px` in the observation model.
 - The PH's `mean_quality` field (exponential moving average, updated in `WorldTracker.step()`).
 - Gallery entry quality used by the identity resolver.
 
