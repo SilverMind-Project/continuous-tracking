@@ -95,7 +95,7 @@ class TestCameraStaleness:
 
 class TestHysteresisInlining:
     def test_hysteresis_state_stored_directly(self) -> None:
-        """After M2, _hysteresis_state is a plain dict, not dict-of-PostureHysteresis."""
+        """_hysteresis_state is a plain dict, not dict-of-PostureHysteresis."""
         tracker = GlobalPostureTracker(required_consecutive=2)
         # No PostureHysteresis objects should exist.
         assert not hasattr(tracker, "_hysteresis")
@@ -139,7 +139,7 @@ class TestEvictTrack:
     def test_evict_does_not_call_inner_evict(self) -> None:
         """Regression test: evict_track must not call any intermediate object.evict() method.
         The old code called self._hysteresis[id].evict(id) before popping the instance,
-        which was a no-op. After M2, there is no inner evict() call at all."""
+        which was a no-op. There is no inner evict() call at all."""
         tracker = GlobalPostureTracker(required_consecutive=1)
         tracker.update("gt-1", "cam-1", _scores(sw=0.8), ["cam-1"])
         # If the old pattern is accidentally restored, this test catches it because

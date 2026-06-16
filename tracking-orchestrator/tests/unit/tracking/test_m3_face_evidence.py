@@ -359,7 +359,7 @@ class TestFrontalityWeighting:
 
 
 class TestCandidateNotContradiction:
-    """Candidate and unrecognized faces must never trigger the M2.1 contradiction path."""
+    """Candidate and unrecognized faces must never trigger the contradiction path."""
 
     def test_candidate_face_not_contradiction(self):
         """A candidate face for bob does NOT contradict held identity alice."""

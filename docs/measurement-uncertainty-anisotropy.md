@@ -19,6 +19,12 @@ Where:
 - `R_cal = (k_cal * floor_residual_m)^2 * I` is the systematic calibration term in m^2.
 - `epsilon * I` is a small numeric floor that keeps `R_obs` invertible.
 
+Footpoint reliability controls the scale of `Sigma_px`. A bbox clipped against the bottom or sides
+of the image means the bbox bottom-centre is probably the image boundary, not the person's floor
+contact point. If pose is available and both ankles have low visibility, the feet are likely
+occluded. CTS keeps those observations but marks `footpoint_reliable=False`, which steeply inflates
+the pixel covariance before applying `J`.
+
 The random term has the expected units:
 
 ```text

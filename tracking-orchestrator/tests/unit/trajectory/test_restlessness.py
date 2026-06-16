@@ -207,7 +207,7 @@ class TestTvWatchingFixture:
         pts = []
         for i in range(n):
             # Occasional posture shift: motion_energy 0.06-0.08 nu/s.
-            # This is above the M1 stillness floor (0.05) but BELOW motion_active_floor (0.10).
+            # This is above the stillness floor (0.05) but below motion_active_floor (0.10).
             me = rng.uniform(0.01, 0.08)
             pts.append(
                 _pt(

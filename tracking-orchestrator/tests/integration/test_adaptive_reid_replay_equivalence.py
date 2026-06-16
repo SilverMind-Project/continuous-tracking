@@ -1,4 +1,4 @@
-"""Replay equivalence proof for adaptive ReID cadence (M5.1).
+"""Replay equivalence proof for adaptive ReID cadence.
 
 Proves that det_to_ph assignments are identical whether observations carry
 full embeddings or empty embeddings (embedding=[]).

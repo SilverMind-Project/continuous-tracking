@@ -9,15 +9,20 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import numpy as np
 import pytest
 
-from app.domain import BoundingBox, Detection, FloorPoint
+from app.calibration.state import CalibrationState
+from app.domain import BoundingBox, Detection, FloorPoint, OrientationBin, tuple_to_cov2x2
+from app.inference.schemas import Keypoint, PoseResult
 from app.pipeline.stages.world_tracking import (
     _CAMERA_TILE_M,
     _VIRTUAL_ROOM_M,
     _stable_camera_hash,
     _synthetic_floor_point,
 )
+from app.tracking.floor_projector import FloorProjector
+from app.tracking.world.observation_model import homography_jacobian, pixel_covariance
 from app.tracking.world.tracker import WorldTrackerResult
 
 # ---------------------------------------------------------------------------
@@ -47,6 +52,13 @@ def test_stable_camera_hash_is_16bit():
 
 def _make_bbox(x_min: int, y_min: int, x_max: int, y_max: int) -> BoundingBox:
     return BoundingBox(x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max)
+
+
+def _pose() -> PoseResult:
+    keypoints = [Keypoint(x=0.5, y=0.5, score=0.9) for _ in range(17)]
+    keypoints[15] = Keypoint(x=0.45, y=0.95, score=0.9)
+    keypoints[16] = Keypoint(x=0.55, y=0.95, score=0.9)
+    return PoseResult(keypoints=tuple(keypoints))
 
 
 def test_synthetic_floor_point_returns_floor_point():
@@ -172,3 +184,76 @@ async def test_world_tracking_stage_produces_observations_without_calibration():
         "Synthetic floor point must have non-zero coordinates to prevent "
         "all detections collapsing to origin (0, 0)"
     )
+    assert obs.floor_cov_random is None
+    assert not obs.footpoint_reliable
+    assert ctx.geometry_by_detection == {}
+
+
+def test_build_observations_populates_geometry_for_calibrated_detection():
+    from unittest.mock import MagicMock
+
+    from app.pipeline.frame_context import FrameContext
+    from app.pipeline.stages.world_tracking import WorldTrackingStage
+    from app.pipeline.types import LiveConfigHolder
+    from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+    from app.transport.redis_streams import FrameReady
+
+    now = datetime.now(UTC)
+    state = CalibrationState()
+    h = np.array([[0.01, 0.0, -1.0], [0.0, 0.01, -2.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    state.homographies["cam-cal"] = h.tolist()
+    projector = FloorProjector(state)
+    frame = FrameReady(
+        camera_id="cam-cal",
+        minio_key="",
+        frame_index=1,
+        capture_time_unix_ns=int(now.timestamp() * 1e9),
+        received_time_unix_ns=int(now.timestamp() * 1e9),
+        width=640,
+        height=480,
+    )
+    ctx = FrameContext(
+        frame=frame,
+        event_time=now,
+        capture_time=now,
+        effective_width=640,
+        effective_height=480,
+    )
+    bbox = BoundingBox(x_min=100, y_min=50, x_max=250, y_max=400)
+    ctx.domain_detections = [
+        Detection(
+            detection_id="det-cal",
+            camera_id="cam-cal",
+            bbox=bbox,
+            confidence=0.9,
+            floor_point=projector.project("cam-cal", bbox),
+            embedding=[0.1, 0.2],
+            capture_time=now,
+            event_time=now,
+            crop_quality=0.8,
+            floor_residual_m=0.05,
+        )
+    ]
+    ctx.det_pose_result["det-cal"] = _pose()
+    ctx.orientation_by_detection["det-cal"] = (OrientationBin.LEFT, 0.7)
+    stage = WorldTrackingStage(
+        tracker=MagicMock(),
+        live_config=LiveConfigHolder(CameraRoomMap(), RoomPolygonMap()),
+        floor_projector=projector,
+    )
+
+    observations, uncalibrated_count = stage._build_observations(ctx)
+
+    assert uncalibrated_count == 0
+    assert len(observations) == 1
+    obs = observations[0]
+    assert obs.floor_cov_random is not None
+    assert obs.footpoint_reliable
+    assert ctx.geometry_by_detection["det-cal"].footpoint_reliable
+    assert ctx.geometry_by_detection["det-cal"].orientation == OrientationBin.LEFT
+    expected = (
+        homography_jacobian(h, bbox.center_x, float(bbox.y_max))
+        @ pixel_covariance(ctx.geometry_by_detection["det-cal"])
+        @ homography_jacobian(h, bbox.center_x, float(bbox.y_max)).T
+    )
+    np.testing.assert_allclose(tuple_to_cov2x2(obs.floor_cov_random), expected)

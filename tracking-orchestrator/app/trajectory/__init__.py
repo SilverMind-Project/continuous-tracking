@@ -1,1 +1,1 @@
-"""Trajectory and room dwell writing for M6."""
+"""Trajectory and room dwell writing."""

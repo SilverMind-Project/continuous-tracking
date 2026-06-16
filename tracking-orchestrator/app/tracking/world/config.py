@@ -89,7 +89,7 @@ class WorldTrackerConfig:
     dedup_max_distance_ceiling_m: float = 1.5
     dedup_require_no_face_conflict: bool = True
 
-    # ---- Low-confidence detection recovery (M2.3 BYTE-style second association) ----
+    # ---- Low-confidence detection recovery (BYTE-style second association) ----
     # When enabled, YOLO detections in [low_confidence_floor, detector_confidence) are
     # kept and offered in a second association pass against already-open PHs only, with a
     # tightened geometric gate (recovery_gate_chi2, 95% chi-squared with 2 dof vs the

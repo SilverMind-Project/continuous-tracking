@@ -235,13 +235,13 @@ class PipelineConfig:
     signals_enabled: bool = True
     signal_interval_s: int = 60
 
-    # --- Fall detection fast path (M2) ---
+    # --- Fall detection fast path ---
     fall_detection: FallDetectionConfig = field(default_factory=FallDetectionConfig)
 
-    # --- Adaptive ReID cadence (M5.1) ---
+    # --- Adaptive ReID cadence ---
     adaptive_reid: AdaptiveReidConfig = field(default_factory=AdaptiveReidConfig)
 
-    # --- Gait daily aggregation (M3.2) ---
+    # --- Gait daily aggregation ---
     gait_aggregate_interval_s: int = 3600
     gait_min_daily_bouts: int = 3
     gait_min_daily_walking_s: float = 60.0
@@ -540,6 +540,7 @@ class FrameProcessingPipeline:
             tracker=self._world_tracker,
             live_config=self._live_config,
             config=self._config.world_tracker,
+            floor_projector=self._floor_projector,
         )
 
         # Named stage groups — replace fragile integer slices so adding

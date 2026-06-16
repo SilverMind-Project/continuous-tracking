@@ -1,4 +1,4 @@
-"""M2.3a: Uncalibrated gate relaxation tests for pair_cost."""
+"""Uncalibrated gate relaxation tests for pair_cost."""
 
 from __future__ import annotations
 

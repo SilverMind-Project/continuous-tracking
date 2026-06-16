@@ -1,7 +1,7 @@
-"""M1 B5: Assert that refactored stage-runner segments match pre-refactor integer slices.
+"""Assert that refactored stage-runner segments match previous integer slices.
 
 The pre-refactor code used ``stages[2:]``, ``stages[2:6]``, ``stages[7:]``.
-After M1 these become named lists.  This test proves the name-to-slice
+These are named lists. This test proves the name-to-slice
 mapping is correct by asserting the expected stage name sequences.
 """
 
@@ -74,7 +74,7 @@ def _post_world_stages() -> list:
 
 
 class TestStageRunnerSegments:
-    """Assert that M1 refactored stage-runner segments match pre-refactor slices."""
+    """Assert that refactored stage-runner segments match previous slices."""
 
     def _names(self, runner: StageRunner) -> list[str]:
         return [s.name for s in runner._stages]

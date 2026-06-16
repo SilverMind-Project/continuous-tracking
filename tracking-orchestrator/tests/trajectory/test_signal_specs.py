@@ -1,4 +1,4 @@
-"""M7: Tests for AlgorithmSpec, DataQuality, and signal metadata attachment."""
+"""Tests for AlgorithmSpec, DataQuality, and signal metadata attachment."""
 
 from __future__ import annotations
 

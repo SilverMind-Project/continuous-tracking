@@ -121,7 +121,7 @@ def test_reid_preprocess_shape() -> None:
 
 def test_reid_preprocess_samples_full_crop() -> None:
     """Regression: the resize must sample from the entire source crop, not
-    collapse to a single row/column of the top-left pixel (the M3 bug)."""
+    collapse to a single row/column of the top-left pixel."""
     from app.inference.reid_embedder import _preprocess as reid_preprocess
 
     # Create a crop with a clear gradient — bottom-right corner is bright.

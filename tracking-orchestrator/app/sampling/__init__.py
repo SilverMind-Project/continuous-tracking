@@ -1,1 +1,1 @@
-"""Keyframe sampling for M6."""
+"""Keyframe sampling."""

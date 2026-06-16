@@ -52,8 +52,8 @@ def dedup_observations(
     Args:
         observations: raw observations for this frame (all cameras).
         cfg: WorldTrackerConfig; uses ``dedup_enabled``, ``dedup_max_distance_m``,
-             ``dedup_require_no_face_conflict``, and M5 group-appearance keys.
-        overlap_groups: declared overlap groups for group-appearance dedup (M5).
+             ``dedup_require_no_face_conflict``, and group-appearance keys.
+        overlap_groups: declared overlap groups for group-appearance dedup.
 
     Returns:
         (deduped_observations, cluster_map) where:
@@ -121,7 +121,7 @@ def dedup_observations(
                     continue
             _union(i, j)
 
-    # M5.3: Group-appearance dedup for uncalibrated cameras in declared overlap groups.
+    # Group-appearance dedup for uncalibrated cameras in declared overlap groups.
     if cfg.enable_group_appearance_dedup and overlap_groups:
         _group_appearance_dedup_pass(observations, cfg, overlap_groups, _find, _union, n)
 

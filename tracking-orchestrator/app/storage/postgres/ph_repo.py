@@ -998,7 +998,13 @@ class PostgresWorldObservationRepository:
                 ),
                 observation.height_estimate_m,
                 observation.quality,
-                json.dumps({"floor_residual_m": observation.floor_residual_m}),
+                json.dumps(
+                    {
+                        "floor_residual_m": observation.floor_residual_m,
+                        "floor_cov_random": observation.floor_cov_random,
+                        "footpoint_reliable": observation.footpoint_reliable,
+                    }
+                ),
             )
         return oid
 
@@ -1068,6 +1074,12 @@ def _annotation_str(raw: Any, key: str) -> str | None:
     return str(value)
 
 
+def _cov2x2_tuple_from_metadata(raw: Any) -> tuple[float, float, float, float] | None:
+    if not isinstance(raw, list | tuple) or len(raw) != 4:
+        return None
+    return (float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3]))
+
+
 def _row_to_ph(row: Any) -> PersonHypothesis:
     mean_raw: list[float] = [float(v) for v in row["state_mean"]]
     cov_raw: list[float] = [float(v) for v in row["state_cov"]]
@@ -1124,6 +1136,8 @@ def _row_to_world_observation(row: Any) -> WorldObservation:
         face_anchor=None,
         quality=float(row.get("quality") or 0.0),
         floor_residual_m=metadata.get("floor_residual_m"),
+        floor_cov_random=_cov2x2_tuple_from_metadata(metadata.get("floor_cov_random")),
+        footpoint_reliable=bool(metadata.get("footpoint_reliable", True)),
     )
 
 

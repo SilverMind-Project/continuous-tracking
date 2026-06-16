@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         FloorPoint,
         IdentityDecision,
         IdentityRevision,
+        ObservationGeometry,
         OrientationBin,
         PostureType,
         WorldFrameSnapshot,
@@ -80,6 +81,10 @@ class FrameContext:
     # per-detection body orientation estimate from pose keypoints.
     # Producer: InferenceStage. Consumer: WorldTrackingStage.
     orientation_by_detection: dict[str, tuple[OrientationBin, float]] = field(default_factory=dict)
+    # detection_id -> ObservationGeometry.
+    # Producer: WorldTrackingStage._build_observations.
+    # Consumers: geometry-aware posture weighting and observation persistence.
+    geometry_by_detection: dict[str, ObservationGeometry] = field(default_factory=dict)
     # Typed evidence produced by inference adapters.
     _detection_evidence: dict[int, PersonDetectionEvidence] = field(default_factory=dict)
     _appearance_evidence: list[AppearanceEvidence] = field(default_factory=list)

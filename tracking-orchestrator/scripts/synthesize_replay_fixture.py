@@ -17,6 +17,8 @@ Each observation dict contains:
     detection_id            str   (deterministic; used by truth sidecar)
     quality                 float
     calibrated              bool  (default True)
+    floor_cov_random        list[float] | None  row-major 2x2 covariance in m²
+    footpoint_reliable      bool
     face_anchor             dict | None
     orientation             int   (OrientationBin value; 4=UNKNOWN default)
     orientation_confidence  float (default 0.0)
@@ -68,10 +70,16 @@ def _obs(
     detection_id: str,
     detection_confidence: float = 0.92,
     quality: float = 0.5,
+    floor_cov_random: list[float] | None = None,
+    footpoint_reliable: bool | None = None,
     orientation: int = ORI_UNKNOWN,
     orientation_confidence: float = 0.0,
 ) -> dict:
     obs_time = BASE_TIME + timedelta(seconds=step * FRAME_INTERVAL_S)
+    if footpoint_reliable is None:
+        footpoint_reliable = calibrated
+    if floor_cov_random is None and calibrated:
+        floor_cov_random = [0.04, 0.0, 0.0, 0.04]
     result: dict = {
         "camera_id": camera_id,
         "frame_index": frame_index,
@@ -84,6 +92,8 @@ def _obs(
         "detection_id": detection_id,
         "quality": quality,
         "calibrated": calibrated,
+        "floor_cov_random": floor_cov_random,
+        "footpoint_reliable": footpoint_reliable,
         "orientation": orientation,
         "orientation_confidence": orientation_confidence,
     }
@@ -243,7 +253,7 @@ def hallway_bathroom_door() -> tuple[list[list[dict]], dict]:
     return frames, truth
 
 
-# ── M1 new fixtures ─────────────────────────────────────────────────────
+# ── Identity continuity fixtures ────────────────────────────────────────
 
 
 def _mk_face(
@@ -285,8 +295,8 @@ def single_camera_turn() -> tuple[list[list[dict]], dict]:
 
     Total: 50 frames.  calibrated=False throughout (home camera scenario).
 
-    Without M2 flags this produces 2 distinct PHs and UNKNOWN-after-known.
-    With M2 revival + sticky maintenance this should produce 1 PH with
+    Without revival/sticky maintenance this produces 2 distinct PHs and UNKNOWN-after-known.
+    With revival + sticky maintenance this should produce 1 PH with
     identity alice held throughout.
     """
     emb_front = [0.95, 0.05, 0.00]
@@ -591,7 +601,7 @@ def resident_plus_stranger() -> tuple[list[list[dict]], dict]:
     Stranger:          never produces a face anchor (only no-face frames).
 
     This is the clinical guardrail for the favor-continuity bias:
-    later milestones must never transfer the resident's identity onto
+    later identity changes must never transfer the resident's identity onto
     the stranger's track.
     """
     emb_resident = [0.90, 0.10, 0.00]
@@ -647,7 +657,7 @@ def resident_plus_stranger() -> tuple[list[list[dict]], dict]:
     return frames, truth
 
 
-# ── New fixtures for M5.3 sweep ─────────────────────────────────────────
+# ── Sweep fixtures ──────────────────────────────────────────────────────
 
 
 def uncalibrated_pacing() -> tuple[list[list[dict]], dict]:

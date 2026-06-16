@@ -1,6 +1,6 @@
 ---
 name: engineering-standards
-description: This skill covers **how** to build - library choices, data abstraction patterns, testing strategy, wire format, and security at boundaries. For **what** to build (milestones, domain rules, quality gate, linting configuration), see [CLAUDE.md](CLAUDE.md).
+description: This skill covers **how** to build - library choices, data abstraction patterns, testing strategy, wire format, and security at boundaries. For **what** to build (domain rules, quality gates, linting configuration), see [CLAUDE.md](CLAUDE.md).
 ---
 
 # Engineering Standards

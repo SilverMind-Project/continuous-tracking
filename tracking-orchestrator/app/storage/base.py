@@ -761,6 +761,10 @@ class InMemoryWorldObservationRepository:
             detection_id=observation.detection_id,
             quality=observation.quality,
             floor_residual_m=observation.floor_residual_m,
+            orientation=observation.orientation,
+            orientation_confidence=observation.orientation_confidence,
+            floor_cov_random=observation.floor_cov_random,
+            footpoint_reliable=observation.footpoint_reliable,
         )
         self._observations.setdefault(ph_id, []).append(stored)
         return oid
@@ -771,7 +775,7 @@ class InMemoryWorldObservationRepository:
 
 
 # ---------------------------------------------------------------------------
-# CameraTopologyRepository (M5.1)
+# CameraTopologyRepository
 # ---------------------------------------------------------------------------
 
 
@@ -851,7 +855,7 @@ class CachedCameraTopologyRepository:
 
 
 # ---------------------------------------------------------------------------
-# CoPresenceRepository (M5.1)
+# CoPresenceRepository
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""Postgres-backed CameraTopologyRepository and CoPresenceRepository (M5.1)."""
+"""Postgres-backed CameraTopologyRepository and CoPresenceRepository."""
 
 from __future__ import annotations
 

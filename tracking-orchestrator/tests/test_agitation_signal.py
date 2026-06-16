@@ -1,4 +1,4 @@
-"""Tests for the agitation_index dementia signal (M4 task 4.2).
+"""Tests for the agitation_index dementia signal.
 
 All tests use InMemory repositories — no DB required.
 """

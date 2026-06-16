@@ -9,8 +9,10 @@ import numpy.typing as npt
 import pytest
 
 from app.domain import ObservationGeometry, OrientationBin
+from app.inference.schemas import Keypoint, PoseResult
 from app.tracking.world.observation_model import (
     calibration_covariance,
+    footpoint_reliable,
     homography_jacobian,
     observation_covariance,
     pixel_covariance,
@@ -41,6 +43,13 @@ def _geo(
         orientation=orientation,
         orientation_confidence=orientation_confidence,
     )
+
+
+def _pose(left_ankle_score: float = 0.9, right_ankle_score: float = 0.9) -> PoseResult:
+    keypoints = [Keypoint(x=0.5, y=0.5, score=0.9) for _ in range(17)]
+    keypoints[15] = Keypoint(x=0.45, y=0.95, score=left_ankle_score)
+    keypoints[16] = Keypoint(x=0.55, y=0.95, score=right_ankle_score)
+    return PoseResult(keypoints=tuple(keypoints))
 
 
 def _project_m(h: NDArrayF8, px: float, py: float) -> NDArrayF8:
@@ -195,3 +204,40 @@ def test_all_outputs_are_python_float_and_2x2_float64() -> None:
 
     assert isinstance(posture_view_weight(geo), float)
     assert isinstance(primary_camera_score(geo), float)
+
+
+def test_footpoint_reliable_false_when_bottom_truncated() -> None:
+    assert not footpoint_reliable(
+        _pose(),
+        (100, 100, 220, 478),
+        image_w=640,
+        image_h=480,
+        edge_margin_px=4,
+    )
+
+
+def test_footpoint_reliable_false_when_ankles_occluded() -> None:
+    assert not footpoint_reliable(
+        _pose(left_ankle_score=0.1, right_ankle_score=0.2),
+        (100, 100, 220, 420),
+        image_w=640,
+        image_h=480,
+    )
+
+
+def test_footpoint_reliable_true_when_clean_and_ankle_visible() -> None:
+    assert footpoint_reliable(
+        _pose(left_ankle_score=0.1, right_ankle_score=0.8),
+        (100, 100, 220, 420),
+        image_w=640,
+        image_h=480,
+    )
+
+
+def test_footpoint_reliable_true_without_pose_when_not_truncated() -> None:
+    assert footpoint_reliable(
+        None,
+        (100, 100, 220, 420),
+        image_w=640,
+        image_h=480,
+    )

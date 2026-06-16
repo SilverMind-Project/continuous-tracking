@@ -133,7 +133,7 @@ async def test_list_history_filters_by_time():
 
 
 # ---------------------------------------------------------------------------
-# M2.3b: Provisional-PH visibility filtering
+# Provisional-PH visibility filtering
 # ---------------------------------------------------------------------------
 
 

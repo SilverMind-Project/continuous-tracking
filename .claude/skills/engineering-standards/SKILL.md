@@ -1,6 +1,6 @@
 ---
 name: engineering-standards
-description: Use when changing CTS architecture, repositories, configuration, tests, wire formats, units, caches, or security boundaries. For milestone and domain requirements, see CLAUDE.md.
+description: Use when changing CTS architecture, repositories, configuration, tests, wire formats, units, caches, or security boundaries. For domain requirements and quality gates, see CLAUDE.md.
 ---
 
 # Engineering Standards
@@ -882,9 +882,9 @@ Review checklist when adding an execution path: which epoch-scoped caches does t
 
 ### Cross-service contracts
 
-- **Proto changes are two-repo changes.** Update bindings, subscribers, publishers, tests, and docs in both repos in the same milestone.
+- **Proto changes are two-repo changes.** Update bindings, subscribers, publishers, tests, and docs in both repos in the same change set.
 - **Do not reuse proto field numbers.** Deprecated fields are reserved. New fields get new numbers. Keep compatibility readers during migration.
-- **Wire-field rename discipline.** When a serialized field is renamed (preferred: finalize the rename in the `.proto` file so the generated `_pb2.py` uses the new name), update the proto, regenerate bindings in both repos (`make proto-py`), and update every producer and consumer in the same milestone. After the rename the deprecated field name must not appear anywhere in source code except: (a) `reserved` declarations in the proto, (b) `Detection.global_track_id` which remains as a deprecated wire alias for older orchestrators until a dedicated cleanup milestone. No business logic, no second module, and no published message may read or emit a deprecated field name once the rename is finalized. Enforce with a name-contract test (`tests/contracts/test_ph_contract_names.py`). The approved-boundary list in that test is the authoritative registry of permitted legacy references.
+- **Wire-field rename discipline.** When a serialized field is renamed (preferred: finalize the rename in the `.proto` file so the generated `_pb2.py` uses the new name), update the proto, regenerate bindings in both repos (`make proto-py`), and update every producer and consumer in the same change set. After the rename the deprecated field name must not appear anywhere in source code except: (a) `reserved` declarations in the proto, (b) `Detection.global_track_id` which remains as a deprecated wire alias for older orchestrators until a dedicated cleanup change. No business logic, no second module, and no published message may read or emit a deprecated field name once the rename is finalized. Enforce with a name-contract test (`tests/contracts/test_ph_contract_names.py`). The approved-boundary list in that test is the authoritative registry of permitted legacy references.
 - **Decode-boundary rule.** A wire field may carry a deprecated name during a rename, but it must be decoded into its PH-native name at exactly one boundary, and no business logic may read the deprecated name. After decoding, only the canonical name propagates. The `test_ph_contract_names.py` enforcement verifies that no non-approved module reads or emits a deprecated field name.
 - **Redis Streams stay protobuf-only.** No JSON, no base64, no dual-codec.
 - **Shadow before authority.** New tracking, identity, or signal algorithms run in shadow mode with mismatch metrics before becoming authoritative.

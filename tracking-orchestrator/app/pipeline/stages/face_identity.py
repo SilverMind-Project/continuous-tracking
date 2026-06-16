@@ -318,7 +318,7 @@ class FaceIdentityStage(FrameStage):
                 state = face.recognition_state
 
                 if state == "recognized":
-                    # Strong positive: emit if confidence >= min_conf (same as before M3).
+                    # Strong positive: emit if confidence >= min_conf.
                     if face.confidence < min_conf:
                         continue
                     face_anchors.append(

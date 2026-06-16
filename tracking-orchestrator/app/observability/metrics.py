@@ -101,7 +101,7 @@ class Metrics:
     world_tracker_ph_spawned_total: Counter
     world_tracker_ph_closed_total: Counter
 
-    # ---- PH lifecycle (M1) ----------------------------------------------
+    # ---- PH lifecycle ---------------------------------------------------
     ph_lifetime_seconds: Histogram
     ph_observations_at_close: Histogram
     identity_unknown_after_known_total: Counter
@@ -163,16 +163,16 @@ class Metrics:
     cts_presence_events_published_total: Counter
     cts_dwell_events_published_total: Counter
 
-    # ---- Fall detection fast path (M2) ----
+    # ---- Fall detection fast path ----
     cts_fall_suspected_total: Counter
     cts_fall_descent_rate: Histogram
     cts_fall_suspected_unidentified_total: Counter
 
-    # ---- Low-confidence detection recovery (M2.3) ----
+    # ---- Low-confidence detection recovery ----
     worldtracker_low_band_matches_total: Counter
     worldtracker_low_band_dropped_total: Counter
 
-    # ---- Adaptive ReID cadence (M5.1) ----
+    # ---- Adaptive ReID cadence ----
     cts_reid_executed_total: Counter
     cts_reid_skipped_total: Counter
 
@@ -399,7 +399,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_world_tracker_ph_closed_total",
             "PHs closed since process start.",
         ),
-        # ---- PH lifecycle (M1) ------------------------------------------------
+        # ---- PH lifecycle -----------------------------------------------------
         ph_lifetime_seconds=_hist(
             "cts_ph_lifetime_seconds",
             "Seconds from PH creation to close.",
@@ -575,7 +575,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         ),
         worldtracker_group_appearance_dedup_total=_counter(
             "cts_worldtracker_group_appearance_dedup_total",
-            "Group-appearance dedup clusters formed (M5).",
+            "Group-appearance dedup clusters formed.",
         ),
         worldtracker_copresence_links_total=_counter(
             "cts_worldtracker_copresence_links_total",
@@ -592,7 +592,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Dwell events published to tracking.dwell.",
             ["event_type"],
         ),
-        # ---- Fall detection fast path (M2) ----
+        # ---- Fall detection fast path ----
         cts_fall_suspected_total=_counter(
             "cts_fall_suspected_total",
             "fall_suspected signals emitted by FallDetectionStage.",
@@ -607,16 +607,16 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_fall_suspected_unidentified_total",
             "Fall detections suppressed because the PH had no committed identity.",
         ),
-        # ---- Low-confidence detection recovery (M2.3) ----
+        # ---- Low-confidence detection recovery ----
         worldtracker_low_band_matches_total=_counter(
             "cts_worldtracker_low_band_matches_total",
-            "PHs updated via low-confidence second association pass (M2.3).",
+            "PHs updated via low-confidence second association pass.",
         ),
         worldtracker_low_band_dropped_total=_counter(
             "cts_worldtracker_low_band_dropped_total",
             "Low-band observations dropped (no open PH within recovery gate).",
         ),
-        # ---- Adaptive ReID cadence (M5.1) ----
+        # ---- Adaptive ReID cadence ----
         cts_reid_executed_total=_counter(
             "cts_reid_executed_total",
             "Frames where SOLIDER-ReID embed_batch was called.",

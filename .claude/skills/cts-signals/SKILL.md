@@ -62,11 +62,11 @@ Each detector method:
 
 **Three iron rules:**
 
-1. **Baselines derive from raw behavior tables, never from emitted signals.** `BehaviorBaselineRepository` queries `person_trajectories` and `room_dwells`, not `dementia_signals`. Using prior signal values as a baseline creates a circularity: the baseline shifts toward whatever the detector already fires on, making the z-score converge toward zero over time. (M1 audit root cause: the pre-M1 pacing baseline read emitted pacing signals.)
+1. **Baselines derive from raw behavior tables, never from emitted signals.** `BehaviorBaselineRepository` queries `person_trajectories` and `room_dwells`, not `dementia_signals`. Using prior signal values as a baseline creates a circularity: the baseline shifts toward whatever the detector already fires on, making the z-score converge toward zero over time. Audit note: the pacing baseline once read emitted pacing signals.
 
-2. **The current value must never be in its own baseline sample set.** The current observation window is excluded from the `since`/`until` query range. A signal that includes its own measurement in the denominator will never trigger -- the z-score is 0 by construction. (M1 audit root cause: the pre-M1 baseline window included the current day.)
+2. **The current value must never be in its own baseline sample set.** The current observation window is excluded from the `since`/`until` query range. A signal that includes its own measurement in the denominator will never trigger -- the z-score is 0 by construction. Audit note: the baseline window once included the current day.
 
-3. **Baseline samples must be in the same units and window shape as the compared value.** If you compare a 24-hour transition rate, the baseline samples must each be 24-hour transition rates, not hourly counts or raw point counts. (M1 audit root cause: the pre-M1 pacing baseline compared per-minute rates against per-30-minute counts.)
+3. **Baseline samples must be in the same units and window shape as the compared value.** If you compare a 24-hour transition rate, the baseline samples must each be 24-hour transition rates, not hourly counts or raw point counts. Audit note: the pacing baseline once compared per-minute rates against per-30-minute counts.
 
 ## Statistics
 
@@ -133,7 +133,7 @@ Returns True if the signal should be emitted. Internal logic in order:
 - Trend signals (`sundowning_index`) and experimental kinds cap at `warning`.
 - Data quality demotion: if `identity_confidence_mean < 0.3` OR `coverage_ratio < 0.1`, `warning` and `emergency` are demoted to `info` before emission. The signal is still emitted (so the upsert records it), but caregiver notifications should filter on severity.
 - Dementia signals may gate on the persisted `position_sigma_m` / `footpoint_reliable` fields
-  once M08 lands. Low-confidence trajectory points should not escalate pacing/wandering.
+  when those fields are available. Low-confidence trajectory points should not escalate pacing/wandering.
 
 ## Stable IDs and idempotency
 

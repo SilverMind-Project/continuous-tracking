@@ -1,4 +1,4 @@
-"""M5 cross-camera revival: step-level guardrails.
+"""Cross-camera revival step-level guardrails.
 
 The pure selector (select_revival_candidate) is unit-tested in
 tests/unit/tracking/world/test_revival.py (accept/reject, low-appearance,
@@ -6,7 +6,7 @@ implausible transit, face conflict). These tests prove the end-to-end behaviour
 through WorldTracker.step with enable_cross_camera_revival:
 
 - Positive: cross_camera_handoff.bin links the camera-B segment to the camera-A
-  identity once M5 is on (the gap that the M1 baseline left unlinked).
+  identity once cross-camera revival is on.
 - Clinical guardrail: a stranger appearing on a second camera after a resident
   handoff must NEVER inherit the resident's identity via cross-camera revival.
 
@@ -25,8 +25,10 @@ from tests.integration._replay import _ROOM_POLYGONS, FIXTURES_DIR, load_fixture
 BASE_TIME = datetime(2026, 5, 28, 9, 0, 0, tzinfo=UTC)
 
 
-async def _replay_with_m5(db_pool: Any, fixture_name: str, *, identity_ids: list[str]) -> Any:
-    """Replay a fixture with M2 + M5 cross-camera revival enabled."""
+async def _replay_with_cross_camera_revival(
+    db_pool: Any, fixture_name: str, *, identity_ids: list[str]
+) -> Any:
+    """Replay a fixture with PH revival and cross-camera revival enabled."""
     from app.domain import Identity
     from app.storage.base import InMemoryGalleryRepository
     from app.storage.postgres.ph_repo import (
@@ -70,19 +72,20 @@ async def _replay_with_m5(db_pool: Any, fixture_name: str, *, identity_ids: list
 
 
 @pytest.mark.integration
-class TestM5CrossCameraHandoff:
-    """cross_camera_handoff.bin: M5 links the two cameras to one identity."""
+class TestCrossCameraHandoff:
+    """cross_camera_handoff.bin links the two cameras to one identity."""
 
     @pytest.mark.asyncio
     async def test_handoff_preserves_identity_across_cameras(self, db_pool: Any) -> None:
         from app.storage.postgres.ph_repo import PostgresPHRepository
 
-        await _replay_with_m5(db_pool, "cross_camera_handoff.bin", identity_ids=["alice"])
+        await _replay_with_cross_camera_revival(
+            db_pool, "cross_camera_handoff.bin", identity_ids=["alice"]
+        )
         ph_repo = PostgresPHRepository(db_pool)
         phs, _total = await ph_repo.list_active(include_transient=True)
 
-        # The camera-B segment must carry alice's identity (handoff linked),
-        # whereas the M1 baseline left it UNKNOWN / a fresh PH.
+        # The camera-B segment must carry alice's identity after the handoff is linked.
         b_phs = [ph for ph in phs if "cam-handoff-b" in (ph.active_cameras or set())]
         assert b_phs, "expected at least one PH active on camera B"
         assert any(ph.current_identity_id == "alice" for ph in b_phs), (
@@ -91,7 +94,7 @@ class TestM5CrossCameraHandoff:
 
 
 @pytest.mark.integration
-class TestM5StrangerGuardrail:
+class TestCrossCameraStrangerGuardrail:
     """A stranger on a second camera must not inherit the resident's identity."""
 
     @pytest.mark.asyncio

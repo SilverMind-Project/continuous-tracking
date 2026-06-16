@@ -1,4 +1,4 @@
-"""Pipeline-level tests for InferenceStage adaptive ReID cadence (M5.1).
+"""Pipeline-level tests for InferenceStage adaptive ReID cadence.
 
 Tests:
   1. Two-person frame always embeds (multi_detect trigger).

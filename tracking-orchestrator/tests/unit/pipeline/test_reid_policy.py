@@ -1,4 +1,4 @@
-"""Unit tests for ReidNeedPolicy (M5.1 adaptive ReID cadence).
+"""Unit tests for ReidNeedPolicy adaptive ReID cadence.
 
 Truth-table coverage of all trigger conditions plus boundary cases.
 Tests run without any I/O or DB.

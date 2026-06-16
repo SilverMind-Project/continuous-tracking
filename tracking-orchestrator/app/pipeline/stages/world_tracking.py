@@ -15,11 +15,14 @@ from ...domain import (
     BoundingBox,
     FaceAnchor,
     FloorPoint,
+    ObservationGeometry,
     OrientationBin,
     WorldObservation,
 )
 from ...observability import metrics as _metrics
+from ...tracking.floor_projector import FloorProjector
 from ...tracking.world.config import WorldTrackerConfig
+from ...tracking.world.observation_model import footpoint_reliable, pixel_covariance
 from ...tracking.world.tracker import WorldTracker, WorldTrackerResult
 from ..frame_context import FrameContext
 from ..privacy import PrivacyZoneFilter
@@ -100,6 +103,7 @@ class WorldTrackingStage(FrameStage):
         anchor_match_window_s: float = 30.0,
         anchor_match_distance_m: float = 5.0,
         anchor_min_confidence: float = 0.5,
+        floor_projector: FloorProjector | None = None,
     ) -> None:
         self._tracker = tracker
         self._config = config or WorldTrackerConfig()
@@ -109,6 +113,7 @@ class WorldTrackingStage(FrameStage):
         self._anchor_match_window_s = anchor_match_window_s
         self._anchor_match_distance_m = anchor_match_distance_m
         self._anchor_min_confidence = anchor_min_confidence
+        self._floor_projector = floor_projector or FloorProjector(calibration_state)
         self._missing_room_binding_warnings: set[str] = set()
 
     async def run(self, ctx: FrameContext) -> None:
@@ -242,6 +247,8 @@ class WorldTrackingStage(FrameStage):
                     face_anchor=None,
                     detection_id="",
                     quality=0.0,
+                    floor_cov_random=None,
+                    footpoint_reliable=False,
                 )
             )
 
@@ -260,13 +267,47 @@ class WorldTrackingStage(FrameStage):
         # can still create PersonHypotheses and commit face-based identities.
         observations: list[WorldObservation] = []
         uncalibrated_count = 0
+        ctx.geometry_by_detection = {}
         for det in ctx.domain_detections:
             fp = det.floor_point
+            floor_cov_random: tuple[float, float, float, float] | None = None
+            reliable_footpoint = False
+            geometry: ObservationGeometry | None = None
             if not fp.calibrated:
                 fp = _synthetic_floor_point(
                     det.bbox, ctx.effective_width, ctx.effective_height, ctx.frame.camera_id
                 )
                 uncalibrated_count += 1
+            else:
+                orientation, orientation_confidence = ctx.orientation_by_detection.get(
+                    det.detection_id, (OrientationBin.UNKNOWN, 0.0)
+                )
+                floor_residual_m = det.floor_residual_m if det.floor_residual_m is not None else 0.0
+                reliable_footpoint = footpoint_reliable(
+                    ctx.det_pose_result.get(det.detection_id),
+                    (det.bbox.x_min, det.bbox.y_min, det.bbox.x_max, det.bbox.y_max),
+                    ctx.effective_width,
+                    ctx.effective_height,
+                )
+                geometry = ObservationGeometry(
+                    footpoint_px=(det.bbox.center_x, float(det.bbox.y_max)),
+                    floor_residual_m=floor_residual_m,
+                    footpoint_reliable=reliable_footpoint,
+                    detection_confidence=det.confidence,
+                    crop_quality=det.crop_quality,
+                    orientation=orientation,
+                    orientation_confidence=orientation_confidence,
+                )
+                pixel_cov_px2 = pixel_covariance(geometry)
+                _point, floor_cov_random = self._floor_projector.project_with_covariance(
+                    det.camera_id,
+                    det.bbox,
+                    pixel_cov_px2,
+                )
+                ctx.geometry_by_detection[det.detection_id] = geometry
+            orientation, orientation_confidence = ctx.orientation_by_detection.get(
+                det.detection_id, (OrientationBin.UNKNOWN, 0.0)
+            )
             observations.append(
                 WorldObservation(
                     camera_id=det.camera_id,
@@ -281,12 +322,10 @@ class WorldTrackingStage(FrameStage):
                     detection_id=det.detection_id,
                     quality=det.crop_quality,
                     floor_residual_m=det.floor_residual_m if fp.calibrated else None,
-                    orientation=ctx.orientation_by_detection.get(
-                        det.detection_id, (OrientationBin.UNKNOWN, 0.0)
-                    )[0],
-                    orientation_confidence=ctx.orientation_by_detection.get(
-                        det.detection_id, (OrientationBin.UNKNOWN, 0.0)
-                    )[1],
+                    orientation=orientation,
+                    orientation_confidence=orientation_confidence,
+                    floor_cov_random=floor_cov_random,
+                    footpoint_reliable=geometry.footpoint_reliable if geometry else False,
                 )
             )
         return observations, uncalibrated_count
@@ -359,6 +398,8 @@ class WorldTrackingStage(FrameStage):
                     floor_residual_m=obs.floor_residual_m,
                     orientation=obs.orientation,
                     orientation_confidence=obs.orientation_confidence,
+                    floor_cov_random=obs.floor_cov_random,
+                    footpoint_reliable=obs.footpoint_reliable,
                 )
             )
         return observations_with_faces

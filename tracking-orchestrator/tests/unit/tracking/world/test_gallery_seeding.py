@@ -182,8 +182,8 @@ async def test_candidate_face_does_not_seed_gallery() -> None:
 
 @pytest.mark.asyncio
 async def test_multiview_gallery_does_not_leak_identity_to_stranger() -> None:
-    """Clinical guardrail with the multiview gallery query LIVE (the path M4
-    enables). With only grandma enrolled and a stranger whose body embedding is
+    """Clinical guardrail with the multiview gallery query live. With only grandma
+    enrolled and a stranger whose body embedding is
     orthogonal to grandma's prototypes (similarity ~0), the resolver must keep
     the stranger UNKNOWN. Before the UNKNOWN-complement fix this leaked: the
     single-identity likelihood normalized to grandma=1.0 and committed."""
@@ -229,7 +229,7 @@ async def test_multiview_gallery_still_commits_matching_identity() -> None:
 
 @pytest.mark.asyncio
 async def test_multiview_back_view_retrieval_commits_via_max_over_views() -> None:
-    """End-to-end front->back retrieval (M4's headline). Grandma's gallery holds
+    """End-to-end front->back retrieval. Grandma's gallery holds
     a BACK prototype distinct from her front. A back-facing PH (no face, body
     matches the BACK entry) commits grandma via max-over-views, where a single
     front-mean query would miss. Proves turn-around re-ID through the tracker."""

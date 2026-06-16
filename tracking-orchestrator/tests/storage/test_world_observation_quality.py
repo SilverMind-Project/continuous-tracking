@@ -23,6 +23,8 @@ def _make_obs(quality: float, detection_id: str = "d1") -> WorldObservation:
         detection_confidence=0.92,
         detection_id=detection_id,
         quality=quality,
+        floor_cov_random=(0.1, 0.0, 0.0, 0.2),
+        footpoint_reliable=False,
     )
 
 
@@ -34,6 +36,8 @@ async def test_quality_round_trips_through_inmemory_repo():
     stored = await repo.list_by_ph("ph-1", limit=10)
     assert len(stored) == 1
     assert abs(stored[0].quality - 0.73) < 1e-6
+    assert stored[0].floor_cov_random == (0.1, 0.0, 0.0, 0.2)
+    assert not stored[0].footpoint_reliable
 
 
 @pytest.mark.asyncio

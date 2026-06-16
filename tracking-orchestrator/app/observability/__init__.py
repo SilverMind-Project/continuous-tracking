@@ -1,4 +1,4 @@
-"""Observability primitives for the tracking orchestrator (M10).
+"""Observability primitives for the tracking orchestrator.
 
 Centralises Prometheus metrics so producers / consumers / pipeline stages
 record against one canonical registry.  The metrics shape mirrors the

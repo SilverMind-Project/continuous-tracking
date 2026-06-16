@@ -4,9 +4,10 @@ Provides :func:`load_fixture` for reading length-prefixed JSON .bin fixture
 files and constructing :class:`WorldObservation` lists.  Also provides
 ``FIXTURES_DIR``, ``_ROOM_POLYGONS``, and :func:`load_truth` for reuse.
 
-Extended in M1 to support ``calibrated`` (default True for backward
+Extended to support ``calibrated`` (default True for backward
 compatibility with existing fixtures) and ``face_anchor`` fields.
-Extended in M5.3 to support ``orientation`` and ``orientation_confidence``.
+Extended to support ``orientation`` and ``orientation_confidence``.
+Extended to support ``floor_cov_random`` and ``footpoint_reliable``.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ def load_fixture(path: Path) -> list[list[WorldObservation]]:
             for o in obs_list:
                 bbox_d = o["bbox"]
 
-                # ── face anchor (optional, added in M1) ──
+                # ── face anchor (optional) ──
                 face_anchor: FaceAnchor | None = None
                 fa_data = o.get("face_anchor")
                 if fa_data is not None:
@@ -62,13 +63,24 @@ def load_fixture(path: Path) -> list[list[WorldObservation]]:
                         ),
                     )
 
-                # ── orientation (optional, added in M5.3) ──
+                # ── orientation (optional) ──
                 ori_raw = o.get("orientation", OrientationBin.UNKNOWN)
                 try:
                     orientation = OrientationBin(int(ori_raw))
                 except (ValueError, KeyError):
                     orientation = OrientationBin.UNKNOWN
                 orientation_confidence = float(o.get("orientation_confidence", 0.0))
+                floor_cov_raw = o.get("floor_cov_random")
+                floor_cov_random = (
+                    (
+                        float(floor_cov_raw[0]),
+                        float(floor_cov_raw[1]),
+                        float(floor_cov_raw[2]),
+                        float(floor_cov_raw[3]),
+                    )
+                    if floor_cov_raw is not None
+                    else None
+                )
 
                 frame_obs.append(
                     WorldObservation(
@@ -96,6 +108,8 @@ def load_fixture(path: Path) -> list[list[WorldObservation]]:
                         face_anchor=face_anchor,
                         orientation=orientation,
                         orientation_confidence=orientation_confidence,
+                        floor_cov_random=floor_cov_random,
+                        footpoint_reliable=bool(o.get("footpoint_reliable", True)),
                     )
                 )
             steps.append(frame_obs)

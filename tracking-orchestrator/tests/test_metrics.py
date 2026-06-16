@@ -1,4 +1,4 @@
-"""Smoke tests for the M10 Prometheus metrics module.
+"""Smoke tests for the Prometheus metrics module.
 
 The tests build a fresh ``CollectorRegistry`` per case so the global
 registry stays clean.

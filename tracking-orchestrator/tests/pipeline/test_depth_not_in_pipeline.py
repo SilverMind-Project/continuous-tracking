@@ -1,6 +1,6 @@
 """Invariant 3: DepthEstimator is implemented but intentionally not wired
 into the live frame pipeline. It is used only during homography auto-calibration.
-M7 will wire it into the posture slow-path."""
+The posture slow-path will wire it in when enabled."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Unit tests for the low-confidence detection recovery second association pass (M2.3).
+"""Unit tests for the low-confidence detection recovery second association pass.
 
 Tests:
   2. open PH + low-band obs inside tight gate → PH updated, observation_count unchanged,

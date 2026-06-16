@@ -1,4 +1,4 @@
-"""Per-window restlessness features for the agitation-index signal (M4).
+"""Per-window restlessness features for the agitation-index signal.
 
 Mirrors the window-handling conventions of DementiaSignalWorker._compute_pacing
 (sorted ascending, density gating) and must not duplicate room-transition logic.
@@ -26,7 +26,7 @@ class RestlessnessConfig:
 
     motion_active_floor:
         Motion energy above which a point counts as "active" (nu/s).
-        Set above the M1 stillness floor (0.05 nu/s, p95 of still segments)
+        Set above the stillness floor (0.05 nu/s, p95 of still segments)
         so that passive frames — TV-watching, breathing micro-adjustments —
         are excluded from in_place_motion_ratio.  Walking is ~0.15 nu/s;
         this floor sits between still p95 (0.05) and walking p5 (0.15).
@@ -96,7 +96,7 @@ class RestlessnessFeatures:
     a meaningful distribution.
 
     observed_minutes:
-        Point-count proxy for minutes (same docstring caveat as M1 task 1:
+        Point-count proxy for minutes (same docstring caveat as the pacing detector:
         each trajectory point represents roughly one observation minute
         at normal sampling rates; this is not a wall-clock measurement).
     """

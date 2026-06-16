@@ -142,8 +142,8 @@ def test_missing_embeddings_falls_back_to_space_time() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cross_camera_rejected_in_m2() -> None:
-    """A different-camera closed PH is rejected (cross-camera is M5)."""
+def test_cross_camera_rejected_when_disabled() -> None:
+    """A different-camera closed PH is rejected when cross-camera revival is disabled."""
     closed = _closed_ph(camera_id="cam-b")
     obs = _obs(camera_id="cam-a")
     result = select_revival_candidate(obs, [closed], NOW, _config())

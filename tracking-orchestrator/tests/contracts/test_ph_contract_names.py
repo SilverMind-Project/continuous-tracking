@@ -20,7 +20,7 @@ import pytest
 from app.transport.redis_streams import _build_tracking_event_pb
 
 # -- Approved boundary files that may still reference legacy names -----------
-# These files are grandfathered until their respective refactoring milestones.
+# These files are grandfathered until their respective cleanup changes.
 _APPROVED_LEGACY_FILES: set[str] = {
     "app/domain/__init__.py",
 }

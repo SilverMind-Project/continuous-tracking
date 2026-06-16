@@ -1,4 +1,4 @@
-"""Unit tests for DetectStage low-confidence recovery (M2.3).
+"""Unit tests for DetectStage low-confidence recovery.
 
 Tests:
   1. Partition correctness: high / low band split.

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
 
 from app.domain import ObservationGeometry, OrientationBin
+
+if TYPE_CHECKING:
+    from app.inference.schemas import PoseResult
 
 NDArrayF8 = npt.NDArray[np.float64]
 
@@ -132,3 +136,41 @@ def primary_camera_score(geo: ObservationGeometry) -> float:
     reliability_factor = 1.0 if geo.footpoint_reliable else 0.5
     score = reliability_factor * geo.crop_quality * geo.detection_confidence
     return float(min(max(score, 0.0), 1.0))
+
+
+def footpoint_reliable(
+    pose: PoseResult | None,
+    bbox_px: tuple[int, int, int, int],
+    image_w: int,
+    image_h: int,
+    *,
+    edge_margin_px: int = 4,
+    ankle_score_floor: float = 0.3,
+) -> bool:
+    """Return True when bbox bottom-centre is a trustworthy floor contact point.
+
+    Args:
+        pose: Optional COCO-17 pose result for the detection.
+        bbox_px: Raw pixel bbox as ``(x_min, y_min, x_max, y_max)``.
+        image_w: Raw/effective image width in px.
+        image_h: Raw/effective image height in px.
+        edge_margin_px: Edge-contact margin in px for truncation detection.
+        ankle_score_floor: Minimum ankle keypoint score for foot visibility.
+
+    With no pose result, truncation alone decides reliability. With pose,
+    both ankles below the score floor means the feet are occluded.
+    """
+    x_min, _y_min, x_max, y_max = bbox_px
+    truncated = (
+        y_max >= image_h - edge_margin_px
+        or x_min <= edge_margin_px
+        or x_max >= image_w - edge_margin_px
+    )
+    if pose is None:
+        ankles_visible = True
+    else:
+        left_ankle = pose.get("left_ankle")
+        right_ankle = pose.get("right_ankle")
+        ankles_visible = max(left_ankle.score, right_ankle.score) >= ankle_score_floor
+
+    return bool(not truncated and ankles_visible)

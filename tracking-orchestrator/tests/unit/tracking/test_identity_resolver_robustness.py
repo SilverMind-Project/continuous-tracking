@@ -1,4 +1,4 @@
-"""M3 identity resolver robustness guards."""
+"""Identity resolver robustness guards."""
 
 from __future__ import annotations
 

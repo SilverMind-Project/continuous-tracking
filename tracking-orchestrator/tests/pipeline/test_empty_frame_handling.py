@@ -1,5 +1,5 @@
 """Invariant 2: world tracker must be called on every frame, even with
-zero detections, so PHs age toward close_grace_s (M1 update)."""
+zero detections, so PHs age toward close_grace_s."""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ class TestEmptyFrameHandling:
     @pytest.mark.asyncio
     async def test_tracklet_ages_out_after_empty_frames(self) -> None:
         """A PH must close after ph_close_grace_s of no observations,
-        confirming the aging mechanism works through empty frames (M1 update)."""
+        confirming the aging mechanism works through empty frames."""
 
         detection_count = 0
 

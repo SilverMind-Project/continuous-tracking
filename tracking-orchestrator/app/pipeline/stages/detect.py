@@ -100,7 +100,7 @@ class DetectStage(FrameStage):
         contexts: list[FrameContext],
         images: list[npt.NDArray[np.uint8]],
     ) -> None:
-        """Standard path — byte-identical to the pre-M2.3 behavior."""
+        """Standard path, byte-identical to the behavior before low-confidence recovery."""
         detections_by_frame = await self._detect_images(images)
         for ctx, image, detections in zip(contexts, images, detections_by_frame, strict=True):
             logger.debug(

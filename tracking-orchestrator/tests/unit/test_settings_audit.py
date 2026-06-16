@@ -144,7 +144,7 @@ def test_no_dead_settings() -> None:
     externally_supplied = {
         (FaceIdConfig, "camera_configs"),
         (SignalConfig, "tz_name"),
-        # sampling gate, default-off, no settings.yaml key (M4 may add one).
+        # sampling gate, default-off, no settings.yaml key.
         (ResolverConfig, "coherence_shadow_sample_rate"),
     }
     for config_cls, builder in dataclass_fields.items():

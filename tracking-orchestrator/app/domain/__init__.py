@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 from enum import IntEnum
 from typing import Any, Literal, Protocol
 
+import numpy as np
+import numpy.typing as npt
+
 # ---------------------------------------------------------------------------
 # Spatial calibration
 # ---------------------------------------------------------------------------
@@ -97,7 +100,7 @@ class IdentityResolvableEntity(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Orientation and view prototypes (M4)
+# Orientation and view prototypes
 # ---------------------------------------------------------------------------
 
 
@@ -146,6 +149,16 @@ class ObservationGeometry:
     distance_m: float | None = None  # camera-to-footpoint floor distance
 
 
+def cov2x2_to_tuple(m: npt.NDArray[np.float64]) -> tuple[float, float, float, float]:
+    """Return a row-major 2x2 floor covariance tuple in m²."""
+    return (float(m[0, 0]), float(m[0, 1]), float(m[1, 0]), float(m[1, 1]))
+
+
+def tuple_to_cov2x2(t: tuple[float, float, float, float]) -> npt.NDArray[np.float64]:
+    """Return a 2x2 floor covariance matrix in m² from a row-major tuple."""
+    return np.array([[t[0], t[1]], [t[2], t[3]]], dtype=np.float64)
+
+
 # ---------------------------------------------------------------------------
 # Person Hypothesis types
 # ---------------------------------------------------------------------------
@@ -179,6 +192,13 @@ class WorldObservation:
     floor_residual_m: float | None = None
     orientation: OrientationBin = OrientationBin.UNKNOWN  # body orientation from pose keypoints
     orientation_confidence: float = 0.0  # confidence of orientation estimate [0,1]
+    floor_cov_random: tuple[float, float, float, float] | None = None
+    """Random part of the floor covariance J*Sigma_px*J^T, m^2, row-major 2x2.
+
+    None for uncalibrated/synthetic points with no homography Jacobian.
+    """
+    footpoint_reliable: bool = True
+    """False when feet are occluded or bbox truncation makes the floor contact low-trust."""
 
 
 @dataclass(frozen=True)

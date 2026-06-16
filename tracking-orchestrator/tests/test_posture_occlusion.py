@@ -1,4 +1,4 @@
-"""Tests for occlusion-aware posture scoring (M3)."""
+"""Tests for occlusion-aware posture scoring."""
 
 from __future__ import annotations
 

@@ -1,8 +1,8 @@
-"""M1 A3: Baseline capture tests for diagnosis fixtures.
+"""Baseline capture tests for diagnosis fixtures.
 
 Replays each new fixture through WorldTracker.step (Postgres repos),
 asserts present behaviour, and records baseline numbers as named
-constants so later milestones can assert improvement.
+constants so later changes can assert improvement.
 
 Marked @pytest.mark.integration; CI selects this marker.
 """
@@ -20,17 +20,17 @@ from tests.integration._replay import _ROOM_POLYGONS, FIXTURES_DIR, load_fixture
 # Must match the BASE_TIME used by synthesize_replay_fixture.py.
 BASE_TIME = datetime(2026, 5, 28, 9, 0, 0, tzinfo=UTC)
 
-# ── M1 baseline constants (recorded 2026-06-01) ─────────────────────────
-# When M2+ improves identity stability, these will decrease.
+# ── Baseline constants (recorded 2026-06-01) ────────────────────────────
+# When continuity features improve identity stability, these will decrease.
 
 # single_camera_turn: 12-frame (6 s) occlusion gap after turning forces PH
 # close (> 5 s grace) then respawn as UNKNOWN.  2 distinct PHs: the frontal
-# face-anchor PH (alice) plus the post-gap respawn (UNKNOWN).  M2 revival +
+# face-anchor PH (alice) plus the post-gap respawn (UNKNOWN).  Revival +
 # sticky maintenance must reduce this to exactly 1 PH with identity held.
 BASELINE_MIN_DISTINCT_PH_IDS_TURN = 2
 
 # cross_camera_handoff: 16 s gap > ph_close_grace_s (15 s), PH closes.
-# Cameras share 0 PH ids — the cross-camera gap M5 must fix.
+# Cameras share 0 PH ids; cross-camera revival should fix this gap.
 BASELINE_CAMERA_SHARED_PH_COUNT = 0
 
 # two_people_one_room: exactly 2 distinct PHs maintained
@@ -197,7 +197,7 @@ class TestDiagnosisResidentPlusStranger:
 
 @pytest.mark.integration
 class TestBehaviorNeutrality:
-    """M1 refactor must not change tracking behavior on existing fixtures."""
+    """Refactors must not change tracking behavior on existing fixtures."""
 
     @pytest.mark.asyncio
     async def test_hallway_bathroom_ph_count_unchanged(self, db_pool: Any) -> None:

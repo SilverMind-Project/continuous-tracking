@@ -81,6 +81,7 @@ The list is configuration-dependent. A conditional stage must name its enabling 
 |-------|--------|---------|
 | `frame` | `FetchStage` | All stages |
 | `domain_detections` | `DetectStage` | `PrivacyStage`, `SpatialProjectionStage`, `InferenceStage`, `DetectionBackfillStage` |
+| `geometry_by_detection` | `WorldTrackingStage._build_observations` | Geometry-aware posture weighting and observation persistence |
 | `world_snapshots`, `outcome_decisions`, `committed_ids`, `det_to_ph`, `active_ph_ids`, `new_revisions`, `ph_born_at_by_id` | `WorldTrackingStage._populate_context` | `DetectionBackfillStage`, `ClosePHStage`, `TrajectoryStage`, `RevisionsStage`, `PublishStage` (there is no single `world_tracker_result` field; the result is fanned out into these named fields) |
 | `face_anchors`, `_face_evidence` | `FaceIdentityStage` | `WorldTrackingStage` |
 | `event_time` | Initialized at context creation | All stages (do not use `datetime.now(UTC)` inside a stage unless you specifically need wall-clock time) |
@@ -120,7 +121,11 @@ There are two fixture families at different replay altitudes:
 | World-tracker replay | Length-prefixed JSON `WorldObservation` steps in `tests/fixtures/frame_replays/*.bin`, with `*.truth.json` sidecars | `tests/integration/_replay.py::load_fixture` and `load_truth`; replayed directly through `WorldTracker.step` by `test_world_tracker_e2e.py`, `test_m5_cross_camera.py`, `test_m2_ph_continuity.py`, and related integration tests | `scripts/synthesize_replay_fixture.py`; `scripts/record_replay_fixture.py` captures approved replay inputs |
 | Fall sequence | Header plus `FallFrameInput` rows as JSON Lines in `tests/fixtures/fall_sequences/*.jsonl` | `tests/integration/test_fall_sequences.py::_load_fixture`; replayed through `FallFeatureExtractor` and `FallDetector`. `scripts/calibrate_fall_thresholds.py` has a matching calibration loader | `scripts/synthesize_fall_sequence.py` |
 
-World-tracker fixture observations carry `calibrated`, optional `face_anchor`, `orientation`, and `orientation_confidence`. Their truth sidecars carry person labels per detection plus expected events. These proofs bypass the full frame pipeline, so they do not exercise MinIO, Triton, detection, face/pose inference, stage ordering, or the three execution routes.
+World-tracker fixture observations carry `calibrated`, optional `face_anchor`, `orientation`,
+`orientation_confidence`, `floor_cov_random`, and `footpoint_reliable`. Their truth sidecars carry
+person labels per detection plus expected events. These proofs bypass the full frame pipeline, so
+they do not exercise MinIO, Triton, detection, face/pose inference, stage ordering, or the three
+execution routes.
 
 Fall fixtures carry bbox, keypoints, posture scores, floor speed, motion energy, timing, room metadata, and a required expectation (`detect`, `no-detect`, or `warning-max`). They exist separately because `WorldObservation` replay cannot exercise `FallDetectionStage` inputs.
 

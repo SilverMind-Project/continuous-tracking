@@ -765,14 +765,14 @@ class WorldTracker:
                     reason="new_observation"
                 ).inc()
 
-        # 5a. Low-confidence second association pass (M2.3 BYTE-style recovery).
+        # 5a. Low-confidence second association pass (BYTE-style recovery).
         # Offers low-band detections to unmatched PHs under a tightened geometric gate.
         # Geometry-only cost (alpha_app=0): no embeddings, no identity evidence.
         # Matched PHs get Kalman state + last_seen_at update only; observation_count,
         # gallery_mean, and view_prototypes are intentionally unchanged to prevent
         # ghost persistence from contaminating identity or appearance state.
         # Low-band observations are NOT persisted (WorldObservation has no
-        # low_confidence field; adding a DB column is out of scope for M2.3).
+        # low_confidence field; adding a DB column is out of scope here).
         lb_matched_ph_indices: set[int] = set()
         if cfg.enable_low_confidence_recovery and low_band_observations:
             lb_obs_raw, _ = dedup_observations(

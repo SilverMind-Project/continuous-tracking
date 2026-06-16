@@ -95,8 +95,8 @@ class TestPipelineSkeleton:
             assert pipeline._transport is not None
             assert pipeline._ph_repo is not None
             assert pipeline._detector is None  # Skeleton mode
-            assert pipeline._trajectory_writer is not None  # M6
-            assert pipeline._keyframe_sampler is not None  # M6
+            assert pipeline._trajectory_writer is not None
+            assert pipeline._keyframe_sampler is not None
 
     @pytest.mark.asyncio
     async def test_live_room_map_replacement_is_read_by_next_skeleton_frame(
@@ -214,7 +214,7 @@ class TestPipelineSkeleton:
     async def test_close_track_on_global_track_termination(
         self, pipeline: FrameProcessingPipeline
     ) -> None:
-        """Issue #23 (M1 update): when a PH disappears, the pipeline
+        """Issue #23: when a PH disappears, the pipeline
         processes the closure without error."""
         with _mock_redis_deps():
             mock_detector = AsyncMock()
@@ -421,7 +421,7 @@ class TestFullPipelineIntegration:
             assert last_kwargs["frame_height"] == 480
             assert last_kwargs["capture_time_unix_ns"] > 0
 
-            # In M1, PHs require calibrated floor points (detector + homography).
+            # PHs require calibrated floor points (detector + homography).
             # Without calibration, observations are dropped safely.
             # The pipeline publishes events regardless.
             assert pipeline._ph_repo is not None

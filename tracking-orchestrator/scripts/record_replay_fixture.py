@@ -2,6 +2,10 @@
 
 Subscribes to ``frames.ready`` Redis stream and captures FrameReady
 protobuf messages from the specified cameras for the requested duration.
+It does not write WorldObservation replay rows; schema fields such as
+``floor_cov_random`` and ``footpoint_reliable`` are emitted by
+``scripts/synthesize_replay_fixture.py`` and read by
+``tests/integration/_replay.py``.
 
 Usage::
 

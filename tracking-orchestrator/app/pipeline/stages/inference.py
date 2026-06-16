@@ -65,7 +65,7 @@ class InferenceStage(FrameStage):
         crops = [crop_detection(image, det) for det in detections]
         ctx.crops = crops
 
-        # --- Adaptive ReID cadence policy (M5.1) ---
+        # --- Adaptive ReID cadence policy ---
         # Evaluated synchronously before embed_batch() so no GPU time is wasted.
         _skip_embed = False
         _skip_reason = ""

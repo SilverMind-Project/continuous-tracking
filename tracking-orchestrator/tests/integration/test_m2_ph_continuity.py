@@ -1,9 +1,9 @@
 """PH lifecycle continuity integration proofs.
 
-Replays the M1 diagnosis fixtures through WorldTracker.step with M2 flags
+Replays the diagnosis fixtures through WorldTracker.step with continuity features
 enabled (revival, sticky maintenance, uncalibrated gate relax), an identity
 resolver wired in, and known identities registered.  Asserts strict
-improvement over the M1 baseline on distinct-PH count, identity stability,
+improvement over the recorded baseline on distinct-PH count, identity stability,
 and guardrail preservation.
 
 Shadow-metric proofs (flags off) demonstrate the mechanisms would fire
@@ -46,13 +46,13 @@ def _labeled_counter_value(counter: Counter, label_name: str, label_value: str) 
 # ── Replay helpers ────────────────────────────────────────────────────────
 
 
-async def _replay_with_m2(
+async def _replay_with_continuity_features(
     db_pool: Any,
     fixture_name: str,
     *,
     known_identity_ids: list[str] | None = None,
 ) -> Any:
-    """Replay a fixture with M2 flags enabled and an identity resolver wired in.
+    """Replay a fixture with continuity features enabled and an identity resolver wired in.
 
     Returns (ph_repo, tracker) for post-replay assertions.
     """
@@ -114,7 +114,7 @@ async def _replay_shadow(
     db_pool: Any,
     fixture_name: str,
 ) -> Any:
-    """Replay a fixture with M2 flags OFF (shadow mode).
+    """Replay a fixture with continuity features OFF (shadow mode).
 
     Returns ph_repo for post-replay metric assertions.
     """
@@ -145,21 +145,21 @@ async def _replay_shadow(
     return ph_repo
 
 
-# ── M2 measurable gate: single_camera_turn ────────────────────────────────
+# ── Measurable gate: single_camera_turn ──────────────────────────────────
 
 
 @pytest.mark.integration
-class TestM2SingleCameraTurn:
-    """single_camera_turn.bin with M2 flags enabled.
+class TestSingleCameraTurnContinuity:
+    """single_camera_turn.bin with continuity features enabled.
 
-    M1 baseline: 2 distinct PHs (front-face PH + post-gap respawn as UNKNOWN).
-    M2 target: 1 PH with identity alice held throughout.
+    Recorded baseline: 2 distinct PHs (front-face PH + post-gap respawn as UNKNOWN).
+    Target: 1 PH with identity alice held throughout.
     """
 
     @pytest.mark.asyncio
     async def test_exactly_one_ph_for_one_person(self, db_pool: Any) -> None:
         """With revival, the closed PH is revived instead of spawning new."""
-        ph_repo, _tracker = await _replay_with_m2(
+        ph_repo, _tracker = await _replay_with_continuity_features(
             db_pool, "single_camera_turn.bin", known_identity_ids=["alice"]
         )
 
@@ -174,7 +174,7 @@ class TestM2SingleCameraTurn:
     async def test_identity_held_through_turn(self, db_pool: Any) -> None:
         """With sticky maintenance, the alice identity is held through the
         turn and walk frames — never UNKNOWN after being committed."""
-        ph_repo, _tracker = await _replay_with_m2(
+        ph_repo, _tracker = await _replay_with_continuity_features(
             db_pool, "single_camera_turn.bin", known_identity_ids=["alice"]
         )
 
@@ -186,31 +186,31 @@ class TestM2SingleCameraTurn:
             )
 
     @pytest.mark.asyncio
-    async def test_strict_improvement_over_m1_baseline(self, db_pool: Any) -> None:
-        """M2 must reduce distinct-PH count below the M1 baseline of 2."""
+    async def test_strict_improvement_over_recorded_baseline(self, db_pool: Any) -> None:
+        """Continuity features must reduce distinct-PH count below the recorded baseline of 2."""
         from tests.integration.test_diagnosis_baseline import (
             BASELINE_MIN_DISTINCT_PH_IDS_TURN,
         )
 
-        ph_repo, _tracker = await _replay_with_m2(
+        ph_repo, _tracker = await _replay_with_continuity_features(
             db_pool, "single_camera_turn.bin", known_identity_ids=["alice"]
         )
 
         phs, _total = await ph_repo.list_active(include_transient=True)
         distinct_ph = len({ph.ph_id for ph in phs})
-        # Strict improvement: fewer distinct PHs than the M1 baseline minimum.
+        # Strict improvement: fewer distinct PHs than the recorded baseline minimum.
         assert distinct_ph < BASELINE_MIN_DISTINCT_PH_IDS_TURN, (
             f"expected fewer than {BASELINE_MIN_DISTINCT_PH_IDS_TURN} distinct PHs, "
             f"got {distinct_ph}"
         )
 
 
-# ── M2 guardrail: two_people_one_room ─────────────────────────────────────
+# ── Guardrail: two_people_one_room ────────────────────────────────────────
 
 
 @pytest.mark.integration
-class TestM2TwoPeopleOneRoom:
-    """two_people_one_room.bin with M2 flags enabled.
+class TestTwoPeopleOneRoomContinuity:
+    """two_people_one_room.bin with continuity features enabled.
 
     Guardrail: the continuity bias (revival + sticky maintenance) must not
     merge two distinct people into one PH.
@@ -219,7 +219,7 @@ class TestM2TwoPeopleOneRoom:
     @pytest.mark.asyncio
     async def test_two_distinct_phs_preserved(self, db_pool: Any) -> None:
         """Two people remain two distinct PHs."""
-        ph_repo, _tracker = await _replay_with_m2(
+        ph_repo, _tracker = await _replay_with_continuity_features(
             db_pool, "two_people_one_room.bin", known_identity_ids=["alice", "bob"]
         )
 
@@ -227,12 +227,12 @@ class TestM2TwoPeopleOneRoom:
         assert total == 2, f"expected 2 PHs for two people, got {total}"
 
         ph_ids = {ph.ph_id for ph in phs}
-        assert len(ph_ids) == 2, "M2: the two PHs must have distinct IDs"
+        assert len(ph_ids) == 2, "the two PHs must have distinct IDs"
 
     @pytest.mark.asyncio
     async def test_two_distinct_identities_preserved(self, db_pool: Any) -> None:
         """Two people retain two distinct identities (alice, bob)."""
-        ph_repo, _tracker = await _replay_with_m2(
+        ph_repo, _tracker = await _replay_with_continuity_features(
             db_pool, "two_people_one_room.bin", known_identity_ids=["alice", "bob"]
         )
 
@@ -247,7 +247,7 @@ class TestM2TwoPeopleOneRoom:
     @pytest.mark.asyncio
     async def test_no_over_merge(self, db_pool: Any) -> None:
         """The continuity bias must not merge alice and bob into one PH."""
-        ph_repo, _tracker = await _replay_with_m2(
+        ph_repo, _tracker = await _replay_with_continuity_features(
             db_pool, "two_people_one_room.bin", known_identity_ids=["alice", "bob"]
         )
 
@@ -259,12 +259,12 @@ class TestM2TwoPeopleOneRoom:
             )
 
 
-# ── M2 guardrail: resident_plus_stranger ──────────────────────────────────
+# ── Guardrail: resident_plus_stranger ─────────────────────────────────────
 
 
 @pytest.mark.integration
-class TestM2ResidentPlusStranger:
-    """resident_plus_stranger.bin with M2 flags enabled.
+class TestResidentPlusStrangerContinuity:
+    """resident_plus_stranger.bin with continuity features enabled.
 
     Clinical guardrail: the favor-continuity bias must NOT transfer the
     resident's identity to the stranger's track.  This is the consequential
@@ -275,7 +275,7 @@ class TestM2ResidentPlusStranger:
     @pytest.mark.asyncio
     async def test_stranger_never_gets_resident_identity(self, db_pool: Any) -> None:
         """The stranger's PH stays UNKNOWN throughout."""
-        ph_repo, _tracker = await _replay_with_m2(
+        ph_repo, _tracker = await _replay_with_continuity_features(
             db_pool, "resident_plus_stranger.bin", known_identity_ids=["alice"]
         )
 
@@ -293,12 +293,12 @@ class TestM2ResidentPlusStranger:
                 )
 
 
-# ── M2 shadow-metric proofs ───────────────────────────────────────────────
+# ── Shadow-metric proofs ─────────────────────────────────────────────────
 
 
 @pytest.mark.integration
-class TestM2ShadowMetrics:
-    """With M2 flags OFF, the shadow counters must be > 0 on the turn replay,
+class TestContinuityShadowMetrics:
+    """With continuity features OFF, the shadow counters must be > 0 on the turn replay,
     demonstrating the mechanisms would fire before enabling them."""
 
     @pytest.mark.asyncio
