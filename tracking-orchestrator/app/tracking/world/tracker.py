@@ -7,6 +7,7 @@ no direct I/O. Called by WorldTrackingStage once per frame.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
@@ -873,7 +874,15 @@ class WorldTracker:
             await self._ph_repo.save(ph)
 
         # 9. Identity resolution: run the Bayesian resolver on PHs that
-        #    received observations this frame.
+        #    received observations this frame.  Pass the full open-PH identity
+        #    occupancy (updated_phs is a superset of all open PHs) so the
+        #    duplicate-active-identity guard also protects incumbents that were
+        #    not observed this frame.
+        open_ph_identities = {
+            ph.ph_id: ph.current_identity_id
+            for ph in updated_phs
+            if ph.closed_at is None and ph.current_identity_id
+        }
         identity_decisions, revisions, identity_by_ph = await _resolve_identities(
             resolver=self._identity_resolver,
             obs_repo=self._obs_repo,
@@ -883,6 +892,7 @@ class WorldTracker:
             face_anchors=face_anchors or [],
             det_to_ph=det_to_ph,
             face_evidence=face_evidence,
+            open_ph_identities=open_ph_identities,
             now=now,
             config=cfg,
         )
@@ -1255,6 +1265,7 @@ async def _resolve_identities(
     face_anchors: list[FaceAnchor],
     det_to_ph: dict[str, str] | None = None,
     face_evidence: list[FaceEvidence] | None = None,
+    open_ph_identities: Mapping[str, str] | None = None,
     now: datetime,
     config: WorldTrackerConfig,
 ) -> tuple[list[IdentityDecision], list[IdentityRevision], dict[str, dict[str, object]]]:
@@ -1331,6 +1342,7 @@ async def _resolve_identities(
             },
             ph_qualities={ph.ph_id: ph.mean_quality for ph in resolvable_phs},
             face_evidence=face_evidence,
+            open_ph_identities=open_ph_identities or {},
         )
     except Exception:
         logger.exception("identity_resolution_failed")

@@ -304,6 +304,10 @@ resolver:
   enable_quality_gate: true
   flip_debounce_window_s: 10.0
   enable_flip_debounce: true
+  # Shadow-first guard for duplicate active resident identities. Enable after
+  # replay proves same-person cross-camera continuation still works.
+  enable_duplicate_active_identity_guard: false
+  duplicate_identity_direct_face_min_confidence: 0.90
   # Identity-lock gate for emitted face anchors. This is intentionally stricter
   # than face_id.min_confidence, which only controls whether an anchor is emitted.
   face_commit_min_confidence: 0.70

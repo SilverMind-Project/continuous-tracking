@@ -861,6 +861,7 @@ Review checklist when adding an execution path: which epoch-scoped caches does t
 - **Evidence provenance is mandatory.** Source, confidence, quality, model version, timestamp, and tracklet identifier on every record.
 - **Direct face evidence is distinct.** Direct ArcFace, propagated hints, operator corrections, and ReID matches are separate evidence source types with different weights.
 - **Temporal prior cannot create identity.** It maintains an existing identity within a bounded window; new assignment requires sensory or operator evidence.
+- **Duplicate active identity is a guarded invariant.** `IdentityResolver.resolve()` owns the occupancy check over all open PHs (`open_ph_identities` carries incumbents not observed this frame). A second active PH must not newly acquire an identity already held by another open PH unless it has strong direct recognized face evidence for that identity. Shadow mode reports `cts_identity_shadow_mismatch_total{feature="duplicate_active_identity"}` before enforcement.
 - **Gallery labels are governed.** Tentative commits → quarantine → promotion after stable evidence, not immediate trust.
 - **Revisions are idempotent.** Stable IDs and evidence summaries so CC can apply once and explain in the UI.
 

@@ -219,6 +219,10 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         commit_margin_dense=r.as_float("commit_margin_dense"),
         flip_debounce_window_s=r.as_float("flip_debounce_window_s"),
         enable_flip_debounce=r.as_bool("enable_flip_debounce"),
+        enable_duplicate_active_identity_guard=r.as_bool("enable_duplicate_active_identity_guard"),
+        duplicate_identity_direct_face_min_confidence=r.as_float(
+            "duplicate_identity_direct_face_min_confidence"
+        ),
         prior_maintenance_max_age_s=r.as_float("prior_maintenance_max_age_s"),
         identified_entry_boost_min_sim=r.as_float("identified_entry_boost_min_sim"),
         identified_entry_min_likelihood=r.as_float("identified_entry_min_likelihood"),

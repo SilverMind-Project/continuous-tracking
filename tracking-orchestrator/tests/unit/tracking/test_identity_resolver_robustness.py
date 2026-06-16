@@ -72,6 +72,39 @@ def _anchor(person_id: str, *, confidence: float = 0.95, quality: float = 0.9) -
     )
 
 
+async def _duplicate_identity_resolver(
+    *,
+    enable_guard: bool,
+) -> IdentityResolver:
+    gallery = InMemoryGalleryRepository()
+    now = datetime.now(UTC)
+    for identity_id in ("amma", "grandma"):
+        await gallery.upsert_identity(
+            Identity(identity_id=identity_id, display_name=identity_id, enrolled_at=now)
+        )
+    for tracklet_id in ("t-held", "t-new"):
+        await gallery.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id=f"{tracklet_id}-amma",
+                identity_id="amma",
+                embedding=[1.0, 0.0],
+                seen_at=now,
+                origin_tracklet_id=tracklet_id,
+                face_confirmed=True,
+            )
+        )
+    return IdentityResolver(
+        gallery_repo=gallery,
+        config=ResolverConfig(
+            commit_prob=0.50,
+            commit_prob_dense=0.50,
+            commit_margin_dense=0.20,
+            prior_weight=0.30,
+            enable_duplicate_active_identity_guard=enable_guard,
+        ),
+    )
+
+
 async def _resolver(config: ResolverConfig) -> IdentityResolver:
     gallery = InMemoryGalleryRepository()
     identity = Identity(
@@ -372,7 +405,9 @@ async def test_coherence_boost_no_miscommit_without_stable_appearance() -> None:
     assert outcome.decisions[0].identity_id is None
 
 
-async def _propagation_resolver(similarity: float) -> IdentityResolver:
+async def _propagation_resolver(
+    similarity: float, *, enable_guard: bool = False
+) -> IdentityResolver:
     gallery = InMemoryGalleryRepository()
     now = datetime.now(UTC)
     for identity_id in ("alice", "bob"):
@@ -405,6 +440,7 @@ async def _propagation_resolver(similarity: float) -> IdentityResolver:
             cross_gt_face_propagation_threshold=0.72,
             face_commit_min_confidence=0.70,
             enable_quality_gate=True,
+            enable_duplicate_active_identity_guard=enable_guard,
         ),
     )
 
@@ -653,3 +689,189 @@ def test_sticky_maintenance_no_contradiction_with_same_face(
     # Identity should be held (no contradiction).
     assert decision.identity_id == "alice"
     assert not decision.revises_previous
+
+
+@pytest.mark.asyncio
+async def test_duplicate_active_identity_guard_blocks_second_reid_assignment(
+    fresh_metrics: Metrics,
+) -> None:
+    resolver = await _duplicate_identity_resolver(enable_guard=True)
+    now = datetime.now(UTC)
+
+    outcome = await resolver.resolve(
+        hypotheses=[
+            _make_gt(
+                ph_id="ph-held",
+                current_identity_id="amma",
+                committed_at=now - timedelta(seconds=5),
+                tracklet_ids=["t-held"],
+            ),
+            _make_gt(ph_id="ph-new", tracklet_ids=["t-new"]),
+        ],
+        new_face_anchors=[],
+        captured_at=now,
+    )
+
+    decisions = {decision.ph_id: decision for decision in outcome.decisions}
+    assert decisions["ph-held"].identity_id == "amma"
+    assert decisions["ph-new"].identity_id is None
+    assert "duplicate_active_identity_blocked: amma" in decisions["ph-new"].reason
+    assert (
+        _labeled_counter_value(
+            fresh_metrics.identity_shadow_mismatch_total,
+            "feature",
+            "duplicate_active_identity",
+        )
+        == 0.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_active_identity_guard_shadows_when_disabled(
+    fresh_metrics: Metrics,
+) -> None:
+    resolver = await _duplicate_identity_resolver(enable_guard=False)
+    now = datetime.now(UTC)
+
+    outcome = await resolver.resolve(
+        hypotheses=[
+            _make_gt(
+                ph_id="ph-held",
+                current_identity_id="amma",
+                committed_at=now - timedelta(seconds=5),
+                tracklet_ids=["t-held"],
+            ),
+            _make_gt(ph_id="ph-new", tracklet_ids=["t-new"]),
+        ],
+        new_face_anchors=[],
+        captured_at=now,
+    )
+
+    decisions = {decision.ph_id: decision for decision in outcome.decisions}
+    assert decisions["ph-held"].identity_id == "amma"
+    assert decisions["ph-new"].identity_id == "amma"
+    assert (
+        _labeled_counter_value(
+            fresh_metrics.identity_shadow_mismatch_total,
+            "feature",
+            "duplicate_active_identity",
+        )
+        == 1.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_active_identity_guard_allows_strong_direct_faces() -> None:
+    gallery = InMemoryGalleryRepository()
+    now = datetime.now(UTC)
+    await gallery.upsert_identity(
+        Identity(identity_id="amma", display_name="amma", enrolled_at=now)
+    )
+    await gallery.upsert_identity(
+        Identity(identity_id="grandma", display_name="grandma", enrolled_at=now)
+    )
+    resolver = IdentityResolver(
+        gallery_repo=gallery,
+        config=ResolverConfig(
+            commit_prob=0.50,
+            enable_duplicate_active_identity_guard=True,
+            duplicate_identity_direct_face_min_confidence=0.90,
+        ),
+    )
+
+    outcome = await resolver.resolve(
+        hypotheses=[
+            _make_gt(ph_id="ph-a", tracklet_ids=["t-a"]),
+            _make_gt(ph_id="ph-b", tracklet_ids=["t-b"]),
+        ],
+        new_face_anchors=[
+            FaceAnchor(person_id="amma", confidence=0.95, quality=0.95, tracklet_id="t-a"),
+            FaceAnchor(person_id="amma", confidence=0.96, quality=0.95, tracklet_id="t-b"),
+        ],
+        captured_at=now,
+    )
+
+    assert {decision.ph_id: decision.identity_id for decision in outcome.decisions} == {
+        "ph-a": "amma",
+        "ph-b": "amma",
+    }
+
+
+@pytest.mark.asyncio
+async def test_duplicate_active_identity_guard_blocks_unobserved_incumbent() -> None:
+    """An open PH that holds amma but is not observed this frame still blocks a
+    second PH from acquiring amma via ReID alone (the keyframe-mislabel case)."""
+    resolver = await _duplicate_identity_resolver(enable_guard=True)
+    now = datetime.now(UTC)
+
+    # Only ph-new is observed this frame; ph-held is open but undetected, so it
+    # is absent from ``hypotheses`` yet present in ``open_ph_identities``.
+    outcome = await resolver.resolve(
+        hypotheses=[_make_gt(ph_id="ph-new", tracklet_ids=["t-new"])],
+        new_face_anchors=[],
+        captured_at=now,
+        open_ph_identities={"ph-held": "amma", "ph-new": ""},
+    )
+
+    decisions = {decision.ph_id: decision for decision in outcome.decisions}
+    assert decisions["ph-new"].identity_id is None
+    assert "duplicate_active_identity_blocked: amma" in decisions["ph-new"].reason
+
+
+@pytest.mark.asyncio
+async def test_duplicate_active_identity_guard_allows_unobserved_incumbent_with_face() -> None:
+    """Strong direct face evidence bypasses the unobserved-incumbent block, so
+    genuine cross-camera continuation/handoff still commits."""
+    gallery = InMemoryGalleryRepository()
+    now = datetime.now(UTC)
+    await gallery.upsert_identity(
+        Identity(identity_id="amma", display_name="amma", enrolled_at=now)
+    )
+    resolver = IdentityResolver(
+        gallery_repo=gallery,
+        config=ResolverConfig(
+            commit_prob=0.50,
+            enable_duplicate_active_identity_guard=True,
+            duplicate_identity_direct_face_min_confidence=0.90,
+        ),
+    )
+
+    outcome = await resolver.resolve(
+        hypotheses=[_make_gt(ph_id="ph-new", tracklet_ids=["t-new"])],
+        new_face_anchors=[
+            FaceAnchor(person_id="amma", confidence=0.96, quality=0.95, tracklet_id="t-new"),
+        ],
+        captured_at=now,
+        open_ph_identities={"ph-held": "amma"},
+    )
+
+    decisions = {decision.ph_id: decision for decision in outcome.decisions}
+    assert decisions["ph-new"].identity_id == "amma"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_active_identity_guard_does_not_trust_propagated_face() -> None:
+    """A *propagated* face anchor must not grant the strong-direct-face bypass.
+
+    src has a genuine 'alice' face; dst has no own face but receives a high-
+    confidence propagated 'alice' anchor that would otherwise commit alice.
+    The bypass is computed from the original (pre-propagation) anchors, so dst
+    is still blocked — this is the keyframe-mislabel contamination path.
+    """
+    resolver = await _propagation_resolver(0.95, enable_guard=True)
+    src = _make_gt(ph_id="src", tracklet_ids=["t-src"], camera_ids=["cam-a"])
+    dst = _make_gt(ph_id="dst", tracklet_ids=["t-dst"], camera_ids=["cam-b"])
+
+    outcome = await resolver.resolve(
+        hypotheses=[src, dst],
+        new_face_anchors=[
+            FaceAnchor(person_id="alice", confidence=1.0, quality=1.0, tracklet_id="t-src")
+        ],
+        captured_at=datetime.now(UTC),
+        ph_qualities={"src": 0.9, "dst": 0.9},
+    )
+
+    decisions = {decision.ph_id: decision for decision in outcome.decisions}
+    assert decisions["src"].identity_id == "alice"
+    assert decisions["dst"].identity_id is None
+    assert "duplicate_active_identity_blocked: alice" in decisions["dst"].reason

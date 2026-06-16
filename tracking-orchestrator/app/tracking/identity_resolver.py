@@ -27,8 +27,8 @@ import math
 import random
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -83,6 +83,15 @@ class _CommitEvaluation:
     effective_commit_margin: float
     quality_gate_blocked: bool
     flip_debounce_blocked: bool
+
+
+@dataclass(frozen=True)
+class _PendingIdentityDecision:
+    """Identity decision plus batch-scoped evidence used by guardrails."""
+
+    entity: IdentityResolvableEntity
+    decision: IdentityDecision
+    direct_face_confidence: float
 
 
 @dataclass(frozen=True)
@@ -176,6 +185,16 @@ class ResolverConfig:
     # and cts_identity_shadow_mismatch_total{feature="flip_debounce"} counts
     # decisions the debounce would have changed.
     enable_flip_debounce: bool = False
+
+    # Batch-level guardrail: prevent two active PHs in the same resolver call
+    # from acquiring the same resident identity unless each duplicate has strong
+    # direct ArcFace evidence for that identity.  Ships shadow-first.
+    enable_duplicate_active_identity_guard: bool = False
+
+    # Minimum direct face confidence required to bypass the duplicate-active
+    # identity guard.  This is stricter than face_commit_min_confidence because
+    # the invariant is about two simultaneously visible PHs sharing one person.
+    duplicate_identity_direct_face_min_confidence: float = 0.90
 
     # Sticky maintenance — hold a committed identity within the maintenance
     # window unless strongly contradicted, even when the posterior argmax is
@@ -368,6 +387,7 @@ class IdentityResolver:
         ph_heights: dict[str, float] | None = None,
         ph_qualities: dict[str, float] | None = None,
         face_evidence: list[FaceEvidence] | None = None,
+        open_ph_identities: Mapping[str, str] | None = None,
     ) -> ResolveOutcome:
         """Resolve identities for a batch of tracked entities.
 
@@ -377,6 +397,10 @@ class IdentityResolver:
             captured_at: wall-clock time of the current frame.
             ph_heights: optional entity_id → height_m mapping.
             ph_qualities: optional entity_id → rolling crop quality mapping.
+            open_ph_identities: optional ph_id → committed identity_id for every
+                currently-open PH, including PHs not observed this frame. Feeds
+                the duplicate-active-identity guard so an incumbent holder that
+                is momentarily undetected still protects its identity.
             face_evidence: optional typed FaceEvidence records with source
                 metadata. When provided, direct evidence receives normal
                 weight and propagated evidence receives reduced weight.
@@ -405,7 +429,7 @@ class IdentityResolver:
             hypotheses, face_evidence or [], augmented_anchors
         )
 
-        outcome = ResolveOutcome()
+        pending_decisions: list[_PendingIdentityDecision] = []
 
         for entity in hypotheses:
             prior = self._build_prior(entity, captured_at)
@@ -531,6 +555,15 @@ class IdentityResolver:
                     for s in {ev.source for ev in evidence_items}
                 },
             )
+            # Use the *original* anchors/evidence (pre-propagation) so the
+            # duplicate-guard bypass only trusts a PH's own direct face — a
+            # propagated anchor for another person must never grant the bypass.
+            direct_face_confidence = self._direct_face_confidence(
+                entity,
+                new_face_anchors,
+                face_evidence or [],
+                identity_id=decision.identity_id,
+            )
             decision = IdentityDecision(
                 ph_id=decision.ph_id,
                 identity_id=decision.identity_id,
@@ -541,25 +574,138 @@ class IdentityResolver:
                 evidence_backed=decision.evidence_backed,
                 evidence={
                     "sources": ep.evidence_summary,
-                    "direct_face_confidence": best_face_conf or 0.0,
+                    "direct_face_confidence": direct_face_confidence,
                     "posterior_entropy": ep.entropy,
                 },
             )
+            pending_decisions.append(
+                _PendingIdentityDecision(
+                    entity=entity,
+                    decision=decision,
+                    direct_face_confidence=direct_face_confidence,
+                )
+            )
 
+        outcome = ResolveOutcome()
+        final_decisions = self._apply_duplicate_active_identity_guard(
+            pending_decisions, open_ph_identities or {}
+        )
+        entity_by_id = {item.entity.entity_id: item.entity for item in pending_decisions}
+
+        for decision in final_decisions:
             if decision.revises_previous:
-                revision = self._build_revision(entity, decision, captured_at)
+                revision = self._build_revision(entity_by_id[decision.ph_id], decision, captured_at)
                 if revision is not None:
                     outcome.revisions.append(revision)
             if (
                 decision.identity_id is not None
                 and decision.revises_previous
-                and await self._has_cross_camera_reid_assist(entity, decision.identity_id)
+                and await self._has_cross_camera_reid_assist(
+                    entity_by_id[decision.ph_id], decision.identity_id
+                )
             ):
                 metrics.metrics.reid_cross_camera_assist_total.inc()
 
             outcome.decisions.append(decision)
 
         return outcome
+
+    def _apply_duplicate_active_identity_guard(
+        self,
+        pending: list[_PendingIdentityDecision],
+        open_ph_identities: Mapping[str, str],
+    ) -> list[IdentityDecision]:
+        """Apply or shadow-count the duplicate-active-identity guard."""
+        blocked = self._duplicate_active_blocks(pending, open_ph_identities)
+
+        if not self._config.enable_duplicate_active_identity_guard:
+            if blocked:
+                metrics.metrics.identity_shadow_mismatch_total.labels(
+                    feature="duplicate_active_identity"
+                ).inc(len(blocked))
+            return [item.decision for item in pending]
+
+        return [self._block_decision(item, blocked) for item in pending]
+
+    def _duplicate_active_blocks(
+        self,
+        pending: list[_PendingIdentityDecision],
+        open_ph_identities: Mapping[str, str],
+    ) -> dict[str, str]:
+        """Return {ph_id: blocked_identity_id} for duplicate new assignments.
+
+        An identity may stay with PHs that already hold it (an incumbent open
+        PH, this frame or any other) or that carry strong direct recognized face
+        evidence.  A *new* assignment to an already-occupied identity is blocked;
+        when several new assignments compete for an unoccupied identity, only the
+        strongest posterior survives.
+        """
+        threshold = self._config.duplicate_identity_direct_face_min_confidence
+        batch_ph_ids = {item.decision.ph_id for item in pending}
+
+        # Identities already occupied by an open PH that is not in this batch.
+        external: set[str] = {
+            identity_id
+            for ph_id, identity_id in open_ph_identities.items()
+            if ph_id not in batch_ph_ids
+        }
+
+        by_identity: dict[str, list[_PendingIdentityDecision]] = defaultdict(list)
+        for item in pending:
+            if item.decision.identity_id is not None:
+                by_identity[item.decision.identity_id].append(item)
+
+        blocked: dict[str, str] = {}
+        for identity_id, items in by_identity.items():
+            holders = {
+                item.decision.ph_id
+                for item in items
+                if item.direct_face_confidence >= threshold
+                or (
+                    item.decision.previous_identity_id == identity_id
+                    and not item.decision.revises_previous
+                )
+            }
+            candidates = [item for item in items if item.decision.ph_id not in holders]
+            if not candidates:
+                continue
+
+            occupied = bool(holders) or identity_id in external
+            if not occupied:
+                # No incumbent: let the strongest new assignment claim it.
+                winner = max(
+                    candidates,
+                    key=lambda item: (
+                        item.decision.posterior.top_identity()[1],
+                        item.decision.posterior.top_with_margin()[1],
+                    ),
+                )
+                candidates = [c for c in candidates if c is not winner]
+
+            for item in candidates:
+                blocked[item.decision.ph_id] = identity_id
+
+        return blocked
+
+    @staticmethod
+    def _block_decision(
+        item: _PendingIdentityDecision,
+        blocked: Mapping[str, str],
+    ) -> IdentityDecision:
+        """Return the decision, demoted to UNKNOWN if the guard blocked it."""
+        identity_id = blocked.get(item.decision.ph_id)
+        if identity_id is None:
+            return item.decision
+        return replace(
+            item.decision,
+            identity_id=None,
+            revises_previous=False,
+            reason=(
+                f"duplicate_active_identity_blocked: {identity_id} "
+                f"(direct_face_confidence={item.direct_face_confidence:.3f})"
+            ),
+            evidence_backed=False,
+        )
 
     # ------------------------------------------------------------------
     # Prior construction
@@ -759,6 +905,45 @@ class IdentityResolver:
                     likelihood["UNKNOWN"] = likelihood.get("UNKNOWN", 0.0) + remainder
 
         return PosteriorDist(likelihood), best_recognized_conf
+
+    def _direct_face_confidence(
+        self,
+        entity: IdentityResolvableEntity,
+        face_anchors: list[FaceAnchor],
+        face_evidence: list[FaceEvidence],
+        *,
+        identity_id: str | None,
+    ) -> float:
+        """Return the best direct recognized face confidence for this entity/id."""
+        if identity_id is None:
+            return 0.0
+
+        entity_obs_ids = set(entity.observation_ids)
+        matched_ids = entity_obs_ids | {entity.entity_id}
+
+        if face_evidence:
+            return max(
+                (
+                    fe.confidence
+                    for fe in face_evidence
+                    if fe.source == "direct"
+                    and fe.recognition_state == "recognized"
+                    and fe.person_id == identity_id
+                    and (fe.tracklet_id in matched_ids or fe.detection_id in entity_obs_ids)
+                ),
+                default=0.0,
+            )
+
+        return max(
+            (
+                fa.confidence
+                for fa in face_anchors
+                if fa.recognition_state == "recognized"
+                and fa.person_id == identity_id
+                and (fa.tracklet_id in matched_ids or fa.detection_id in entity_obs_ids)
+            ),
+            default=0.0,
+        )
 
     def _p_face(self, confidence: float, quality: float) -> float:
         """Probability that a face anchor is correct.
