@@ -128,6 +128,24 @@ class ViewPrototype:
     count: int  # number of observations EMAd into this prototype
 
 
+@dataclass(frozen=True)
+class ObservationGeometry:
+    """Per-observation view geometry, computed once and shared by all consumers.
+
+    Pixel quantities are in raw image px. Residuals and distances are metres
+    in the shared floor-plan frame.
+    """
+
+    footpoint_px: tuple[float, float]  # bbox bottom-centre, raw pixels
+    floor_residual_m: float  # homography reprojection residual; 0.0 if unknown
+    footpoint_reliable: bool  # feet visible and bbox not truncated
+    detection_confidence: float  # detector confidence [0, 1]
+    crop_quality: float  # CropQuality score [0, 1]
+    orientation: OrientationBin  # body orientation from pose
+    orientation_confidence: float  # orientation confidence [0, 1]
+    distance_m: float | None = None  # camera-to-footpoint floor distance
+
+
 # ---------------------------------------------------------------------------
 # Person Hypothesis types
 # ---------------------------------------------------------------------------
