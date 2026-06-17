@@ -21,8 +21,10 @@ logger = get_logger(__name__)
 _SQL_INSERT_TRAJECTORY = """
 INSERT INTO continuous_tracking.person_trajectories
     (observed_at, identity_id, ph_id, room_name,
-     ground_x, ground_y, posture, identity_confidence, motion_energy, floor_speed_m_s)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ground_x, ground_y, posture, identity_confidence,
+     position_sigma_m, primary_camera_id, contributing_camera_count, footpoint_reliable,
+     motion_energy, floor_speed_m_s)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 """
 
 _SQL_INSERT_DWELL = """
@@ -58,7 +60,9 @@ LIMIT 1
 
 _SQL_LIST_TRAJECTORY = """
 SELECT identity_id, ph_id, observed_at, room_name,
-       ground_x, ground_y, posture, identity_confidence, motion_energy, floor_speed_m_s
+       ground_x, ground_y, posture, identity_confidence,
+       position_sigma_m, primary_camera_id, contributing_camera_count, footpoint_reliable,
+       motion_energy, floor_speed_m_s
 FROM continuous_tracking.person_trajectories
 WHERE TRUE
 """
@@ -97,6 +101,10 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
                 point.ground_y,
                 point.posture,
                 point.identity_confidence,
+                point.position_sigma_m,
+                point.primary_camera_id,
+                point.contributing_camera_count,
+                point.footpoint_reliable,
                 point.motion_energy,
                 point.floor_speed_m_s,
             )
@@ -218,6 +226,10 @@ def _row_to_point(row: Any) -> PersonTrajectoryPoint:
         ground_y=float(row["ground_y"]),
         posture=row["posture"],
         identity_confidence=float(row["identity_confidence"]),
+        position_sigma_m=float(row["position_sigma_m"]),
+        primary_camera_id=row["primary_camera_id"],
+        contributing_camera_count=int(row["contributing_camera_count"]),
+        footpoint_reliable=bool(row["footpoint_reliable"]),
         motion_energy=row.get("motion_energy"),
         floor_speed_m_s=row.get("floor_speed_m_s"),
     )

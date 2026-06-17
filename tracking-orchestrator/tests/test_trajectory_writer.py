@@ -73,6 +73,34 @@ async def test_floor_point_converted_to_meters(
     assert points[0].ground_y == pytest.approx(2.0)
 
 
+async def test_trajectory_point_persists_confidence_fields(
+    writer: TrajectoryWriter,
+    repo: InMemoryTrajectoryRepository,
+) -> None:
+    point = await writer.write(
+        identity_id="alice",
+        ph_id="gt-001",
+        room_name="bedroom",
+        floor_point=FloorPoint(x_mm=1000, y_mm=2000),
+        captured_at=_T0,
+        position_sigma_m=0.42,
+        primary_camera_id="cam-primary",
+        contributing_camera_count=3,
+        footpoint_reliable=False,
+    )
+
+    assert point.position_sigma_m == pytest.approx(0.42)
+    assert point.primary_camera_id == "cam-primary"
+    assert point.contributing_camera_count == 3
+    assert point.footpoint_reliable is False
+
+    points = await repo.list_trajectory_points()
+    assert points[0].position_sigma_m == pytest.approx(0.42)
+    assert points[0].primary_camera_id == "cam-primary"
+    assert points[0].contributing_camera_count == 3
+    assert points[0].footpoint_reliable is False
+
+
 async def test_first_observation_opens_dwell(
     writer: TrajectoryWriter,
     repo: InMemoryTrajectoryRepository,

@@ -21,6 +21,7 @@ def _obs(
     *,
     primary_score: float,
     quality: float = 0.8,
+    footpoint_reliable: bool = True,
 ) -> WorldObservation:
     return WorldObservation(
         camera_id=camera_id,
@@ -33,6 +34,7 @@ def _obs(
         detection_id=detection_id,
         quality=quality,
         primary_score=primary_score,
+        footpoint_reliable=footpoint_reliable,
     )
 
 
@@ -105,6 +107,43 @@ async def test_primary_uses_best_source_camera_from_dedup_cluster() -> None:
 
     assert len(result.snapshots) == 1
     assert result.snapshots[0].camera_id == "cam-b"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_records_cluster_count_and_representative_reliability() -> None:
+    tracker, _ph_repo = _tracker(primary_switch_frames=1, dedup_enabled=True)
+    t0 = datetime(2026, 6, 17, 12, 0, 0, tzinfo=UTC)
+
+    result = await tracker.step(
+        [
+            _obs(
+                "cam-a",
+                5.0,
+                5.0,
+                "d1",
+                t0,
+                primary_score=0.2,
+                quality=0.9,
+                footpoint_reliable=False,
+            ),
+            _obs(
+                "cam-b",
+                5.03,
+                5.0,
+                "d2",
+                t0,
+                primary_score=0.95,
+                quality=0.1,
+                footpoint_reliable=True,
+            ),
+        ],
+        now=t0,
+    )
+
+    assert len(result.snapshots) == 1
+    snapshot = result.snapshots[0]
+    assert snapshot.contributing_camera_count == 2
+    assert snapshot.footpoint_reliable is False
 
 
 @pytest.mark.asyncio

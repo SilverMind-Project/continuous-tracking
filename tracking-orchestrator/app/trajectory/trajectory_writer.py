@@ -68,6 +68,10 @@ class TrajectoryWriter:
         captured_at: datetime,
         identity_confidence: float = 0.0,
         posture: PostureType = "unknown",
+        position_sigma_m: float = 0.0,
+        primary_camera_id: str = "",
+        contributing_camera_count: int = 1,
+        footpoint_reliable: bool = True,
         motion_energy: float | None = None,
         floor_speed_m_s: float | None = None,
     ) -> PersonTrajectoryPoint:
@@ -82,6 +86,10 @@ class TrajectoryWriter:
             captured_at: wall-clock time of the observation.
             identity_confidence: posterior probability of the top identity.
             posture: classified posture for this frame.
+            position_sigma_m: PH floor-position uncertainty in metres.
+            primary_camera_id: stabilized best-view camera for this point.
+            contributing_camera_count: camera observations fused into this point.
+            footpoint_reliable: representative footpoint reliability for this point.
             motion_energy: mean keypoint velocity (None when pose unavailable).
 
         Returns:
@@ -96,6 +104,10 @@ class TrajectoryWriter:
             ground_y=floor_point.y_mm / 1000.0,
             posture=posture,
             identity_confidence=identity_confidence,
+            position_sigma_m=position_sigma_m,
+            primary_camera_id=primary_camera_id,
+            contributing_camera_count=contributing_camera_count,
+            footpoint_reliable=footpoint_reliable,
             motion_energy=motion_energy,
             floor_speed_m_s=floor_speed_m_s,
         )

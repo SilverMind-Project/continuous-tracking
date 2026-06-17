@@ -114,6 +114,9 @@ CC is the consumer and control plane for CTS. CTS does not serve users directly;
 - **CC drives identity corrections.** The CC BFF `routers/cts_ph.py` proxies the orchestrator `/ph/*` endpoints (`get_ph`, observations, trail, co-present, correct, merge, split, batch_correct). Operator corrections produce `IdentityRevision`s that flow back through CTS and CC history.
 - **CC injects evidence back into CTS.** CC can push face assertions (from person-identification-service) that `WorldTrackingStage` matches to observations as `FaceAnchor`s, so CC-side identity knowledge strengthens the CTS posterior.
 - **`mean_quality` and identity confidence travel on the wire** from CTS to the CC `PersonLocationEnvelope`. CC does not recompute them.
+- **Trajectory confidence is persisted for signal gating.** CTS stores `position_sigma_m`,
+  `primary_camera_id`, `contributing_camera_count`, and `footpoint_reliable` on each
+  `person_trajectories` row so dementia detectors can demote low-confidence evidence.
 - **CC enriches CTS signals with caregiver context.** `DementiaSignal`s become alerts only after CC applies per-person `cts_alert_config` gating and rule pipelines; CTS itself never decides whether to notify.
 
 For everything on the CC side (the rules engine and its seven trigger types, event aggregation, the 23 step types, channels and filters, the PWA companion view, Gemini Live realtime voice, Home Assistant and reCamera sensors, and the known CC bugs and gaps) read `cognitive-companion/docs/systems-architecture.md`.

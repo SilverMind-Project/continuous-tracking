@@ -43,6 +43,9 @@ def _make_snapshot(
     room_name: str = "living_room",
     bbox: BoundingBox | None = None,
     captured_at: datetime | None = None,
+    position_sigma_m: float = 0.1,
+    contributing_camera_count: int = 1,
+    footpoint_reliable: bool = True,
 ) -> WorldFrameSnapshot:
     if captured_at is None:
         captured_at = datetime.now(UTC)
@@ -55,7 +58,9 @@ def _make_snapshot(
         floor_y_m=floor_y_m,
         floor_vx_m_s=0.0,
         floor_vy_m_s=0.0,
-        position_sigma_m=0.1,
+        position_sigma_m=position_sigma_m,
+        contributing_camera_count=contributing_camera_count,
+        footpoint_reliable=footpoint_reliable,
         identity_id=identity_id,
         identity_confidence=identity_confidence,
         room_name=room_name,
@@ -279,3 +284,29 @@ class TestTrajectoryWritesFromSnapshots:
 
         assert len(repo._points) == 1
         assert repo._points[0].room_name == "kitchen"
+
+    async def test_writer_sets_footpoint_reliable_and_camera_count(self) -> None:
+        """Confidence metadata comes from WorldFrameSnapshot."""
+        now = datetime.now(UTC)
+        snap = _make_snapshot(
+            ph_id="ph-1",
+            camera_id="cam-primary",
+            captured_at=now,
+            position_sigma_m=0.33,
+            contributing_camera_count=2,
+            footpoint_reliable=False,
+        )
+
+        repo = InMemoryTrajectoryRepository()
+        writer = TrajectoryWriter(repo=repo)
+        stage = TrajectoryStage(trajectory_writer=writer)
+
+        ctx = _make_ctx(camera_id="cam-primary", now=now, snapshots=[snap])
+        await stage.run(ctx)
+
+        assert len(repo._points) == 1
+        pt = repo._points[0]
+        assert pt.position_sigma_m == pytest.approx(0.33)
+        assert pt.primary_camera_id == "cam-primary"
+        assert pt.contributing_camera_count == 2
+        assert pt.footpoint_reliable is False

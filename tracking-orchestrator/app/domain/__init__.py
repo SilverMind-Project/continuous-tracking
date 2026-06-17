@@ -290,6 +290,8 @@ class WorldFrameSnapshot:
     floor_vx_m_s: float
     floor_vy_m_s: float
     position_sigma_m: float
+    contributing_camera_count: int = 1
+    footpoint_reliable: bool = True
     identity_id: str | None = None
     identity_confidence: float = 0.0
     posterior_entropy: float = 0.0
@@ -847,6 +849,14 @@ class PersonTrajectoryPoint:
     ground_y: float = 0.0  # meters, floor-plan frame
     posture: PostureType = "unknown"
     identity_confidence: float = 0.0
+    # sqrt of larger eigenvalue of PH position covariance, in metres
+    position_sigma_m: float = 0.0
+    # stabilized best-view camera selected by the world tracker
+    primary_camera_id: str = ""
+    # number of camera observations fused into this point for the frame
+    contributing_camera_count: int = 1
+    # representative observation footpoint reliability for this frame
+    footpoint_reliable: bool = True
     # mean keypoint velocity at this point; None when pose unavailable
     motion_energy: float | None = None
     # Kalman floor speed in m/s; None when camera is uncalibrated

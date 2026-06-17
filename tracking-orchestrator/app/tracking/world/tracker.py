@@ -408,6 +408,9 @@ class WorldTracker:
             str, tuple[int, BoundingBox | None, float]
         ] = {}  # ph_id -> (frame_index, bbox, detection_confidence)
         ph_floor_calibrated: dict[str, bool] = {}  # ph_id -> obs.floor_point.calibrated this frame
+        ph_confidence_meta: dict[
+            str, tuple[int, bool]
+        ] = {}  # ph_id -> (contributing_camera_count, footpoint_reliable)
         # Representative observation per PH updated this frame. Consumed after
         # identity resolution (step 9) to seed the multi-view gallery with the
         # COMMITTED identity. Seeding inside step 4 used the pre-resolution
@@ -507,6 +510,7 @@ class WorldTracker:
                 obs.detection_confidence,
             )
             ph_floor_calibrated[ph.ph_id] = obs.floor_point.calibrated
+            ph_confidence_meta[ph.ph_id] = (len(src_ids), obs.footpoint_reliable)
             # Map all source detection IDs (not just the representative) to this PH.
             for src_det_id in src_ids:
                 if src_det_id:
@@ -737,6 +741,7 @@ class WorldTracker:
                 obs.detection_confidence,
             )
             ph_floor_calibrated[new_ph.ph_id] = obs.floor_point.calibrated
+            ph_confidence_meta[new_ph.ph_id] = (len(spawn_src_ids), obs.footpoint_reliable)
             # Defer gallery seeding to after identity resolution (step 9).
             seed_obs_by_ph[new_ph.ph_id] = obs
             # Save the PH first so the FK constraint on world_observations is satisfied.
@@ -900,6 +905,7 @@ class WorldTracker:
                     )
                     updated_phs.append(recovered)
                     lb_matched_ph_indices.add(ph_idx)
+                    ph_confidence_meta[ph.ph_id] = (1, obs.footpoint_reliable)
                     _metrics.metrics.worldtracker_low_band_matches_total.inc()
                     logger.debug(
                         "low_band_recovery_match",
@@ -1015,6 +1021,8 @@ class WorldTracker:
             )
             obs_meta = ph_obs_meta.get(ph.ph_id, (0, None, 0.0))
             obs_frame_index, obs_bbox, obs_det_conf = obs_meta
+            confidence_meta = ph_confidence_meta.get(ph.ph_id, (1, True))
+            contributing_camera_count, footpoint_reliable = confidence_meta
             id_data = identity_by_ph.get(ph.ph_id, {})
             snapshots.append(
                 WorldFrameSnapshot(
@@ -1027,6 +1035,8 @@ class WorldTracker:
                     floor_vx_m_s=ph.state_mean[2],
                     floor_vy_m_s=ph.state_mean[3],
                     position_sigma_m=position_sigma_m(ph.state_cov),
+                    contributing_camera_count=contributing_camera_count,
+                    footpoint_reliable=footpoint_reliable,
                     identity_id=_sanitize_identity_id(
                         str(id_data["identity_id"])
                         if id_data.get("identity_id") is not None

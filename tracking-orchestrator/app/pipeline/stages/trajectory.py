@@ -310,6 +310,10 @@ class TrajectoryStage(FrameStage):
                 captured_at=traj_time,
                 identity_confidence=identity_confidence,
                 posture=gt_posture,
+                position_sigma_m=snap.position_sigma_m,
+                primary_camera_id=snap.camera_id,
+                contributing_camera_count=snap.contributing_camera_count,
+                footpoint_reliable=snap.footpoint_reliable,
                 motion_energy=gt_motion_energy,
                 floor_speed_m_s=snap.floor_speed_m_s,
             )

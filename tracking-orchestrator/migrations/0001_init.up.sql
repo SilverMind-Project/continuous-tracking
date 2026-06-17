@@ -201,6 +201,10 @@ CREATE TABLE IF NOT EXISTS person_trajectories (
     posture             TEXT NOT NULL DEFAULT 'unknown'
                             CHECK (posture IN ('standing', 'sitting', 'walking', 'lying', 'unknown')),
     identity_confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    position_sigma_m    DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    primary_camera_id   TEXT NOT NULL DEFAULT '',
+    contributing_camera_count INTEGER NOT NULL DEFAULT 1,
+    footpoint_reliable  BOOLEAN NOT NULL DEFAULT TRUE,
     motion_energy       DOUBLE PRECISION,
     PRIMARY KEY (id, observed_at)
 );

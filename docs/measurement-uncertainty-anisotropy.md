@@ -35,6 +35,12 @@ The calibration term is kept separate because it is systematic. Cross-camera fus
 the random term with more independent camera observations, but it must not fuse away a fixed
 camera calibration bias.
 
+Trajectory persistence keeps the uncertainty audit trail with each `person_trajectories` row:
+`position_sigma_m` stores the PH position covariance summary, `primary_camera_id` records the
+stabilized best-view camera, `contributing_camera_count` records how many camera observations
+fed the point for that frame, and `footpoint_reliable` records the representative observation's
+footpoint reliability.
+
 ```text
 Image pixels                         Floor-plan metres
 
