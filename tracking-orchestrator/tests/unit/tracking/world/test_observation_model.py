@@ -191,6 +191,30 @@ def test_primary_camera_score_prefers_reliable_high_quality() -> None:
     assert primary_camera_score(good) > primary_camera_score(low_quality)
 
 
+def test_primary_camera_score_ranking() -> None:
+    candidates = {
+        "occluded_high_conf": _geo(
+            footpoint_reliable=False,
+            detection_confidence=0.98,
+            crop_quality=0.95,
+        ),
+        "clean_medium": _geo(
+            footpoint_reliable=True,
+            detection_confidence=0.80,
+            crop_quality=0.75,
+        ),
+        "clean_best": _geo(
+            footpoint_reliable=True,
+            detection_confidence=0.92,
+            crop_quality=0.90,
+        ),
+    }
+
+    ranked = sorted(candidates, key=lambda name: primary_camera_score(candidates[name]))
+
+    assert ranked == ["occluded_high_conf", "clean_medium", "clean_best"]
+
+
 def test_all_outputs_are_python_float_and_2x2_float64() -> None:
     h = np.eye(3, dtype=np.float64)
     geo = _geo()

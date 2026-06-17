@@ -405,6 +405,11 @@ world_tracker:
   base_footpoint_sigma_px: 4.0      # detector bbox-bottom localization noise (px, 1 sigma)
   occluded_footpoint_inflation: 8.0  # sigma multiplier when feet are hidden or bbox truncated
 
+  # ---- Stabilized primary camera ----
+  # A challenger camera must be best-view for this many consecutive tracker
+  # frames before snapshot camera_id/keyframe/room fallback switches.
+  primary_switch_frames: 5
+
   # ---- Cross-camera dedup (U1) ----
   dedup_enabled: true
   dedup_max_distance_m: 0.9

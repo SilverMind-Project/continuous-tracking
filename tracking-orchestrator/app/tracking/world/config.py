@@ -97,6 +97,11 @@ class WorldTrackerConfig:
     base_footpoint_sigma_px: float = 4.0  # detector bbox-bottom localization noise (px, 1 sigma)
     occluded_footpoint_inflation: float = 8.0  # sigma multiplier when feet are hidden/truncated
 
+    # ---- Stabilized primary camera ----
+    # A challenger camera must be the best-view camera for this many consecutive
+    # tracker frames before the PH's displayed/keyframe camera switches.
+    primary_switch_frames: int = 5
+
     # ---- Cross-camera dedup ----
     # Pre-association floor-point dedup for observations from overlapping cameras.
     # Two observations from different cameras within this distance on the floor plane

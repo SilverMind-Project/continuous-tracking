@@ -22,7 +22,11 @@ from ...domain import (
 from ...observability import metrics as _metrics
 from ...tracking.floor_projector import FloorProjector
 from ...tracking.world.config import WorldTrackerConfig
-from ...tracking.world.observation_model import footpoint_reliable, pixel_covariance
+from ...tracking.world.observation_model import (
+    footpoint_reliable,
+    pixel_covariance,
+    primary_camera_score,
+)
 from ...tracking.world.tracker import WorldTracker, WorldTrackerResult
 from ..frame_context import FrameContext
 from ..privacy import PrivacyZoneFilter
@@ -249,6 +253,7 @@ class WorldTrackingStage(FrameStage):
                     quality=0.0,
                     floor_cov_random=None,
                     footpoint_reliable=False,
+                    primary_score=0.0,
                 )
             )
 
@@ -273,6 +278,7 @@ class WorldTrackingStage(FrameStage):
             floor_cov_random: tuple[float, float, float, float] | None = None
             reliable_footpoint = False
             geometry: ObservationGeometry | None = None
+            primary_score = 0.0
             if not fp.calibrated:
                 fp = _synthetic_floor_point(
                     det.bbox, ctx.effective_width, ctx.effective_height, ctx.frame.camera_id
@@ -305,6 +311,7 @@ class WorldTrackingStage(FrameStage):
                     pixel_cov_px2,
                 )
                 ctx.geometry_by_detection[det.detection_id] = geometry
+                primary_score = primary_camera_score(geometry)
             orientation, orientation_confidence = ctx.orientation_by_detection.get(
                 det.detection_id, (OrientationBin.UNKNOWN, 0.0)
             )
@@ -326,6 +333,7 @@ class WorldTrackingStage(FrameStage):
                     orientation_confidence=orientation_confidence,
                     floor_cov_random=floor_cov_random,
                     footpoint_reliable=geometry.footpoint_reliable if geometry else False,
+                    primary_score=primary_score,
                 )
             )
         return observations, uncalibrated_count
@@ -400,6 +408,7 @@ class WorldTrackingStage(FrameStage):
                     orientation_confidence=obs.orientation_confidence,
                     floor_cov_random=obs.floor_cov_random,
                     footpoint_reliable=obs.footpoint_reliable,
+                    primary_score=obs.primary_score,
                 )
             )
         return observations_with_faces

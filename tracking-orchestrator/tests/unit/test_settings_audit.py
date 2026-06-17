@@ -99,6 +99,7 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     assert world_tracker.zupt_speed_exit_m_s == pytest.approx(0.20)
     assert world_tracker.zupt_consecutive_frames == 5
     assert world_tracker.zupt_velocity_sigma_m_s == pytest.approx(0.05)
+    assert world_tracker.primary_switch_frames == 5
 
 
 def test_signal_config_defaults_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:

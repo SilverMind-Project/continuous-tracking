@@ -84,6 +84,18 @@ def _metadata_with_room(
     return merged
 
 
+def _best_primary_camera(
+    source_detection_ids: tuple[str, ...],
+    obs_by_det_id: dict[str, WorldObservation],
+    fallback: WorldObservation,
+) -> str:
+    candidates = [obs_by_det_id[did] for did in source_detection_ids if did in obs_by_det_id]
+    if not candidates:
+        candidates = [fallback]
+    best = max(candidates, key=lambda obs: (obs.primary_score, obs.camera_id, obs.detection_id))
+    return best.camera_id
+
+
 class ContinuationPublisher(Protocol):
     """Publishes PHContinuationCandidate events to tracking.continuations."""
 
@@ -269,6 +281,8 @@ class WorldTracker:
         # without issuing an async DB query. Empty until the first step().
         self._last_open_phs: list[PersonHypothesis] = []
         self._still_counter: dict[str, int] = {}
+        self._primary_camera: dict[str, str] = {}
+        self._primary_challenger: dict[str, tuple[str, int]] = {}
 
     @property
     def last_open_phs(self) -> list[PersonHypothesis]:
@@ -454,6 +468,7 @@ class WorldTracker:
             cluster_cameras = frozenset(
                 obs_by_det_id[did].camera_id for did in src_ids if did in obs_by_det_id
             )
+            self._update_primary_camera(ph.ph_id, _best_primary_camera(src_ids, obs_by_det_id, obs))
 
             updated = PersonHypothesis(
                 ph_id=ph.ph_id,
@@ -585,6 +600,7 @@ class WorldTracker:
             spawn_cameras = frozenset(
                 obs_by_det_id[did].camera_id for did in spawn_src_ids if did in obs_by_det_id
             ) or frozenset([obs.camera_id])
+            best_spawn_camera = _best_primary_camera(spawn_src_ids, obs_by_det_id, obs)
             room_id, room_name = resolve_room(
                 obs.floor_point.x_mm / 1000.0,
                 obs.floor_point.y_mm / 1000.0,
@@ -714,6 +730,7 @@ class WorldTracker:
                 )
 
             updated_phs.append(new_ph)
+            self._update_primary_camera(new_ph.ph_id, best_spawn_camera)
             ph_obs_meta[new_ph.ph_id] = (
                 obs.frame_index,
                 obs.bbox,
@@ -956,6 +973,14 @@ class WorldTracker:
         self._still_counter = {
             pid: count for pid, count in self._still_counter.items() if pid in open_ph_ids
         }
+        self._primary_camera = {
+            pid: camera_id for pid, camera_id in self._primary_camera.items() if pid in open_ph_ids
+        }
+        self._primary_challenger = {
+            pid: challenger
+            for pid, challenger in self._primary_challenger.items()
+            if pid in open_ph_ids
+        }
 
         # Seed the multi-view gallery AFTER identity resolution so a face that
         # commits (or is held) this frame seeds with its committed identity.
@@ -979,10 +1004,11 @@ class WorldTracker:
         for ph in updated_phs:
             if ph.observation_count < cfg.min_observations_to_publish:
                 continue
+            primary_camera = self._primary_camera.get(ph.ph_id, ph.last_seen_camera)
             room_id, room_name = resolve_room(
                 ph.state_mean[0],
                 ph.state_mean[1],
-                ph.last_seen_camera,
+                primary_camera,
                 room_polygons,
                 camera_room_map,
                 room_names,
@@ -993,7 +1019,7 @@ class WorldTracker:
             snapshots.append(
                 WorldFrameSnapshot(
                     ph_id=ph.ph_id,
-                    camera_id=ph.last_seen_camera,
+                    camera_id=primary_camera,
                     frame_index=obs_frame_index,
                     captured_at=ph.last_seen_at,
                     floor_x_m=ph.state_mean[0],
@@ -1039,6 +1065,34 @@ class WorldTracker:
             det_to_ph=det_to_ph,
             revived_ph_ids=frozenset(revived_ph_ids),
         )
+
+    def _update_primary_camera(self, ph_id: str, best_camera: str) -> None:
+        if not best_camera:
+            return
+
+        current = self._primary_camera.get(ph_id)
+        if current is None:
+            self._primary_camera[ph_id] = best_camera
+            self._primary_challenger.pop(ph_id, None)
+            return
+
+        if best_camera == current:
+            self._primary_challenger.pop(ph_id, None)
+            return
+
+        challenger_camera, streak = self._primary_challenger.get(ph_id, ("", 0))
+        if best_camera == challenger_camera:
+            streak += 1
+        else:
+            streak = 1
+
+        switch_frames = max(1, self._config.primary_switch_frames)
+        if streak >= switch_frames:
+            self._primary_camera[ph_id] = best_camera
+            self._primary_challenger.pop(ph_id, None)
+            return
+
+        self._primary_challenger[ph_id] = (best_camera, streak)
 
     def _maybe_apply_zero_velocity_update(
         self,

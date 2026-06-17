@@ -276,6 +276,7 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         k_cal=wt.as_float("k_cal"),
         base_footpoint_sigma_px=wt.as_float("base_footpoint_sigma_px"),
         occluded_footpoint_inflation=wt.as_float("occluded_footpoint_inflation"),
+        primary_switch_frames=wt.as_int("primary_switch_frames"),
         dedup_enabled=wt.as_bool("dedup_enabled"),
         dedup_max_distance_m=wt.as_float("dedup_max_distance_m"),
         dedup_residual_coeff_k=wt.as_float("dedup_residual_coeff_k"),

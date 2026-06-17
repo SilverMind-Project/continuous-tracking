@@ -112,6 +112,21 @@ max/representative per-camera `R_cal`, NOT the inverse-sum). The representative 
 gates should use the same uncertainty (Mahalanobis with R) where they currently use
 residual-widened Euclidean distance — fold in, single path.
 
+### Stabilized primary camera
+
+Floor position is still the fused Kalman state, not a single-camera projection. The tracker
+also maintains one per-PH primary camera for the downstream snapshot `camera_id`, keyframe
+selection, and camera-based room fallback when no room polygon contains the fused point.
+
+The primary is selected from the cameras that contributed to the PH update in the current
+tracker frame. Each observation carries `primary_score`, computed only by
+`observation_model.primary_camera_score(ObservationGeometry)` from footpoint reliability,
+crop quality, and detection confidence. The tracker chooses the best-scoring camera for the
+frame, then applies hysteresis: a different camera must be best for
+`WorldTrackerConfig.primary_switch_frames` consecutive tracker frames before the PH primary
+switches. This keeps displayed crops and room labels from flickering across overlapping
+cameras while leaving fused position, covariance, and lifecycle logic unchanged.
+
 ---
 
 ## 3. Milestones (with dependencies)

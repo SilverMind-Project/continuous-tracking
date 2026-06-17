@@ -199,6 +199,8 @@ class WorldObservation:
     """
     footpoint_reliable: bool = True
     """False when feet are occluded or bbox truncation makes the floor contact low-trust."""
+    primary_score: float = 0.0
+    """Best-view score for stabilized primary-camera selection."""
 
 
 @dataclass(frozen=True)
