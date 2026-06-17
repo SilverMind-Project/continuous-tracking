@@ -5,6 +5,8 @@ from __future__ import annotations
 import dataclasses
 from datetime import UTC, datetime
 
+import pytest
+
 from app.domain import BoundingBox, FaceAnchor, FloorPoint, OverlapGroup, WorldObservation
 from app.tracking.world.config import WorldTrackerConfig
 from app.tracking.world.dedup import dedup_observations
@@ -477,8 +479,15 @@ def test_mixed_calibrated_uncalibrated_cluster() -> None:
     assert rep.floor_point.y_mm == 5000
 
 
-def test_single_camera_cluster_equals_single_obs_cov() -> None:
-    """With one calibrated member, the representative carries the same covariance."""
+def test_single_camera_cluster_carries_total_cov() -> None:
+    """A calibrated singleton is finalized to the total R = random + bias floor.
+
+    Audit fix (Finding 1): single-camera observations bypass information-form
+    fusion, so dedup must add the systematic calibration bias floor itself —
+    otherwise the Kalman/gate treat single-camera tracks (the common case) as
+    far more certain than the calibration warrants. With residual 0.0 the bias
+    floor collapses to the numeric floor (1e-4).
+    """
     r_rand = (0.04, 0.0, 0.0, 0.04)
     obs = _obs_with_cov(
         "cam-1",
@@ -489,11 +498,46 @@ def test_single_camera_cluster_equals_single_obs_cov() -> None:
         floor_cov_random=r_rand,
         floor_residual_m=0.0,
     )
-    # Singleton cluster (only one member): dedup returns it unchanged.
     deduped, _ = dedup_observations([obs], _CFG)
     assert len(deduped) == 1
-    # The singleton is returned as-is (no _build_representative called).
-    assert deduped[0].floor_cov_random == r_rand
+    cov = deduped[0].floor_cov_random
+    assert cov is not None
+    numeric_floor = 1e-4
+    assert cov[0] == pytest.approx(0.04 + numeric_floor)
+    assert cov[3] == pytest.approx(0.04 + numeric_floor)
+    assert cov[1] == pytest.approx(0.0)
+    assert cov[2] == pytest.approx(0.0)
+
+
+def test_single_camera_singleton_adds_calibration_bias_floor() -> None:
+    """A nonzero residual adds R_cal = (k_cal·residual)²·I to the singleton's R."""
+    r_rand = (0.01, 0.0, 0.0, 0.01)
+    residual_m = 0.2
+    obs = _obs_with_cov(
+        "cam-1",
+        5.0,
+        5.0,
+        detection_id="d1",
+        quality=0.5,
+        floor_cov_random=r_rand,
+        floor_residual_m=residual_m,
+    )
+    deduped, _ = dedup_observations([obs], _CFG)
+    cov = deduped[0].floor_cov_random
+    assert cov is not None
+    expected_diag = 0.01 + (1.0 * residual_m) ** 2  # random + bias floor, k_cal=1.0
+    assert cov[0] == pytest.approx(expected_diag)
+    assert cov[3] == pytest.approx(expected_diag)
+
+
+def test_uncalibrated_singleton_unchanged() -> None:
+    """An uncalibrated singleton (no random cov) keeps floor_cov_random=None."""
+    obs = _obs_with_cov("cam-1", 5.0, 5.0, detection_id="d1", floor_cov_random=None)
+    obs = dataclasses.replace(
+        obs, floor_point=dataclasses.replace(obs.floor_point, calibrated=False)
+    )
+    deduped, _ = dedup_observations([obs], _CFG)
+    assert deduped[0].floor_cov_random is None
 
 
 def test_representative_floor_point_is_quality_weighted_fallback() -> None:

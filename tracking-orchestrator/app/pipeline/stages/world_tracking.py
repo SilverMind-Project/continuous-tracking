@@ -304,7 +304,11 @@ class WorldTrackingStage(FrameStage):
                     orientation=orientation,
                     orientation_confidence=orientation_confidence,
                 )
-                pixel_cov_px2 = pixel_covariance(geometry)
+                pixel_cov_px2 = pixel_covariance(
+                    geometry,
+                    base_sigma_px=self._config.base_footpoint_sigma_px,
+                    occluded_inflation=self._config.occluded_footpoint_inflation,
+                )
                 _point, floor_cov_random = self._floor_projector.project_with_covariance(
                     det.camera_id,
                     det.bbox,

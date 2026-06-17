@@ -21,6 +21,7 @@ from app.tracking.world.observation_model import (
     posture_view_weight,
     primary_camera_score,
     random_covariance,
+    total_observation_cov,
 )
 
 NDArrayF8 = npt.NDArray[np.float64]
@@ -148,6 +149,32 @@ def test_calibration_covariance_scales_with_residual() -> None:
     large = calibration_covariance(_geo(floor_residual_m=0.10))
 
     np.testing.assert_allclose(large, 4.0 * small)
+
+
+def test_pixel_covariance_honors_config_params() -> None:
+    """base_sigma_px / occluded_inflation override the module defaults."""
+    geo = _geo(footpoint_reliable=True, detection_confidence=1.0, crop_quality=1.0)
+    default_cov = pixel_covariance(geo)
+    doubled_cov = pixel_covariance(geo, base_sigma_px=8.0)
+    # Variance scales with sigma^2, so doubling the base sigma quadruples it.
+    np.testing.assert_allclose(doubled_cov, 4.0 * default_cov, rtol=1e-9)
+
+    occluded = _geo(footpoint_reliable=False, detection_confidence=1.0, crop_quality=1.0)
+    weak_inflation = pixel_covariance(occluded, occluded_inflation=2.0)
+    strong_inflation = pixel_covariance(occluded, occluded_inflation=8.0)
+    assert float(np.linalg.det(strong_inflation)) > float(np.linalg.det(weak_inflation))
+
+
+def test_total_observation_cov_equals_random_plus_bias_floor() -> None:
+    """The single-camera total R adds the systematic bias floor to the random part."""
+    random_cov = np.array([[0.002, 0.0003], [0.0003, 0.004]], dtype=np.float64)
+    residual_m = 0.1
+    k_cal = 1.0
+    total = total_observation_cov(random_cov, residual_m, k_cal)
+    expected = random_cov + bias_floor_from_residual(residual_m, k_cal)
+    np.testing.assert_allclose(total, expected, rtol=1e-12)
+    # The bias floor must strictly grow the covariance (anti-overconfidence).
+    assert float(np.linalg.det(total)) > float(np.linalg.det(random_cov))
 
 
 def test_random_vs_total_covariance_split() -> None:

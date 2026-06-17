@@ -29,9 +29,14 @@ from app.services.camera_room_map import (
 from app.services.transit_zone_map import TransitZoneMap
 from app.transport.redis_streams import FrameReady
 
+
 # A capture timestamp that is always "live" (within the 30s age gate).
-# Using the module-load time is sufficient; the tests run in milliseconds.
-_NOW_NS = int(time.time() * 1e9)
+# Computed per call (not at module load) so frames stay fresh no matter how long
+# the full suite takes to reach this module — a module-load constant goes stale
+# once cumulative suite runtime exceeds the 30 s stale-frame gate.
+def _now_ns() -> int:
+    return int(time.time() * 1e9)
+
 
 # ---------------------------------------------------------------------------
 # Pipeline skeleton tests
@@ -122,8 +127,8 @@ class TestPipelineSkeleton:
                 camera_id="cam-live",
                 minio_key="frames/cam-live/1.jpg",
                 frame_index=1,
-                capture_time_unix_ns=_NOW_NS,
-                received_time_unix_ns=_NOW_NS,
+                capture_time_unix_ns=_now_ns(),
+                received_time_unix_ns=_now_ns(),
                 width=640,
                 height=480,
             )
@@ -165,8 +170,8 @@ class TestPipelineSkeleton:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/42.jpg",
                 frame_index=42,
-                capture_time_unix_ns=_NOW_NS,
-                received_time_unix_ns=_NOW_NS + 100_000_000,
+                capture_time_unix_ns=_now_ns(),
+                received_time_unix_ns=_now_ns() + 100_000_000,
                 width=640,
                 height=480,
             )
@@ -278,8 +283,8 @@ class TestPipelineSkeleton:
                     camera_id="cam-1",
                     minio_key=f"frames/cam-1/{i}.jpg",
                     frame_index=i,
-                    capture_time_unix_ns=_NOW_NS + i * 200_000_000,
-                    received_time_unix_ns=_NOW_NS + 100_000_000 + i * 200_000_000,
+                    capture_time_unix_ns=_now_ns() + i * 200_000_000,
+                    received_time_unix_ns=_now_ns() + 100_000_000 + i * 200_000_000,
                     width=640,
                     height=480,
                 )
@@ -322,8 +327,8 @@ class TestPipelineSkeleton:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/3.jpg",
                 frame_index=3,
-                capture_time_unix_ns=_NOW_NS,
-                received_time_unix_ns=_NOW_NS + 100_000_000,
+                capture_time_unix_ns=_now_ns(),
+                received_time_unix_ns=_now_ns() + 100_000_000,
                 width=200,
                 height=100,
             )
@@ -405,8 +410,8 @@ class TestFullPipelineIntegration:
                     camera_id="cam-1",
                     minio_key=f"frames/cam-1/{i}.jpg",
                     frame_index=i,
-                    capture_time_unix_ns=_NOW_NS + i * 200_000_000,
-                    received_time_unix_ns=_NOW_NS + 100_000_000 + i * 200_000_000,
+                    capture_time_unix_ns=_now_ns() + i * 200_000_000,
+                    received_time_unix_ns=_now_ns() + 100_000_000 + i * 200_000_000,
                     width=640,
                     height=480,
                 )
@@ -441,8 +446,8 @@ class TestFullPipelineIntegration:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/0.jpg",
                 frame_index=0,
-                capture_time_unix_ns=_NOW_NS,
-                received_time_unix_ns=_NOW_NS + 100_000_000,
+                capture_time_unix_ns=_now_ns(),
+                received_time_unix_ns=_now_ns() + 100_000_000,
                 width=640,
                 height=480,
             )
@@ -472,8 +477,8 @@ class TestFullPipelineIntegration:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/missing.jpg",
                 frame_index=0,
-                capture_time_unix_ns=_NOW_NS,
-                received_time_unix_ns=_NOW_NS + 100_000_000,
+                capture_time_unix_ns=_now_ns(),
+                received_time_unix_ns=_now_ns() + 100_000_000,
                 width=0,
                 height=0,
             )
@@ -492,8 +497,8 @@ class TestCameraRowUpsert:
             camera_id=camera_id,
             minio_key=f"frames/{camera_id}/{frame_index}.jpg",
             frame_index=frame_index,
-            capture_time_unix_ns=_NOW_NS,
-            received_time_unix_ns=_NOW_NS + 100_000_000,
+            capture_time_unix_ns=_now_ns(),
+            received_time_unix_ns=_now_ns() + 100_000_000,
             width=640,
             height=480,
         )
@@ -604,8 +609,8 @@ class TestFrameFailureCounter:
             camera_id=camera_id,
             minio_key=f"frames/{camera_id}/0.jpg",
             frame_index=0,
-            capture_time_unix_ns=_NOW_NS,
-            received_time_unix_ns=_NOW_NS + 100_000_000,
+            capture_time_unix_ns=_now_ns(),
+            received_time_unix_ns=_now_ns() + 100_000_000,
             width=640,
             height=480,
         )

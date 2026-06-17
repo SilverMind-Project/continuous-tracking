@@ -73,11 +73,21 @@ def homography_jacobian(h: npt.ArrayLike, px: float, py: float) -> NDArrayF8:
     return scaled_jacobian_m_per_px
 
 
-def pixel_covariance(geo: ObservationGeometry) -> NDArrayF8:
-    """Return the image-space footpoint covariance Σ_px in px^2."""
-    sigma_px = _BASE_FOOTPOINT_SIGMA_PX
+def pixel_covariance(
+    geo: ObservationGeometry,
+    *,
+    base_sigma_px: float = _BASE_FOOTPOINT_SIGMA_PX,
+    occluded_inflation: float = _OCCLUDED_INFLATION,
+) -> NDArrayF8:
+    """Return the image-space footpoint covariance Σ_px in px^2.
+
+    ``base_sigma_px`` and ``occluded_inflation`` default to the module constants
+    so the function is behavior-preserving when called positionally; callers
+    holding a ``WorldTrackerConfig`` pass the configured values instead.
+    """
+    sigma_px = base_sigma_px
     if not geo.footpoint_reliable:
-        sigma_px *= _OCCLUDED_INFLATION
+        sigma_px *= occluded_inflation
 
     detection_confidence = max(geo.detection_confidence, _MIN_CONF_FLOOR)
     crop_quality = max(geo.crop_quality, _MIN_CONF_FLOOR)
@@ -147,6 +157,23 @@ def bias_floor_from_residual(residual_m: float, k_cal: float = _K_CAL) -> NDArra
     """
     variance_m2 = max((k_cal * residual_m) ** 2, _NUMERIC_FLOOR_M2)
     return variance_m2 * np.eye(2, dtype=np.float64)
+
+
+def total_observation_cov(
+    random_cov_m2: NDArrayF8,
+    residual_m: float,
+    k_cal: float = _K_CAL,
+) -> NDArrayF8:
+    """Return the total single-camera R = random + bias floor (m²).
+
+    This is the single-observation equivalent of ``fuse_information_form`` with
+    one member: the random covariance ``J·Σ_px·Jᵀ`` plus the non-shrinking
+    systematic ``R_cal`` derived from the calibration residual. It is the value a
+    single-camera observation must hand to the Kalman/gate so the filter is not
+    overconfident — mirroring ``observation_covariance`` but starting from an
+    already-projected random covariance.
+    """
+    return random_cov_m2 + bias_floor_from_residual(residual_m, k_cal)
 
 
 def fuse_information_form(

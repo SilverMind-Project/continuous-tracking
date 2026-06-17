@@ -18,7 +18,11 @@ from app.pipeline.frame_pipeline import (
 )
 from app.transport.redis_streams import FrameReady
 
-_NOW_NS = int(time.time() * 1e9)
+
+def _now_ns() -> int:
+    # Computed per call so frames stay live regardless of cumulative suite runtime
+    # (a module-load constant goes stale past the 30 s stale-frame gate).
+    return int(time.time() * 1e9)
 
 
 @contextmanager
@@ -84,8 +88,8 @@ class TestEmptyFrameHandling:
                 camera_id="cam-1",
                 minio_key="frames/cam-1/0.jpg",
                 frame_index=0,
-                capture_time_unix_ns=_NOW_NS,
-                received_time_unix_ns=_NOW_NS + 100_000_000,
+                capture_time_unix_ns=_now_ns(),
+                received_time_unix_ns=_now_ns() + 100_000_000,
                 width=640,
                 height=480,
             )
@@ -143,8 +147,8 @@ class TestEmptyFrameHandling:
                     camera_id="cam-1",
                     minio_key=f"frames/cam-1/{i}.jpg",
                     frame_index=i,
-                    capture_time_unix_ns=_NOW_NS + i * 200_000_000,
-                    received_time_unix_ns=_NOW_NS + 100_000_000 + i * 200_000_000,
+                    capture_time_unix_ns=_now_ns() + i * 200_000_000,
+                    received_time_unix_ns=_now_ns() + 100_000_000 + i * 200_000_000,
                     width=640,
                     height=480,
                 )

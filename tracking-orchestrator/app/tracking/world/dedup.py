@@ -23,9 +23,14 @@ import numpy.typing as npt
 from structlog import get_logger
 
 from ...domain import FloorPoint
+from ...domain import cov2x2_to_tuple as _cov2x2_to_tuple
 from ...domain import tuple_to_cov2x2 as _tuple_to_cov2x2
 from .helpers import cosine_similarity
-from .observation_model import bias_floor_from_residual, fuse_information_form
+from .observation_model import (
+    bias_floor_from_residual,
+    fuse_information_form,
+    total_observation_cov,
+)
 
 if TYPE_CHECKING:
     from ...domain import FaceAnchor, OverlapGroup, WorldObservation
@@ -74,7 +79,7 @@ def dedup_observations(
         singleton_map: dict[str, tuple[str, ...]] = {
             obs.detection_id: (obs.detection_id,) for obs in observations if obs.detection_id
         }
-        return list(observations), singleton_map
+        return [_finalize_singleton(obs, cfg.k_cal) for obs in observations], singleton_map
 
     n = len(observations)
     # Union-Find to identify connected components.
@@ -144,7 +149,7 @@ def dedup_observations(
 
     for _root, members in clusters.items():
         if len(members) == 1:
-            obs = observations[members[0]]
+            obs = _finalize_singleton(observations[members[0]], cfg.k_cal)
             deduped.append(obs)
             single: tuple[str, ...] = (obs.detection_id,)
             cluster_map[obs.detection_id] = single
@@ -241,6 +246,29 @@ def _group_appearance_dedup_pass(
                 group_id=group_id_i,
                 sim=round(sim, 3),
             )
+
+
+def _finalize_singleton(obs: WorldObservation, k_cal: float) -> WorldObservation:
+    """Promote a single-camera observation's covariance to the total R (m²).
+
+    A singleton bypasses information-form fusion, so on its own it carries only
+    the random part ``J·Σ_px·Jᵀ`` in ``floor_cov_random``. Add the systematic
+    calibration bias floor so it matches the semantics of a fused multi-camera
+    representative (which already carries ``R_rand* + bias_floor``). Without this
+    the Kalman update and the association gate treat single-camera tracks — the
+    common case — as far more certain than the calibration warrants.
+
+    Uncalibrated / synthetic singletons (no ``floor_cov_random``) are returned
+    unchanged; they keep the isotropic fallback in the tracker.
+    """
+    if not obs.floor_point.calibrated or obs.floor_cov_random is None:
+        return obs
+    total = total_observation_cov(
+        _tuple_to_cov2x2(obs.floor_cov_random),
+        obs.floor_residual_m or 0.0,
+        k_cal,
+    )
+    return dataclasses.replace(obs, floor_cov_random=_cov2x2_to_tuple(total))
 
 
 def _select_representative(cluster: list[WorldObservation]) -> WorldObservation:
