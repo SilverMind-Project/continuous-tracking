@@ -7,10 +7,15 @@ tuning is centralized.
 
 from __future__ import annotations
 
+import numpy as np
+import numpy.typing as npt
+
 from ...domain import ViewPrototype
 from .config import WorldTrackerConfig
 from .helpers import cosine_similarity
 from .kalman import KalmanState, isotropic_cov, mahalanobis2_position
+
+NDArrayF8 = npt.NDArray[np.float64]
 
 GATE_INF: float = 1.0e9  # sentinel for "do not match"
 
@@ -33,6 +38,7 @@ def pair_cost(
     *,
     calibrated: bool = True,
     ph_view_prototypes: tuple[ViewPrototype, ...] = (),
+    obs_cov_m2: NDArrayF8 | None = None,
 ) -> float:
     """Return finite cost in [0, GATE_INF). GATE_INF means do not match.
 
@@ -59,11 +65,12 @@ def pair_cost(
         alpha_app = cfg.alpha_app
 
     # 1. Geometric gate.
+    gate_cov = obs_cov_m2 if obs_cov_m2 is not None else isotropic_cov(cfg.observation_noise_m)
     d2 = mahalanobis2_position(
         ph_state,
         obs_floor_x_m,
         obs_floor_y_m,
-        isotropic_cov(cfg.observation_noise_m),
+        gate_cov,
     )
     if d2 > gate:
         return GATE_INF

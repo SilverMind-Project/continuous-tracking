@@ -390,6 +390,12 @@ world_tracker:
   initial_velocity_sigma_m_s: 2.0
   velocity_decay_s: 3.0
   height_sigma_m: 0.15
+  # ---- Observation uncertainty model (M04 information-form fusion) ----
+  # Mirror observation_model.py module constants; tune against M09 acceptance fixtures.
+  k_cal: 1.0                        # bias-floor gain: R_cal = (k_cal * residual_m)^2 * I (m^2)
+  base_footpoint_sigma_px: 4.0      # detector bbox-bottom localization noise (px, 1 sigma)
+  occluded_footpoint_inflation: 8.0  # sigma multiplier when feet are hidden or bbox truncated
+
   # ---- Cross-camera dedup (U1) ----
   dedup_enabled: true
   dedup_max_distance_m: 0.9

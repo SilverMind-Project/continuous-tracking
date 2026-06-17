@@ -12,18 +12,26 @@ building the observation lists and calling associate().
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import numpy as np
+import numpy.typing as npt
 from structlog import get_logger
 
+from ...domain import FloorPoint
+from ...domain import tuple_to_cov2x2 as _tuple_to_cov2x2
 from .helpers import cosine_similarity
+from .observation_model import bias_floor_from_residual, fuse_information_form
 
 if TYPE_CHECKING:
     from ...domain import FaceAnchor, OverlapGroup, WorldObservation
     from .config import WorldTrackerConfig
+
+NDArrayF8 = npt.NDArray[np.float64]
 
 logger = get_logger(__name__)
 
@@ -144,7 +152,7 @@ def dedup_observations(
             # Multi-observation cluster: collapse to one representative.
             cluster_obs = [observations[m] for m in members]
             rep = _select_representative(cluster_obs)
-            rep = _build_representative(rep, cluster_obs)
+            rep = _build_representative(rep, cluster_obs, k_cal=cfg.k_cal)
             deduped.append(rep)
             src_ids = tuple(obs.detection_id for obs in cluster_obs)
             cluster_map[rep.detection_id] = src_ids
@@ -258,48 +266,25 @@ def _effective_distance_gate_m(
 def _build_representative(
     best: WorldObservation,
     cluster: list[WorldObservation],
+    k_cal: float = 1.0,
 ) -> WorldObservation:
     """Build the dedup representative from the best observation in a cluster.
 
-    Floor position: quality-weighted mean of calibrated floor points.
+    Floor position + covariance: information-form (inverse-covariance) fusion of
+    the RANDOM covariance only (J·Σ_px·Jᵀ), plus a non-shrinking bias floor
+    derived from the worst calibration residual in the cluster.  Crop quality
+    already scaled Σ_px in M01; it does NOT weight the fusion directly here.
+
     Embedding: taken from the best (highest-quality) observation unchanged.
     Face anchor: highest-confidence face anchor in the cluster.
-    active_cameras: the representative itself carries camera_id; the tracker
-                    adds all cameras via cluster_map during PH update.
+    active_cameras: the representative carries camera_id; the tracker adds all
+                    cameras from cluster_map during PH update.
+
+    If no calibrated member has floor_cov_random, falls back to the best
+    observation's floor point with floor_cov_random=None (old behavior).
+    Mixed clusters (some calibrated, some not): only calibrated members with
+    floor_cov_random contribute to fusion; uncalibrated members are skipped.
     """
-    import dataclasses
-
-    from ...domain import FloorPoint
-
-    # Quality-weighted mean floor point.
-    total_weight = 0.0
-    wx = 0.0
-    wy = 0.0
-    missing_fp = 0
-    for obs in cluster:
-        if not obs.floor_point.calibrated:
-            missing_fp += 1
-            continue
-        w = obs.quality if obs.quality > 0.0 else 1e-6
-        wx += obs.floor_point.x_mm / 1000.0 * w
-        wy += obs.floor_point.y_mm / 1000.0 * w
-        total_weight += w
-
-    if missing_fp > 0:
-        # Caller (WorldTracker) increments the metric; we just note the count.
-        pass
-
-    if total_weight > 0.0:
-        mean_x_m = wx / total_weight
-        mean_y_m = wy / total_weight
-        mean_fp = FloorPoint(
-            x_mm=round(mean_x_m * 1000.0),
-            y_mm=round(mean_y_m * 1000.0),
-            calibrated=True,
-        )
-    else:
-        mean_fp = best.floor_point
-
     # Best face anchor in the cluster.
     best_face = best.face_anchor
     for obs in cluster:
@@ -307,6 +292,60 @@ def _build_representative(
             best_face is None or obs.face_anchor.confidence > best_face.confidence
         ):
             best_face = obs.face_anchor
+
+    # Gather calibrated members that carry a random covariance.
+    fuseable = [
+        obs for obs in cluster if obs.floor_point.calibrated and obs.floor_cov_random is not None
+    ]
+
+    if fuseable:
+        points_m = [
+            (obs.floor_point.x_mm / 1000.0, obs.floor_point.y_mm / 1000.0) for obs in fuseable
+        ]
+        random_covs: list[NDArrayF8] = [
+            _tuple_to_cov2x2(cov) for obs in fuseable if (cov := obs.floor_cov_random) is not None
+        ]
+
+        # Bias floor: worst (largest) calibration residual in the full cluster.
+        worst_residual_m = max(obs.floor_residual_m or 0.0 for obs in cluster)
+        bias_floor = bias_floor_from_residual(worst_residual_m, k_cal)
+
+        try:
+            (fx_m, fy_m), fused_cov_rm = fuse_information_form(points_m, random_covs, bias_floor)
+            fused_fp = FloorPoint(
+                x_mm=round(fx_m * 1000.0),
+                y_mm=round(fy_m * 1000.0),
+                calibrated=True,
+            )
+            return dataclasses.replace(
+                best,
+                floor_point=fused_fp,
+                face_anchor=best_face,
+                floor_cov_random=fused_cov_rm,
+            )
+        except (ValueError, np.linalg.LinAlgError):
+            pass  # fall through to legacy path
+
+    # Legacy fallback: quality-weighted mean, no covariance on the representative.
+    total_weight = 0.0
+    wx = 0.0
+    wy = 0.0
+    for obs in cluster:
+        if not obs.floor_point.calibrated:
+            continue
+        w = obs.quality if obs.quality > 0.0 else 1e-6
+        wx += obs.floor_point.x_mm / 1000.0 * w
+        wy += obs.floor_point.y_mm / 1000.0 * w
+        total_weight += w
+
+    if total_weight > 0.0:
+        mean_fp = FloorPoint(
+            x_mm=round(wx / total_weight * 1000.0),
+            y_mm=round(wy / total_weight * 1000.0),
+            calibrated=True,
+        )
+    else:
+        mean_fp = best.floor_point
 
     return dataclasses.replace(
         best,

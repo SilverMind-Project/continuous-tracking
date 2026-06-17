@@ -11,8 +11,10 @@ import pytest
 from app.domain import ObservationGeometry, OrientationBin
 from app.inference.schemas import Keypoint, PoseResult
 from app.tracking.world.observation_model import (
+    bias_floor_from_residual,
     calibration_covariance,
     footpoint_reliable,
+    fuse_information_form,
     homography_jacobian,
     observation_covariance,
     pixel_covariance,
@@ -241,3 +243,96 @@ def test_footpoint_reliable_true_without_pose_when_not_truncated() -> None:
         image_w=640,
         image_h=480,
     )
+
+
+# ---------------------------------------------------------------------------
+# bias_floor_from_residual tests
+# ---------------------------------------------------------------------------
+
+
+def test_bias_floor_from_residual_zero_returns_numeric_floor() -> None:
+    bf = bias_floor_from_residual(0.0)
+    assert bf.shape == (2, 2)
+    assert float(bf[0, 0]) >= 1e-4
+    assert float(bf[1, 1]) >= 1e-4
+
+
+def test_bias_floor_from_residual_scales_with_residual() -> None:
+    small = bias_floor_from_residual(0.05)
+    large = bias_floor_from_residual(0.10)
+    assert float(large[0, 0]) > float(small[0, 0])
+
+
+def test_bias_floor_from_residual_k_cal_scales_result() -> None:
+    base = bias_floor_from_residual(0.1, k_cal=1.0)
+    doubled = bias_floor_from_residual(0.1, k_cal=2.0)
+    np.testing.assert_allclose(doubled[0, 0], 4.0 * base[0, 0])
+
+
+def test_bias_floor_is_isotropic() -> None:
+    bf = bias_floor_from_residual(0.2)
+    np.testing.assert_allclose(bf[0, 0], bf[1, 1])
+    np.testing.assert_allclose(bf[0, 1], 0.0)
+    np.testing.assert_allclose(bf[1, 0], 0.0)
+
+
+# ---------------------------------------------------------------------------
+# fuse_information_form tests
+# ---------------------------------------------------------------------------
+
+
+def _iso_cov(sigma_m: float) -> NDArrayF8:
+    return (sigma_m**2) * np.eye(2, dtype=np.float64)
+
+
+def test_single_camera_returns_own_covariance_plus_bias_floor() -> None:
+    r_rand = _iso_cov(0.1)
+    bias_floor = _iso_cov(0.05)
+    (x, y), cov_rm = fuse_information_form([(3.0, 4.0)], [r_rand], bias_floor)
+    fused_cov = np.array(cov_rm).reshape(2, 2)
+    # The implementation adds a numeric floor (1e-4) to r_rand before inversion for
+    # numerical stability, so the result is r_rand + numeric_floor + bias_floor.
+    numeric_floor = 1e-4 * np.eye(2, dtype=np.float64)
+    expected = r_rand + numeric_floor + bias_floor
+    np.testing.assert_allclose(x, 3.0, atol=1e-9)
+    np.testing.assert_allclose(y, 4.0, atol=1e-9)
+    np.testing.assert_allclose(fused_cov, expected, rtol=1e-6)
+
+
+def test_fusion_weights_toward_low_covariance_camera() -> None:
+    r_low = _iso_cov(0.01)  # very precise camera
+    r_high = _iso_cov(1.0)  # very imprecise camera
+    bias_floor = _iso_cov(0.001)
+    points = [(0.0, 0.0), (10.0, 0.0)]
+    covs = [r_low, r_high]
+    (x, _y), _ = fuse_information_form(points, covs, bias_floor)
+    # Fused x must be much closer to 0.0 (low-R camera) than to 10.0 (high-R camera).
+    assert x < 1.0, f"fused x={x} should be near 0.0 (the low-covariance camera)"
+
+
+def test_fusion_does_not_shrink_below_bias_floor() -> None:
+    """Anti-jump guarantee: R* diagonal → bias_floor as N grows, never → 0."""
+    bias_floor = _iso_cov(0.1)
+    r_rand = _iso_cov(0.05)
+    for n_cameras in [2, 5, 10, 50]:
+        points = [(1.0, 2.0)] * n_cameras
+        covs = [r_rand] * n_cameras
+        _xy, cov_rm = fuse_information_form(points, covs, bias_floor)
+        fused_cov = np.array(cov_rm).reshape(2, 2)
+        assert float(fused_cov[0, 0]) >= float(bias_floor[0, 0]) - 1e-9, (
+            f"R* diagonal {fused_cov[0, 0]} fell below bias_floor {bias_floor[0, 0]} "
+            f"at N={n_cameras}"
+        )
+
+
+def test_fusion_symmetric_cameras_return_shared_position() -> None:
+    r_rand = _iso_cov(0.1)
+    bias_floor = _iso_cov(0.01)
+    (x, y), _ = fuse_information_form([(3.0, 4.0), (3.0, 4.0)], [r_rand, r_rand], bias_floor)
+    np.testing.assert_allclose(x, 3.0, atol=1e-9)
+    np.testing.assert_allclose(y, 4.0, atol=1e-9)
+
+
+def test_fuse_information_form_empty_raises() -> None:
+    with pytest.raises(ValueError, match="no valid"):
+        fuse_information_form([], [], _iso_cov(0.1))

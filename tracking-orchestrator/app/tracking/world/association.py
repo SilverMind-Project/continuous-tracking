@@ -5,12 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import numpy.typing as npt
 from scipy.optimize import linear_sum_assignment
 
-from ...domain import ViewPrototype
+from ...domain import ViewPrototype, tuple_to_cov2x2
 from .config import WorldTrackerConfig
 from .cost_matrix import GATE_INF, pair_cost
 from .kalman import KalmanState
+
+NDArrayF8 = npt.NDArray[np.float64]
 
 
 @dataclass(frozen=True)
@@ -36,10 +39,13 @@ def associate(
     *,
     obs_calibrated: list[bool] | None = None,
     ph_view_prototypes: list[tuple[ViewPrototype, ...]] | None = None,
+    obs_covs: list[tuple[float, float, float, float] | None] | None = None,
 ) -> Assignment:
     """Hungarian assignment with gating.
 
     Pairs whose cost is GATE_INF are excluded from the matched set.
+    When obs_covs is provided, each observation's covariance is used in the
+    Mahalanobis gate so uncertain observations gate more permissively.
     """
     n_ph = len(ph_states)
     n_obs = len(obs_floor_points)
@@ -50,10 +56,15 @@ def associate(
 
     calib_flags = obs_calibrated if obs_calibrated is not None else [True] * n_obs
     prototypes = ph_view_prototypes if ph_view_prototypes is not None else [()] * n_ph
+    cov_tuples: list[tuple[float, float, float, float] | None] = (
+        obs_covs if obs_covs is not None else [None] * n_obs
+    )
 
     cost = np.full((n_ph, n_obs), GATE_INF, dtype=np.float64)
     for i in range(n_ph):
         for j in range(n_obs):
+            cov_t = cov_tuples[j]
+            obs_cov_m2: NDArrayF8 | None = tuple_to_cov2x2(cov_t) if cov_t is not None else None
             cost[i, j] = pair_cost(
                 ph_state=ph_states[i],
                 ph_gallery_mean=ph_gallery_means[i],
@@ -68,6 +79,7 @@ def associate(
                 cfg=cfg,
                 calibrated=calib_flags[j],
                 ph_view_prototypes=prototypes[i],
+                obs_cov_m2=obs_cov_m2,
             )
 
     # If every pair is gated, skip the solver.

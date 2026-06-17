@@ -78,6 +78,13 @@ class WorldTrackerConfig:
     enable_group_appearance_dedup: bool = False
     dedup_group_appearance_min_sim: float = 0.75
 
+    # ---- Observation uncertainty model (used by information-form fusion) ----
+    # These mirror the module-level constants in observation_model.py and make
+    # them tunable per-deployment.  Tune against M09 acceptance fixtures.
+    k_cal: float = 1.0  # R_cal/bias-floor = (k_cal · residual_m)² · I  (m²)
+    base_footpoint_sigma_px: float = 4.0  # detector bbox-bottom localization noise (px, 1 sigma)
+    occluded_footpoint_inflation: float = 8.0  # sigma multiplier when feet are hidden/truncated
+
     # ---- Cross-camera dedup ----
     # Pre-association floor-point dedup for observations from overlapping cameras.
     # Two observations from different cameras within this distance on the floor plane

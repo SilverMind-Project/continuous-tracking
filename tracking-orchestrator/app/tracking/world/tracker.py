@@ -35,6 +35,7 @@ from ...domain import (
     ViewPrototype,
     WorldFrameSnapshot,
     WorldObservation,
+    tuple_to_cov2x2,
 )
 from ...observability import metrics as _metrics
 from ...storage.base import (
@@ -149,6 +150,7 @@ class _ObsVectors:
     face_confidences: list[float]
     heights: list[float | None]
     calibrated: list[bool]
+    covs: list[tuple[float, float, float, float] | None]
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,7 @@ def _unpack_observations(observations: list[WorldObservation]) -> _ObsVectors:
         face_confidences=face_confidences,
         heights=[obs.height_estimate_m for obs in observations],
         calibrated=[obs.floor_point.calibrated for obs in observations],
+        covs=[obs.floor_cov_random for obs in observations],
     )
 
 
@@ -350,6 +353,7 @@ class WorldTracker:
             cfg=cfg,
             obs_calibrated=obs_vecs.calibrated,
             ph_view_prototypes=ph_vecs.view_prototypes,
+            obs_covs=obs_vecs.covs,
         )
 
         # Shadow association under relaxed uncalibrated gate.
@@ -368,6 +372,7 @@ class WorldTracker:
                 cfg=relaxed_cfg,
                 obs_calibrated=obs_vecs.calibrated,
                 ph_view_prototypes=ph_vecs.view_prototypes,
+                obs_covs=obs_vecs.covs,
             )
             if set(assignment.matched) != set(shadow_assignment.matched) or set(
                 assignment.unmatched_obs
@@ -396,11 +401,16 @@ class WorldTracker:
             ks = predicted_states[ph_idx]
             obs = observations[obs_idx]  # deduped representative
 
+            obs_r = (
+                tuple_to_cov2x2(obs.floor_cov_random)
+                if obs.floor_cov_random is not None and obs.floor_point.calibrated
+                else isotropic_cov(cfg.observation_noise_m)
+            )
             new_state = update(
                 ks,
                 obs.floor_point.x_mm / 1000.0,
                 obs.floor_point.y_mm / 1000.0,
-                isotropic_cov(cfg.observation_noise_m),
+                obs_r,
             )
             new_gallery_mean = update_gallery_mean(
                 ph.gallery_mean, obs.embedding, ph.observation_count
@@ -802,6 +812,7 @@ class WorldTracker:
                     cfg=recovery_cfg,
                     obs_calibrated=lb_obs_vecs.calibrated,
                     ph_view_prototypes=lb_ph_prototypes,
+                    obs_covs=lb_obs_vecs.covs,
                 )
                 for local_ph_idx, lb_obs_idx in lb_assignment.matched:
                     ph_idx = unmatched_after_pass1[local_ph_idx]

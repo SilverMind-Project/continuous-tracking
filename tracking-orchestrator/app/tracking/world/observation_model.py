@@ -138,6 +138,69 @@ def primary_camera_score(geo: ObservationGeometry) -> float:
     return float(min(max(score, 0.0), 1.0))
 
 
+def bias_floor_from_residual(residual_m: float, k_cal: float = _K_CAL) -> NDArrayF8:
+    """Return R_bias = (k_cal · residual_m)² · I in m².
+
+    This is the non-shrinking systematic bias floor for cross-camera fusion.
+    It must be ADDED after information-form fusion, never inverse-summed.
+    Clamped to the numeric floor so the matrix stays invertible.
+    """
+    variance_m2 = max((k_cal * residual_m) ** 2, _NUMERIC_FLOOR_M2)
+    return variance_m2 * np.eye(2, dtype=np.float64)
+
+
+def fuse_information_form(
+    points_m: list[tuple[float, float]],
+    random_covs_m2: list[NDArrayF8],
+    bias_floor_m2: NDArrayF8,
+) -> tuple[tuple[float, float], tuple[float, float, float, float]]:
+    """Inverse-covariance fuse the RANDOM part, then add the bias floor.
+
+    x* = R_rand* · Σ (R_rand_i⁻¹ · x_i);  R* = R_rand* + bias_floor_m2
+    where R_rand* = (Σ R_rand_i⁻¹)⁻¹.  Returns (x*, R*_rowmajor as 4-tuple).
+
+    CRITICAL: bias_floor_m2 is ADDED after fusion, never inverse-summed —
+    calibration bias is systematic and must not shrink with camera count.
+
+    Raises ValueError if no valid (finite, positive-definite) members remain.
+    """
+    numeric_floor = _NUMERIC_FLOOR_M2 * np.eye(2, dtype=np.float64)
+
+    info_sum = np.zeros((2, 2), dtype=np.float64)
+    info_x_sum = np.zeros(2, dtype=np.float64)
+    valid = 0
+
+    for (x_m, y_m), r_rand in zip(points_m, random_covs_m2, strict=True):
+        if r_rand is None:
+            continue
+        if not np.all(np.isfinite(r_rand)):
+            continue
+        r_floored = r_rand + numeric_floor
+        try:
+            r_inv = np.linalg.inv(r_floored)
+        except np.linalg.LinAlgError:
+            continue
+        xy = np.array([x_m, y_m], dtype=np.float64)
+        info_sum += r_inv
+        info_x_sum += r_inv @ xy
+        valid += 1
+
+    if valid == 0:
+        raise ValueError("fuse_information_form: no valid calibrated members")
+
+    r_random_fused = np.linalg.inv(info_sum)
+    fused_xy = r_random_fused @ info_x_sum
+    fused_cov = r_random_fused + bias_floor_m2
+
+    flat = fused_cov.ravel()
+    return (float(fused_xy[0]), float(fused_xy[1])), (
+        float(flat[0]),
+        float(flat[1]),
+        float(flat[2]),
+        float(flat[3]),
+    )
+
+
 def footpoint_reliable(
     pose: PoseResult | None,
     bbox_px: tuple[int, int, int, int],

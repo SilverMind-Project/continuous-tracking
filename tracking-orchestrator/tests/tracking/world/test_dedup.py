@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 
 from app.domain import BoundingBox, FaceAnchor, FloorPoint, OverlapGroup, WorldObservation
@@ -335,3 +336,172 @@ def test_group_appearance_dedup_disabled_skips() -> None:
     )
     deduped, _ = dedup_observations([obs1, obs2], cfg, overlap_groups=[_GROUP])
     assert len(deduped) == 2, "flag off -> no group-appearance dedup"
+
+
+# ---------------------------------------------------------------------------
+# M04: Information-form fusion tests
+# ---------------------------------------------------------------------------
+
+
+def _obs_with_cov(
+    camera_id: str,
+    x_m: float,
+    y_m: float,
+    *,
+    detection_id: str = "",
+    quality: float = 0.5,
+    floor_cov_random: tuple[float, float, float, float] | None = None,
+    floor_residual_m: float | None = None,
+) -> WorldObservation:
+    base = _obs(
+        camera_id=camera_id,
+        x_m=x_m,
+        y_m=y_m,
+        detection_id=detection_id,
+        quality=quality,
+        floor_residual_m=floor_residual_m,
+    )
+    return dataclasses.replace(base, floor_cov_random=floor_cov_random)
+
+
+def test_fusion_weights_toward_low_covariance_camera() -> None:
+    """Fused position sits near the low-R camera, not the midpoint a mean would give."""
+    r_low = (0.0001, 0.0, 0.0, 0.0001)  # 1 cm sigma — very precise
+    r_high = (1.0, 0.0, 0.0, 1.0)  # 1 m sigma — very imprecise
+    # Place observations within the 0.6 m dedup gate.
+    obs_low_r = _obs_with_cov(
+        "cam-1", 5.0, 5.0, detection_id="d1", quality=0.5, floor_cov_random=r_low
+    )
+    obs_high_r = _obs_with_cov(
+        "cam-2", 5.5, 5.0, detection_id="d2", quality=0.7, floor_cov_random=r_high
+    )
+    deduped, _ = dedup_observations([obs_low_r, obs_high_r], _CFG)
+    assert len(deduped) == 1
+    rep = deduped[0]
+    fused_x_m = rep.floor_point.x_mm / 1000.0
+    # Fused position must be much closer to 5.0 (low-R cam) than to 5.5 (high-R cam).
+    # A quality-weighted mean with quality 0.5 and 0.7 would give ~5.3; information-form
+    # fusion with r_high >> r_low gives nearly 5.0.
+    assert fused_x_m < 5.1, (
+        f"fused x={fused_x_m:.3f} should be near 5.0 (low-R camera), not near 5.5"
+    )
+
+
+def test_fusion_does_not_shrink_below_bias_floor() -> None:
+    """Anti-jump guarantee: fused R* diagonal never falls below the bias floor."""
+    residual_m = 0.1
+    bias_floor_diag = (1.0 * residual_m) ** 2  # k_cal=1.0
+    r_rand = (0.04, 0.0, 0.0, 0.04)
+    # Build N identical cameras all at the same point.
+    for n_cameras in [2, 3, 5]:
+        cameras = [
+            _obs_with_cov(
+                f"cam-{i}",
+                5.0,
+                5.0,
+                detection_id=f"d{i}",
+                quality=0.5,
+                floor_cov_random=r_rand,
+                floor_residual_m=residual_m,
+            )
+            for i in range(n_cameras)
+        ]
+        # Build clusters manually for n>2 since the dedup gate only merges pairs.
+        # Use a very wide gate to ensure all collapse.
+        cfg_wide = WorldTrackerConfig(dedup_enabled=True, dedup_max_distance_m=100.0)
+        deduped, _ = dedup_observations(cameras, cfg_wide)
+        assert len(deduped) == 1
+        rep = deduped[0]
+        assert rep.floor_cov_random is not None
+        fused_diag = rep.floor_cov_random[0]  # R*[0,0]
+        assert fused_diag >= bias_floor_diag - 1e-9, (
+            f"R* diagonal {fused_diag:.6f} fell below bias_floor {bias_floor_diag:.6f} "
+            f"at N={n_cameras} cameras"
+        )
+
+
+def test_bias_floor_uses_worst_residual() -> None:
+    """Bias floor comes from the cluster member with the largest residual."""
+    r_rand = (0.04, 0.0, 0.0, 0.04)
+    obs_good = _obs_with_cov(
+        "cam-1",
+        5.0,
+        5.0,
+        detection_id="d1",
+        quality=0.5,
+        floor_cov_random=r_rand,
+        floor_residual_m=0.05,
+    )
+    obs_bad = _obs_with_cov(
+        "cam-2",
+        5.1,
+        5.0,
+        detection_id="d2",
+        quality=0.5,
+        floor_cov_random=r_rand,
+        floor_residual_m=0.5,
+    )
+    deduped, _ = dedup_observations([obs_good, obs_bad], _CFG)
+    assert len(deduped) == 1
+    rep = deduped[0]
+    assert rep.floor_cov_random is not None
+    expected_bias_floor = (1.0 * 0.5) ** 2  # k_cal * worst_residual
+    fused_diag = rep.floor_cov_random[0]
+    assert fused_diag >= expected_bias_floor - 1e-9, (
+        f"bias floor {fused_diag:.6f} < expected {expected_bias_floor:.6f}"
+    )
+
+
+def test_mixed_calibrated_uncalibrated_cluster() -> None:
+    """Only calibrated members with floor_cov_random contribute to fusion."""
+    r_rand = (0.04, 0.0, 0.0, 0.04)
+    obs_calib = _obs_with_cov(
+        "cam-1", 5.0, 5.0, detection_id="d1", quality=0.5, floor_cov_random=r_rand
+    )
+    obs_uncalib = _obs_with_cov(
+        "cam-2", 5.05, 5.0, detection_id="d2", quality=0.5, floor_cov_random=None
+    )
+    obs_uncalib = dataclasses.replace(
+        obs_uncalib,
+        floor_point=dataclasses.replace(obs_uncalib.floor_point, calibrated=False),
+    )
+    # The uncalibrated obs cannot form a geometric dedup cluster with the calibrated one.
+    # But we can test _build_representative directly.
+    from app.tracking.world.dedup import _build_representative, _select_representative
+
+    cluster = [obs_calib, obs_uncalib]
+    best = _select_representative(cluster)
+    rep = _build_representative(best, cluster)
+    # Position must come from the calibrated member only.
+    assert rep.floor_point.x_mm == 5000
+    assert rep.floor_point.y_mm == 5000
+
+
+def test_single_camera_cluster_equals_single_obs_cov() -> None:
+    """With one calibrated member, the representative carries the same covariance."""
+    r_rand = (0.04, 0.0, 0.0, 0.04)
+    obs = _obs_with_cov(
+        "cam-1",
+        5.0,
+        5.0,
+        detection_id="d1",
+        quality=0.5,
+        floor_cov_random=r_rand,
+        floor_residual_m=0.0,
+    )
+    # Singleton cluster (only one member): dedup returns it unchanged.
+    deduped, _ = dedup_observations([obs], _CFG)
+    assert len(deduped) == 1
+    # The singleton is returned as-is (no _build_representative called).
+    assert deduped[0].floor_cov_random == r_rand
+
+
+def test_representative_floor_point_is_quality_weighted_fallback() -> None:
+    """Without floor_cov_random, the fallback quality-weighted mean still works."""
+    obs_hi = _obs("cam-1", 5.0, 5.0, detection_id="d1", quality=1.0)
+    obs_lo = _obs("cam-2", 5.6, 5.0, detection_id="d2", quality=0.0)
+    deduped, _ = dedup_observations([obs_hi, obs_lo], _CFG)
+    assert len(deduped) == 1
+    rep = deduped[0]
+    # floor_cov_random=None on both → fallback path → quality-weighted mean.
+    assert abs(rep.floor_point.x_mm / 1000.0 - 5.0) < 0.01
