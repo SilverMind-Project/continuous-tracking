@@ -13,6 +13,7 @@ from .cost_matrix import GATE_INF as GATE_INF
 from .cost_matrix import pair_cost as pair_cost
 from .kalman import KalmanState as KalmanState
 from .kalman import initialize as initialize
+from .kalman import isotropic_cov as isotropic_cov
 from .kalman import mahalanobis2_position as mahalanobis2_position
 from .kalman import predict as predict
 from .kalman import update as update
@@ -28,6 +29,7 @@ __all__ = [
     "WorldTrackerConfig",
     "associate",
     "initialize",
+    "isotropic_cov",
     "mahalanobis2_position",
     "pair_cost",
     "predict",

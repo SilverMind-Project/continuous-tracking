@@ -10,7 +10,7 @@ from __future__ import annotations
 from ...domain import ViewPrototype
 from .config import WorldTrackerConfig
 from .helpers import cosine_similarity
-from .kalman import KalmanState, mahalanobis2_position
+from .kalman import KalmanState, isotropic_cov, mahalanobis2_position
 
 GATE_INF: float = 1.0e9  # sentinel for "do not match"
 
@@ -63,7 +63,7 @@ def pair_cost(
         ph_state,
         obs_floor_x_m,
         obs_floor_y_m,
-        cfg.observation_noise_m,
+        isotropic_cov(cfg.observation_noise_m),
     )
     if d2 > gate:
         return GATE_INF

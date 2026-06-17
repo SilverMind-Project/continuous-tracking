@@ -55,7 +55,7 @@ from .helpers import (
     update_gallery_mean,
     update_height_ema,
 )
-from .kalman import KalmanState, initialize, predict, update
+from .kalman import KalmanState, initialize, isotropic_cov, predict, update
 from .revival import select_revival_candidate
 from .topology import record_handoff
 
@@ -400,7 +400,7 @@ class WorldTracker:
                 ks,
                 obs.floor_point.x_mm / 1000.0,
                 obs.floor_point.y_mm / 1000.0,
-                cfg.observation_noise_m,
+                isotropic_cov(cfg.observation_noise_m),
             )
             new_gallery_mean = update_gallery_mean(
                 ph.gallery_mean, obs.embedding, ph.observation_count
@@ -810,7 +810,7 @@ class WorldTracker:
                     obs = lb_obs_raw[lb_obs_idx]
                     fx = obs.floor_point.x_mm / 1000.0
                     fy = obs.floor_point.y_mm / 1000.0
-                    new_state = update(ks, fx, fy, cfg.observation_noise_m)
+                    new_state = update(ks, fx, fy, isotropic_cov(cfg.observation_noise_m))
                     # Kalman + last_seen_at update only; do NOT touch observation_count,
                     # gallery_mean, view_prototypes, or mean_quality.
                     recovered = PersonHypothesis(

@@ -114,11 +114,16 @@ def predict(
     return KalmanState(mean=predicted_mean, covariance=predicted_cov, updated_at=now)
 
 
+def isotropic_cov(sigma_m: float) -> NDArrayF8:
+    """R = sigma_m² · I (2,2). Use for synthetic/uncalibrated floor points with no Jacobian."""
+    return (sigma_m**2) * np.eye(2, dtype=np.float64)
+
+
 def update(
     state: KalmanState,
     observation_x_m: float,
     observation_y_m: float,
-    observation_noise_m: float,
+    observation_cov_m2: NDArrayF8,  # (2,2) m²
 ) -> KalmanState:
     """Apply a position observation. Returns the posterior state."""
     z = np.array([observation_x_m, observation_y_m], dtype=np.float64)
@@ -129,7 +134,7 @@ def update(
         ],
         dtype=np.float64,
     )
-    R = (observation_noise_m**2) * np.eye(2, dtype=np.float64)  # noqa: N806
+    R = observation_cov_m2  # noqa: N806
 
     # Innovation.
     y = z - H @ state.mean  # shape (2,)
@@ -153,7 +158,7 @@ def mahalanobis2_position(
     state: KalmanState,
     observation_x_m: float,
     observation_y_m: float,
-    observation_noise_m: float,
+    observation_cov_m2: NDArrayF8,  # (2,2) m²
 ) -> float:
     """Squared Mahalanobis distance of an observation under the predicted state.
 
@@ -167,7 +172,7 @@ def mahalanobis2_position(
         ],
         dtype=np.float64,
     )
-    R = (observation_noise_m**2) * np.eye(2, dtype=np.float64)  # noqa: N806
+    R = observation_cov_m2  # noqa: N806
     y = z - H @ state.mean
     S = H @ state.covariance @ H.T + R  # noqa: N806
     x = np.linalg.solve(S, y)
