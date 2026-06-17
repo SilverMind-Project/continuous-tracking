@@ -9,10 +9,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.domain import (
     BoundingBox,
     Detection,
     FloorPoint,
+    ObservationGeometry,
+    OrientationBin,
     WorldFrameSnapshot,
 )
 from app.pipeline.frame_context import FrameContext
@@ -215,6 +219,51 @@ class TestTrajectoryWritesFromSnapshots:
         # But cam-b's posture evidence is now in the fusion store for ph-x.
         assert "cam-b" in posture_tracker._snapshots["ph-x"]
         assert posture_tracker._snapshots["ph-x"]["cam-b"].lying == 0.9
+        assert posture_tracker._snapshots["ph-x"]["cam-b"].view_weight == 1.0
+
+    async def test_non_representative_posture_uses_geometry_view_weight(self) -> None:
+        """Posture ingest uses the shared geometry descriptor when it is present."""
+        now = datetime.now(UTC)
+        snap = _make_snapshot(ph_id="ph-x", camera_id="cam-a", captured_at=now)
+
+        repo = InMemoryTrajectoryRepository()
+        writer = TrajectoryWriter(repo=repo)
+        posture_tracker = GlobalPostureTracker(required_consecutive=1)
+        stage = TrajectoryStage(
+            trajectory_writer=writer,
+            motion_energy_tracker=MotionEnergyTracker(),
+            posture_tracker=posture_tracker,
+        )
+
+        ctx = _make_ctx(camera_id="cam-b", now=now, snapshots=[snap])
+        ctx.domain_detections = [
+            Detection(
+                detection_id="det-b",
+                camera_id="cam-b",
+                bbox=BoundingBox(0.0, 0.0, 10.0, 20.0),
+                embedding=[],
+                capture_time=now,
+                event_time=now,
+                ph_id="ph-x",
+                floor_point=FloorPoint(0, 0),
+            )
+        ]
+        ctx.det_posture_scores["det-b"] = PostureScores(
+            lying=0.9, sitting=0.0, standing_walking=0.0, keypoint_confidence=0.85
+        )
+        ctx.geometry_by_detection["det-b"] = ObservationGeometry(
+            footpoint_px=(5.0, 20.0),
+            floor_residual_m=0.02,
+            footpoint_reliable=False,
+            detection_confidence=0.9,
+            crop_quality=0.8,
+            orientation=OrientationBin.FRONT,
+            orientation_confidence=1.0,
+        )
+
+        await stage.run(ctx)
+
+        assert posture_tracker._snapshots["ph-x"]["cam-b"].view_weight == pytest.approx(0.18)
 
     async def test_room_name_from_snapshot(self) -> None:
         """Trajectory point room_name comes from the snapshot, not camera_room_map."""

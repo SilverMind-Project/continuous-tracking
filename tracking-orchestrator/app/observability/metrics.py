@@ -132,6 +132,7 @@ class Metrics:
     cts_posture_hysteresis_flips_total: Counter
     cts_posture_camera_contributions_total: Counter
     cts_posture_cameras_fused: Histogram
+    cts_posture_view_weight: Histogram
     cts_posture_fused_class_total: Counter
 
     # ---- Stage latency -----------------------------------------------
@@ -510,6 +511,11 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_posture_cameras_fused",
             "Number of cameras contributing to each fusion cycle (non-stale).",
             (1.0, 2.0, 3.0, 4.0, 5.0),
+        ),
+        cts_posture_view_weight=_hist(
+            "cts_posture_view_weight",
+            "Geometry suitability multiplier applied to each per-camera posture contribution.",
+            (0.0, 0.1, 0.3, 0.5, 0.6, 0.8, 1.0),
         ),
         cts_posture_fused_class_total=_counter(
             "cts_posture_fused_class_total",

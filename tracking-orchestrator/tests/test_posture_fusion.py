@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from app.domain import ObservationGeometry, OrientationBin
+from app.tracking.world.observation_model import posture_view_weight
 from app.trajectory.posture import (
     GlobalPostureTracker,
     PostureScores,
@@ -15,6 +17,23 @@ def _scores(
     lying: float = 0.0, sitting: float = 0.0, sw: float = 0.0, kp: float = 0.8
 ) -> PostureScores:
     return PostureScores(lying=lying, sitting=sitting, standing_walking=sw, keypoint_confidence=kp)
+
+
+def _geo(
+    *,
+    footpoint_reliable: bool = True,
+    orientation: OrientationBin = OrientationBin.LEFT,
+    orientation_confidence: float = 1.0,
+) -> ObservationGeometry:
+    return ObservationGeometry(
+        footpoint_px=(100.0, 200.0),
+        floor_residual_m=0.02,
+        footpoint_reliable=footpoint_reliable,
+        detection_confidence=0.9,
+        crop_quality=0.9,
+        orientation=orientation,
+        orientation_confidence=orientation_confidence,
+    )
 
 
 class TestQualityWeightedFusion:
@@ -76,6 +95,7 @@ class TestCameraStaleness:
             sitting=0.9,
             standing_walking=0.0,
             keypoint_confidence=0.8,
+            view_weight=1.0,
             captured_at=past,
         )
 
@@ -181,6 +201,85 @@ class TestRecordSnapshotIngest:
         tracker.record_snapshot("gt-1", "cam-2", _scores(lying=0.95, kp=0.95))
         result = tracker.update("gt-1", "cam-1", _scores(sitting=0.6, kp=0.25), ["cam-1", "cam-2"])
         assert result == "lying"
+
+    def test_record_snapshot_still_separate_from_update(self) -> None:
+        """N cameras can be ingested without advancing the temporal smoother."""
+        tracker = GlobalPostureTracker(required_consecutive=2)
+
+        tracker.record_snapshot("gt-1", "cam-1", _scores(sitting=0.8, kp=0.8))
+        tracker.record_snapshot("gt-1", "cam-2", _scores(lying=0.8, kp=0.8))
+        tracker.record_snapshot("gt-1", "cam-3", _scores(sw=0.8, kp=0.8))
+
+        assert set(tracker._snapshots["gt-1"]) == {"cam-1", "cam-2", "cam-3"}
+        assert tracker.committed_posture("gt-1") is None
+
+
+class TestGeometryAwareFusion:
+    def test_frontal_camera_downweighted_vs_side(self) -> None:
+        """A side view should dominate an equally confident frontal view."""
+        tracker = GlobalPostureTracker(required_consecutive=1)
+        front_weight = posture_view_weight(_geo(orientation=OrientationBin.FRONT))
+        side_weight = posture_view_weight(_geo(orientation=OrientationBin.LEFT))
+
+        tracker.record_snapshot(
+            "gt-1",
+            "cam-front",
+            _scores(lying=0.9, kp=0.9),
+            view_weight=front_weight,
+        )
+        result = tracker.update(
+            "gt-1",
+            "cam-side",
+            _scores(sitting=0.8, kp=0.9),
+            ["cam-front", "cam-side"],
+            view_weight=side_weight,
+        )
+
+        assert front_weight < side_weight
+        assert result == "sitting"
+
+    def test_occluded_lower_body_downweighted(self) -> None:
+        """A camera with unreliable footpoint/lower body contributes less."""
+        tracker = GlobalPostureTracker(required_consecutive=1)
+        occluded_weight = posture_view_weight(_geo(footpoint_reliable=False))
+        clear_weight = posture_view_weight(_geo(footpoint_reliable=True))
+
+        tracker.record_snapshot(
+            "gt-1",
+            "cam-occluded",
+            _scores(lying=0.9, kp=0.9),
+            view_weight=occluded_weight,
+        )
+        result = tracker.update(
+            "gt-1",
+            "cam-clear",
+            _scores(sitting=0.7, kp=0.9),
+            ["cam-occluded", "cam-clear"],
+            view_weight=clear_weight,
+        )
+
+        assert occluded_weight < clear_weight
+        assert result == "sitting"
+
+    def test_resolve_margin_prevents_near_tie_flip(self) -> None:
+        tracker = GlobalPostureTracker(required_consecutive=1)
+
+        tracker.update("gt-1", "cam-1", _scores(sitting=0.8, kp=0.9), ["cam-1"])
+        near_tie = tracker.update(
+            "gt-1",
+            "cam-1",
+            _scores(lying=0.52, sitting=0.50, kp=0.9),
+            ["cam-1"],
+        )
+        clear_margin = tracker.update(
+            "gt-1",
+            "cam-1",
+            _scores(lying=0.62, sitting=0.50, kp=0.9),
+            ["cam-1"],
+        )
+
+        assert near_tie == "sitting"
+        assert clear_margin == "lying"
 
 
 class TestMultiCameraFusionEndToEnd:

@@ -74,6 +74,9 @@ Prevents depth estimates from being completely ignored when keypoint cameras are
 present, while still giving keypoint cameras proportionally higher weight.
 """
 
+_RESOLVE_MARGIN: float = 0.10
+"""Top fused class must beat the runner-up by this score margin to flip."""
+
 
 # ── Primitive helpers ─────────────────────────────────────────────────────────
 
@@ -421,6 +424,7 @@ class _CameraSnapshot:
     sitting: float
     standing_walking: float
     keypoint_confidence: float
+    view_weight: float
     captured_at: datetime
 
 
@@ -698,6 +702,7 @@ class GlobalPostureTracker:
         camera_id: str,
         scores: PostureScores,
         *,
+        view_weight: float = 1.0,
         now: datetime | None = None,
     ) -> None:
         """Store one camera's posture evidence for a track without resolving.
@@ -717,6 +722,7 @@ class GlobalPostureTracker:
             sitting=scores.sitting,
             standing_walking=scores.standing_walking,
             keypoint_confidence=scores.keypoint_confidence,
+            view_weight=view_weight,
             captured_at=snapshot_time,
         )
         _metrics.metrics.cts_posture_camera_contributions_total.labels(
@@ -730,6 +736,7 @@ class GlobalPostureTracker:
         scores: PostureScores,
         active_camera_ids: list[str] | tuple[str, ...] | set[str],
         motion_energy: float | None = None,
+        view_weight: float = 1.0,
     ) -> PostureType:
         """Update posture scores for a track on one camera; return smoothed global posture.
 
@@ -744,13 +751,13 @@ class GlobalPostureTracker:
         now = datetime.now(UTC)
 
         # 1. Store this camera's latest snapshot.
-        self.record_snapshot(global_track_id, camera_id, scores, now=now)
+        self.record_snapshot(global_track_id, camera_id, scores, view_weight=view_weight, now=now)
 
         # 2. Quality-weighted fusion across active cameras.
         fused = self._fuse(global_track_id, active_camera_ids, now)
 
         # 3. Resolve the winner using clinical priority rules.
-        raw_posture = self._resolve(fused, motion_energy)
+        raw_posture = self._resolve(fused, motion_energy, self.committed_posture(global_track_id))
 
         # 4. Apply hysteresis (state stored directly — no PostureHysteresis indirection).
         return self._apply_hysteresis(global_track_id, raw_posture)
@@ -778,8 +785,9 @@ class GlobalPostureTracker:
             age_s = (now - snap.captured_at).total_seconds()
             if age_s > self._camera_stale_after_s:
                 continue
-            # Floor so depth cameras (keypoint_confidence == 0) still contribute.
-            weight = max(snap.keypoint_confidence, self._depth_weight)
+            # Floor the keypoint term for depth cameras, then scale by view suitability.
+            weight = max(snap.keypoint_confidence, self._depth_weight) * snap.view_weight
+            _metrics.metrics.cts_posture_view_weight.observe(snap.view_weight)
             acc["lying"] += weight * snap.lying
             acc["sitting"] += weight * snap.sitting
             acc["standing_walking"] += weight * snap.standing_walking
@@ -802,19 +810,36 @@ class GlobalPostureTracker:
         self,
         fused: dict[str, float],
         motion_energy: float | None,
+        committed: PostureType | None = None,
     ) -> PostureType:
         """Map fused soft scores to a PostureType label using clinical priority."""
-        best = max(fused["lying"], fused["sitting"], fused["standing_walking"])
+        scores = {
+            "lying": fused["lying"],
+            "sitting": fused["sitting"],
+            "standing": fused["standing_walking"],
+        }
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        best_label, best = ranked[0]
+        second_best = ranked[1][1]
         if best < _MIN_EVIDENCE:
             raw: PostureType = "unknown"
-        elif fused["lying"] >= fused["sitting"] and fused["lying"] >= fused["standing_walking"]:
+        elif best_label == "standing":
+            if motion_energy is not None and motion_energy > _WALKING_VELOCITY_NU_S:
+                raw = "walking"
+            else:
+                raw = "standing"
+        elif best_label == "lying":
             raw = "lying"
-        elif fused["sitting"] >= fused["standing_walking"]:
-            raw = "sitting"
-        elif motion_energy is not None and motion_energy > _WALKING_VELOCITY_NU_S:
-            raw = "walking"
         else:
-            raw = "standing"
+            raw = "sitting"
+
+        if (
+            committed is not None
+            and raw != "unknown"
+            and raw != committed
+            and best - second_best < _RESOLVE_MARGIN
+        ):
+            raw = committed
         _metrics.metrics.cts_posture_fused_class_total.labels(posture=raw).inc()
         return raw
 
@@ -845,6 +870,14 @@ class GlobalPostureTracker:
                 return raw
             self._hysteresis_state[global_track_id] = (committed, candidate, count)
             return committed
+
+        if self._required_consecutive <= 1:
+            self._hysteresis_state[global_track_id] = (raw, raw, 1)
+            if committed != raw:
+                _metrics.metrics.cts_posture_hysteresis_flips_total.labels(
+                    camera_id="global",
+                ).inc()
+            return raw
 
         self._hysteresis_state[global_track_id] = (committed, raw, 1)
         return committed

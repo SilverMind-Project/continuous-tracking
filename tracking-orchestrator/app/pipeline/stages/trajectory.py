@@ -11,6 +11,7 @@ from ...domain import FloorPoint, PostureType
 from ...inference.schemas import PoseResult
 from ...storage.gait import GaitBoutRepository
 from ...tracking.floor_projector import FloorProjector
+from ...tracking.world import observation_model
 from ...trajectory.gait import WalkingBoutSegmenter
 from ...trajectory.motion_energy import MotionEnergyTracker
 from ...trajectory.posture import GlobalPostureTracker
@@ -214,6 +215,13 @@ class TrajectoryStage(FrameStage):
         self._gait_segmenter = gait_segmenter
         self._gait_bout_repo = gait_bout_repo
 
+    @staticmethod
+    def _posture_view_weight(ctx: FrameContext, detection_id: str) -> float:
+        geometry = ctx.geometry_by_detection.get(detection_id)
+        if geometry is None:
+            return 1.0
+        return observation_model.posture_view_weight(geometry)
+
     async def run(self, ctx: FrameContext) -> None:
         if not ctx.world_snapshots or not self._trajectory_writer:
             return
@@ -249,7 +257,12 @@ class TrajectoryStage(FrameStage):
                     continue
                 scores = ctx.det_posture_scores.get(det.detection_id)
                 if scores is not None:
-                    self._posture_tracker.record_snapshot(det.ph_id, ctx.frame.camera_id, scores)
+                    self._posture_tracker.record_snapshot(
+                        det.ph_id,
+                        ctx.frame.camera_id,
+                        scores,
+                        view_weight=self._posture_view_weight(ctx, det.detection_id),
+                    )
 
         for snap in ctx.world_snapshots:
             if snap.camera_id != ctx.frame.camera_id:
@@ -278,6 +291,7 @@ class TrajectoryStage(FrameStage):
                         # sight of the person stop contributing automatically.
                         active_camera_ids=list(snap.active_cameras) or [snap.camera_id],
                         motion_energy=gt_motion_energy,
+                        view_weight=self._posture_view_weight(ctx, det_id),
                     )
                     ctx.det_posture[det_id] = gt_posture
 

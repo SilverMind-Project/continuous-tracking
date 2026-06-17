@@ -25,6 +25,9 @@ class TestPostureMetricsRegistered:
     def test_cameras_fused_histogram_registered(self, fresh_metrics) -> None:
         assert hasattr(fresh_metrics, "cts_posture_cameras_fused")
 
+    def test_view_weight_histogram_registered(self, fresh_metrics) -> None:
+        assert hasattr(fresh_metrics, "cts_posture_view_weight")
+
     def test_fused_class_counter_registered(self, fresh_metrics) -> None:
         assert hasattr(fresh_metrics, "cts_posture_fused_class_total")
 
@@ -79,6 +82,24 @@ class TestGlobalPostureTrackerMetrics:
             camera_id="global"
         )._value.get()
         assert after > before
+
+    def test_update_observes_view_weight(self) -> None:
+        """Fusion records the geometry suitability multiplier for each contribution."""
+        from app.observability import metrics as _metrics
+
+        registry = CollectorRegistry()
+        _metrics.metrics = build_metrics(registry=registry)
+
+        tracker = GlobalPostureTracker(required_consecutive=1)
+        scores = PostureScores(
+            lying=0.0, sitting=0.9, standing_walking=0.0, keypoint_confidence=0.8
+        )
+
+        before = _metrics.metrics.cts_posture_view_weight._sum.get()
+        tracker.update("gt-1", "cam-test", scores, ["cam-test"], view_weight=0.6)
+        after = _metrics.metrics.cts_posture_view_weight._sum.get()
+
+        assert after == before + 0.6
 
 
 class TestCommittedPosture:
