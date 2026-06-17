@@ -56,7 +56,15 @@ from .helpers import (
     update_gallery_mean,
     update_height_ema,
 )
-from .kalman import KalmanState, initialize, isotropic_cov, predict, update
+from .kalman import (
+    KalmanState,
+    initialize,
+    isotropic_cov,
+    mahalanobis2_position,
+    predict,
+    update,
+    zero_velocity_update,
+)
 from .revival import select_revival_candidate
 from .topology import record_handoff
 
@@ -260,6 +268,7 @@ class WorldTracker:
         # last_open_phs so ReidNeedPolicy (InferenceStage) can evaluate proximity
         # without issuing an async DB query. Empty until the first step().
         self._last_open_phs: list[PersonHypothesis] = []
+        self._still_counter: dict[str, int] = {}
 
     @property
     def last_open_phs(self) -> list[PersonHypothesis]:
@@ -411,6 +420,14 @@ class WorldTracker:
                 obs.floor_point.x_mm / 1000.0,
                 obs.floor_point.y_mm / 1000.0,
                 obs_r,
+            )
+            new_state = self._maybe_apply_zero_velocity_update(
+                ph_id=ph.ph_id,
+                predicted_state=ks,
+                updated_state=new_state,
+                observation_x_m=obs.floor_point.x_mm / 1000.0,
+                observation_y_m=obs.floor_point.y_mm / 1000.0,
+                observation_cov_m2=obs_r,
             )
             new_gallery_mean = update_gallery_mean(
                 ph.gallery_mean, obs.embedding, ph.observation_count
@@ -821,7 +838,16 @@ class WorldTracker:
                     obs = lb_obs_raw[lb_obs_idx]
                     fx = obs.floor_point.x_mm / 1000.0
                     fy = obs.floor_point.y_mm / 1000.0
-                    new_state = update(ks, fx, fy, isotropic_cov(cfg.observation_noise_m))
+                    obs_r = isotropic_cov(cfg.observation_noise_m)
+                    new_state = update(ks, fx, fy, obs_r)
+                    new_state = self._maybe_apply_zero_velocity_update(
+                        ph_id=ph.ph_id,
+                        predicted_state=ks,
+                        updated_state=new_state,
+                        observation_x_m=fx,
+                        observation_y_m=fy,
+                        observation_cov_m2=obs_r,
+                    )
                     # Kalman + last_seen_at update only; do NOT touch observation_count,
                     # gallery_mean, view_prototypes, or mean_quality.
                     recovered = PersonHypothesis(
@@ -927,6 +953,9 @@ class WorldTracker:
         self._last_identity_confidence = {
             pid: conf for pid, conf in self._last_identity_confidence.items() if pid in open_ph_ids
         }
+        self._still_counter = {
+            pid: count for pid, count in self._still_counter.items() if pid in open_ph_ids
+        }
 
         # Seed the multi-view gallery AFTER identity resolution so a face that
         # commits (or is held) this frame seeds with its committed identity.
@@ -1010,6 +1039,47 @@ class WorldTracker:
             det_to_ph=det_to_ph,
             revived_ph_ids=frozenset(revived_ph_ids),
         )
+
+    def _maybe_apply_zero_velocity_update(
+        self,
+        *,
+        ph_id: str,
+        predicted_state: KalmanState,
+        updated_state: KalmanState,
+        observation_x_m: float,
+        observation_y_m: float,
+        observation_cov_m2: np.typing.NDArray[np.float64],
+    ) -> KalmanState:
+        """Gate and apply ZUPT for one matched PH update."""
+        cfg = self._config
+        speed = speed_m_s(
+            (
+                float(updated_state.mean[0]),
+                float(updated_state.mean[1]),
+                float(updated_state.mean[2]),
+                float(updated_state.mean[3]),
+            )
+        )
+        if speed > cfg.zupt_speed_exit_m_s:
+            self._still_counter.pop(ph_id, None)
+            return updated_state
+
+        innovation_small = (
+            mahalanobis2_position(
+                predicted_state,
+                observation_x_m,
+                observation_y_m,
+                observation_cov_m2,
+            )
+            < cfg.zupt_innov_chi2
+        )
+        if speed < cfg.zupt_speed_enter_m_s and innovation_small:
+            self._still_counter[ph_id] = self._still_counter.get(ph_id, 0) + 1
+
+        if self._still_counter.get(ph_id, 0) >= cfg.zupt_consecutive_frames:
+            return zero_velocity_update(updated_state, cfg.zupt_velocity_sigma_m_s)
+
+        return updated_state
 
     async def _detect_copresence(
         self,

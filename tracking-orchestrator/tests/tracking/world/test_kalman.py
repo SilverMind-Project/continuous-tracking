@@ -7,11 +7,13 @@ from datetime import UTC, datetime
 import numpy as np
 
 from app.tracking.world.kalman import (
+    KalmanState,
     initialize,
     isotropic_cov,
     mahalanobis2_position,
     predict,
     update,
+    zero_velocity_update,
 )
 
 
@@ -81,6 +83,34 @@ class TestUpdate:
         updated = update(state, 0.5, 0.5, isotropic_cov(0.25))
         assert updated.mean[0] > 0.0
         assert updated.mean[1] > 0.0
+
+
+class TestZeroVelocityUpdate:
+    def test_reduces_velocity_and_cross_covariance_position_uncertainty(self) -> None:
+        cov = np.array(
+            [
+                [0.25, 0.0, 0.12, 0.0],
+                [0.0, 0.25, 0.0, 0.12],
+                [0.12, 0.0, 0.5, 0.0],
+                [0.0, 0.12, 0.0, 0.5],
+            ],
+            dtype=np.float64,
+        )
+        state = KalmanState(
+            mean=np.array([2.0, 3.0, 0.8, -0.6], dtype=np.float64),
+            covariance=cov,
+            updated_at=_now(),
+        )
+        prior_speed = float(np.linalg.norm(state.mean[2:4]))
+        prior_pos_trace = float(state.covariance[0, 0] + state.covariance[1, 1])
+
+        posterior = zero_velocity_update(state, velocity_meas_sigma_m_s=0.05)
+
+        posterior_speed = float(np.linalg.norm(posterior.mean[2:4]))
+        posterior_pos_trace = float(posterior.covariance[0, 0] + posterior.covariance[1, 1])
+        assert posterior_speed < prior_speed * 0.02
+        assert posterior_pos_trace < prior_pos_trace
+        np.testing.assert_allclose(posterior.covariance, posterior.covariance.T, atol=1e-12)
 
 
 class TestMahalanobis2:

@@ -389,6 +389,15 @@ world_tracker:
   initial_position_sigma_m: 1.0
   initial_velocity_sigma_m_s: 2.0
   velocity_decay_s: 3.0
+  # ---- Adaptive zero-velocity update (ZUPT) ----
+  # Treat only sustained near-still tracks as stationary. Exit begins at the
+  # bottom of the clinically relevant slow-shuffle band (0.2-0.4 m/s) so
+  # impaired gait still feeds pacing, wandering, and gait analytics.
+  zupt_speed_enter_m_s: 0.12
+  zupt_speed_exit_m_s: 0.20
+  zupt_consecutive_frames: 5
+  zupt_innov_chi2: 2.0
+  zupt_velocity_sigma_m_s: 0.05
   height_sigma_m: 0.15
   # ---- Observation uncertainty model (M04 information-form fusion) ----
   # Mirror observation_model.py module constants; tune against M09 acceptance fixtures.

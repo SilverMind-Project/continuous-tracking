@@ -154,6 +154,39 @@ def update(
     return KalmanState(mean=new_mean, covariance=new_cov, updated_at=state.updated_at)
 
 
+def zero_velocity_update(
+    state: KalmanState,
+    velocity_meas_sigma_m_s: float,
+) -> KalmanState:
+    """Apply a zero-velocity pseudo-measurement to the velocity sub-state.
+
+    Measurement model H_v selects ``vx, vy`` with z=0 and
+    R_v = sigma² · I. Positions can move via cross-covariance, which removes
+    drift caused by noise-induced phantom velocity.
+    """
+    z = np.array([0.0, 0.0], dtype=np.float64)
+    H = np.array(  # noqa: N806
+        [
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    R = (velocity_meas_sigma_m_s**2) * np.eye(2, dtype=np.float64)  # noqa: N806
+
+    y = z - H @ state.mean
+    S = H @ state.covariance @ H.T + R  # noqa: N806
+    K_T = np.linalg.solve(S, H @ state.covariance.T)  # noqa: N806
+    K = K_T.T  # noqa: N806
+
+    new_mean = state.mean + K @ y
+    eye = np.eye(4, dtype=np.float64)
+    new_cov = (eye - K @ H) @ state.covariance
+    new_cov = 0.5 * (new_cov + new_cov.T)
+
+    return KalmanState(mean=new_mean, covariance=new_cov, updated_at=state.updated_at)
+
+
 def mahalanobis2_position(
     state: KalmanState,
     observation_x_m: float,

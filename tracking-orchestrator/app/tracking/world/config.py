@@ -25,6 +25,18 @@ class WorldTrackerConfig:
     # ---- Velocity decay for unobserved PHs ----
     velocity_decay_s: float = 3.0
 
+    # ---- Adaptive zero-velocity update (ZUPT) ----
+    # Enter below a sustained near-still speed; exit at the bottom of the
+    # clinically relevant slow-shuffle band so 0.2-0.4 m/s gait is not clamped.
+    zupt_speed_enter_m_s: float = 0.12
+    zupt_speed_exit_m_s: float = 0.20
+    # Debounce brief pauses, and require the measurement to agree with the
+    # prediction before counting a frame as stationary.
+    zupt_consecutive_frames: int = 5
+    zupt_innov_chi2: float = 2.0
+    # Smaller sigma pulls velocity harder toward zero once stationarity is gated.
+    zupt_velocity_sigma_m_s: float = 0.05
+
     # ---- Cost matrix weights (must sum roughly to 1.0) ----
     alpha_geo: float = 0.5
     alpha_app: float = 0.4

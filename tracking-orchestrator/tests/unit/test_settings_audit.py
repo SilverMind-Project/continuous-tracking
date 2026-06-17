@@ -95,6 +95,10 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resolver.cross_gt_face_propagation_threshold == pytest.approx(0.72)
     assert world_tracker.dedup_residual_coeff_k == pytest.approx(1.0)
     assert world_tracker.dedup_max_distance_ceiling_m == pytest.approx(1.5)
+    assert world_tracker.zupt_speed_enter_m_s == pytest.approx(0.12)
+    assert world_tracker.zupt_speed_exit_m_s == pytest.approx(0.20)
+    assert world_tracker.zupt_consecutive_frames == 5
+    assert world_tracker.zupt_velocity_sigma_m_s == pytest.approx(0.05)
 
 
 def test_signal_config_defaults_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
