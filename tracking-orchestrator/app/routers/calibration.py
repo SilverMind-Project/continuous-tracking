@@ -210,7 +210,7 @@ class AutoCalibrateResult(BaseModel):
         default=None,
         description=(
             "Normalised [0,1] image-space polygon tracing the detected floor. "
-            "Same coordinate space as visibility_polygon (NOT floor-plan metres). "
+            "Not the same coordinate space as visibility_polygon, which is normalised floor-plan space. "
             "Null when fewer than 3 floor inliers were detected."
         ),
     )

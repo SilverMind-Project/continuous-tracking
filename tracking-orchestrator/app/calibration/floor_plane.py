@@ -383,8 +383,9 @@ def floor_region_polygon(
     """Polygon in normalised [0,1] image coords tracing the detected floor.
 
     Coordinate space: normalised image [0,1] — ``[col/image_w, row/image_h]``.
-    This is the **same space as visibility_polygon**, NOT floor-plan metres;
-    the distinction matters because a floor-plan polygon uses physical metres.
+    This is image space, not the normalised floor-plan space used by
+    ``visibility_polygon``; the distinction matters because both use [0,1]
+    values but describe different coordinate systems.
 
     Built from floor inlier pixels ``result.sample_indices[result.inlier_mask]``
     (row, col).  Takes the hull of those pixels, simplifies with
