@@ -1,0 +1,52 @@
+{
+  "persons": [
+    "p1"
+  ],
+  "detection_truth": {
+    "det-oblique-0": "p1",
+    "det-oblique-1": "p1",
+    "det-oblique-2": "p1",
+    "det-oblique-3": "p1",
+    "det-oblique-4": "p1",
+    "det-oblique-5": "p1",
+    "det-oblique-6": "p1",
+    "det-oblique-7": "p1",
+    "det-oblique-8": "p1",
+    "det-oblique-9": "p1",
+    "det-oblique-10": "p1",
+    "det-oblique-11": "p1",
+    "det-oblique-12": "p1",
+    "det-oblique-13": "p1",
+    "det-oblique-14": "p1",
+    "det-oblique-15": "p1",
+    "det-oblique-16": "p1",
+    "det-oblique-17": "p1",
+    "det-oblique-18": "p1",
+    "det-oblique-19": "p1",
+    "det-oblique-20": "p1",
+    "det-oblique-21": "p1",
+    "det-oblique-22": "p1",
+    "det-oblique-23": "p1",
+    "det-oblique-24": "p1",
+    "det-oblique-25": "p1",
+    "det-oblique-26": "p1",
+    "det-oblique-27": "p1",
+    "det-oblique-28": "p1",
+    "det-oblique-29": "p1",
+    "det-oblique-30": "p1",
+    "det-oblique-31": "p1",
+    "det-oblique-32": "p1",
+    "det-oblique-33": "p1",
+    "det-oblique-34": "p1",
+    "det-oblique-35": "p1",
+    "det-oblique-36": "p1",
+    "det-oblique-37": "p1",
+    "det-oblique-38": "p1",
+    "det-oblique-39": "p1"
+  },
+  "events": [],
+  "truth_position_mm": [
+    8000,
+    8000
+  ]
+}

@@ -1,0 +1,315 @@
+{
+  "persons": [
+    "p1"
+  ],
+  "detection_truth": {
+    "det-move-walk-0": "p1",
+    "det-move-walk-1": "p1",
+    "det-move-walk-2": "p1",
+    "det-move-walk-3": "p1",
+    "det-move-walk-4": "p1",
+    "det-move-walk-5": "p1",
+    "det-move-walk-6": "p1",
+    "det-move-walk-7": "p1",
+    "det-move-walk-8": "p1",
+    "det-move-walk-9": "p1",
+    "det-move-walk-10": "p1",
+    "det-move-walk-11": "p1",
+    "det-move-walk-12": "p1",
+    "det-move-walk-13": "p1",
+    "det-move-walk-14": "p1",
+    "det-move-walk-15": "p1",
+    "det-move-walk-16": "p1",
+    "det-move-walk-17": "p1",
+    "det-move-walk-18": "p1",
+    "det-move-walk-19": "p1",
+    "det-move-stop-0": "p1",
+    "det-move-stop-1": "p1",
+    "det-move-stop-2": "p1",
+    "det-move-stop-3": "p1",
+    "det-move-stop-4": "p1",
+    "det-move-stop-5": "p1",
+    "det-move-stop-6": "p1",
+    "det-move-stop-7": "p1",
+    "det-move-stop-8": "p1",
+    "det-move-stop-9": "p1",
+    "det-move-stop-10": "p1",
+    "det-move-stop-11": "p1",
+    "det-move-stop-12": "p1",
+    "det-move-stop-13": "p1",
+    "det-move-stop-14": "p1",
+    "det-move-stop-15": "p1",
+    "det-move-stop-16": "p1",
+    "det-move-stop-17": "p1",
+    "det-move-stop-18": "p1",
+    "det-move-stop-19": "p1",
+    "det-move-stop-20": "p1",
+    "det-move-stop-21": "p1",
+    "det-move-stop-22": "p1",
+    "det-move-stop-23": "p1",
+    "det-move-stop-24": "p1",
+    "det-move-stop-25": "p1",
+    "det-move-stop-26": "p1",
+    "det-move-stop-27": "p1",
+    "det-move-stop-28": "p1",
+    "det-move-stop-29": "p1",
+    "det-move-stop-30": "p1",
+    "det-move-stop-31": "p1",
+    "det-move-stop-32": "p1",
+    "det-move-stop-33": "p1",
+    "det-move-stop-34": "p1",
+    "det-move-stop-35": "p1",
+    "det-move-stop-36": "p1",
+    "det-move-stop-37": "p1",
+    "det-move-stop-38": "p1",
+    "det-move-stop-39": "p1"
+  },
+  "events": [],
+  "truth_trajectory_mm": [
+    [
+      3000,
+      5000
+    ],
+    [
+      3150,
+      5000
+    ],
+    [
+      3300,
+      5000
+    ],
+    [
+      3450,
+      5000
+    ],
+    [
+      3600,
+      5000
+    ],
+    [
+      3750,
+      5000
+    ],
+    [
+      3900,
+      5000
+    ],
+    [
+      4050,
+      5000
+    ],
+    [
+      4200,
+      5000
+    ],
+    [
+      4350,
+      5000
+    ],
+    [
+      4500,
+      5000
+    ],
+    [
+      4650,
+      5000
+    ],
+    [
+      4800,
+      5000
+    ],
+    [
+      4950,
+      5000
+    ],
+    [
+      5100,
+      5000
+    ],
+    [
+      5250,
+      5000
+    ],
+    [
+      5400,
+      5000
+    ],
+    [
+      5550,
+      5000
+    ],
+    [
+      5700,
+      5000
+    ],
+    [
+      5850,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ],
+    [
+      6000,
+      5000
+    ]
+  ],
+  "walk_end_step": 20,
+  "truth_stop_pos_mm": [
+    6000,
+    5000
+  ]
+}

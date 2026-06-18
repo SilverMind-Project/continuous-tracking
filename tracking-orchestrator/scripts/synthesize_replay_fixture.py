@@ -74,6 +74,7 @@ def _obs(
     footpoint_reliable: bool | None = None,
     orientation: int = ORI_UNKNOWN,
     orientation_confidence: float = 0.0,
+    floor_residual_m: float | None = None,
 ) -> dict:
     obs_time = BASE_TIME + timedelta(seconds=step * FRAME_INTERVAL_S)
     if footpoint_reliable is None:
@@ -97,6 +98,8 @@ def _obs(
         "orientation": orientation,
         "orientation_confidence": orientation_confidence,
     }
+    if floor_residual_m is not None:
+        result["floor_residual_m"] = floor_residual_m
     if face_anchor is not None:
         fa = dict(face_anchor)
         if "captured_at_iso" not in fa:
@@ -879,6 +882,341 @@ def mixed_calibration_entry() -> tuple[list[list[dict]], dict]:
     return frames, truth
 
 
+def stationary_two_camera() -> tuple[list[list[dict]], dict]:
+    """Person standing still seen by two cameras with different calibration offsets.
+
+    cam-A: systematic +0.3 m offset in x  →  observations at (8300, 8000) mm
+    cam-B: systematic -0.2 m offset in x  →  observations at (7800, 8000) mm
+
+    Both calibrated with floor_residual_m matching their offset magnitude so the
+    bias floor in dedup._build_representative carries the right uncertainty.
+    Inter-camera distance = 500 mm = 0.5 m < dedup_max_distance_m (0.6 m), so
+    every frame the two observations collapse into one fused representative.
+
+    Phase 1 (steps 0-29): both cameras present.
+    Phase 2 (steps 30-39): cam-A only (cam-B dropout).
+
+    Truth sidecar extras:
+        truth_position_mm       [8000, 8000] — true floor position
+        cam_b_dropout_at_step   30
+    """
+    emb = [0.90, 0.08, 0.02]
+    frames: list[list[dict]] = []
+    labels: list[list[str]] = []
+
+    for i in range(30):
+        det_a = f"det-stat-a-{i}"
+        det_b = f"det-stat-b-{i}"
+        frames.append(
+            [
+                _obs(
+                    "cam-A",
+                    i,
+                    i,
+                    8300,
+                    8000,
+                    emb,
+                    detection_id=det_a,
+                    quality=0.85,
+                    floor_cov_random=[0.0025, 0.0, 0.0, 0.0025],
+                    floor_residual_m=0.30,
+                ),
+                _obs(
+                    "cam-B",
+                    i,
+                    i,
+                    7800,
+                    8000,
+                    emb,
+                    detection_id=det_b,
+                    quality=0.80,
+                    floor_cov_random=[0.0025, 0.0, 0.0, 0.0025],
+                    floor_residual_m=0.20,
+                ),
+            ]
+        )
+        labels.append(["p1", "p1"])
+
+    for i in range(10):
+        step = 30 + i
+        det_a = f"det-stat-a-{step}"
+        frames.append(
+            [
+                _obs(
+                    "cam-A",
+                    step,
+                    step,
+                    8300,
+                    8000,
+                    emb,
+                    detection_id=det_a,
+                    quality=0.85,
+                    floor_cov_random=[0.0025, 0.0, 0.0, 0.0025],
+                    floor_residual_m=0.30,
+                ),
+            ]
+        )
+        labels.append(["p1"])
+
+    truth = _make_truth(["p1"], frames, labels)
+    truth["truth_position_mm"] = [8000, 8000]
+    truth["cam_b_dropout_at_step"] = 30
+    return frames, truth
+
+
+def slow_shuffle() -> tuple[list[list[dict]], dict]:
+    """Person walking at 0.3 m/s along the x-axis; single calibrated camera.
+
+    Frame interval = 0.5 s, so each step advances 150 mm in x.
+    Walk from (3000, 5000) mm to (3000 + 39*150, 5000) = (8850, 5000) mm.
+
+    Truth sidecar extras:
+        truth_trajectory_mm   [[x_mm, y_mm], ...]  per frame
+        truth_speed_m_s       0.30
+    """
+    emb = [0.85, 0.10, 0.05]
+    frames: list[list[dict]] = []
+    labels: list[list[str]] = []
+    trajectory_mm: list[list[int]] = []
+
+    step_mm = 150  # 0.3 m/s * 0.5 s
+    start_x_mm = 3000
+    y_mm = 5000
+
+    for i in range(40):
+        fx = start_x_mm + i * step_mm
+        det_id = f"det-shuffle-{i}"
+        frames.append(
+            [
+                _obs(
+                    "cam-walk",
+                    i,
+                    i,
+                    fx,
+                    y_mm,
+                    emb,
+                    detection_id=det_id,
+                    quality=0.80,
+                    floor_cov_random=[0.0064, 0.0, 0.0, 0.0064],
+                    floor_residual_m=0.05,
+                ),
+            ]
+        )
+        labels.append(["p1"])
+        trajectory_mm.append([fx, y_mm])
+
+    truth = _make_truth(["p1"], frames, labels)
+    truth["truth_trajectory_mm"] = trajectory_mm
+    truth["truth_speed_m_s"] = 0.30
+    return frames, truth
+
+
+def oblique_single_camera() -> tuple[list[list[dict]], dict]:
+    """Person at a fixed position viewed by a single oblique camera.
+
+    The camera views mostly along the x-axis (large Jacobian in x), producing an
+    elongated error ellipse: sigma_x = 0.4 m, sigma_y = 0.1 m.
+
+    floor_cov_random = [0.16, 0.0, 0.0, 0.01]  (row-major 2x2, m²)
+
+    After _finalize_singleton adds the bias floor and the Kalman applies the
+    anisotropic R, the PH posterior covariance eigen-ratio should be ≫ 1.
+
+    Truth sidecar extras:
+        truth_position_mm   [8000, 8000]
+    """
+    emb = [0.80, 0.15, 0.05]
+    frames: list[list[dict]] = []
+    labels: list[list[str]] = []
+
+    for i in range(40):
+        det_id = f"det-oblique-{i}"
+        frames.append(
+            [
+                _obs(
+                    "cam-oblique",
+                    i,
+                    i,
+                    8000,
+                    8000,
+                    emb,
+                    detection_id=det_id,
+                    quality=0.75,
+                    floor_cov_random=[0.16, 0.0, 0.0, 0.01],
+                    floor_residual_m=0.05,
+                ),
+            ]
+        )
+        labels.append(["p1"])
+
+    truth = _make_truth(["p1"], frames, labels)
+    truth["truth_position_mm"] = [8000, 8000]
+    return frames, truth
+
+
+def posture_disagreement_four_camera() -> tuple[list[list[dict]], dict]:
+    """Four cameras with conflicting posture evidence.
+
+    Three side cameras (LEFT, RIGHT, BACK) see a sitting person.
+    One frontal camera (FRONT) sees a standing person with high keypoint confidence.
+    Geometry-aware posture fusion should output 'sitting' because side views carry
+    higher view_weight (they better reveal height-relative posture cues).
+
+    Truth sidecar extras:
+        posture_truth               "sitting"
+        per_camera_posture_scores   dict[camera_id, {lying, sitting, sw, kp_conf}]
+    """
+    emb = [0.85, 0.10, 0.05]
+    frames: list[list[dict]] = []
+    labels: list[list[str]] = []
+
+    # Side cameras have LOW keypoint confidence (kp=0.30) so that, under equal
+    # view weights, the high-kp front camera's strong standing signal dominates
+    # and sw wins.  Only when the frontal view-weight penalty (0.64) is applied
+    # does sitting's three-camera sum re-take the lead.  This makes the gate
+    # falsifiable: a constant view_weight=1.0 would flip the result to "standing".
+    cameras: list[tuple[str, int, float]] = [
+        ("cam-left", ORI_LEFT, 0.30),
+        ("cam-right", ORI_RIGHT, 0.30),
+        ("cam-back", ORI_BACK, 0.30),
+        ("cam-front", ORI_FRONT, 0.95),
+    ]
+
+    for i in range(30):
+        step_obs: list[dict] = []
+        step_labels: list[str] = []
+        for cam_id, ori, quality in cameras:
+            det_id = f"det-posture-{cam_id}-{i}"
+            step_obs.append(
+                _obs(
+                    cam_id,
+                    i,
+                    i,
+                    8000,
+                    8000,
+                    emb,
+                    detection_id=det_id,
+                    quality=quality,
+                    orientation=ori,
+                    orientation_confidence=0.9,
+                    floor_cov_random=[0.04, 0.0, 0.0, 0.04],
+                )
+            )
+            step_labels.append("p1")
+        frames.append(step_obs)
+        labels.append(step_labels)
+
+    truth = _make_truth(["p1"], frames, labels)
+    truth["posture_truth"] = "sitting"
+    # Scores designed so equal-weight fusion picks "standing_walking" (front camera
+    # dominates via kp=0.95), but geometry-aware weighting (front view_weight=0.64,
+    # side view_weight=1.0) tips the result back to "sitting".
+    # Equal-weight check: sw=0.522 > sitting=0.452  (test would fail without weighting)
+    # Geometry-weight check: sitting=0.511 > sw=0.459  (test passes with weighting)
+    truth["per_camera_posture_scores"] = {
+        "cam-left": {
+            "lying": 0.05,
+            "sitting": 0.85,
+            "standing_walking": 0.10,
+            "keypoint_confidence": 0.30,
+        },
+        "cam-right": {
+            "lying": 0.06,
+            "sitting": 0.82,
+            "standing_walking": 0.12,
+            "keypoint_confidence": 0.30,
+        },
+        "cam-back": {
+            "lying": 0.05,
+            "sitting": 0.80,
+            "standing_walking": 0.15,
+            "keypoint_confidence": 0.30,
+        },
+        "cam-front": {
+            "lying": 0.00,
+            "sitting": 0.10,
+            "standing_walking": 0.90,
+            "keypoint_confidence": 0.95,
+        },
+    }
+    return frames, truth
+
+
+def moving_then_stop() -> tuple[list[list[dict]], dict]:
+    """Walk then stop: tests ZUPT engages only after the stop, lag bounded during walk.
+
+    Steps 0-19:  walking at 0.3 m/s (150 mm/step in x), single camera.
+    Steps 20-59: stationary at (6000, 5000) mm.
+    ZUPT requires zupt_consecutive_frames=5 stationary frames; by step 25 it fires.
+
+    Truth sidecar extras:
+        truth_trajectory_mm   [[x_mm, y_mm], ...]  per frame (60 entries)
+        walk_end_step         20
+        truth_stop_pos_mm     [6000, 5000]
+    """
+    emb = [0.87, 0.10, 0.03]
+    frames: list[list[dict]] = []
+    labels: list[list[str]] = []
+    trajectory_mm: list[list[int]] = []
+
+    step_mm = 150
+    start_x_mm = 3000
+    stop_x_mm = 6000
+    y_mm = 5000
+    walk_frames = 20
+    stop_frames = 40
+
+    for i in range(walk_frames):
+        fx = start_x_mm + i * step_mm
+        det_id = f"det-move-walk-{i}"
+        frames.append(
+            [
+                _obs(
+                    "cam-move",
+                    i,
+                    i,
+                    fx,
+                    y_mm,
+                    emb,
+                    detection_id=det_id,
+                    quality=0.80,
+                    floor_cov_random=[0.0064, 0.0, 0.0, 0.0064],
+                    floor_residual_m=0.05,
+                ),
+            ]
+        )
+        labels.append(["p1"])
+        trajectory_mm.append([fx, y_mm])
+
+    for i in range(stop_frames):
+        step = walk_frames + i
+        det_id = f"det-move-stop-{i}"
+        frames.append(
+            [
+                _obs(
+                    "cam-move",
+                    step,
+                    step,
+                    stop_x_mm,
+                    y_mm,
+                    emb,
+                    detection_id=det_id,
+                    quality=0.80,
+                    floor_cov_random=[0.0064, 0.0, 0.0, 0.0064],
+                    floor_residual_m=0.05,
+                ),
+            ]
+        )
+        labels.append(["p1"])
+        trajectory_mm.append([stop_x_mm, y_mm])
+
+    truth = _make_truth(["p1"], frames, labels)
+    truth["truth_trajectory_mm"] = trajectory_mm
+    truth["walk_end_step"] = walk_frames
+    truth["truth_stop_pos_mm"] = [stop_x_mm, y_mm]
+    return frames, truth
+
+
 def main() -> None:
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -893,6 +1231,12 @@ def main() -> None:
         ("uncalibrated_pacing", uncalibrated_pacing()),
         ("uncalibrated_two_people_home", uncalibrated_two_people_home()),
         ("mixed_calibration_entry", mixed_calibration_entry()),
+        # M09 acceptance fixtures
+        ("stationary_two_camera", stationary_two_camera()),
+        ("slow_shuffle", slow_shuffle()),
+        ("oblique_single_camera", oblique_single_camera()),
+        ("posture_disagreement_four_camera", posture_disagreement_four_camera()),
+        ("moving_then_stop", moving_then_stop()),
     ]
 
     for name, (frames, truth) in fixtures:

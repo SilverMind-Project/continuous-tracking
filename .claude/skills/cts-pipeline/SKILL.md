@@ -122,12 +122,28 @@ There are two fixture families at different replay altitudes:
 | Fall sequence | Header plus `FallFrameInput` rows as JSON Lines in `tests/fixtures/fall_sequences/*.jsonl` | `tests/integration/test_fall_sequences.py::_load_fixture`; replayed through `FallFeatureExtractor` and `FallDetector`. `scripts/calibrate_fall_thresholds.py` has a matching calibration loader | `scripts/synthesize_fall_sequence.py` |
 
 World-tracker fixture observations carry `calibrated`, optional `face_anchor`, `orientation`,
-`orientation_confidence`, `floor_cov_random`, and `footpoint_reliable`. Their truth sidecars carry
-person labels per detection plus expected events. These proofs bypass the full frame pipeline, so
-they do not exercise MinIO, Triton, detection, face/pose inference, stage ordering, or the three
-execution routes.
+`orientation_confidence`, `floor_cov_random`, `footpoint_reliable`, and (from M09) `floor_residual_m`.
+Their truth sidecars carry person labels per detection plus expected events; M09 fixtures also carry
+scenario-specific extra fields (e.g., `truth_position_mm`, `cam_b_dropout_at_step`, `truth_trajectory_mm`,
+`posture_truth`, `per_camera_posture_scores`). These proofs bypass the full frame pipeline, so they do
+not exercise MinIO, Triton, detection, face/pose inference, stage ordering, or the three execution routes.
 
 Fall fixtures carry bbox, keypoints, posture scores, floor speed, motion energy, timing, room metadata, and a required expectation (`detect`, `no-detect`, or `warning-max`). They exist separately because `WorldObservation` replay cannot exercise `FallDetectionStage` inputs.
+
+**M09 acceptance fixtures (five scenarios, committed 2026-06-18):**
+
+| Fixture | Scenario | Key truth sidecar extras |
+|---|---|---|
+| `stationary_two_camera` | Person still; cam-A (+0.3 m offset) and cam-B (-0.2 m offset); cam-B drops at step 30 | `truth_position_mm`, `cam_b_dropout_at_step` |
+| `slow_shuffle` | 0.30 m/s walk along x; single camera | `truth_trajectory_mm`, `truth_speed_m_s` |
+| `oblique_single_camera` | Fixed point; anisotropic R `[0.16, 0, 0, 0.01]` (sigma_x=0.4 m, sigma_y=0.1 m) | `truth_position_mm` |
+| `posture_disagreement_four_camera` | 4 cameras (LEFT/RIGHT/BACK/FRONT); 3 sitting, 1 standing; geometry-aware fusion should output sitting | `posture_truth`, `per_camera_posture_scores` |
+| `moving_then_stop` | Walk 20 frames at 0.30 m/s then stop for 40 frames; ZUPT engages at stop | `truth_trajectory_mm`, `walk_end_step`, `truth_stop_pos_mm` |
+
+**M09 measurement harness:** `tests/integration/_fusion_metrics.py` provides `run_replay()` and `compute_eigen_ratio()`.
+`run_replay(steps, legacy_mode=True)` strips `floor_cov_random` (forces isotropic) and sets `zupt_consecutive_frames=99999`
+(disables ZUPT) — TEST-ONLY toggle. Gate tests live in `tests/integration/test_fusion_acceptance.py` (6 tests,
+`@pytest.mark.integration`, use `InMemoryPHRepository`, no Postgres required).
 
 **Fixture ownership rule.** A fixture-format change must update the generator, every loader or calibration reader for that family, round-trip or compatibility tests, regenerated committed fixtures, and this skill in one PR. Do not hand-edit generated fixture payloads.
 
