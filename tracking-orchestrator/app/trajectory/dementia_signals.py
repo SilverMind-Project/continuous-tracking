@@ -17,6 +17,7 @@ Signal types
 
 from __future__ import annotations
 
+import itertools
 import math
 import uuid
 from dataclasses import dataclass
@@ -406,13 +407,19 @@ class DementiaSignalWorker:
             window_data = rolling_pts
             dwell_data = rolling_dwells
         else:
+            # Explicit generous limits: the default (100) silently truncates a
+            # busy resident's window to the most recent points, which would make
+            # observed-stillness and dwell history undercount. Match the
+            # incremental-path limits.
             window_data = await self._trajectory_repo.list_trajectory_points(
                 identity_id=identity_id,
                 after=now - self._cfg.window,
+                limit=5000,
             )
             dwell_data = await self._trajectory_repo.list_room_dwells(
                 identity_id=identity_id,
                 after=now - self._cfg.window,
+                limit=1000,
             )
             # Seed rolling state for future incremental runs.
             if self._cfg.incremental_enabled:
@@ -442,7 +449,7 @@ class DementiaSignalWorker:
         signals.extend(await self._compute_sundowning(identity_id, window, now))
         signals.extend(await self._compute_bathroom_dwell_anomaly(identity_id, dwells, now))
         signals.extend(await self._compute_nighttime_movement(identity_id, window, now))
-        signals.extend(await self._compute_stillness_anomaly(identity_id, dwells, now))
+        signals.extend(await self._compute_stillness_anomaly(identity_id, dwells, window, now))
         signals.extend(await self._compute_absence(identity_id, window, now))
         signals.extend(await self._compute_gait_slowing(identity_id, now))
         if self._cfg.agitation_enabled:
@@ -983,6 +990,7 @@ class DementiaSignalWorker:
         self,
         identity_id: str,
         dwells: list[RoomDwell],
+        window: list[PersonTrajectoryPoint],
         now: datetime,
     ) -> list[DementiaSignal]:
         """Detect stillness: sustained low motion energy in non-resting posture.
@@ -990,7 +998,21 @@ class DementiaSignalWorker:
         Clinically meaningful immobility = near-zero motion energy in a
         non-resting posture (lying in a non-bedroom, or prolonged
         sitting/standing stillness).
+
+        An **open** dwell is qualified from observed low-motion trajectory
+        points, not from wall-clock ``now - entered_at``.  A dwell row left open
+        by an orphaned/closed PH (the leak class) has no recent points and
+        accumulates no observed-still time, so it can no longer masquerade as
+        hours of immobility.  A genuinely still resident keeps producing
+        low-motion points and still fires.
         """
+        # Trajectory points for this identity, grouped by PH and time-ordered.
+        points_by_ph: dict[str, list[PersonTrajectoryPoint]] = {}
+        for p in window:
+            points_by_ph.setdefault(p.ph_id, []).append(p)
+        for pts in points_by_ph.values():
+            pts.sort(key=lambda p: p.observed_at)
+
         still_signals: list[DementiaSignal] = []
 
         for dwell in dwells:
@@ -999,8 +1021,9 @@ class DementiaSignalWorker:
                 continue
 
             if dwell.exited_at is not None:
-                # Closed dwell — check if it meets stillness criteria.
-                if dwell.still_seconds < self._cfg.stillness_threshold_minutes * 60:
+                # Closed dwell — use the persisted accumulated still time.
+                still_value = float(dwell.still_seconds)
+                if still_value < self._cfg.stillness_threshold_minutes * 60:
                     continue
                 if (
                     dwell.min_motion_energy is not None
@@ -1008,43 +1031,37 @@ class DementiaSignalWorker:
                 ):
                     continue
                 duration = dwell.duration_seconds or 0
-                severity = _stillness_severity(duration, dwell.primary_posture, self._cfg)
                 w_end = dwell.exited_at
-                cold_start = False
-
-                # Compare against baseline stillness episodes.
-                z_result = await self._compute_z_score(
-                    value=float(dwell.still_seconds),
-                    signal_kind="stillness_anomaly",
-                    identity_id=identity_id,
-                    now=now,
-                )
-                if z_result.z_score is None and self._baseline_repo is not None:
-                    # Cold start: cap severity at warning.
-                    cold_start = True
-                    if severity == "emergency":
-                        severity = "warning"
             else:
-                # Open dwell — check current stillness duration.
-                duration = int((now - dwell.entered_at).total_seconds())
-                if duration < self._cfg.stillness_threshold_minutes * 60:
+                # Open dwell — require it to be actively observed and still *now*.
+                dwell_points = [
+                    p
+                    for p in points_by_ph.get(dwell.ph_id, [])
+                    if p.observed_at >= dwell.entered_at
+                ]
+                if not dwell_points:
                     continue
-                if (
-                    dwell.min_motion_energy is not None
-                    and dwell.min_motion_energy > self._cfg.stillness_motion_floor
-                ):
+                gap_to_now = (now - dwell_points[-1].observed_at).total_seconds()
+                if gap_to_now > self._cfg.stillness_open_freshness_s:
+                    # No recent observation: stale/orphaned open dwell, not live.
                     continue
-                severity = _stillness_severity(duration, dwell.primary_posture, self._cfg)
-                w_end = now
-                z_result = await self._compute_z_score(
-                    value=float(dwell.still_seconds),
-                    signal_kind="stillness_anomaly",
-                    identity_id=identity_id,
-                    now=now,
-                )
-                cold_start = z_result.z_score is None and self._baseline_repo is not None
-                if cold_start and severity == "emergency":
-                    severity = "warning"
+                still_value = self._observed_still_seconds(dwell_points)
+                if still_value < self._cfg.stillness_threshold_minutes * 60:
+                    continue
+                duration = int(still_value)
+                w_end = dwell_points[-1].observed_at
+
+            severity = _stillness_severity(duration, dwell.primary_posture, self._cfg)
+            z_result = await self._compute_z_score(
+                value=still_value,
+                signal_kind="stillness_anomaly",
+                identity_id=identity_id,
+                now=now,
+            )
+            cold_start = z_result.z_score is None and self._baseline_repo is not None
+            if cold_start and severity == "emergency":
+                # Cold start: cannot confirm emergency without baseline context.
+                severity = "warning"
 
             kind: DementiaSignalKind = "stillness_anomaly"
             # Each dwell is a distinct episode; stable key survives across runs.
@@ -1070,7 +1087,7 @@ class DementiaSignalWorker:
                     identity_id=identity_id,
                     signal_kind=kind,
                     severity=severity,
-                    value=float(dwell.still_seconds),
+                    value=still_value,
                     baseline=z_result.baseline,
                     z_score=z_result.z_score,
                     window_start=dwell.entered_at,
@@ -1079,7 +1096,7 @@ class DementiaSignalWorker:
                     algorithm_version=_ALGORITHM_VERSION,
                     context={
                         "room_name": dwell.room_name,
-                        "still_seconds": dwell.still_seconds,
+                        "still_seconds": int(still_value),
                         "primary_posture": dwell.primary_posture,
                         "min_motion_energy": dwell.min_motion_energy,
                         "cold_start": cold_start,
@@ -1089,6 +1106,22 @@ class DementiaSignalWorker:
             )
 
         return still_signals
+
+    def _observed_still_seconds(self, points: list[PersonTrajectoryPoint]) -> float:
+        """Accumulate observed low-motion seconds across time-ordered points.
+
+        Mirrors ``TrajectoryWriter``'s still accumulation: a gap counts as still
+        when the later point's motion energy is below the floor, capped per gap
+        so a long observation hole cannot inflate the total.
+        """
+        acc = 0.0
+        floor = self._cfg.stillness_still_energy_floor
+        cap = self._cfg.stillness_max_gap_s
+        for prev, cur in itertools.pairwise(points):
+            if cur.motion_energy is not None and cur.motion_energy < floor:
+                gap = (cur.observed_at - prev.observed_at).total_seconds()
+                acc += min(max(gap, 0.0), cap)
+        return acc
 
     # ------------------------------------------------------------------
     # 3.5  Absence — hourly context
@@ -1641,6 +1674,15 @@ class SignalConfig:
     stillness_emergency_minutes: int = 120
     # Production's 0.05 floor filters ambient motion and minor pose jitter.
     stillness_motion_floor: float = 0.05
+    # An open dwell qualifies only if observed within this many seconds of now;
+    # otherwise it is a stale/orphaned row, not live immobility. 180 s tolerates
+    # a few missed frames without admitting abandoned dwells.
+    stillness_open_freshness_s: int = 180
+    # Floor + per-gap cap for re-deriving observed still time from points on the
+    # open branch. Mirror TrajectoryWriter's accumulation so open and closed
+    # dwells use the same definition of "still".
+    stillness_still_energy_floor: float = 0.005
+    stillness_max_gap_s: float = 60.0
     resting_rooms: tuple[str, ...] = ("bed", "bedroom")
     # Bathroom
     bathroom_z_threshold: float = 3.5

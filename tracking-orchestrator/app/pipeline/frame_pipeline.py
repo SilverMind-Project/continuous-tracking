@@ -444,6 +444,18 @@ class FrameProcessingPipeline:
         _traj_repo = deps.trajectory_repo or InMemoryTrajectoryRepository()
         self._trajectory_writer = TrajectoryWriter(repo=_traj_repo)
 
+        # Reconcile dwells left open by a previous lifecycle: writer dwell state
+        # is in-memory, so a restart strands every then-open dwell with
+        # exited_at NULL — which the stillness detector reads as immobility.
+        try:
+            closed = await self._trajectory_writer.reconcile_open_dwells(
+                closed_at=datetime.now(UTC)
+            )
+            if closed:
+                logger.info("Reconciled dangling open dwells at startup", count=closed)
+        except Exception:  # noqa: BLE001  # startup reconciliation must not block boot
+            logger.warning("dwell_reconciliation_failed", exc_info=True)
+
         # Gait bout segmenter, daily aggregator, and their repositories.
         # Segmenter adds only arithmetic + one insert per bout (no behavioural risk).
         # Aggregator runs inside _signal_loop at gait.aggregate_interval_s cadence
@@ -535,6 +547,7 @@ class FrameProcessingPipeline:
             enable_low_confidence_recovery=wt_cfg.enable_low_confidence_recovery,
             low_confidence_floor=wt_cfg.low_confidence_floor,
             high_threshold=_high_threshold,
+            measure_low_confidence_band=wt_cfg.measure_low_confidence_band,
         )
         world_tracking_stage = WorldTrackingStage(
             tracker=self._world_tracker,

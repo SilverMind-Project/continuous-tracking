@@ -47,6 +47,30 @@ SET exited_at         = $1,
 WHERE id = $5
 """
 
+_SQL_CLOSE_DANGLING_DWELLS = """
+UPDATE continuous_tracking.room_dwells d
+SET exited_at        = ex.exit_at,
+    duration_seconds = GREATEST(0, EXTRACT(EPOCH FROM (ex.exit_at - d.entered_at)))::int
+FROM (
+    SELECT d2.id,
+           LEAST(
+               $1::timestamptz,
+               GREATEST(
+                   d2.entered_at,
+                   COALESCE(
+                       (SELECT max(p.observed_at)
+                        FROM continuous_tracking.person_trajectories p
+                        WHERE p.ph_id = d2.ph_id),
+                       d2.entered_at
+                   )
+               )
+           ) AS exit_at
+    FROM continuous_tracking.room_dwells d2
+    WHERE d2.exited_at IS NULL
+) ex
+WHERE d.id = ex.id
+"""
+
 _SQL_GET_OPEN_DWELL = """
 SELECT id, identity_id, ph_id, room_name,
        entered_at, entry_confidence, primary_posture, activity_summary
@@ -156,6 +180,16 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
         if row is None:
             return None
         return _row_to_dwell(row)
+
+    async def close_dangling_open_dwells(self, closed_at: datetime) -> int:
+        async with self._pool.acquire() as conn:
+            status = await conn.execute(_SQL_CLOSE_DANGLING_DWELLS, closed_at)
+        # asyncpg returns a command tag like "UPDATE 15933"; the last token is
+        # the affected row count.
+        try:
+            return int(status.split()[-1])
+        except (ValueError, IndexError):
+            return 0
 
     async def list_trajectory_points(
         self,

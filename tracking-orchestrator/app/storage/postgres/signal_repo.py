@@ -15,21 +15,34 @@ import asyncpg  # type: ignore[import-untyped]
 from ...domain import DementiaSignal
 from ..base import DementiaSignalRepository
 
-_SQL_UPSERT_SIGNAL = """
+# The table is a hypertable with PRIMARY KEY (signal_id, emitted_at): the time
+# dimension must be in the key. ``emitted_at`` advances every run, so a plain
+# ``ON CONFLICT (signal_id, emitted_at)`` never collides for a re-emitted signal
+# and inserts a duplicate row each cycle. Instead update by signal_id alone
+# (advancing emitted_at in place — Timescale supports updating the partition
+# column), and insert only when absent. This restores the design intent: one row
+# per stable signal_id, refreshed in place and still ordered by latest emission.
+_SQL_UPDATE_SIGNAL = """
+UPDATE continuous_tracking.dementia_signals SET
+    severity          = $2,
+    value             = $3,
+    baseline          = $4,
+    z_score           = $5,
+    window_start      = $6,
+    window_end        = $7,
+    context_json      = $8,
+    emitted_at        = $9,
+    algorithm_version = $10
+WHERE signal_id = $1::uuid
+"""
+
+_SQL_INSERT_SIGNAL = """
 INSERT INTO continuous_tracking.dementia_signals
     (signal_id, identity_id, signal_kind, severity, value,
      baseline, z_score, window_start, window_end, context_json, emitted_at,
      algorithm_version)
 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-ON CONFLICT (signal_id, emitted_at) DO UPDATE SET
-    severity          = EXCLUDED.severity,
-    value             = EXCLUDED.value,
-    baseline          = EXCLUDED.baseline,
-    z_score           = EXCLUDED.z_score,
-    window_start      = EXCLUDED.window_start,
-    window_end        = EXCLUDED.window_end,
-    context_json      = EXCLUDED.context_json,
-    algorithm_version = EXCLUDED.algorithm_version
+ON CONFLICT (signal_id, emitted_at) DO NOTHING
 """
 
 _SQL_LIST_SIGNALS = """
@@ -51,22 +64,38 @@ class PostgresDementiaSignalRepository(DementiaSignalRepository):
         self._pool = pool
 
     async def upsert_signal(self, signal: DementiaSignal) -> None:
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                _SQL_UPSERT_SIGNAL,
+        context_json = json.dumps(signal.context)
+        async with self._pool.acquire() as conn, conn.transaction():
+            status = await conn.execute(
+                _SQL_UPDATE_SIGNAL,
                 signal.signal_id,
-                signal.identity_id,
-                signal.signal_kind,
                 signal.severity,
                 signal.value,
                 signal.baseline,
                 signal.z_score,
                 signal.window_start,
                 signal.window_end,
-                json.dumps(signal.context),
+                context_json,
                 signal.emitted_at,
                 signal.algorithm_version,
             )
+            # asyncpg returns "UPDATE <n>"; insert only when no row matched.
+            if status.rsplit(" ", 1)[-1] == "0":
+                await conn.execute(
+                    _SQL_INSERT_SIGNAL,
+                    signal.signal_id,
+                    signal.identity_id,
+                    signal.signal_kind,
+                    signal.severity,
+                    signal.value,
+                    signal.baseline,
+                    signal.z_score,
+                    signal.window_start,
+                    signal.window_end,
+                    context_json,
+                    signal.emitted_at,
+                    signal.algorithm_version,
+                )
 
     async def list_signals(
         self,

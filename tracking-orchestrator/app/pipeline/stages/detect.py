@@ -74,12 +74,18 @@ class DetectStage(FrameStage):
         enable_low_confidence_recovery: bool = False,
         low_confidence_floor: float = 0.25,
         high_threshold: float = 0.7,
+        measure_low_confidence_band: bool = False,
     ) -> None:
         self._detector = detector
         self._iou_dedup_threshold = iou_dedup_threshold
         self._enable_low_confidence_recovery = enable_low_confidence_recovery
         self._low_confidence_floor = low_confidence_floor
         self._high_threshold = high_threshold
+        # Diagnostic, read-only: when on (and recovery off), measure how often
+        # the high cut hides a present person, without feeding the low band to
+        # the tracker. Ignored when recovery is enabled (recovery already
+        # decodes the low band and uses it).
+        self._measure_low_confidence_band = measure_low_confidence_band
 
     async def run(self, ctx: FrameContext) -> None:
         await self.run_batch([ctx])
@@ -92,6 +98,8 @@ class DetectStage(FrameStage):
 
         if self._enable_low_confidence_recovery:
             await self._run_batch_with_recovery(contexts, images)
+        elif self._measure_low_confidence_band:
+            await self._run_batch_measure(contexts, images)
         else:
             await self._run_batch_standard(contexts, images)
 
@@ -180,6 +188,75 @@ class DetectStage(FrameStage):
             ctx.raw_detections = high
             ctx._detection_ids = {idx: str(uuid.uuid4()) for idx in range(len(high))}
             ctx.low_band_detections = low
+
+    async def _run_batch_measure(
+        self,
+        contexts: list[FrameContext],
+        images: list[npt.NDArray[np.uint8]],
+    ) -> None:
+        """Diagnostic measurement path (read-only w.r.t. tracking).
+
+        Decodes at ``low_confidence_floor`` in ONE Triton call (same cost as the
+        standard single-threshold call) and records how often a present person
+        is visible only below ``high_threshold``.  ``ctx.raw_detections`` is the
+        high band exactly as in the standard path, and the low band is NOT fed to
+        the tracker — so association/spawn/close behavior is unchanged.  This
+        isolates the question: are detection gaps caused by the high cut, or are
+        they genuine no-detection?
+        """
+        all_detections_by_frame = await self._detect_images_at_threshold(
+            images, self._low_confidence_floor
+        )
+        for ctx, _image, all_detections in zip(
+            contexts, images, all_detections_by_frame, strict=True
+        ):
+            all_detections = _filter_small_bboxes(all_detections)
+            high: list[DetectionBox] = [
+                d for d in all_detections if d.confidence >= self._high_threshold
+            ]
+            low: list[DetectionBox] = [
+                d
+                for d in all_detections
+                if self._low_confidence_floor <= d.confidence < self._high_threshold
+            ]
+            if high and self._iou_dedup_threshold < 1.0:
+                high = _iou_dedup_detections(high, self._iou_dedup_threshold)
+            if low and self._iou_dedup_threshold < 1.0:
+                low = _iou_dedup_detections(low, self._iou_dedup_threshold)
+            # Cross-band dedup: a low box overlapping a kept high box is the same
+            # person seen twice, not a hidden detection — do not count it.
+            if low and high:
+                low = [
+                    lb
+                    for lb in low
+                    if not any(
+                        _bbox_iou(
+                            [lb.x1, lb.y1, lb.x2, lb.y2],
+                            [hb.x1, hb.y1, hb.x2, hb.y2],
+                        )
+                        > self._iou_dedup_threshold
+                        for hb in high
+                    )
+                ]
+
+            cam = ctx.frame.camera_id
+            band = "high" if high else ("low_only" if low else "empty")
+            _metrics.metrics.detector_band_frames_total.labels(camera_id=cam, band=band).inc()
+            if low:
+                _metrics.metrics.detector_lowband_boxes_total.labels(camera_id=cam).inc(len(low))
+            if band == "low_only":
+                # The decisive case: a person is present but only below the cut.
+                logger.info(
+                    "lowband_only_frame",
+                    camera_id=cam,
+                    frame_index=ctx.frame.frame_index,
+                    low_band_count=len(low),
+                    low_band_confidences=[round(d.confidence, 3) for d in low],
+                )
+
+            # Tracking input is identical to the standard path: only the high band.
+            ctx.raw_detections = high
+            ctx._detection_ids = {idx: str(uuid.uuid4()) for idx in range(len(high))}
 
     async def _detect_images(
         self,

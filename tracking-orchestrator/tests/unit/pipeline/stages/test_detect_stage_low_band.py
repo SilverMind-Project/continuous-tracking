@@ -175,3 +175,76 @@ async def test_flag_disabled_byte_identical_standard_path() -> None:
     assert ctx.raw_detections[0].confidence == pytest.approx(0.85)
     assert ctx.low_band_detections == []
     _ = low_box  # used to avoid unused variable warning
+
+
+# ---------------------------------------------------------------------------
+# 5. Measurement path (diagnostic, read-only): does NOT feed the tracker
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_measure_path_does_not_feed_tracker() -> None:
+    """measure_low_confidence_band decodes the low band but keeps tracking input
+    identical to the standard path: raw_detections == high band only, and
+    low_band_detections stays empty (never handed to the tracker)."""
+    high_box = DetectionBox(x1=0.1, y1=0.1, x2=0.4, y2=0.5, confidence=0.85)
+    low_box = DetectionBox(x1=0.5, y1=0.1, x2=0.7, y2=0.5, confidence=0.40)
+
+    fake = _FakeDetector([high_box, low_box])
+    stage = DetectStage(
+        detector=fake,  # type: ignore[arg-type]
+        iou_dedup_threshold=0.55,
+        enable_low_confidence_recovery=False,
+        measure_low_confidence_band=True,
+        low_confidence_floor=0.25,
+        high_threshold=0.7,
+    )
+    ctx = _ctx()
+    await stage.run(ctx)
+
+    # Tracking sees only the high band; the low band is measured, not fed.
+    assert len(ctx.raw_detections) == 1
+    assert ctx.raw_detections[0].confidence == pytest.approx(0.85)
+    assert ctx.low_band_detections == []
+    # One Triton call, at the low floor.
+    assert fake.calls_with_threshold == [0.25]
+
+
+@pytest.mark.asyncio
+async def test_measure_path_counts_low_only_frame() -> None:
+    """A frame whose only person box is below the high cut is classified
+    'low_only' and contributes to the discarded-box counter; raw_detections is
+    empty (identical to what the standard 0.7 path would see)."""
+    from app.observability import metrics as _metrics
+
+    low_box = DetectionBox(x1=0.4, y1=0.1, x2=0.7, y2=0.6, confidence=0.45)
+    fake = _FakeDetector([low_box])
+    stage = DetectStage(
+        detector=fake,  # type: ignore[arg-type]
+        iou_dedup_threshold=0.55,
+        enable_low_confidence_recovery=False,
+        measure_low_confidence_band=True,
+        low_confidence_floor=0.25,
+        high_threshold=0.7,
+    )
+
+    def _counter(band: str) -> float:
+        return _metrics.metrics.detector_band_frames_total.labels(
+            camera_id="cam-1", band=band
+        )._value.get()
+
+    before = _counter("low_only")
+    before_boxes = _metrics.metrics.detector_lowband_boxes_total.labels(
+        camera_id="cam-1"
+    )._value.get()
+
+    ctx = _ctx()
+    await stage.run(ctx)
+
+    # Tracker sees nothing (person is below the cut) — the gap the hypothesis is about.
+    assert ctx.raw_detections == []
+    # Measurement recorded a low-only frame and one discarded box.
+    assert _counter("low_only") == pytest.approx(before + 1)
+    assert _metrics.metrics.detector_lowband_boxes_total.labels(
+        camera_id="cam-1"
+    )._value.get() == pytest.approx(before_boxes + 1)

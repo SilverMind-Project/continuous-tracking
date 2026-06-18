@@ -220,3 +220,55 @@ async def test_multiple_trajectory_points_stored(
 
     points = await repo.list_trajectory_points(identity_id="alice")
     assert len(points) == 5
+
+
+async def test_start_segment_closes_prior_open_dwell(
+    writer: TrajectoryWriter,
+    repo: InMemoryTrajectoryRepository,
+) -> None:
+    """Reviving a PH must finalize the prior open dwell, not orphan it.
+
+    Regression: start_segment previously discarded the open dwell without
+    writing exited_at, leaving a dangling row that the stillness detector later
+    read as immobility (the phantom-signal storm).
+    """
+    t_enter = _T0
+    t_revive = _T0 + timedelta(minutes=3)
+
+    await writer.write("alice", "gt-001", "kitchen", FloorPoint(0, 0), t_enter)
+    await writer.start_segment(
+        ph_id="gt-001", identity_id="alice", room_name="hallway", entered_at=t_revive
+    )
+
+    # Exactly one open dwell (the new segment); the old one is closed, not leaked.
+    all_dwells = await repo.list_room_dwells(identity_id="alice")
+    open_dwells = [d for d in all_dwells if d.exited_at is None]
+    assert len(open_dwells) == 1
+    assert open_dwells[0].room_name == "hallway"
+
+    closed = [d for d in all_dwells if d.exited_at is not None]
+    assert len(closed) == 1
+    assert closed[0].room_name == "kitchen"
+    assert closed[0].exited_at is not None
+
+
+async def test_reconcile_open_dwells_closes_danglers(
+    writer: TrajectoryWriter,
+    repo: InMemoryTrajectoryRepository,
+) -> None:
+    """Restart reconciliation closes dwells left open by a previous lifecycle."""
+    # Simulate a dwell open since a previous process, with a last observation.
+    await writer.write("alice", "gt-001", "kitchen", FloorPoint(0, 0), _T0)
+    last_obs = _T0 + timedelta(minutes=10)
+    await writer.write("alice", "gt-001", "kitchen", FloorPoint(0, 0), last_obs)
+    assert await repo.get_open_dwell("alice", "gt-001") is not None
+
+    closed_count = await writer.reconcile_open_dwells(closed_at=_T0 + timedelta(hours=2))
+    assert closed_count == 1
+    assert await repo.get_open_dwell("alice", "gt-001") is None
+
+    dwells = await repo.list_room_dwells(identity_id="alice")
+    assert len(dwells) == 1
+    # Exit stamped at the last observed point, not the (much later) closed_at.
+    assert dwells[0].exited_at == last_obs
+    assert dwells[0].duration_seconds == 600

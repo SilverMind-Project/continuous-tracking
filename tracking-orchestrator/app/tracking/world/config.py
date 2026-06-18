@@ -125,3 +125,11 @@ class WorldTrackerConfig:
     enable_low_confidence_recovery: bool = False
     low_confidence_floor: float = 0.25
     recovery_gate_chi2: float = 5.99  # chi-squared 95% with 2 dof
+
+    # ---- Low-confidence band measurement (diagnostic, read-only) ----
+    # When enabled (and recovery off), the detect stage decodes at
+    # low_confidence_floor and records how often a present person is visible only
+    # in [low_confidence_floor, detector_confidence) — i.e. whether detection
+    # gaps are caused by the confidence cut. Does NOT feed the low band to the
+    # tracker, so tracking behavior is unchanged. Off by default.
+    measure_low_confidence_band: bool = False

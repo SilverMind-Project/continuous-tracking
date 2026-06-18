@@ -111,6 +111,13 @@ signal:
   stillness_threshold_minutes: 60
   stillness_emergency_minutes: 120
   stillness_motion_floor: 0.05
+  # An open dwell qualifies for stillness only if observed within this many
+  # seconds of now; otherwise it is a stale/orphaned row, not live immobility.
+  stillness_open_freshness_s: 180
+  # Floor + per-gap cap for re-deriving observed still time from points on the
+  # open branch (mirror TrajectoryWriter's still accumulation).
+  stillness_still_energy_floor: 0.005
+  stillness_max_gap_s: 60.0
   pacing_room_threshold: 8
   pacing_window_minutes: 30
   nighttime_transition_threshold: 3
@@ -470,6 +477,14 @@ world_tracker:
   # Chi-squared gate for the second association pass (95% with 2 dof = 5.99,
   # tighter than the primary 9.21 to bound ghost-persistence risk).
   recovery_gate_chi2: 5.99
+  # Diagnostic, read-only: when true (and recovery false), the detect stage
+  # decodes at low_confidence_floor and records cts_detector_band_frames_total
+  # {band=high|low_only|empty} + cts_detector_lowband_boxes_total, to measure
+  # whether the detector_confidence cut is hiding present people. Does NOT change
+  # tracking (the low band is only counted, never fed to the tracker).
+  # TEMPORARILY ENABLED for the detection-gap root-cause measurement (2026-06-17);
+  # revert to false once the capture is complete.
+  measure_low_confidence_band: false
 
 # Gait and mobility analytics (Milestone 3)
 #

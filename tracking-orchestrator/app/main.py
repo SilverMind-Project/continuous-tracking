@@ -303,6 +303,7 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         enable_low_confidence_recovery=wt.as_bool("enable_low_confidence_recovery"),
         low_confidence_floor=wt.as_float("low_confidence_floor"),
         recovery_gate_chi2=wt.as_float("recovery_gate_chi2"),
+        measure_low_confidence_band=wt.as_bool("measure_low_confidence_band"),
     )
 
 
@@ -334,6 +335,9 @@ def _build_signal_config(s: Settings) -> SignalConfig:
         stillness_threshold_minutes=sig.as_int("stillness_threshold_minutes"),
         stillness_emergency_minutes=sig.as_int("stillness_emergency_minutes"),
         stillness_motion_floor=sig.as_float("stillness_motion_floor"),
+        stillness_open_freshness_s=sig.as_int("stillness_open_freshness_s"),
+        stillness_still_energy_floor=sig.as_float("stillness_still_energy_floor"),
+        stillness_max_gap_s=sig.as_float("stillness_max_gap_s"),
         resting_rooms=tuple(sig.require("resting_rooms")),
         bathroom_z_threshold=sig.as_float("bathroom_z_threshold"),
         bathroom_z_threshold_night=sig.as_float("bathroom_z_threshold_night"),

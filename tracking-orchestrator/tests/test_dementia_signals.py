@@ -315,16 +315,17 @@ class TestStillnessAnomalyDetector:
                 onset_consecutive_windows=1,
             )
         )
-        await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=41))
-        # Open dwell in kitchen for 40 minutes with high still_seconds.
+        # Open dwell in kitchen, observed still for 40 minutes via low-motion points.
         entered_at = _NOW - timedelta(minutes=40)
+        for p in _still_points("kitchen", _GT, entered_offset_minutes=40):
+            await traj_repo.save_trajectory_point(p)
         open_dwell = RoomDwell(
             dwell_id=str(uuid.uuid4()),
             identity_id=_IDENTITY,
             ph_id=_GT,
             room_name="kitchen",
             entered_at=entered_at,
-            still_seconds=30 * 60,  # 30 minutes of actual stillness
+            still_seconds=30 * 60,
             min_motion_energy=0.001,  # below motion floor
         )
         await traj_repo.save_room_dwell(open_dwell)
@@ -365,6 +366,61 @@ class TestStillnessAnomalyDetector:
 
         signals = await worker.run_once(now=_NOW)
         assert not any(s.signal_kind == "stillness_anomaly" for s in signals)
+
+
+class TestStillnessPhantomRegression:
+    """Regression: a leaked/orphaned open dwell must never fire phantom stillness.
+
+    Root cause of the duplicate-signal storm: open dwell rows were left dangling
+    (exited_at NULL) by PH churn and restarts, then the detector treated any aged
+    open dwell as 60-minute immobility on every run, each with a distinct
+    per-dwell episode key, producing tens of spurious ``stillness_anomaly``
+    signals within minutes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_orphaned_open_dwell_emits_no_phantom_stillness(self):
+        """An open dwell with no recent observations stays silent across cycles."""
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                stillness_threshold_minutes=60,
+                onset_consecutive_windows=2,
+            )
+        )
+        # Resident was observed still, then the PH was orphaned: low-motion points
+        # stop 30 min ago but the dwell row is never closed (exited_at NULL,
+        # still_seconds 0 — exactly the leaked-row shape seen in production).
+        for p in _still_points("kitchen", _GT, entered_offset_minutes=120, end_offset_minutes=30):
+            await traj_repo.save_trajectory_point(p)
+        orphan = _still_dwell("kitchen", 120, still_minutes=0, ph_id=_GT)
+        await traj_repo.save_room_dwell(orphan)
+
+        # Advance several cycles well past the threshold; never qualifies.
+        total = 0
+        for k in range(6):
+            sigs = await worker.run_once(now=_NOW + timedelta(minutes=k))
+            total += len([s for s in sigs if s.signal_kind == "stillness_anomaly"])
+        assert total == 0, f"Orphaned open dwell produced {total} phantom stillness signal(s)"
+
+    @pytest.mark.asyncio
+    async def test_many_orphaned_dwells_do_not_storm(self):
+        """Many aged open dwells (no recent points) yield zero stillness signals."""
+        worker, traj_repo, _ = _make_worker(
+            SignalConfig(
+                stillness_threshold_minutes=60,
+                onset_consecutive_windows=1,
+            )
+        )
+        # 30 leaked open dwells across distinct ph_ids, none recently observed.
+        for i in range(30):
+            d = _still_dwell("kitchen", 90 + i, still_minutes=0, ph_id=f"orphan-{i}")
+            await traj_repo.save_room_dwell(d)
+        # A single stale point so the identity is tracked at all.
+        await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=80))
+
+        sigs = await worker.run_once(now=_NOW)
+        stillness = [s for s in sigs if s.signal_kind == "stillness_anomaly"]
+        assert stillness == [], f"Phantom storm: {len(stillness)} stillness signals"
 
 
 # ---------------------------------------------------------------------------
@@ -1113,6 +1169,41 @@ def _still_dwell(
     )
 
 
+def _still_points(
+    room: str,
+    ph_id: str,
+    entered_offset_minutes: float,
+    now: datetime = _NOW,
+    end_offset_minutes: float = 0.0,
+    step_seconds: float = 30.0,
+    motion_energy: float = 0.001,
+) -> list[PersonTrajectoryPoint]:
+    """Low-motion trajectory points spanning an open dwell.
+
+    An open dwell is qualified for stillness from observed low-motion points,
+    not wall-clock age, so tests that exercise the open branch must seed the
+    points the resident produced while sitting still.
+    """
+    entered_at = now - timedelta(minutes=entered_offset_minutes)
+    end_at = now - timedelta(minutes=end_offset_minutes)
+    points: list[PersonTrajectoryPoint] = []
+    t = entered_at
+    while t <= end_at:
+        points.append(
+            PersonTrajectoryPoint(
+                identity_id=_IDENTITY,
+                ph_id=ph_id,
+                observed_at=t,
+                room_name=room,
+                posture="sitting",  # type: ignore[arg-type]
+                identity_confidence=0.9,
+                motion_energy=motion_energy,
+            )
+        )
+        t += timedelta(seconds=step_seconds)
+    return points
+
+
 class TestHysteresisCorrectness:
     """Task 1.3 regression and correctness tests for SignalHysteresis."""
 
@@ -1140,7 +1231,10 @@ class TestHysteresisCorrectness:
                 onset_consecutive_windows=2,
             )
         )
-        await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=121))
+        for p in _still_points("kitchen", "ph-a", entered_offset_minutes=100):
+            await traj_repo.save_trajectory_point(p)
+        for p in _still_points("living_room", "ph-b", entered_offset_minutes=90):
+            await traj_repo.save_trajectory_point(p)
 
         dwell_a = _still_dwell("kitchen", 100, still_minutes=60, ph_id="ph-a")
         dwell_b = _still_dwell("living_room", 90, still_minutes=60, ph_id="ph-b")
@@ -1173,7 +1267,10 @@ class TestHysteresisCorrectness:
                 onset_consecutive_windows=2,
             )
         )
-        await traj_repo.save_trajectory_point(_point("kitchen", offset_minutes=121))
+        for p in _still_points("kitchen", "ph-a", entered_offset_minutes=100):
+            await traj_repo.save_trajectory_point(p)
+        for p in _still_points("living_room", "ph-b", entered_offset_minutes=90):
+            await traj_repo.save_trajectory_point(p)
 
         dwell_a = _still_dwell("kitchen", 100, still_minutes=60, ph_id="ph-a")
         dwell_b = _still_dwell("living_room", 90, still_minutes=60, ph_id="ph-b")

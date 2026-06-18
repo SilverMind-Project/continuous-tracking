@@ -173,6 +173,15 @@ class Metrics:
     worldtracker_low_band_matches_total: Counter
     worldtracker_low_band_dropped_total: Counter
 
+    # ---- Low-confidence band measurement (diagnostic, gated, read-only) ----
+    # Quantifies how often the detector_confidence cut hides a present person:
+    #   band="high"     — >=1 person box at/above the high threshold this frame
+    #   band="low_only" — 0 high boxes but >=1 box in [low_floor, high) (a gap
+    #                     caused purely by the threshold — the discriminator)
+    #   band="empty"    — no person boxes at all (genuine no-detection)
+    detector_band_frames_total: Counter
+    detector_lowband_boxes_total: Counter
+
     # ---- Adaptive ReID cadence ----
     cts_reid_executed_total: Counter
     cts_reid_skipped_total: Counter
@@ -621,6 +630,17 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         worldtracker_low_band_dropped_total=_counter(
             "cts_worldtracker_low_band_dropped_total",
             "Low-band observations dropped (no open PH within recovery gate).",
+        ),
+        # ---- Low-confidence band measurement (diagnostic) ----
+        detector_band_frames_total=_counter(
+            "cts_detector_band_frames_total",
+            "Per-frame detection-band classification (high / low_only / empty).",
+            ["camera_id", "band"],
+        ),
+        detector_lowband_boxes_total=_counter(
+            "cts_detector_lowband_boxes_total",
+            "Person boxes in [low_floor, high_threshold) discarded by the cut.",
+            ["camera_id"],
         ),
         # ---- Adaptive ReID cadence ----
         cts_reid_executed_total=_counter(

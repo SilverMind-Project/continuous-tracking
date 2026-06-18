@@ -134,21 +134,22 @@ class TrajectoryWriter:
     ) -> None:
         """Start a clean dwell segment for a revived PH.
 
-        When a PH is revived after being closed, its previous dwell was already
-        finalized and removed from ``_open_dwell``.  This method creates a new
-        dwell segment so trajectory writing can resume without relying on an
-        implicit side effect from ``_handle_dwell``.
+        When a PH is revived after being closed, any dwell still open from its
+        previous lifecycle must be finalized first — otherwise creating a fresh
+        dwell here orphans the old row (its ``exited_at`` stays NULL and it
+        overwrites the repository's open-dwell id cache).  This method finalizes
+        then creates a new dwell segment so trajectory writing can resume.
 
         Must be called before the first ``write()`` for the revived PH in the
         same frame, so ``_handle_dwell`` can detect a room change or merge
         posture counts correctly.
         """
-        # Clear any stale state that might linger from the previous lifecycle.
+        # Close any lingering open dwell at its last observed time (best effort)
+        # before starting the new segment, so no row is left with exited_at NULL.
+        # Skipping this orphaned the old dwell row (the phantom-stillness leak).
+        prior_exit = self._last_obs_time.get(ph_id) or entered_at
+        await self._finalize_open_dwell(ph_id, prior_exit)
         self._current_room.pop(ph_id, None)
-        self._open_dwell.pop(ph_id, None)
-        self._dwell_posture_counts.pop(ph_id, None)
-        self._dwell_still_acc.pop(ph_id, None)
-        self._last_obs_time.pop(ph_id, None)
 
         # Create a fresh dwell entry for the new segment.
         new_dwell = RoomDwell(
@@ -167,36 +168,63 @@ class TrajectoryWriter:
         self._dwell_posture_counts[ph_id] = {}
         self._last_obs_time[ph_id] = entered_at
 
+    async def _finalize_open_dwell(self, ph_id: str, closed_at: datetime) -> int:
+        """Persist ``exited_at`` for the open dwell of ``ph_id`` and clear its state.
+
+        This is the single place that closes a dwell row.  It MUST be called
+        before discarding a PH's open dwell, otherwise the row is left with
+        ``exited_at IS NULL`` forever (the leak that produced phantom stillness
+        signals — an aged open dwell reads as 60-minute immobility).
+
+        Returns the dwell duration in seconds, or 0 if no open dwell existed.
+        ``_current_room`` is intentionally left untouched; callers decide
+        whether the PH keeps a current room (room change / revival) or not
+        (termination).
+        """
+        dwell = self._open_dwell.pop(ph_id, None)
+        posture_counts = self._dwell_posture_counts.pop(ph_id, {})
+        still_seconds = self._dwell_still_acc.pop(ph_id, 0.0)
+        self._last_obs_time.pop(ph_id, None)
+        if dwell is None:
+            return 0
+        duration = int((closed_at - dwell.entered_at).total_seconds())
+        closed = RoomDwell(
+            dwell_id=dwell.dwell_id,
+            identity_id=dwell.identity_id,
+            ph_id=dwell.ph_id,
+            room_name=dwell.room_name,
+            entered_at=dwell.entered_at,
+            exited_at=closed_at,
+            duration_seconds=duration,
+            entry_confidence=dwell.entry_confidence,
+            primary_posture=_modal_posture(posture_counts),
+            min_motion_energy=dwell.min_motion_energy,
+            still_seconds=dwell.still_seconds + int(still_seconds),
+            activity_summary={},
+        )
+        await self._repo.update_room_dwell(closed)
+        return duration
+
     async def close_track(self, ph_id: str, closed_at: datetime) -> int:
         """Close the open dwell for a terminated PH.
 
         Returns the dwell duration in seconds, or 0 if no open dwell existed.
         """
-        dwell = self._open_dwell.pop(ph_id, None)
-        if dwell is not None:
-            duration = int((closed_at - dwell.entered_at).total_seconds())
-            posture_counts = self._dwell_posture_counts.pop(ph_id, {})
-            modal_posture = _modal_posture(posture_counts)
-            still_seconds = self._dwell_still_acc.pop(ph_id, 0.0)
-            self._last_obs_time.pop(ph_id, None)
-            closed = RoomDwell(
-                dwell_id=dwell.dwell_id,
-                identity_id=dwell.identity_id,
-                ph_id=dwell.ph_id,
-                room_name=dwell.room_name,
-                entered_at=dwell.entered_at,
-                exited_at=closed_at,
-                duration_seconds=duration,
-                entry_confidence=dwell.entry_confidence,
-                primary_posture=modal_posture,
-                min_motion_energy=dwell.min_motion_energy,
-                still_seconds=dwell.still_seconds + int(still_seconds),
-                activity_summary={},
-            )
-            await self._repo.update_room_dwell(closed)
-            self._current_room.pop(ph_id, None)
-            return duration
-        return 0
+        duration = await self._finalize_open_dwell(ph_id, closed_at)
+        self._current_room.pop(ph_id, None)
+        return duration
+
+    async def reconcile_open_dwells(self, closed_at: datetime) -> int:
+        """Close dwell rows left open by a previous process lifecycle.
+
+        Writer dwell state is in-memory and process-local, so any dwell open
+        when the orchestrator stopped can never be closed by ``close_track``
+        after a restart (the in-memory handle is gone).  Called once at startup,
+        this delegates to the repository to stamp ``exited_at`` on every dangling
+        open dwell, using each dwell's last observed trajectory point as the exit
+        time (falling back to ``entered_at``).  Returns the rows closed.
+        """
+        return await self._repo.close_dangling_open_dwells(closed_at)
 
     async def close_all(self, closed_at: datetime) -> None:
         """Close all open dwells and clear per-track state.
@@ -248,29 +276,8 @@ class TrajectoryWriter:
                 self._last_obs_time[ph_id] = captured_at
             return
 
-        # Room changed (or first observation for this track).
-        existing = self._open_dwell.get(ph_id)
-        if existing is not None:
-            duration = int((captured_at - existing.entered_at).total_seconds())
-            posture_counts = self._dwell_posture_counts.pop(ph_id, {})
-            modal_posture = _modal_posture(posture_counts)
-            still_seconds = self._dwell_still_acc.pop(ph_id, 0.0)
-            self._last_obs_time.pop(ph_id, None)
-            closed = RoomDwell(
-                dwell_id=existing.dwell_id,
-                identity_id=existing.identity_id,
-                ph_id=existing.ph_id,
-                room_name=existing.room_name,
-                entered_at=existing.entered_at,
-                exited_at=captured_at,
-                duration_seconds=duration,
-                entry_confidence=existing.entry_confidence,
-                primary_posture=modal_posture,
-                min_motion_energy=existing.min_motion_energy,
-                still_seconds=existing.still_seconds + int(still_seconds),
-                activity_summary={},
-            )
-            await self._repo.update_room_dwell(closed)
+        # Room changed (or first observation for this track): close the old dwell.
+        await self._finalize_open_dwell(ph_id, captured_at)
 
         new_dwell = RoomDwell(
             dwell_id=str(uuid.uuid4()),

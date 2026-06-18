@@ -29,6 +29,15 @@ class TrajectoryRepository(ABC):
         """Return the open (not-yet-exited) dwell for a track, if any."""
 
     @abstractmethod
+    async def close_dangling_open_dwells(self, closed_at: datetime) -> int:
+        """Close every dwell with ``exited_at IS NULL`` (restart reconciliation).
+
+        Each row's ``exited_at`` is set to its last observed trajectory point
+        (falling back to ``entered_at``), bounded by ``closed_at``.  Returns the
+        number of rows closed.
+        """
+
+    @abstractmethod
     async def list_trajectory_points(
         self,
         identity_id: str | None = None,
@@ -104,6 +113,31 @@ class InMemoryTrajectoryRepository(TrajectoryRepository):
 
     async def get_open_dwell(self, identity_id: str, ph_id: str) -> RoomDwell | None:
         return self._open_dwells.get((identity_id, ph_id))
+
+    async def close_dangling_open_dwells(self, closed_at: datetime) -> int:
+        from dataclasses import replace
+
+        last_obs_by_ph: dict[str, datetime] = {}
+        for p in self._points:
+            prev = last_obs_by_ph.get(p.ph_id)
+            if prev is None or p.observed_at > prev:
+                last_obs_by_ph[p.ph_id] = p.observed_at
+
+        count = 0
+        for key, dwell in list(self._open_dwells.items()):
+            exit_at = min(last_obs_by_ph.get(dwell.ph_id, dwell.entered_at), closed_at)
+            if exit_at < dwell.entered_at:
+                exit_at = dwell.entered_at
+            self._open_dwells.pop(key, None)
+            self._closed_dwells.append(
+                replace(
+                    dwell,
+                    exited_at=exit_at,
+                    duration_seconds=int((exit_at - dwell.entered_at).total_seconds()),
+                )
+            )
+            count += 1
+        return count
 
     async def list_trajectory_points(
         self,
