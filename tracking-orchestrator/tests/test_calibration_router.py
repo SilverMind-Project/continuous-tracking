@@ -77,6 +77,7 @@ def test_auto_calibrate_returns_draft_without_storing_homography(client: TestCli
                 sample_count=400,
                 fov_deg=fov_deg,
                 method="depth_auto_draft",
+                floor_region_polygon=None,
             )
 
     monkeypatch.setattr(_cal_router_mod, "_auto_calibrator", FakeAutoCalibrator())

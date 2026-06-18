@@ -205,6 +205,14 @@ class AutoCalibrateResult(BaseModel):
     image_height: int
     method: str = "depth_auto_draft"
     warning: str | None = None
+    floor_region_polygon: list[list[float]] | None = Field(
+        default=None,
+        description=(
+            "Normalised [0,1] image-space polygon tracing the detected floor. "
+            "Same coordinate space as visibility_polygon (NOT floor-plan metres). "
+            "Null when fewer than 3 floor inliers were detected."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +452,7 @@ async def post_auto_calibrate(
         image_height=int(image.shape[0]),
         method=result.method,
         warning=warning or None,
+        floor_region_polygon=result.floor_region_polygon,
     )
 
 

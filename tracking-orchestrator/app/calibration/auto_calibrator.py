@@ -26,6 +26,7 @@ from app.calibration.floor_plane import (
     FloorPlaneFitter,
     FloorPlaneResult,
     floor_plane_to_homography,
+    floor_region_polygon,
     sample_floor_plane_suggestions,
 )
 from app.inference.depth import DepthEstimator
@@ -57,6 +58,11 @@ class AutoCalibrationResult:
     fov_deg: float
     #: ``"depth_auto_draft"`` — must not be treated as committed calibration.
     method: str = "depth_auto_draft"
+    #: Normalised [0,1] image-space polygon tracing the detected floor region.
+    #: Same coordinate space as visibility_polygon (NOT floor-plan metres).
+    #: None when the floor plane fit produced fewer than 3 inlier pixels.
+    # TODO: persist CTS-side if a detection-gating or privacy-zone consumer appears.
+    floor_region_polygon: list[list[float]] | None = None
 
 
 class AutoCalibrator:
@@ -168,4 +174,5 @@ class AutoCalibrator:
             sample_count=len(plane_result.inlier_mask),
             depth_shape=(int(depth_map.shape[0]), int(depth_map.shape[1])),
             fov_deg=effective_fov,
+            floor_region_polygon=floor_region_polygon(plane_result, h, w),
         )

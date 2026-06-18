@@ -372,6 +372,87 @@ def floor_plane_local_correspondences(
     return src, dst
 
 
+def floor_region_polygon(
+    result: FloorPlaneResult,
+    image_h: int,
+    image_w: int,
+    *,
+    concave: bool = True,
+    region_fraction: float = 0.9,
+) -> list[list[float]] | None:
+    """Polygon in normalised [0,1] image coords tracing the detected floor.
+
+    Coordinate space: normalised image [0,1] — ``[col/image_w, row/image_h]``.
+    This is the **same space as visibility_polygon**, NOT floor-plan metres;
+    the distinction matters because a floor-plan polygon uses physical metres.
+
+    Built from floor inlier pixels ``result.sample_indices[result.inlier_mask]``
+    (row, col).  Takes the hull of those pixels, simplifies with
+    ``cv2.approxPolyDP``, and normalises by ``(image_w, image_h)``.
+
+    The ``region_fraction`` vertical filter includes inliers where
+    ``row >= image_h * (1 - region_fraction)``.  Defaults to 0.9 so the
+    polygon can extend into the top 10 % of the image, covering cameras whose
+    floor extends above the fitter's default 60 % sampling band.  Set to 0.6
+    to restrict the output to the same band the RANSAC fitter used.
+
+    Concave hull (``shapely.concave_hull``) handles L-shaped floors and
+    furniture occlusions.  Falls back to ``cv2.convexHull`` on degenerate input.
+
+    Returns ``None`` when fewer than 3 inliers survive the region filter.
+    """
+    import cv2
+
+    inlier_rc = result.sample_indices[result.inlier_mask]  # (N, 2): row, col
+
+    if len(inlier_rc) < 3:
+        return None
+
+    # Vertical filter: allow inliers above the RANSAC sampling band when
+    # region_fraction > fitter's floor_region_fraction.
+    row_min = int(image_h * (1.0 - region_fraction))
+    keep = inlier_rc[:, 0] >= row_min
+    inlier_rc = inlier_rc[keep]
+    if len(inlier_rc) < 3:
+        return None
+
+    # (x, y) = (col, row) — standard image-space convention.
+    xy = np.stack([inlier_rc[:, 1], inlier_rc[:, 0]], axis=1).astype(np.float32)
+
+    epsilon = 0.01 * float(np.hypot(image_w, image_h))
+    pts: list[list[float]] | None = None
+
+    if concave:
+        try:
+            import shapely
+            from shapely.geometry import MultiPoint
+
+            mp = MultiPoint(xy.tolist())
+            hull = shapely.concave_hull(mp, ratio=0.3)
+            if hull.is_empty or hull.geom_type not in ("Polygon", "MultiPolygon"):
+                raise ValueError("degenerate concave hull")
+            if hull.geom_type == "MultiPolygon":
+                hull = max(hull.geoms, key=lambda g: g.area)
+            coords = np.array(hull.exterior.coords, dtype=np.float32)
+            simplified = cv2.approxPolyDP(coords, epsilon, closed=True)
+            simplified_pts: list[list[float]] = simplified.reshape(-1, 2).tolist()
+            if len(simplified_pts) >= 3:
+                pts = simplified_pts
+        except Exception:  # noqa: BLE001 — intentional fallback to convex hull
+            pts = None
+
+    if pts is None:
+        hull_cv = cv2.convexHull(xy)
+        simplified_cv = cv2.approxPolyDP(hull_cv, epsilon * 0.5, closed=True)
+        simplified_cv_pts: list[list[float]] = simplified_cv.reshape(-1, 2).tolist()
+        if len(simplified_cv_pts) < 3:
+            return None
+        pts = simplified_cv_pts
+
+    # Normalise: x_norm = col / image_w, y_norm = row / image_h.
+    return [[round(float(pt[0]) / image_w, 4), round(float(pt[1]) / image_h, 4)] for pt in pts]
+
+
 def sample_floor_plane_suggestions(
     result: FloorPlaneResult,
     count: int = 9,
