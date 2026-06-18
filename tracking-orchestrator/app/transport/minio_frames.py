@@ -55,6 +55,22 @@ class MinioFrameFetcher:
             self._client_cm = None
             self._client = None
 
+    async def put_bytes(
+        self,
+        minio_key: str,
+        data: bytes,
+        content_type: str = "image/jpeg",
+    ) -> None:
+        """Upload raw bytes to MinIO under *minio_key*."""
+        if self._client is None:
+            raise RuntimeError("MinioFrameFetcher is not connected")
+        await self._client.put_object(
+            Bucket=self._config.bucket,
+            Key=minio_key,
+            Body=data,
+            ContentType=content_type,
+        )
+
     async def fetch_rgb(self, minio_key: str) -> npt.NDArray[np.uint8]:
         if self._client is None:
             raise RuntimeError("MinioFrameFetcher is not connected")

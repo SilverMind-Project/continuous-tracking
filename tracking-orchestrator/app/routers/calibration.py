@@ -8,6 +8,7 @@ Routes:
     POST /internal/calibration/homography         - store a pre-computed matrix
     GET  /internal/calibration/homography/{id}    - retrieve stored matrix
     POST /internal/calibration/auto/{camera_id}   - depth-based auto-calibration
+    POST /internal/calibration/drift/{camera_id}  - score drift against reference
     POST /internal/calibration/privacy_zones
     POST /internal/calibration/camera_adjacency
     POST /internal/calibration/reload
@@ -600,4 +601,100 @@ async def get_status() -> CalibrationStatusResponse:
         adjacency_edge_count=len(state.adjacency_edges),
         last_reload_at=state.last_reload_at,
         adjacency_edges=edges,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Drift detection
+# ---------------------------------------------------------------------------
+
+
+class DriftRequest(BaseModel):
+    """Keys for the reference and current frames stored in MinIO."""
+
+    reference_key: str = Field(..., min_length=1, description="MinIO key for the calibration reference frame")
+    current_key: str = Field(..., min_length=1, description="MinIO key for the frame to compare against")
+
+
+class DriftResponse(BaseModel):
+    """Drift score result — no homography is modified."""
+
+    camera_id: str
+    inlier_ratio: float
+    ssim: float
+    drifted: bool
+    reason: str
+
+
+@router.post(
+    "/drift/{camera_id}",
+    response_model=DriftResponse,
+    summary="Score a current frame against the calibration reference for drift",
+)
+async def post_drift(
+    camera_id: str,
+    body: Annotated[DriftRequest, Body()],
+) -> DriftResponse:
+    """Fetch the reference and current frames from MinIO and run the drift score.
+
+    Returns the ORB inlier ratio (primary), mean SSIM (secondary), a drifted
+    boolean, and a human-readable reason.  Never modifies any homography state.
+
+    Returns 503 when MinIO is unavailable (frame fetcher not wired).
+    Returns 404 when either MinIO key is not found.
+    """
+    from app.calibration.drift import drift_score
+
+    fetcher = _frame_fetcher
+    if fetcher is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "calibration.minio_unavailable",
+                "message": "MinIO frame storage is not configured on the orchestrator.",
+            },
+        )
+
+    import numpy as np
+
+    try:
+        ref_rgb = await fetcher.fetch_rgb(body.reference_key)
+        cur_rgb = await fetcher.fetch_rgb(body.current_key)
+    except Exception as exc:
+        logger.warning(
+            "drift_frame_fetch_failed",
+            camera_id=camera_id,
+            reference_key=body.reference_key,
+            current_key=body.current_key,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "calibration.frame_not_found",
+                "message": f"Could not fetch one or both frames from object storage: {exc}",
+            },
+        ) from exc
+
+    # fetch_rgb returns RGB; drift_score expects BGR (cv2 convention).
+    ref_bgr = np.asarray(ref_rgb[:, :, ::-1], dtype=np.uint8)
+    cur_bgr = np.asarray(cur_rgb[:, :, ::-1], dtype=np.uint8)
+
+    result = drift_score(ref_bgr, cur_bgr)
+
+    logger.info(
+        "drift_score_computed",
+        camera_id=camera_id,
+        inlier_ratio=round(result.inlier_ratio, 4),
+        ssim=round(result.ssim, 4),
+        drifted=result.drifted,
+        reason=result.reason,
+    )
+
+    return DriftResponse(
+        camera_id=camera_id,
+        inlier_ratio=result.inlier_ratio,
+        ssim=result.ssim,
+        drifted=result.drifted,
+        reason=result.reason,
     )
