@@ -5,6 +5,10 @@ description: Use when changing CTS frame-pipeline stages, execution paths, track
 
 # CTS Pipeline
 
+When a pipeline change affects PH identity evidence, identity resolution, gallery seeding, or
+identity revisions, also load
+`/home/sriram/code/nanai/continuous-tracking/.claude/skills/cts-identity-governance/SKILL.md`.
+
 This skill maps the configured frame-processing pipeline so you can reason about where a new feature fits, how stages interact, and what constraints apply when adding or modifying a stage.
 
 ## The golden rule

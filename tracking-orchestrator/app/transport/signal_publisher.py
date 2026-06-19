@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 
+from cts_contracts import DementiaSignalKind, DementiaSignalSeverity
 from structlog import get_logger
 
 from ..domain import DementiaSignal
@@ -25,23 +26,31 @@ logger = get_logger(__name__)
 FIELD = b"signal"
 
 
-# Domain Literal -> proto enum mappings.  The orchestrator's domain layer
-# uses string Literals; the wire format uses proto enums for validation
-# and forwards-compat.
+# Wire vocabulary -> proto enum mappings. The keys are sourced from the shared
+# ``cts_contracts`` enums (the single source of truth for the wire contract with
+# cognitive-companion), so the producer and consumer can never disagree on the
+# vocabulary. ``test_signal_publisher`` asserts these cover every shared enum
+# member, so a new wire kind cannot be added without a publisher mapping (which is
+# how ``fall_suspected`` / ``gait_slowing`` / ``agitation_index`` previously went
+# unmapped and were published as UNSPECIFIED). StrEnum members equal their wire
+# string, so ``.get(signal.signal_kind)`` (a domain Literal string) still resolves.
+# Domain-only kinds outside the wire contract (the M4 kinds) are intentionally
+# absent and fall back to UNSPECIFIED.
 
+# Derived from the shared enums: each member ``X`` maps to the proto constant
+# ``DEMENTIA_SIGNAL_KIND_X`` / ``DEMENTIA_SIGNAL_SEVERITY_X`` (the proto naming the
+# enum mirrors). Deriving keeps the map exhaustive by construction (no per-entry
+# duplication, no missed kind); a member whose name has no matching proto constant
+# raises AttributeError at import (loud, not a silent UNSPECIFIED). The coverage
+# test asserts the result still equals the full shared enum.
 _KIND_TO_PROTO: dict[str, int] = {
-    "pacing": signals_pb2.DEMENTIA_SIGNAL_KIND_PACING,
-    "sundowning_index": signals_pb2.DEMENTIA_SIGNAL_KIND_SUNDOWNING_INDEX,
-    "bathroom_dwell_anomaly": signals_pb2.DEMENTIA_SIGNAL_KIND_BATHROOM_DWELL_ANOMALY,
-    "nighttime_movement": signals_pb2.DEMENTIA_SIGNAL_KIND_NIGHTTIME_MOVEMENT,
-    "stillness_anomaly": signals_pb2.DEMENTIA_SIGNAL_KIND_STILLNESS_ANOMALY,
-    "absence": signals_pb2.DEMENTIA_SIGNAL_KIND_ABSENCE,
+    kind: getattr(signals_pb2, f"DEMENTIA_SIGNAL_KIND_{kind.name}")
+    for kind in DementiaSignalKind
 }
 
 _SEVERITY_TO_PROTO: dict[str, int] = {
-    "info": signals_pb2.DEMENTIA_SIGNAL_SEVERITY_INFO,
-    "warning": signals_pb2.DEMENTIA_SIGNAL_SEVERITY_WARNING,
-    "emergency": signals_pb2.DEMENTIA_SIGNAL_SEVERITY_EMERGENCY,
+    severity: getattr(signals_pb2, f"DEMENTIA_SIGNAL_SEVERITY_{severity.name}")
+    for severity in DementiaSignalSeverity
 }
 
 

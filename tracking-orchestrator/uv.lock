@@ -488,6 +488,11 @@ wheels = [
 ]
 
 [[package]]
+name = "cts-contracts"
+version = "0.1.0"
+source = { git = "https://github.com/SilverMind-Project/cts-contracts#222b3b0f1816fe31abfb457964f9b57661b6bd10" }
+
+[[package]]
 name = "cuda-bindings"
 version = "13.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2331,6 +2336,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "aiobotocore" },
     { name = "asyncpg" },
+    { name = "cts-contracts" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "numpy" },
@@ -2375,6 +2381,7 @@ dev = [
 requires-dist = [
     { name = "aiobotocore", specifier = ">=2.15.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "cts-contracts", git = "https://github.com/SilverMind-Project/cts-contracts" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "import-linter", marker = "extra == 'dev'", specifier = ">=2.0.0" },

@@ -864,6 +864,10 @@ Review checklist when adding an execution path: which epoch-scoped caches does t
 
 ### Identity evidence and gallery governance
 
+For the complete authority, provenance, correction, and ReID lifecycle contract, load
+`/home/sriram/code/nanai/continuous-tracking/.claude/skills/cts-identity-governance/SKILL.md`.
+That focused skill is normative for identity work; this section remains the architectural summary.
+
 - **Evidence provenance is mandatory.** Source, confidence, quality, model version, timestamp, and tracklet identifier on every record.
 - **Direct face evidence is distinct.** Direct ArcFace, propagated hints, operator corrections, and ReID matches are separate evidence source types with different weights.
 - **Temporal prior cannot create identity.** It maintains an existing identity within a bounded window; new assignment requires sensory or operator evidence.
