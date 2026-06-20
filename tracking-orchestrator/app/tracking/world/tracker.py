@@ -1148,6 +1148,16 @@ class WorldTracker:
                         if ph_floor_calibrated.get(ph.ph_id, False)
                         else None
                     ),
+                    evidence_json=str(id_data.get("evidence_json", "{}")),
+                    inferred_identity_id=str(id_data.get("inferred_identity_id") or ""),
+                    effective_identity_id=str(id_data.get("effective_identity_id") or ""),
+                    authority=str(id_data.get("authority") or ""),
+                    decision_source=str(id_data.get("decision_source") or ""),
+                    decision_id=str(id_data.get("decision_id") or ""),
+                    conflict=str(id_data.get("conflict") or ""),
+                    last_independent_evidence_at_unix_ns=int(id_data.get("last_independent_evidence_at_unix_ns") or 0),
+                    config_hash=str(id_data.get("config_hash") or ""),
+                    model_set_version=str(id_data.get("model_set_version") or ""),
                 )
             )
 
@@ -1613,6 +1623,16 @@ async def _resolve_identities(
                 and isinstance(decision.evidence, dict)
                 and float(decision.evidence.get("direct_face_confidence", 0.0) or 0.0) > 0.0  # type: ignore[arg-type]
             ),
+            "evidence_json": decision.evidence_json,
+            "inferred_identity_id": decision.inferred_identity_id,
+            "effective_identity_id": decision.effective_identity_id,
+            "authority": decision.authority,
+            "decision_source": decision.decision_source,
+            "decision_id": decision.decision_id,
+            "conflict": decision.conflict,
+            "last_independent_evidence_at_unix_ns": decision.last_independent_evidence_at_unix_ns,
+            "config_hash": decision.config_hash,
+            "model_set_version": decision.model_set_version,
         }
 
     # Collect revisions (publishing is handled by RevisionsStage).

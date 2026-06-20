@@ -11,6 +11,7 @@ from structlog import get_logger
 from ...transport.redis_streams import RedisStreamsTransport
 from ..frame_context import FrameContext
 from ..types import LiveConfigHolder
+from ...storage.base import GalleryRepository, IdentityDecisionRepositoryProtocol
 from ._room_maps import camera_room_name
 from .base import FrameStage
 
@@ -25,10 +26,12 @@ class PublishStage(FrameStage):
         transport: RedisStreamsTransport,
         live_config: LiveConfigHolder,
         live_publish_max_hz: float = 3.0,
+        identity_provenance_repo: IdentityDecisionRepositoryProtocol | None = None,
     ) -> None:
         self._transport = transport
         self._live_config = live_config
         self._live_publish_max_hz = live_publish_max_hz
+        self._identity_provenance_repo = identity_provenance_repo
         self._throttle_interval_s = 1.0 / live_publish_max_hz if live_publish_max_hz > 0 else 0.0
         # Per-camera last publish wall-clock timestamp (monotonic seconds).
         self._last_publish_time: dict[str, float] = {}
@@ -99,7 +102,16 @@ class PublishStage(FrameStage):
                 "second_probability": 0.0,
                 "posterior_entropy": snap.posterior_entropy,
                 "direct_face_evidence": snap.direct_face_evidence,
-                "evidence_json": "{}",
+                "evidence_json": snap.evidence_json,
+                "inferred_identity_id": snap.inferred_identity_id,
+                "effective_identity_id": snap.effective_identity_id,
+                "authority": snap.authority,
+                "decision_source": snap.decision_source,
+                "decision_id": snap.decision_id,
+                "conflict": snap.conflict,
+                "last_independent_evidence_at_unix_ns": snap.last_independent_evidence_at_unix_ns,
+                "config_hash": snap.config_hash,
+                "model_set_version": snap.model_set_version,
                 "mean_quality": snap.mean_quality,
             }
             identity_snapshots.append(id_snap)
@@ -125,11 +137,55 @@ class PublishStage(FrameStage):
                             if decision.evidence
                             else False
                         ),
-                        "evidence_json": (
-                            json.dumps(decision.evidence) if decision.evidence else "{}"
-                        ),
+                        "evidence_json": decision.evidence_json,
+                        "inferred_identity_id": decision.inferred_identity_id,
+                        "effective_identity_id": decision.effective_identity_id,
+                        "authority": decision.authority,
+                        "decision_source": decision.decision_source,
+                        "decision_id": decision.decision_id,
+                        "conflict": decision.conflict,
+                        "last_independent_evidence_at_unix_ns": decision.last_independent_evidence_at_unix_ns,
+                        "config_hash": decision.config_hash,
+                        "model_set_version": decision.model_set_version,
                     }
                 )
+
+
+        if self._identity_provenance_repo is not None and ctx.outcome_decisions:
+            import asyncio
+            from datetime import UTC, datetime
+            from ...domain import IdentityProvenanceDecision
+
+            for decision in ctx.outcome_decisions:
+                if not decision.revises_previous:
+                    continue
+
+                top_id, top_prob = decision.posterior.top_identity()
+                top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
+                top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
+
+                prov = IdentityProvenanceDecision(
+                    decision_id=decision.decision_id or "unknown",
+                    ph_id=decision.ph_id,
+                    captured_at=ctx.frame.captured_at,
+                    authority=decision.authority,
+                    decision_source=decision.decision_source,
+                    diagnostics=decision.evidence or {},
+                    inferred_identity_id=decision.inferred_identity_id,
+                    effective_identity_id=decision.effective_identity_id,
+                    conflict_kind=decision.conflict,
+                    top_probability=top_prob,
+                    second_probability=top2_prob,
+                    posterior_entropy=decision.posterior.entropy(),
+                    config_hash=decision.config_hash,
+                    model_set_version=decision.model_set_version,
+                )
+                if decision.last_independent_evidence_at_unix_ns:
+                    prov.last_independent_evidence_at = datetime.fromtimestamp(
+                        decision.last_independent_evidence_at_unix_ns / 1e9, tz=UTC
+                    )
+
+                asyncio.create_task(self._identity_provenance_repo.save_decision(prov))
 
         logger.info(
             "tracking_event_identity_payload",

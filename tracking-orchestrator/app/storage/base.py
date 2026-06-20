@@ -13,6 +13,7 @@ from structlog import get_logger
 from ..domain import (
     CameraTopologyEdge,
     CoPresenceLink,
+    IdentityProvenanceDecision,
     IdentityRevision,
     Keyframe,
     PersonHypothesis,
@@ -189,6 +190,15 @@ class WorldObservationRepositoryProtocol(Protocol):
 
     async def save(self, observation: WorldObservation, ph_id: str) -> str: ...
     async def list_by_ph(self, ph_id: str, limit: int = 50) -> list[WorldObservation]: ...
+
+
+class IdentityDecisionRepositoryProtocol(Protocol):
+    """Persist identity decisions and their evidence."""
+
+    async def save(self, decision: IdentityProvenanceDecision) -> None: ...
+    async def get_decision(self, decision_id: str) -> IdentityProvenanceDecision | None: ...
+    async def get_by_ph_id(self, ph_id: str, limit: int = 50, offset: int = 0) -> tuple[list[IdentityProvenanceDecision], int]: ...
+    async def get_by_observation_id(self, observation_id: str) -> IdentityProvenanceDecision | None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -793,6 +803,35 @@ class InMemoryWorldObservationRepository:
         return obs_list[-limit:]
 
 
+class InMemoryIdentityDecisionRepository:
+    """In-memory store for identity decisions."""
+
+    def __init__(self) -> None:
+        import asyncio
+
+        self._decisions: dict[str, IdentityProvenanceDecision] = {}
+        self._lock = asyncio.Lock()
+
+    async def save(self, decision: IdentityProvenanceDecision) -> None:
+        async with self._lock:
+            self._decisions[decision.decision_id] = decision
+
+    async def get_decision(self, decision_id: str) -> IdentityProvenanceDecision | None:
+        return self._decisions.get(decision_id)
+
+    async def get_by_ph_id(self, ph_id: str, limit: int = 50, offset: int = 0) -> tuple[list[IdentityProvenanceDecision], int]:
+        results = [d for d in self._decisions.values() if d.ph_id == ph_id]
+        results.sort(key=lambda d: d.captured_at, reverse=True)
+        total = len(results)
+        return results[offset : offset + limit], total
+
+    async def get_by_observation_id(self, observation_id: str) -> IdentityProvenanceDecision | None:
+        for d in self._decisions.values():
+            if d.observation_id == observation_id:
+                return d
+        return None
+
+
 # ---------------------------------------------------------------------------
 # CameraTopologyRepository
 # ---------------------------------------------------------------------------
@@ -943,6 +982,7 @@ __all__ = [
     "InMemoryGaitBoutRepository",
     "InMemoryGaitDailyRepository",
     "InMemoryGalleryRepository",
+    "InMemoryIdentityDecisionRepository",
     "InMemoryKeyframeRepository",
     "InMemoryPHRepository",
     "InMemoryPrivacyRepository",
@@ -950,6 +990,7 @@ __all__ = [
     "InMemoryTrajectoryRepository",
     "InMemoryWorldObservationRepository",
     "KeyframeRepository",
+    "IdentityDecisionRepositoryProtocol",
     "PHRepositoryProtocol",
     "PrivacyRepository",
     "SettingsRepository",

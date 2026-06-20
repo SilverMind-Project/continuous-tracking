@@ -551,6 +551,15 @@ class IdentityResolver:
                     "direct_face_confidence": direct_face_confidence,
                     "posterior_entropy": ep.entropy,
                 },
+                decision_id=decision.decision_id,
+                inferred_identity_id=decision.inferred_identity_id,
+                effective_identity_id=decision.effective_identity_id,
+                authority=decision.authority,
+                decision_source=decision.decision_source,
+                conflict=decision.conflict,
+                last_independent_evidence_at_unix_ns=decision.last_independent_evidence_at_unix_ns,
+                config_hash=decision.config_hash,
+                model_set_version=decision.model_set_version,
             )
             pending_decisions.append(
                 _PendingIdentityDecision(
@@ -1455,6 +1464,7 @@ class IdentityResolver:
                 prev_id=prev_id,
             )
             metrics.metrics.identity_commits_total.labels(source="arcface_conflict").inc()
+            import uuid
             return IdentityDecision(
                 ph_id=entity.entity_id,
                 identity_id=None,
@@ -1463,6 +1473,12 @@ class IdentityResolver:
                 previous_identity_id=prev_id,
                 reason="arcface_authority_conflict: two qualifying anchors for different identities",  # noqa: E501
                 evidence_backed=False,
+                decision_id=str(uuid.uuid4()),
+                inferred_identity_id="",
+                effective_identity_id="",
+                authority="",
+                decision_source="arcface_authority_conflict",
+                conflict="AUTHORITY_CONFLICT",
             )
         if arcface_authority is not None:
             prev_id = entity.current_identity_id
@@ -1475,6 +1491,7 @@ class IdentityResolver:
                 revises=revises,
             )
             metrics.metrics.identity_commits_total.labels(source="arcface_authority").inc()
+            import uuid
             return IdentityDecision(
                 ph_id=entity.entity_id,
                 identity_id=arcface_authority,
@@ -1483,6 +1500,11 @@ class IdentityResolver:
                 previous_identity_id=prev_id,
                 reason=reason,
                 evidence_backed=True,
+                decision_id=str(uuid.uuid4()),
+                inferred_identity_id=top_id if top_id != "UNKNOWN" else "",
+                effective_identity_id=arcface_authority,
+                authority=arcface_authority,
+                decision_source="arcface_authority",
             )
 
         # --- Normal Bayesian posterior path ---
@@ -1621,6 +1643,18 @@ class IdentityResolver:
                 age_s=round((captured_at - entity.last_seen_at).total_seconds(), 1),
             )
 
+        import uuid
+        commit_src = "temporal_prior"
+        if not live_eval.has_evidence:
+            commit_src = "temporal_prior"
+        elif top_id in face_likelihood.distribution:
+            commit_src = "face"
+        else:
+            commit_src = "reid"
+            
+        ev_ts = entity.last_independent_identity_evidence_at
+        ev_ts_ns = int(ev_ts.timestamp() * 1e9) if ev_ts else 0
+
         return IdentityDecision(
             ph_id=entity.entity_id,
             identity_id=new_id,
@@ -1629,6 +1663,11 @@ class IdentityResolver:
             previous_identity_id=prev_id,
             reason=reason,
             evidence_backed=live_eval.evidence_backed,
+            decision_id=str(uuid.uuid4()),
+            inferred_identity_id=top_id if top_id != "UNKNOWN" else "",
+            effective_identity_id=new_id or "",
+            decision_source=commit_src,
+            last_independent_evidence_at_unix_ns=ev_ts_ns,
         )
 
     def _to_commit_policy(self) -> _CommitPolicy:

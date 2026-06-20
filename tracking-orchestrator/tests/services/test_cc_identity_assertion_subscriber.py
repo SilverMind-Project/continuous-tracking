@@ -6,10 +6,13 @@ handling without requiring Redis testcontainers.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from structlog.testing import capture_logs
 
+from app.proto.continuoustracking.v1.tracking_pb2 import CCIdentityAssertion
 from app.services.cc_identity_assertion_subscriber import (
     ASSERTION_TTL_S,
     CCIdentityAssertionSubscriber,
@@ -101,13 +104,17 @@ async def test_subscriber_decodes_all_required_fields():
     )
 
     now = datetime.now(UTC)
+    msg = CCIdentityAssertion(
+        person_id="dave",
+        camera_id="cam-3",
+        captured_at_unix_ns=int(now.timestamp() * 1e9),
+        floor_x_m=5.0,
+        floor_y_m=6.0,
+    )
+    msg.calibrated_confidence = 0.92
+
     fields: dict[bytes, bytes] = {
-        b"person_id": b"dave",
-        b"confidence": b"0.92",
-        b"camera_id": b"cam-3",
-        b"captured_at": now.isoformat().encode(),
-        b"floor_x_m": b"5.0",
-        b"floor_y_m": b"6.0",
+        b"assertion": msg.SerializeToString()
     }
 
     await subscriber._handle(b"msg-1", fields)
@@ -115,10 +122,12 @@ async def test_subscriber_decodes_all_required_fields():
     assert len(result) == 1
     a = result[0]
     assert a["person_id"] == "dave"
-    assert a["confidence"] == 0.92
-    assert a["camera_id"] == "cam-3"
-    assert a["floor_x_m"] == 5.0
-    assert a["floor_y_m"] == 6.0
+    assertion = result[0]
+    assert assertion["person_id"] == "dave"
+    assert math.isclose(assertion["confidence"], 0.92, abs_tol=1e-5)
+    assert assertion["camera_id"] == "cam-3"
+    assert assertion["floor_x_m"] == 5.0
+    assert assertion["floor_y_m"] == 6.0
 
 
 @pytest.mark.asyncio
@@ -145,32 +154,34 @@ async def test_subscriber_drops_empty_person_id():
 
 @pytest.mark.asyncio
 async def test_subscriber_handles_malformed_captured_at():
-    """A message with unparseable captured_at defaults to now without crashing."""
+    """A message with missing captured_at defaults to now without crashing."""
     cache = IdentityAssertionCache()
     subscriber = CCIdentityAssertionSubscriber(
         redis_client=object(),  # type: ignore[arg-type]
         cache=cache,
     )
 
+    msg = CCIdentityAssertion(
+        person_id="eve",
+        camera_id="cam-1",
+        floor_x_m=0.0,
+        floor_y_m=0.0,
+    )
+
     fields: dict[bytes, bytes] = {
-        b"person_id": b"eve",
-        b"confidence": b"0.7",
-        b"camera_id": b"cam-1",
-        b"captured_at": b"not-a-datetime",
-        b"floor_x_m": b"0",
-        b"floor_y_m": b"0",
+        b"assertion": msg.SerializeToString()
     }
 
     # Must not raise.
     await subscriber._handle(b"msg-3", fields)
     result = await cache.get_recent()
     assert len(result) == 1
-    assert result[0]["person_id"] == "eve"
+    assert result[0]["captured_at"] is not None
 
 
 @pytest.mark.asyncio
 async def test_subscriber_handles_malformed_floor_coordinates():
-    """Unparseable floor coordinates default to 0.0 without crashing."""
+    """Missing floor coordinates default to 0.0 without crashing."""
     cache = IdentityAssertionCache()
     subscriber = CCIdentityAssertionSubscriber(
         redis_client=object(),  # type: ignore[arg-type]
@@ -178,13 +189,14 @@ async def test_subscriber_handles_malformed_floor_coordinates():
     )
 
     now = datetime.now(UTC)
+    msg = CCIdentityAssertion(
+        person_id="frank",
+        camera_id="cam-1",
+        captured_at_unix_ns=int(now.timestamp() * 1e9),
+    )
+
     fields: dict[bytes, bytes] = {
-        b"person_id": b"frank",
-        b"confidence": b"0.7",
-        b"camera_id": b"cam-1",
-        b"captured_at": now.isoformat().encode(),
-        b"floor_x_m": b"not-a-float",
-        b"floor_y_m": b"also-not-float",
+        b"assertion": msg.SerializeToString()
     }
 
     await subscriber._handle(b"msg-4", fields)

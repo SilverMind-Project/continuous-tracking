@@ -78,6 +78,7 @@ from ..storage.base import (
     GaitBoutRepository,
     GaitDailyRepository,
     GalleryRepository,
+    IdentityDecisionRepositoryProtocol,
     InMemoryBboxAnnotationRepository,
     InMemoryBehaviorBaselineRepository,
     InMemoryDementiaSignalRepository,
@@ -183,6 +184,7 @@ class PipelineDependencies:
     baseline_repo: BehaviorBaselineRepository | None = None
     gait_bout_repo: GaitBoutRepository | None = None
     gait_daily_repo: GaitDailyRepository | None = None
+    identity_provenance_repo: IdentityDecisionRepositoryProtocol | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -279,6 +281,7 @@ class FrameProcessingPipeline:
         self._ph_continuation_publisher: PHContinuationPublisher | None = None
         self._presence_publisher: PresencePublisher | None = None
         self._dwell_publisher: DwellPublisher | None = None
+        self._identity_provenance_repo: IdentityDecisionRepositoryProtocol | None = None
         # World tracker
         self._world_tracker: WorldTracker | None = None
         self._ph_repo: PHRepositoryProtocol | None = None
@@ -392,6 +395,7 @@ class FrameProcessingPipeline:
         # World-coordinate person tracker (replaces per-camera + cross-camera).
         self._ph_repo = deps.ph_repo or InMemoryPHRepository()
         self._obs_repo = deps.obs_repo or InMemoryWorldObservationRepository()
+        self._identity_provenance_repo = deps.identity_provenance_repo
 
         # ---- Identity resolution ----
         self._floor_projector = FloorProjector(calibration_state)
@@ -650,6 +654,7 @@ class FrameProcessingPipeline:
                 transport=self._transport,
                 live_config=self._live_config,
                 live_publish_max_hz=self._config.live_publish_max_hz,
+                identity_provenance_repo=self._identity_provenance_repo,
             ),
         ]
 

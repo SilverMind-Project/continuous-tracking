@@ -206,6 +206,58 @@ class WorldObservation:
 
 
 @dataclass(frozen=True)
+class IdentityDecisionGalleryHit:
+    entry_id: str
+    identity_id: str
+    raw_similarity: float
+    trust_multiplier: float
+    recency_factor: float
+    rank: int
+    weighted_contribution: float
+    source_episode_group: str | None = None
+    orientation: str | None = None
+
+
+@dataclass(frozen=True)
+class IdentityEvidenceItem:
+    score_type: str
+    score_value: float
+    source_identity_id: str | None = None
+    quality: float | None = None
+    camera_id: str | None = None
+    timestamp: datetime | None = None
+    model_version: str | None = None
+    preprocessing_version: str | None = None
+    calibration_version: str | None = None
+    directness: str | None = None
+    authoritative_eligibility: bool | None = None
+
+
+@dataclass(frozen=True)
+class IdentityProvenanceDecision:
+    decision_id: str
+    ph_id: str
+    captured_at: datetime
+    authority: str
+    decision_source: str
+    diagnostics: dict[str, object]
+    observation_id: str | None = None
+    inferred_identity_id: str | None = None
+    effective_identity_id: str | None = None
+    conflict_kind: str | None = None
+    top_probability: float | None = None
+    second_probability: float | None = None
+    posterior_entropy: float | None = None
+    last_independent_evidence_at: datetime | None = None
+    config_hash: str | None = None
+    resolver_version: str | None = None
+    model_set_version: str | None = None
+    diagnostics_schema_version: str | None = None
+    evidence_items: list[IdentityEvidenceItem] = field(default_factory=list)
+    gallery_hits: list[IdentityDecisionGalleryHit] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class PersonHypothesis:
     """A persistent person track in world (floor-plane) coordinates.
 
@@ -307,6 +359,16 @@ class WorldFrameSnapshot:
     mean_quality: float = 0.0  # PH-level rolling quality from quality capture (surfaces on wire)
     active_cameras: frozenset[str] = frozenset()  # all cameras on this PH (multi-camera fusion)
     floor_speed_m_s: float | None = None  # scalar Kalman speed; None for uncalibrated cameras
+    evidence_json: str = "{}"
+    inferred_identity_id: str = ""
+    effective_identity_id: str = ""
+    authority: str = ""
+    decision_source: str = ""
+    decision_id: str = ""
+    conflict: str = ""
+    last_independent_evidence_at_unix_ns: int = 0
+    config_hash: str = ""
+    model_set_version: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +733,16 @@ class IdentityDecision:
     reason: str = ""
     evidence_backed: bool = False
     evidence: dict[str, object] | None = None
+    evidence_json: str = "{}"
+    inferred_identity_id: str = ""
+    effective_identity_id: str = ""
+    authority: str = ""
+    decision_source: str = ""
+    decision_id: str = ""
+    conflict: str = ""
+    last_independent_evidence_at_unix_ns: int = 0
+    config_hash: str = ""
+    model_set_version: str = ""
 
 
 @dataclass(frozen=True)

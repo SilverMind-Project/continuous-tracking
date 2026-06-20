@@ -15,6 +15,8 @@ from typing import Any
 
 from structlog import get_logger
 
+from ..proto.continuoustracking.v1.tracking_pb2 import CCIdentityAssertion
+
 logger = get_logger(__name__)
 
 # Stream constants.
@@ -114,43 +116,43 @@ class CCIdentityAssertionSubscriber:
                         )
 
     async def _handle(self, message_id: bytes, fields: dict[bytes, bytes]) -> None:
-        """Parse a single assertion and add to the cache."""
-        person_id = fields.get(b"person_id", b"").decode()
-        if not person_id:
+        """Parse a single protobuf assertion and add to the cache."""
+        raw_bytes = fields.get(b"assertion")
+        if not raw_bytes:
             return
 
-        confidence = float(fields.get(b"confidence", b"0.7").decode())
-        camera_id = fields.get(b"camera_id", b"").decode()
+        try:
+            msg = CCIdentityAssertion.FromString(raw_bytes)
+        except Exception:
+            logger.exception("cc_identity_assertion_protobuf_parse_failed")
+            return
 
-        captured_at_str = fields.get(b"captured_at", b"").decode()
-        try:
-            captured_at = datetime.fromisoformat(captured_at_str)
-        except (ValueError, TypeError):
-            captured_at = datetime.now(UTC)
+        if not msg.person_id:
+            return
 
-        # Floor coordinates (decoded for spatial matching).
-        try:
-            floor_x_m = float(fields.get(b"floor_x_m", b"0.0").decode())
-        except (ValueError, TypeError):
-            floor_x_m = 0.0
-        try:
-            floor_y_m = float(fields.get(b"floor_y_m", b"0.0").decode())
-        except (ValueError, TypeError):
-            floor_y_m = 0.0
+        # Use calibrated_confidence if present, fallback to legacy mapping or 0.7
+        confidence = msg.calibrated_confidence if msg.HasField("calibrated_confidence") else 0.7
+        
+        captured_at = datetime.fromtimestamp(msg.captured_at_unix_ns / 1e9, tz=UTC) if msg.captured_at_unix_ns else datetime.now(UTC)
 
         assertion = {
-            "person_id": person_id,
+            "person_id": msg.person_id,
             "confidence": confidence,
-            "camera_id": camera_id,
+            "camera_id": msg.camera_id,
             "captured_at": captured_at,
-            "floor_x_m": floor_x_m,
-            "floor_y_m": floor_y_m,
+            "floor_x_m": msg.floor_x_m,
+            "floor_y_m": msg.floor_y_m,
+            "raw_similarity": msg.raw_similarity,
+            "calibration_status": msg.calibration_status,
+            "source": msg.source,
+            "model_version": msg.model_version,
+            "preprocessing_version": msg.preprocessing_version,
             "_received_at": datetime.now(UTC),
         }
         await self._cache.add(assertion)
         logger.debug(
             "cc_identity_assertion_received",
-            person_id=person_id,
+            person_id=msg.person_id,
             confidence=round(confidence, 3),
-            camera_id=camera_id,
+            camera_id=msg.camera_id,
         )
