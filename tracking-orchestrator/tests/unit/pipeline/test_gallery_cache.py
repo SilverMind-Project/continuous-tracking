@@ -9,7 +9,6 @@ import pytest
 from app.pipeline.gallery_cache import GalleryCache
 from app.storage.gallery import InMemoryGalleryRepository
 
-
 class _CountingRepo(InMemoryGalleryRepository):
     """InMemoryGalleryRepository that counts list_gallery_entries_for_tracklets calls."""
 
@@ -21,9 +20,12 @@ class _CountingRepo(InMemoryGalleryRepository):
         self,
         tracklet_ids: set[str],
         limit: int = 20,
+        allowed_states: set[str] | None = None,
+        model_versions: set[str] | None = None,
     ) -> list:
         self.call_count += 1
-        return await super().list_gallery_entries_for_tracklets(tracklet_ids, limit)
+        return await super().list_gallery_entries_for_tracklets(tracklet_ids, limit, allowed_states, model_versions)
+
 
 
 class TestGalleryCacheReadThrough:

@@ -15,11 +15,6 @@ from .conflicts import (
     rank_duplicate_contenders,
 )
 from .evidence import CAN_CREATE_IDENTITY, EvidenceSource, IdentityEvidence
-from .gallery_governance import (
-    GalleryEntryState,
-    GalleryGovernanceConfig,
-    GalleryGovernanceService,
-)
 from .policy import CommitPolicy  # noqa: F811 — re-exported from commit_policy too
 from .posterior import EvidencePosterior, combine_evidence, combine_posteriors, to_domain_posterior
 from .protocols import GalleryReadsProtocol, IdentityDecisionPersistenceProtocol
@@ -42,9 +37,6 @@ __all__ = [
     "EvidenceContribution",
     "EvidencePosterior",
     "EvidenceSource",
-    "GalleryEntryState",
-    "GalleryGovernanceConfig",
-    "GalleryGovernanceService",
     "GalleryReadsProtocol",
     "IdentityAuthority",
     "IdentityConflict",

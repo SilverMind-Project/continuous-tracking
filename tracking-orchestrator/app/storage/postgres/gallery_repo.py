@@ -51,14 +51,16 @@ _SQL_LIST_IDENTITIES_ALL = """
 _SQL_UPSERT_GALLERY_ENTRY = """
     INSERT INTO continuous_tracking.reid_gallery
         (id, identity_id, embedding, quality, origin_tracklet_id, seen_at,
-         face_confirmed, orientation)
-    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8)
+         face_confirmed, orientation, camera_id, state)
+    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10)
     ON CONFLICT (id) DO UPDATE SET
         embedding = EXCLUDED.embedding,
         quality = EXCLUDED.quality,
         seen_at = EXCLUDED.seen_at,
         face_confirmed = EXCLUDED.face_confirmed,
         orientation = EXCLUDED.orientation,
+        camera_id = EXCLUDED.camera_id,
+        state = EXCLUDED.state,
         updated_at = now()
 """
 
@@ -71,11 +73,12 @@ _SQL_GET_GALLERY_ENTRY = """
 
 _SQL_LIST_GALLERY_ENTRIES = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
-           rg.seen_at, rg.face_confirmed, rg.orientation
+           rg.seen_at, rg.face_confirmed, rg.orientation, rg.state, rg.source_episode_id, rg.camera_id
     FROM continuous_tracking.reid_gallery rg
     INNER JOIN continuous_tracking.identities i ON rg.identity_id = i.identity_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
       AND ($2 IS TRUE OR i.is_active = TRUE)
+      AND rg.state = 'operator_verified'
     ORDER BY rg.seen_at DESC
     LIMIT 100
 """
@@ -83,7 +86,7 @@ _SQL_LIST_GALLERY_ENTRIES = """
 _SQL_SEARCH_SIMILAR = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality,
            rg.origin_tracklet_id, rg.seen_at, rg.face_confirmed,
-           rg.orientation, ''::text AS camera_id,
+           rg.orientation, rg.camera_id, rg.state, rg.source_episode_id,
            1.0 - (rg.embedding <=> $3::vector) AS similarity
     FROM continuous_tracking.reid_gallery rg
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
@@ -95,15 +98,17 @@ _SQL_SEARCH_SIMILAR = """
                WHERE identity_id = rg.identity_id
            ))
       AND ($4::integer IS NULL OR rg.seen_at > now() - ($5::integer || 'seconds')::interval)
+      AND rg.state = 'operator_verified'
     ORDER BY rg.embedding <=> $3::vector
     LIMIT $6
 """
 
 _SQL_LIST_GALLERY_FOR_TRACKLETS = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
-           rg.seen_at, rg.face_confirmed
+           rg.seen_at, rg.face_confirmed, rg.orientation, rg.state, rg.source_episode_id, rg.camera_id
     FROM continuous_tracking.reid_gallery rg
     WHERE rg.origin_tracklet_id = ANY($1::uuid[])
+      AND rg.state = 'operator_verified'
     ORDER BY rg.seen_at DESC
     LIMIT $2
 """
@@ -184,6 +189,8 @@ class PostgresGalleryRepository(GalleryRepository):
                 entry.seen_at,
                 entry.face_confirmed,
                 entry.orientation,
+                entry.camera_id,
+                entry.state,
             )
         return entry.gallery_entry_id
 
@@ -201,6 +208,9 @@ class PostgresGalleryRepository(GalleryRepository):
             origin_tracklet_id=row["origin_tracklet_id"] or "",
             face_confirmed=row["face_confirmed"],
             orientation=row.get("orientation", 4),
+            camera_id=row.get("camera_id") or "",
+            state=row.get("state", "pending_review"),
+            source_episode_id=str(row["source_episode_id"]) if row.get("source_episode_id") else None,
         )
 
     async def list_gallery_entries(
@@ -222,6 +232,9 @@ class PostgresGalleryRepository(GalleryRepository):
                 origin_tracklet_id=row["origin_tracklet_id"] or "",
                 face_confirmed=row["face_confirmed"],
                 orientation=row.get("orientation", 4),
+                camera_id=row.get("camera_id") or "",
+                state=row.get("state", "pending_review"),
+                source_episode_id=str(row["source_episode_id"]) if row.get("source_episode_id") else None,
             )
             for row in rows
         ]
@@ -254,7 +267,10 @@ class PostgresGalleryRepository(GalleryRepository):
                     seen_at=row["seen_at"],
                     origin_tracklet_id=row["origin_tracklet_id"] or "",
                     face_confirmed=row["face_confirmed"],
-                    camera_id=row["camera_id"] or "",
+                    camera_id=row.get("camera_id") or "",
+                    orientation=row.get("orientation", 4),
+                    state=row.get("state", "pending_review"),
+                    source_episode_id=str(row["source_episode_id"]) if row.get("source_episode_id") else None,
                 ),
                 float(row["similarity"]),
             )

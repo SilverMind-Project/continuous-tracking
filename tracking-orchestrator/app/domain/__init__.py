@@ -771,7 +771,8 @@ class GalleryEmbedding:
     face_confirmed: bool = False
     camera_id: str = ""
     orientation: int = OrientationBin.UNKNOWN  # OrientationBin stored as SMALLINT
-
+    state: str = "pending_review"
+    source_episode_id: str | None = None
 
 @dataclass(frozen=True)
 class IdentityCorrection:

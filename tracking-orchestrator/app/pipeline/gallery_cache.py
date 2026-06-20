@@ -58,12 +58,21 @@ class GalleryCache:
         self,
         tracklet_ids: set[str],
         limit: int = 20,
+        allowed_states: set[str] | None = None,
+        model_versions: set[str] | None = None,
     ) -> list[GalleryEmbedding]:
         self._check_stale()
-        key = frozenset(tracklet_ids)
+        # Use frozen sets to ensure the cache key is immutable and hashable
+        s_states = frozenset(allowed_states) if allowed_states else frozenset(["operator_verified"])
+        s_models = frozenset(model_versions) if model_versions else frozenset()
+        key = (frozenset(tracklet_ids), s_states, s_models)
+
         if key not in self._entries_by_tracklets:
             self._entries_by_tracklets[key] = await self._repo.list_gallery_entries_for_tracklets(
-                tracklet_ids, limit
+                tracklet_ids, 
+                limit=limit,
+                allowed_states=allowed_states or {"operator_verified"},
+                model_versions=model_versions,
             )
         return self._entries_by_tracklets[key]
 
@@ -72,14 +81,20 @@ class GalleryCache:
         tracklet_ids_a: set[str],
         tracklet_ids_b: set[str],
         limit: int = 20,
+        allowed_states: set[str] | None = None,
+        model_versions: set[str] | None = None,
     ) -> float:
         self._check_stale()
         key_a = frozenset(tracklet_ids_a)
         key_b = frozenset(tracklet_ids_b)
-        cache_key = (key_a, key_b) if hash(key_a) <= hash(key_b) else (key_b, key_a)
+        s_states = frozenset(allowed_states) if allowed_states else frozenset(["operator_verified"])
+        s_models = frozenset(model_versions) if model_versions else frozenset()
+        
+        cache_key = (key_a, key_b, s_states, s_models) if hash(key_a) <= hash(key_b) else (key_b, key_a, s_states, s_models)
+        
         if cache_key not in self._similarity_cache:
-            entries_a = await self.list_gallery_entries_for_tracklets(tracklet_ids_a, limit)
-            entries_b = await self.list_gallery_entries_for_tracklets(tracklet_ids_b, limit)
+            entries_a = await self.list_gallery_entries_for_tracklets(tracklet_ids_a, limit, allowed_states, model_versions)
+            entries_b = await self.list_gallery_entries_for_tracklets(tracklet_ids_b, limit, allowed_states, model_versions)
             if not entries_a and not entries_b:
                 self._similarity_cache[cache_key] = 0.0
             elif not entries_a or not entries_b:

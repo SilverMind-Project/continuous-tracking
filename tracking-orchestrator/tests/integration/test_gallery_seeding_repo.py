@@ -42,6 +42,7 @@ async def test_seeded_entry_without_tracklet_id_round_trips(db_pool: Any) -> Non
         face_confirmed=True,
         camera_id="cam01",
         orientation=0,
+        state="operator_verified",
     )
     assert entry.origin_tracklet_id == ""  # the condition that broke the write
 

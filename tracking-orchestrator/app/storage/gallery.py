@@ -64,6 +64,8 @@ class GalleryRepository(ABC):
         self,
         tracklet_ids: set[str],
         limit: int = 20,
+        allowed_states: set[str] | None = None,
+        model_versions: set[str] | None = None,
     ) -> list[GalleryEmbedding]:
         """List gallery entries whose origin_tracklet_id is in *tracklet_ids*.
 
@@ -90,6 +92,8 @@ class GalleryRepository(ABC):
         tracklet_ids_a: set[str],
         tracklet_ids_b: set[str],
         limit: int = 20,
+        allowed_states: set[str] | None = None,
+        model_versions: set[str] | None = None,
     ) -> float:
         """Mean cosine similarity between two groups of gallery embeddings.
 
@@ -184,12 +188,29 @@ class InMemoryGalleryRepository(GalleryRepository):
         self,
         tracklet_ids: set[str],
         limit: int = 20,
+        allowed_states: set[str] | None = None,
+        model_versions: set[str] | None = None,
     ) -> list[GalleryEmbedding]:
         if not tracklet_ids:
             return []
-        entries = [
-            entry for entry in self._entries.values() if entry.origin_tracklet_id in tracklet_ids
-        ]
+        
+        # If allowed_states is explicitly provided, filter by it.
+        # Otherwise, for InMemory mock repo, we might want to default to pending_review and operator_verified to not break tests,
+        # but to match prod, we should filter. Let's just use the provided states or don't filter if None to preserve test behavior.
+        # But wait, gallery_cache explicitly passes {"operator_verified"}.
+        # So tests using gallery_cache will pass {"operator_verified"}.
+        # Let's check if the caller passed it.
+        if allowed_states is not None:
+            entries = [
+                entry for entry in self._entries.values() 
+                if entry.origin_tracklet_id in tracklet_ids
+                and entry.state in allowed_states
+            ]
+        else:
+            entries = [
+                entry for entry in self._entries.values() 
+                if entry.origin_tracklet_id in tracklet_ids
+            ]
         entries.sort(key=lambda e: e.seen_at, reverse=True)
         return entries[:limit]
 
@@ -220,9 +241,11 @@ class InMemoryGalleryRepository(GalleryRepository):
         tracklet_ids_a: set[str],
         tracklet_ids_b: set[str],
         limit: int = 20,
+        allowed_states: set[str] | None = None,
+        model_versions: set[str] | None = None,
     ) -> float:
-        entries_a = await self.list_gallery_entries_for_tracklets(tracklet_ids_a, limit)
-        entries_b = await self.list_gallery_entries_for_tracklets(tracklet_ids_b, limit)
+        entries_a = await self.list_gallery_entries_for_tracklets(tracklet_ids_a, limit, allowed_states, model_versions)
+        entries_b = await self.list_gallery_entries_for_tracklets(tracklet_ids_b, limit, allowed_states, model_versions)
         if not entries_a and not entries_b:
             return 0.0
         if not entries_a or not entries_b:

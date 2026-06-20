@@ -1246,20 +1246,49 @@ class IdentityResolver:
         similar: list[tuple[GalleryEmbedding, float]],
         coherence_active: bool = False,
     ) -> PosteriorDist:
-        """Score gallery search hits into a PosteriorDist (shared helper)."""
-        likelihood: dict[str, list[float]] = defaultdict(list)
-        boosted = False
+        """Score gallery search hits into a PosteriorDist with trust-aware scoring."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        
+        # Apply source-episode/camera/orientation vote caps
+        # Group by (identity_id, source_episode_id, camera_id, orientation) and take the strongest vote
+        best_hit_per_group: dict[tuple, tuple[GalleryEmbedding, float, float]] = {}
         for entry, sim in similar:
             logit = self._logistic(sim)
+            # Verified multiplier default 2.0 before aggregation
+            multiplier = 2.0 if entry.state == "operator_verified" else 1.0
+            
+            # Seven-day exponential half-life, no floor
+            # Ensure naive datetimes are treated as UTC if needed, but they should be aware.
+            seen_at = entry.seen_at if entry.seen_at.tzinfo else entry.seen_at.replace(tzinfo=timezone.utc)
+            age_days = (now - seen_at).total_seconds() / 86400.0
+            recency = 2.0 ** (-age_days / 7.0) if age_days >= 0 else 1.0
+            
+            weighted_logit = logit * multiplier * recency
+            
+            group_key = (
+                entry.identity_id,
+                entry.source_episode_id or "",
+                entry.camera_id or "",
+                entry.orientation
+            )
+            
+            if group_key not in best_hit_per_group or best_hit_per_group[group_key][2] < weighted_logit:
+                best_hit_per_group[group_key] = (entry, sim, weighted_logit)
+
+        likelihood: dict[str, list[float]] = defaultdict(list)
+        boosted = False
+        
+        for group_key, (entry, sim, weighted_logit) in best_hit_per_group.items():
             if (
                 entry.identity_id is not None
                 and sim >= self._config.identified_entry_boost_min_sim
-                and logit < self._config.identified_entry_min_likelihood
+                and weighted_logit < self._config.identified_entry_min_likelihood
             ):
-                logit = self._config.identified_entry_min_likelihood
+                weighted_logit = self._config.identified_entry_min_likelihood
                 boosted = True
             key = entry.identity_id if entry.identity_id else "UNKNOWN"
-            likelihood[key].append(logit)
+            likelihood[key].append(weighted_logit)
 
         # Average scores per identity.
         avg: dict[str, float] = {}
