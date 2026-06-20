@@ -667,6 +667,7 @@ class IdentityResolver:
                     )
 
                 ranked = sorted(candidates, key=_rank_key, reverse=True)
+
                 # Detect effective tie: top two match on all meaningful criteria.
                 def _tied(a: _PendingIdentityDecision, b: _PendingIdentityDecision) -> bool:
                     return (
@@ -675,11 +676,13 @@ class IdentityResolver:
                         and abs(
                             a.decision.posterior.top_identity()[1]
                             - b.decision.posterior.top_identity()[1]
-                        ) < 1e-6
+                        )
+                        < 1e-6
                         and abs(
                             a.decision.posterior.top_with_margin()[1]
                             - b.decision.posterior.top_with_margin()[1]
-                        ) < 1e-6
+                        )
+                        < 1e-6
                         and a.entity.last_independent_identity_evidence_at
                         == b.entity.last_independent_identity_evidence_at
                     )
@@ -1464,11 +1467,7 @@ class IdentityResolver:
         if arcface_authority is not None:
             prev_id = entity.current_identity_id
             revises = arcface_authority != prev_id
-            reason = (
-                f"arcface_authority: {arcface_authority}"
-                if revises
-                else ""
-            )
+            reason = f"arcface_authority: {arcface_authority}" if revises else ""
             logger.debug(
                 "arcface_authority_commit",
                 entity_id=entity.entity_id,

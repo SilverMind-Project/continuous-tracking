@@ -104,9 +104,7 @@ async def test_primary_pass_emits_batch_skew_and_outcome(monkeypatch) -> None:
     obs = _obs(5.0, "d0", t0 - timedelta(milliseconds=100), _unit(1))
     await tracker.step([obs], now=t0, room_polygons=_ROOM)
 
-    skew = registry.get_sample_value(
-        "cts_worldtracker_batch_skew_ms_count", {"camera_id": "cam-1"}
-    )
+    skew = registry.get_sample_value("cts_worldtracker_batch_skew_ms_count", {"camera_id": "cam-1"})
     assert skew == 1.0
     spawned = registry.get_sample_value(
         "cts_worldtracker_association_outcome_total", {"outcome": "unmatched_obs"}

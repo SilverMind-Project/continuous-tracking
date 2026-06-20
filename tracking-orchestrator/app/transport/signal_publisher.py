@@ -44,8 +44,7 @@ FIELD = b"signal"
 # raises AttributeError at import (loud, not a silent UNSPECIFIED). The coverage
 # test asserts the result still equals the full shared enum.
 _KIND_TO_PROTO: dict[str, int] = {
-    kind: getattr(signals_pb2, f"DEMENTIA_SIGNAL_KIND_{kind.name}")
-    for kind in DementiaSignalKind
+    kind: getattr(signals_pb2, f"DEMENTIA_SIGNAL_KIND_{kind.name}") for kind in DementiaSignalKind
 }
 
 _SEVERITY_TO_PROTO: dict[str, int] = {

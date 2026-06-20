@@ -219,9 +219,7 @@ class PostgresPHRepository:
                 evidence_at,
             )
 
-    async def prior_only_update(
-        self, ph_id: str, identity_id: str, committed_at: datetime
-    ) -> None:
+    async def prior_only_update(self, ph_id: str, identity_id: str, committed_at: datetime) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 "UPDATE continuous_tracking.person_hypotheses "

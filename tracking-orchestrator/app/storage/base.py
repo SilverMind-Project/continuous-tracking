@@ -245,9 +245,7 @@ class InMemoryPHRepository:
                     last_independent_identity_evidence_at=evidence_at,
                 )
 
-    async def prior_only_update(
-        self, ph_id: str, identity_id: str, committed_at: datetime
-    ) -> None:
+    async def prior_only_update(self, ph_id: str, identity_id: str, committed_at: datetime) -> None:
         async with self._lock:
             ph = self._phs.get(ph_id)
             if ph is not None:

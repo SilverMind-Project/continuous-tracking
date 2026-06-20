@@ -100,7 +100,5 @@ async def test_tied_contenders_are_all_cleared() -> None:
 
     # Both PHs have no evidence clock → no maintenance window → prior doesn't
     # fire → decisions are Unknown.  Zero holders is the correct outcome.
-    active_holders = [
-        d for d in outcome.decisions if d.identity_id == data["identity_id"]
-    ]
+    active_holders = [d for d in outcome.decisions if d.identity_id == data["identity_id"]]
     assert len(active_holders) == 0

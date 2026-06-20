@@ -258,9 +258,7 @@ class TestCommitPolicy:
         reid_likelihood = PosteriorDist({"UNKNOWN": 1.0})
         config = CommitPolicy(commit_prob=0.65, commit_prob_dense=0.80)
 
-        result = _call_evaluate(
-            entity, posterior, face_likelihood, reid_likelihood, config=config
-        )
+        result = _call_evaluate(entity, posterior, face_likelihood, reid_likelihood, config=config)
 
         # alice p ≈ 0.667 < 0.80 (dense threshold) → no commit.
         assert result.new_id is None
@@ -279,9 +277,7 @@ class TestCommitPolicy:
         reid_likelihood = PosteriorDist({"UNKNOWN": 1.0})
         config = CommitPolicy(prior_maintenance_max_age_s=30.0)
 
-        result = _call_evaluate(
-            entity, posterior, face_likelihood, reid_likelihood, config=config
-        )
+        result = _call_evaluate(entity, posterior, face_likelihood, reid_likelihood, config=config)
 
         assert result.new_id == "alice"
         assert result.within_maintenance_window

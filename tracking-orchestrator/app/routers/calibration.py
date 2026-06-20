@@ -210,7 +210,8 @@ class AutoCalibrateResult(BaseModel):
         default=None,
         description=(
             "Normalised [0,1] image-space polygon tracing the detected floor. "
-            "Not the same coordinate space as visibility_polygon, which is normalised floor-plan space. "
+            "Not the same coordinate space as visibility_polygon, "
+            "which is normalised floor-plan space. "
             "Null when fewer than 3 floor inliers were detected."
         ),
     )
@@ -612,8 +613,12 @@ async def get_status() -> CalibrationStatusResponse:
 class DriftRequest(BaseModel):
     """Keys for the reference and current frames stored in MinIO."""
 
-    reference_key: str = Field(..., min_length=1, description="MinIO key for the calibration reference frame")
-    current_key: str = Field(..., min_length=1, description="MinIO key for the frame to compare against")
+    reference_key: str = Field(
+        ..., min_length=1, description="MinIO key for the calibration reference frame"
+    )
+    current_key: str = Field(
+        ..., min_length=1, description="MinIO key for the frame to compare against"
+    )
 
 
 class DriftResponse(BaseModel):

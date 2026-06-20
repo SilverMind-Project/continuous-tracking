@@ -13,8 +13,7 @@ Key assertions:
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import cv2
 import numpy as np
@@ -50,10 +49,10 @@ def _shifted(bgr: np.ndarray, dx: int = 0, dy: int = 0, angle_deg: float = 0.0) 
     """Apply translation + rotation to a BGR image."""
     h, w = bgr.shape[:2]
     cx, cy = w / 2.0, h / 2.0
-    M = cv2.getRotationMatrix2D((cx, cy), angle_deg, 1.0)
-    M[0, 2] += dx
-    M[1, 2] += dy
-    return cv2.warpAffine(bgr, M, (w, h))
+    mat = cv2.getRotationMatrix2D((cx, cy), angle_deg, 1.0)
+    mat[0, 2] += dx
+    mat[1, 2] += dy
+    return cv2.warpAffine(bgr, mat, (w, h))
 
 
 # ---------------------------------------------------------------------------
@@ -127,8 +126,6 @@ def drift_client(monkeypatch):
     ref_img = _checkerboard()
     cur_img = ref_img.copy()
 
-    import numpy as np
-
     # fetch_rgb returns RGB; endpoint converts to BGR internally.
     ref_rgb = ref_img[:, :, ::-1].copy()
     cur_rgb = cur_img[:, :, ::-1].copy()
@@ -147,7 +144,10 @@ def test_drift_endpoint_returns_score(drift_client: TestClient):
     """POST /internal/calibration/drift/{camera_id} returns a valid drift score."""
     resp = drift_client.post(
         "/internal/calibration/drift/cam-1",
-        json={"reference_key": "calibration-refs/cam-1/ref.jpg", "current_key": "frames/cam-1/cur.jpg"},
+        json={
+            "reference_key": "calibration-refs/cam-1/ref.jpg",
+            "current_key": "frames/cam-1/cur.jpg",
+        },
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()

@@ -164,9 +164,7 @@ def evaluate_commit(
         ``CommitEvaluation`` with all fields needed to build ``IdentityDecision``.
     """
     (top_id, top_prob), margin = posterior.top_with_margin()
-    has_evidence = (
-        top_id in face_likelihood.distribution or top_id in reid_likelihood.distribution
-    )
+    has_evidence = top_id in face_likelihood.distribution or top_id in reid_likelihood.distribution
 
     prev_id = entity.current_identity_id
     identity_unchanged = top_id == prev_id and prev_id is not None
@@ -213,9 +211,7 @@ def evaluate_commit(
         new_id = None
 
     quality_gate_blocked = (
-        new_id is not None
-        and new_id != prev_id
-        and entity_quality < config.min_quality_to_commit
+        new_id is not None and new_id != prev_id and entity_quality < config.min_quality_to_commit
     )
     if quality_gate_blocked and enforce_quality_gate:
         new_id = None

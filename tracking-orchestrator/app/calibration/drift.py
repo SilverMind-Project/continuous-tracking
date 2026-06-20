@@ -24,6 +24,7 @@ writes any homography or calibration state.
 
 from __future__ import annotations
 
+import typing
 from dataclasses import dataclass
 
 import cv2
@@ -31,7 +32,7 @@ import numpy as np
 import numpy.typing as npt
 
 # ---------------------------------------------------------------------------
-# Default thresholds – conservative to minimise false positives.
+# Default thresholds - conservative to minimise false positives.
 # ---------------------------------------------------------------------------
 
 _DEFAULT_MIN_INLIER_RATIO: float = 0.35
@@ -66,8 +67,8 @@ def _mean_ssim(
 
     k_size = (11, 11)
     sigma = 1.5
-    C1 = (0.01 * 255.0) ** 2  # 6.5025
-    C2 = (0.03 * 255.0) ** 2  # 58.5225
+    c1 = (0.01 * 255.0) ** 2  # 6.5025
+    c2 = (0.03 * 255.0) ** 2  # 58.5225
 
     mu_r = cv2.GaussianBlur(r, k_size, sigma)
     mu_c = cv2.GaussianBlur(c, k_size, sigma)
@@ -79,10 +80,10 @@ def _mean_ssim(
     sigma_c2 = cv2.GaussianBlur(c * c, k_size, sigma) - mu_c2
     sigma_rc = cv2.GaussianBlur(r * c, k_size, sigma) - mu_rc
 
-    numerator = (2.0 * mu_rc + C1) * (2.0 * sigma_rc + C2)
-    denominator = (mu_r2 + mu_c2 + C1) * (sigma_r2 + sigma_c2 + C2)
+    numerator = (2.0 * mu_rc + c1) * (2.0 * sigma_rc + c2)
+    denominator = (mu_r2 + mu_c2 + c1) * (sigma_r2 + sigma_c2 + c2)
 
-    ssim_map: npt.NDArray[np.float32] = numerator / denominator
+    ssim_map: npt.NDArray[np.float32] = (numerator / denominator).astype(np.float32)
     return float(np.mean(ssim_map))
 
 
@@ -110,21 +111,28 @@ def drift_score(
         DriftResult with drifted=False and reason="insufficient_features" when
         ORB finds too few matches to make a reliable determination.
     """
-    ref_gray = cv2.cvtColor(reference_bgr, cv2.COLOR_BGR2GRAY)
+    ref_gray = typing.cast(
+        npt.NDArray[np.uint8],
+        cv2.cvtColor(reference_bgr, cv2.COLOR_BGR2GRAY),
+    )
 
     # Resize current to reference dimensions before matching and SSIM.
     if current_bgr.shape[:2] != reference_bgr.shape[:2]:
-        current_bgr = cv2.resize(
+        resized = cv2.resize(
             current_bgr,
             (reference_bgr.shape[1], reference_bgr.shape[0]),
             interpolation=cv2.INTER_LINEAR,
         )
-    cur_gray = cv2.cvtColor(current_bgr, cv2.COLOR_BGR2GRAY)
+        current_bgr = typing.cast(npt.NDArray[np.uint8], resized)
+    cur_gray = typing.cast(
+        npt.NDArray[np.uint8],
+        cv2.cvtColor(current_bgr, cv2.COLOR_BGR2GRAY),
+    )
 
     ssim = _mean_ssim(ref_gray, cur_gray)
 
     # ORB: binary descriptors tolerate brightness/contrast changes.
-    orb = cv2.ORB_create(nfeatures=1000)
+    orb = cv2.ORB_create(nfeatures=1000)  # type: ignore[attr-defined]
     kp_ref, desc_ref = orb.detectAndCompute(ref_gray, None)
     kp_cur, desc_cur = orb.detectAndCompute(cur_gray, None)
 
@@ -140,7 +148,9 @@ def drift_score(
     raw = bf.knnMatch(desc_ref, desc_cur, k=2)
 
     # Lowe's ratio test (Lowe 2004): discard ambiguous matches.
-    good = [m for pair in raw if len(pair) == 2 for m, n in [pair] if m.distance < 0.75 * n.distance]
+    good = [
+        m for pair in raw if len(pair) == 2 for m, n in [pair] if m.distance < 0.75 * n.distance
+    ]
 
     if len(good) < _MIN_GOOD_MATCHES:
         return DriftResult(
@@ -150,8 +160,8 @@ def drift_score(
             reason="insufficient_features",
         )
 
-    src_pts = np.float32([kp_ref[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp_cur[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    src_pts = np.array([kp_ref[m.queryIdx].pt for m in good], dtype=np.float32).reshape(-1, 1, 2)
+    dst_pts = np.array([kp_cur[m.trainIdx].pt for m in good], dtype=np.float32).reshape(-1, 1, 2)
 
     _, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
     if mask is None:
@@ -175,7 +185,9 @@ def drift_score(
         affine, _ = cv2.estimateAffinePartial2D(inlier_src, inlier_dst)
         if affine is not None:
             # affine[:,0] = [cos(θ)·s, sin(θ)·s]
-            rotation_deg = float(abs(np.degrees(np.arctan2(float(affine[0, 1]), float(affine[0, 0])))))
+            rotation_deg = float(
+                abs(np.degrees(np.arctan2(float(affine[0, 1]), float(affine[0, 0]))))
+            )
             translation_px = float(np.hypot(float(affine[0, 2]), float(affine[1, 2])))
 
     if inlier_ratio < min_inlier_ratio:

@@ -231,7 +231,9 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         embedding_coherence_min_sim=r.as_float("embedding_coherence_min_sim"),
         embedding_coherence_boost=r.as_float("embedding_coherence_boost"),
         face_commit_min_confidence=r.as_float("face_commit_min_confidence"),
-        arcface_authority_calibrated_confidence=r.as_float("arcface_authority_calibrated_confidence"),
+        arcface_authority_calibrated_confidence=r.as_float(
+            "arcface_authority_calibrated_confidence"
+        ),
         cross_gt_face_propagation_threshold=r.as_float("cross_gt_face_propagation_threshold"),
         cross_gt_face_propagation_max_gts=r.as_int("cross_gt_face_propagation_max_gts"),
         enable_sticky_maintenance=r.as_bool("enable_sticky_maintenance"),

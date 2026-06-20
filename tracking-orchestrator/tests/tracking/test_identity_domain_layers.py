@@ -61,9 +61,7 @@ class TestImportLayerBoundary:
                     attr = getattr(mod, attr_name)
                     attr_module = getattr(attr, "__module__", "") or ""
                     if attr_module.startswith(forbidden):
-                        pytest.fail(
-                            f"{module_name} imports from {forbidden} via {attr_name}"
-                        )
+                        pytest.fail(f"{module_name} imports from {forbidden} via {attr_name}")
                 except AttributeError:
                     pass
 
@@ -120,8 +118,12 @@ class TestTypedSourceDistinction:
 class TestIdentityAuthorityEnum:
     def test_all_authority_levels_present(self) -> None:
         expected = {
-            "unknown", "temporal_prior", "height_proxy",
-            "reid_gallery", "direct_face", "operator",
+            "unknown",
+            "temporal_prior",
+            "height_proxy",
+            "reid_gallery",
+            "direct_face",
+            "operator",
         }
         actual = {a.value for a in IdentityAuthority}
         assert actual == expected
