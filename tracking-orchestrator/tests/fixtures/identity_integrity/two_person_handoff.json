@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "name": "two_visible_people_labels_exchanged",
+      "captured_at": "2026-06-19T12:03:00+00:00",
+      "truth": {
+        "detection-left": "resident-alpha",
+        "detection-right": "resident-beta"
+      },
+      "current_baseline": {
+        "detection-left": {
+          "ph_id": "00000000-0000-0000-0000-000000000401",
+          "effective_identity_id": "resident-beta"
+        },
+        "detection-right": {
+          "ph_id": "00000000-0000-0000-0000-000000000402",
+          "effective_identity_id": "resident-alpha"
+        }
+      }
+    },
+    {
+      "name": "one_physical_person_handed_between_two_phs",
+      "truth_person": "resident-alpha",
+      "observations": [
+        {
+          "observation_id": "00000000-0000-0000-0000-000000000411",
+          "captured_at": "2026-06-19T12:03:05+00:00",
+          "ph_id": "00000000-0000-0000-0000-000000000401"
+        },
+        {
+          "observation_id": "00000000-0000-0000-0000-000000000412",
+          "captured_at": "2026-06-19T12:03:06+00:00",
+          "ph_id": "00000000-0000-0000-0000-000000000403"
+        }
+      ],
+      "current_baseline": {
+        "physical_person_count": 1,
+        "ph_count": 2,
+        "correction_boundary_available": false
+      }
+    }
+  ],
+  "production_evidence_note": "The sanitized fixture preserves confirmed assignments and observation order. Private source frames are intentionally not committed.",
+  "target_invariant": "Reviewed two-person sequences contain no identity exchange, and confirmed handoffs have an observation boundary."
+}
+

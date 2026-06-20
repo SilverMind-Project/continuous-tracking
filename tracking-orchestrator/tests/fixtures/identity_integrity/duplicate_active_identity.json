@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario": "duplicate_active_identity_contenders",
+  "captured_at": "2026-06-19T12:01:00+00:00",
+  "identity_id": "resident-alpha",
+  "contenders": [
+    {
+      "ph_id": "00000000-0000-0000-0000-000000000201",
+      "previous_identity_id": "resident-alpha",
+      "direct_face_confidence": null
+    },
+    {
+      "ph_id": "00000000-0000-0000-0000-000000000202",
+      "previous_identity_id": "resident-alpha",
+      "direct_face_confidence": null
+    }
+  ],
+  "current_baseline": {
+    "duplicate_guard_enabled": false,
+    "active_holders": 2
+  },
+  "target_invariant": "At most one open global PH holds a household identity; ties become Unknown."
+}
+

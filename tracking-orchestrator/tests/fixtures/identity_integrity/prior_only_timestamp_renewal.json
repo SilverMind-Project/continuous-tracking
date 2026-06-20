@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "scenario": "prior_only_timestamp_renewal",
+  "identity_id": "resident-alpha",
+  "ph_id": "00000000-0000-0000-0000-000000000101",
+  "initial_independent_evidence_at": "2026-06-19T12:00:00+00:00",
+  "resolver_evaluated_at": "2026-06-19T12:00:05+00:00",
+  "new_face_anchors": [],
+  "gallery_hits": [],
+  "current_baseline": {
+    "identity_is_held": true,
+    "current_identity_committed_at_is_rewritten": true
+  },
+  "target_invariant": "Prior-only maintenance does not advance the independent evidence clock."
+}
+

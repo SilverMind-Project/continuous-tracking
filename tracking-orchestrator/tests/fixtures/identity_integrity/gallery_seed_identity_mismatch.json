@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scenario": "recognized_face_conflicts_with_held_ph_label",
+  "captured_at": "2026-06-19T12:02:00+00:00",
+  "camera_id": "camera-synthetic-a",
+  "ph_id": "00000000-0000-0000-0000-000000000301",
+  "resolved_identity_id": "resident-alpha",
+  "direct_face_identity_id": "resident-beta",
+  "recognition_state": "recognized",
+  "body_embedding": [1.0, 0.0, 0.0, 0.0],
+  "orientation": "FRONT",
+  "orientation_confidence": 0.95,
+  "quality": 0.9,
+  "current_baseline": {
+    "seeded_identity_id": "resident-alpha",
+    "face_identity_equality_checked": false
+  },
+  "target_invariant": "A face-derived candidate is created only when direct face identity equals candidate identity."
+}
+
