@@ -52,37 +52,25 @@ from ..domain import (
 from ..inference.evidence import FaceEvidence
 from ..observability import metrics
 from ..storage.base import GalleryRepository
+from .identity.commit_policy import (
+    CommitEvaluation,
+    FaceLock,
+    compute_contradiction,
+)
+from .identity.commit_policy import (
+    evaluate_commit as _evaluate_commit_pure,
+)
 from .identity.evidence import IdentityEvidence
-from .identity.posterior import EvidencePosterior
+from .identity.policy import CommitPolicy as _CommitPolicy
+from .identity.posterior import EvidencePosterior, combine_posteriors
 
 logger = get_logger(__name__)
 
 
-@dataclass
-class _FaceLock:
-    """Tracks a face-confirmed identity for one GlobalTrack.
-
-    Set when a face anchor's confidence exceeds face_commit_min_confidence.
-    Displaced when a different identity's face anchor also clears that threshold.
-    """
-
-    identity_id: str
-    confidence: float
-    locked_at: datetime
-
-
-@dataclass(frozen=True)
-class _CommitEvaluation:
-    """Pure commit-rule result before side effects and metric emission."""
-
-    new_id: str | None
-    evidence_backed: bool
-    has_evidence: bool
-    within_maintenance_window: bool
-    effective_commit_prob: float
-    effective_commit_margin: float
-    quality_gate_blocked: bool
-    flip_debounce_blocked: bool
+# _FaceLock and _CommitEvaluation are now public types in identity.commit_policy.
+# Aliases keep internal references consistent.
+_FaceLock = FaceLock
+_CommitEvaluation = CommitEvaluation
 
 
 @dataclass(frozen=True)
@@ -1350,59 +1338,17 @@ class IdentityResolver:
     ) -> PosteriorDist:
         """Combine prior, face likelihood, ReID likelihood, and optional height.
 
-        Posterior = prior * face_likelihood * reid_likelihood * height_likelihood
-
-        If any source is empty (no evidence), it is treated as uniform
-        (weight=1.0) so it does not dilute evidence from other sources.
-
-        When a source is non-empty but missing an identity, a smoothing
-        constant is used instead of 1.0 to avoid penalising identities
-        that *do* appear in the evidence.
+        Delegates to the canonical pure function ``combine_posteriors`` in
+        ``identity.posterior``. Weights come from ``self._config``.
         """
-        all_ids: set[str] = set(prior.distribution.keys())
-        all_ids.update(face.distribution.keys())
-        all_ids.update(reid.distribution.keys())
-        if height is not None and height.distribution:
-            all_ids.update(height.distribution.keys())
-
-        if not all_ids:
-            return PosteriorDist({"UNKNOWN": 1.0})
-
-        def _weight(dist: PosteriorDist, ident: str) -> float:
-            """Return the weight for *ident* from *dist*.
-
-            - Empty distribution → 1.0 (uninformative).
-            - Non-empty distribution → explicit value or smoothing constant.
-            """
-            if not dist.distribution:
-                return 1.0
-            if ident in dist.distribution:
-                return dist.distribution[ident]
-            # Smoothing: spread a small mass over identities not in this source.
-            # 1 / (n_present + 1) is a simple Laplace-style term.
-            n = len(dist.distribution)
-            return 1.0 / (n + 1)
-
-        combined: dict[str, float] = {}
-        for ident in all_ids:
-            fw = _weight(face, ident)
-            # Boost identities that appear in the face distribution.
-            # ArcFace evidence is significantly more reliable than body
-            # ReID for disambiguating enrolled identities in the same room.
-            if ident in face.distribution:
-                fw = fw * self._config.face_weight_multiplier
-
-            hw = _weight(height, ident) if height is not None else 1.0
-            # Boost identities supported by height evidence.
-            if height is not None and height.distribution and ident in height.distribution:
-                hw = hw * self._config.height_weight_multiplier
-
-            combined[ident] = _weight(prior, ident) * fw * _weight(reid, ident) * hw
-
-        if not combined:
-            return PosteriorDist({"UNKNOWN": 1.0})
-
-        return PosteriorDist(combined)
+        return combine_posteriors(
+            prior,
+            face,
+            reid,
+            height,
+            face_weight_multiplier=self._config.face_weight_multiplier,
+            height_weight_multiplier=self._config.height_weight_multiplier,
+        )
 
     # ------------------------------------------------------------------
     # Commit rule
@@ -1481,14 +1427,14 @@ class IdentityResolver:
 
         # Compute contradiction for sticky maintenance.
         prev_id = entity.current_identity_id
-        contradicted = _compute_contradiction(
+        contradicted = compute_contradiction(
             prev_id=prev_id,
             face_likelihood=face_likelihood,
             best_face_confidence=best_face_confidence,
             top_id=top_id,
             top_prob=top_prob,
             margin=margin,
-            config=self._config,
+            config=self._to_commit_policy(),
         )
 
         live_eval = self._evaluate_commit(
@@ -1620,6 +1566,28 @@ class IdentityResolver:
             evidence_backed=live_eval.evidence_backed,
         )
 
+    def _to_commit_policy(self) -> _CommitPolicy:
+        """Build a ``CommitPolicy`` from this resolver's config."""
+        c = self._config
+        return _CommitPolicy(
+            commit_prob=c.commit_prob,
+            commit_margin=c.commit_margin,
+            commit_prob_dense=c.commit_prob_dense,
+            commit_margin_dense=c.commit_margin_dense,
+            prior_maintenance_max_age_s=c.prior_maintenance_max_age_s,
+            face_lock_maintenance_max_age_s=c.face_lock_maintenance_max_age_s,
+            face_commit_min_confidence=c.face_commit_min_confidence,
+            min_quality_to_face_lock=c.min_quality_to_face_lock,
+            min_quality_to_commit=c.min_quality_to_commit,
+            enable_quality_gate=c.enable_quality_gate,
+            flip_debounce_window_s=c.flip_debounce_window_s,
+            enable_flip_debounce=c.enable_flip_debounce,
+            contradiction_face_confidence=c.contradiction_face_confidence,
+            contradiction_posterior_prob=c.contradiction_posterior_prob,
+            contradiction_posterior_margin=c.contradiction_posterior_margin,
+            enable_sticky_maintenance=c.enable_sticky_maintenance,
+        )
+
     def _evaluate_commit(
         self,
         entity: IdentityResolvableEntity,
@@ -1634,120 +1602,20 @@ class IdentityResolver:
         enforce_quality_gate: bool,
         enforce_flip_debounce: bool,
     ) -> _CommitEvaluation:
-        """Evaluate the commit rule without mutating locks or emitting metrics."""
-        (top_id, top_prob), margin = posterior.top_with_margin()
-        has_evidence = (
-            top_id in face_likelihood.distribution or top_id in reid_likelihood.distribution
-        )
-
-        prev_id = entity.current_identity_id
-        identity_unchanged = top_id == prev_id and prev_id is not None
-        within_maintenance_window = False
-        if identity_unchanged:
-            face_lock = self._face_locks.get(entity.entity_id)
-            if face_lock is not None and face_lock.identity_id == prev_id:
-                lock_age_s = (captured_at - face_lock.locked_at).total_seconds()
-                within_maintenance_window = (
-                    lock_age_s <= self._config.face_lock_maintenance_max_age_s
-                )
-            elif entity.current_identity_committed_at is not None:
-                age_delta = captured_at - entity.current_identity_committed_at
-                identity_age_s = age_delta.total_seconds()
-                within_maintenance_window = (
-                    identity_age_s <= self._config.prior_maintenance_max_age_s
-                )
-            else:
-                identity_age_s = (captured_at - entity.last_seen_at).total_seconds()
-                within_maintenance_window = (
-                    identity_age_s <= self._config.prior_maintenance_max_age_s
-                )
-
-        # Sticky maintenance — extend the maintenance window when identity dips
-        # (posterior says UNKNOWN or weak other) but the window hasn't expired and
-        # no strong contradiction exists.  This encodes the owner's choice to
-        # "favor continuity and stability" under weak evidence.
-        if (
-            enable_sticky_maintenance
-            and prev_id is not None
-            and not within_maintenance_window
-            and not contradicted
-        ):
-            face_lock = self._face_locks.get(entity.entity_id)
-            if face_lock is not None and face_lock.identity_id == prev_id:
-                lock_age_s = (captured_at - face_lock.locked_at).total_seconds()
-                sticky_within_window = lock_age_s <= self._config.face_lock_maintenance_max_age_s
-            elif entity.current_identity_committed_at is not None:
-                age_delta = captured_at - entity.current_identity_committed_at
-                sticky_within_window = (
-                    age_delta.total_seconds() <= self._config.prior_maintenance_max_age_s
-                )
-            else:
-                age_delta = captured_at - entity.last_seen_at
-                sticky_within_window = (
-                    age_delta.total_seconds() <= self._config.prior_maintenance_max_age_s
-                )
-            if sticky_within_window:
-                within_maintenance_window = True
-
-        evidence_ok = has_evidence or within_maintenance_window
-
-        dense_candidates = sum(1 for p in posterior.distribution.values() if p > 0.3)
-        is_dense = dense_candidates >= 2
-        effective_commit_prob = (
-            self._config.commit_prob_dense if is_dense else self._config.commit_prob
-        )
-        effective_commit_margin = (
-            self._config.commit_margin_dense if is_dense else self._config.commit_margin
-        )
-
-        evidence_backed = False
-        if within_maintenance_window:
-            new_id = prev_id
-            evidence_backed = has_evidence
-        elif (
-            evidence_ok and top_prob >= effective_commit_prob and margin >= effective_commit_margin
-        ):
-            new_id = top_id if top_id != "UNKNOWN" else None
-            evidence_backed = has_evidence
-        else:
-            new_id = None
-
-        quality_gate_blocked = (
-            new_id is not None
-            and new_id != prev_id
-            and entity_quality < self._config.min_quality_to_commit
-        )
-        if quality_gate_blocked and enforce_quality_gate:
-            new_id = None
-            evidence_backed = False
-
-        flip_debounce_blocked = False
-        if (
-            prev_id is not None
-            and new_id is not None
-            and new_id != prev_id
-            and entity.current_identity_committed_at is not None
-        ):
-            age_s = (captured_at - entity.current_identity_committed_at).total_seconds()
-            if age_s <= self._config.flip_debounce_window_s:
-                clears_dense = (
-                    top_prob >= self._config.commit_prob_dense
-                    and margin >= self._config.commit_margin_dense
-                )
-                flip_debounce_blocked = not clears_dense
-                if flip_debounce_blocked and enforce_flip_debounce:
-                    new_id = prev_id
-                    evidence_backed = False
-
-        return _CommitEvaluation(
-            new_id=new_id,
-            evidence_backed=evidence_backed,
-            has_evidence=has_evidence,
-            within_maintenance_window=within_maintenance_window,
-            effective_commit_prob=effective_commit_prob,
-            effective_commit_margin=effective_commit_margin,
-            quality_gate_blocked=quality_gate_blocked,
-            flip_debounce_blocked=flip_debounce_blocked,
+        """Evaluate the commit rule — thin delegator to the canonical pure function."""
+        return _evaluate_commit_pure(
+            entity=entity,
+            posterior=posterior,
+            face_likelihood=face_likelihood,
+            reid_likelihood=reid_likelihood,
+            captured_at=captured_at,
+            entity_quality=entity_quality,
+            face_locks=self._face_locks,
+            config=self._to_commit_policy(),
+            contradicted=contradicted,
+            enable_sticky_maintenance=enable_sticky_maintenance,
+            enforce_quality_gate=enforce_quality_gate,
+            enforce_flip_debounce=enforce_flip_debounce,
         )
 
     # ------------------------------------------------------------------
@@ -2056,49 +1924,5 @@ class IdentityResolver:
 # ---------------------------------------------------------------------------
 
 
-def _compute_contradiction(
-    *,
-    prev_id: str | None,
-    face_likelihood: PosteriorDist,
-    best_face_confidence: float | None,
-    top_id: str,
-    top_prob: float,
-    margin: float,
-    config: ResolverConfig,
-) -> bool:
-    """Determine whether evidence strongly contradicts a held identity.
-
-    Two contradiction paths (either one is sufficient):
-    1. Face anchor names a different identity with high confidence.
-       Guard: only *recognized* face anchors can contradict.
-       Candidate and unrecognized faces are too weak to overturn a held identity.
-    2. Posterior argmax is a different non-UNKNOWN identity with high
-       probability and margin (dense-scene thresholds).
-
-    Returns False when prev_id is None (no held identity to contradict).
-    """
-    if prev_id is None:
-        return False
-
-    # Face contradiction: the best *recognized* face anchor names a different,
-    # known identity at or above the contradiction confidence threshold.
-    # best_face_confidence is now the best *recognized* anchor confidence
-    # (None when only candidate/unrecognized anchors exist), so candidate and
-    # unrecognized faces cannot trigger contradiction — exactly as required.
-    if (
-        best_face_confidence is not None
-        and best_face_confidence >= config.contradiction_face_confidence
-        and face_likelihood.distribution
-    ):
-        face_top = max(face_likelihood.distribution, key=face_likelihood.distribution.__getitem__)
-        if face_top != "UNKNOWN" and face_top != prev_id:
-            return True
-
-    # Posterior contradiction: a different non-UNKNOWN identity clears both
-    # dense-scene probability and margin thresholds.
-    return bool(
-        top_id != prev_id
-        and top_id != "UNKNOWN"
-        and top_prob >= config.contradiction_posterior_prob
-        and margin >= config.contradiction_posterior_margin
-    )
+# _compute_contradiction has been moved to identity.commit_policy.compute_contradiction.
+# The resolver calls compute_contradiction() (imported at the top of this module).

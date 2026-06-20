@@ -19,10 +19,11 @@ from app.domain import (
     PosteriorDist,
 )
 from app.storage.base import InMemoryGalleryRepository
+from app.tracking.identity.commit_policy import compute_contradiction
+from app.tracking.identity.policy import CommitPolicy
 from app.tracking.identity_resolver import (
     IdentityResolver,
     ResolverConfig,
-    _compute_contradiction,
 )
 
 if TYPE_CHECKING:
@@ -364,55 +365,55 @@ class TestCandidateNotContradiction:
     def test_candidate_face_not_contradiction(self):
         """A candidate face for bob does NOT contradict held identity alice."""
         face_likelihood = PosteriorDist({"bob": 0.33, "UNKNOWN": 0.67})
-        contradicted = _compute_contradiction(
+        contradicted = compute_contradiction(
             prev_id="alice",
             face_likelihood=face_likelihood,
             best_face_confidence=None,  # None when only candidate anchors exist
             top_id="UNKNOWN",
             top_prob=0.5,
             margin=0.1,
-            config=ResolverConfig(),
+            config=CommitPolicy(),
         )
         assert contradicted is False
 
     def test_unrecognized_face_not_contradiction(self):
         """An unrecognized face does NOT contradict a held identity."""
         face_likelihood = PosteriorDist({"UNKNOWN": 1.0})
-        contradicted = _compute_contradiction(
+        contradicted = compute_contradiction(
             prev_id="alice",
             face_likelihood=face_likelihood,
             best_face_confidence=None,  # None for unrecognized
             top_id="UNKNOWN",
             top_prob=0.9,
             margin=0.5,
-            config=ResolverConfig(),
+            config=CommitPolicy(),
         )
         assert contradicted is False
 
     def test_recognized_different_face_still_contradicts(self):
         """A recognized face for bob at high confidence STILL contradicts held alice."""
         face_likelihood = PosteriorDist({"bob": 0.85, "UNKNOWN": 0.15})
-        contradicted = _compute_contradiction(
+        contradicted = compute_contradiction(
             prev_id="alice",
             face_likelihood=face_likelihood,
             best_face_confidence=0.85,  # recognized anchor confidence
             top_id="bob",
             top_prob=0.85,
             margin=0.3,
-            config=ResolverConfig(contradiction_face_confidence=0.70),
+            config=CommitPolicy(contradiction_face_confidence=0.70),
         )
         assert contradicted is True
 
     def test_recognized_same_identity_not_contradiction(self):
         """A recognized face for alice does NOT contradict held alice."""
         face_likelihood = PosteriorDist({"alice": 0.88, "UNKNOWN": 0.12})
-        contradicted = _compute_contradiction(
+        contradicted = compute_contradiction(
             prev_id="alice",
             face_likelihood=face_likelihood,
             best_face_confidence=0.88,
             top_id="alice",
             top_prob=0.88,
             margin=0.3,
-            config=ResolverConfig(contradiction_face_confidence=0.70),
+            config=CommitPolicy(contradiction_face_confidence=0.70),
         )
         assert contradicted is False

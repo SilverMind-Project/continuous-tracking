@@ -1,225 +1,291 @@
-"""Commit policy: decides when to assign, maintain, or demote an identity.
+"""Commit policy: typed evaluation of identity assignment and maintenance.
 
-Extracted from ``IdentityResolver._commit()`` so it can be tested in
-isolation without the full resolver infrastructure.
+Provides the canonical, pure commit evaluation function used by
+``IdentityResolver``. All state (face locks, entity, config) is passed
+explicitly so the function is testable without the full resolver.
+
+``CommitPolicy`` is imported from ``policy.py`` and re-exported here for
+backward compatibility with existing imports.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 
 from structlog import get_logger
 
-from .evidence import IdentityEvidence
-from .posterior import EvidencePosterior
+from ...domain import IdentityResolvableEntity, PosteriorDist
+from .policy import CommitPolicy
 
 logger = get_logger(__name__)
 
-
-@dataclass(frozen=True)
-class CommitPolicy:
-    """Thresholds and rules for identity commit decisions."""
-
-    commit_prob: float = 0.65
-    commit_margin: float = 0.15
-    commit_prob_dense: float = 0.80
-    commit_margin_dense: float = 0.20
-    prior_maintenance_max_age_s: float = 120.0
-    face_commit_min_confidence: float = 0.70
-    face_lock_maintenance_max_age_s: float = 300.0
+# Re-export CommitPolicy so ``from .commit_policy import CommitPolicy`` works.
+__all__ = [
+    "CommitDecision",
+    "CommitEvaluation",
+    "CommitPolicy",
+    "CommitPolicyState",
+    "FaceLock",
+    "compute_contradiction",
+    "evaluate_commit",
+]
 
 
-@dataclass
-class CommitDecision:
-    """Output of the commit policy for one global track in one frame."""
-
-    identity_id: str | None
-    reason: str
-    evidence_backed: bool
-    evidence_summary: dict[str, int] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
+# ---------------------------------------------------------------------------
+# Domain types
+# ---------------------------------------------------------------------------
 
 
 @dataclass
-class _FaceLockState:
+class FaceLock:
+    """Tracks a face-confirmed identity for one entity across frames.
+
+    Set when a face anchor's confidence exceeds ``CommitPolicy.face_commit_min_confidence``.
+    Displaced when a different identity's face anchor clears the same threshold.
+    Not frozen: the resolver mutates ``locked_at`` on refresh.
+    """
+
     identity_id: str
     confidence: float
     locked_at: datetime
 
 
+@dataclass(frozen=True)
+class CommitEvaluation:
+    """Pure commit-rule result before side effects and metric emission.
+
+    Returned by ``evaluate_commit``; caller builds ``IdentityDecision`` and
+    emits metrics from these fields.
+    """
+
+    new_id: str | None
+    evidence_backed: bool
+    has_evidence: bool
+    within_maintenance_window: bool
+    effective_commit_prob: float
+    effective_commit_margin: float
+    quality_gate_blocked: bool
+    flip_debounce_blocked: bool
+
+
+@dataclass(frozen=True)
+class CommitDecision:
+    """Higher-level commit result (additive-path compat, kept for reference).
+
+    Not returned by the canonical ``evaluate_commit``. Kept so external code
+    that depended on ``CommitDecision`` continues to import cleanly; callers
+    should migrate to ``CommitEvaluation``.
+    """
+
+    identity_id: str | None
+    reason: str
+    evidence_backed: bool
+    evidence_summary: dict[str, int] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
 @dataclass
 class CommitPolicyState:
-    """Mutable state maintained across frames by the commit policy."""
+    """Backward-compatibility wrapper around face_locks dict.
 
-    face_locks: dict[str, _FaceLockState] = field(default_factory=dict)
+    The canonical ``evaluate_commit`` takes ``face_locks`` explicitly.
+    This shim lets existing callers pass a ``CommitPolicyState`` object
+    without rewriting call sites. Scheduled for removal in M02.
+    """
+
+    face_locks: dict[str, FaceLock] = field(default_factory=dict)
     revision_log: dict[str, list[datetime]] = field(default_factory=dict)
 
 
-def evaluate_commit(
-    posterior: EvidencePosterior,
-    evidence_list: list[IdentityEvidence],
-    previous_identity_id: str | None,
-    committed_at: datetime | None,
-    captured_at: datetime,
-    global_track_id: str,
-    state: CommitPolicyState,
+# ---------------------------------------------------------------------------
+# Contradiction helper
+# ---------------------------------------------------------------------------
+
+
+def compute_contradiction(
+    *,
+    prev_id: str | None,
+    face_likelihood: PosteriorDist,
+    best_face_confidence: float | None,
+    top_id: str,
+    top_prob: float,
+    margin: float,
     config: CommitPolicy,
-) -> CommitDecision:
-    """Evaluate whether to commit, maintain, or demote an identity.
+) -> bool:
+    """Return True when evidence strongly contradicts a held identity.
 
-    Args:
-        posterior: The combined posterior from evidence.
-        evidence_list: All evidence items for this GT in this frame.
-        previous_identity_id: The GT's current committed identity (if any).
-        committed_at: When the current identity was last evidence-backed.
-        captured_at: Wall-clock time of the current frame.
-        global_track_id: The GT being evaluated.
-        state: Mutable state (face locks, revision log) maintained across frames.
-        config: Commit thresholds.
+    Two contradiction paths (either one is sufficient):
+    1. A *recognized* face anchor names a different identity at or above
+       ``contradiction_face_confidence``. Candidate and unrecognized faces
+       cannot contradict — they are too weak to overturn a held identity.
+    2. Posterior argmax is a different non-UNKNOWN identity clearing both
+       ``contradiction_posterior_prob`` and ``contradiction_posterior_margin``.
 
-    Returns:
-        CommitDecision with the resulting identity_id and reason.
+    Returns False when ``prev_id`` is None (nothing held, nothing to contradict).
     """
-    face_locked_id = _get_face_locked_identity(state, global_track_id, captured_at, config)
-
-    # Check if any evidence can create a new identity.
-    has_creating_evidence = any(ev.can_create_identity for ev in evidence_list)
-
-    # Check if any evidence justifies maintaining the existing identity.
-    identity_unchanged = (
-        posterior.top_identity == previous_identity_id and previous_identity_id is not None
-    )
-
-    # Maintenance window: face lock or standard committed_at window.
-    within_maintenance = False
-    if identity_unchanged:
-        if face_locked_id == previous_identity_id:
-            within_maintenance = True
-        elif committed_at is not None:
-            age_s = (captured_at - committed_at).total_seconds()
-            within_maintenance = age_s <= config.prior_maintenance_max_age_s
-
-    # Dense scene detection: more than 2 identities with posterior > 0.3.
-    dense_count = sum(1 for p in posterior.distribution.values() if p > 0.3)
-    is_dense = dense_count >= 2
-    effective_prob = config.commit_prob_dense if is_dense else config.commit_prob
-    effective_margin = config.commit_margin_dense if is_dense else config.commit_margin
-
-    # Face lock management.
-    _manage_face_lock(state, global_track_id, posterior, evidence_list, captured_at, config)
-
-    evidence_ok = has_creating_evidence or within_maintenance
-
-    if within_maintenance and identity_unchanged:
-        # Carry the existing identity forward.
-        return CommitDecision(
-            identity_id=previous_identity_id,
-            reason="maintained_by_prior",
-            evidence_backed=has_creating_evidence,
-            evidence_summary=posterior.evidence_summary,
-        )
+    if prev_id is None:
+        return False
 
     if (
-        evidence_ok
-        and posterior.top_probability >= effective_prob
-        and posterior.margin >= effective_margin
-        and posterior.top_identity != "UNKNOWN"
+        best_face_confidence is not None
+        and best_face_confidence >= config.contradiction_face_confidence
+        and face_likelihood.distribution
     ):
-        new_id = posterior.top_identity
-        reason = "committed_by_evidence"
-        if posterior.face_evidence_present:
-            p_str = f"p={posterior.top_probability:.3f}, margin={posterior.margin:.3f}"
-            reason = f"committed_by_face ({p_str})"
-        elif posterior.reid_evidence_present:
-            p_str = f"p={posterior.top_probability:.3f}, margin={posterior.margin:.3f}"
-            reason = f"committed_by_reid ({p_str})"
-        else:
-            reason = f"committed (p={posterior.top_probability:.3f}, margin={posterior.margin:.3f})"
-        return CommitDecision(
-            identity_id=new_id,
-            reason=reason,
-            evidence_backed=True,
-            evidence_summary=posterior.evidence_summary,
-        )
+        face_top = max(face_likelihood.distribution, key=face_likelihood.distribution.__getitem__)
+        if face_top != "UNKNOWN" and face_top != prev_id:
+            return True
 
-    # No commit: stay as previous identity or default to None (UNKNOWN).
-    if previous_identity_id and identity_unchanged and within_maintenance:
-        return CommitDecision(
-            identity_id=previous_identity_id,
-            reason="maintained_by_prior",
-            evidence_backed=False,
-            evidence_summary=posterior.evidence_summary,
-        )
-
-    return CommitDecision(
-        identity_id=None,
-        reason="insufficient_evidence",
-        evidence_backed=False,
-        evidence_summary=posterior.evidence_summary,
+    return bool(
+        top_id != prev_id
+        and top_id != "UNKNOWN"
+        and top_prob >= config.contradiction_posterior_prob
+        and margin >= config.contradiction_posterior_margin
     )
 
 
-def _get_face_locked_identity(
-    state: CommitPolicyState,
-    global_track_id: str,
+# ---------------------------------------------------------------------------
+# Canonical commit evaluation
+# ---------------------------------------------------------------------------
+
+
+def evaluate_commit(
+    entity: IdentityResolvableEntity,
+    posterior: PosteriorDist,
+    face_likelihood: PosteriorDist,
+    reid_likelihood: PosteriorDist,
     captured_at: datetime,
+    entity_quality: float,
+    face_locks: dict[str, FaceLock],
     config: CommitPolicy,
-) -> str | None:
-    lock = state.face_locks.get(global_track_id)
-    if lock is None:
-        return None
-    age_s = (captured_at - lock.locked_at).total_seconds()
-    if age_s > config.face_lock_maintenance_max_age_s:
-        return None
-    return lock.identity_id
+    *,
+    contradicted: bool = False,
+    enable_sticky_maintenance: bool,
+    enforce_quality_gate: bool,
+    enforce_flip_debounce: bool,
+) -> CommitEvaluation:
+    """Evaluate the commit rule without mutating locks or emitting metrics.
 
+    This is the single canonical implementation. ``IdentityResolver._commit``
+    delegates here after managing face locks and computing ``contradicted``.
 
-def _manage_face_lock(
-    state: CommitPolicyState,
-    global_track_id: str,
-    posterior: EvidencePosterior,
-    evidence_list: list[IdentityEvidence],
-    captured_at: datetime,
-    config: CommitPolicy,
-) -> None:
-    """Set, refresh, or clear face locks based on evidence.
+    All state is passed explicitly so the function is pure and testable.
+    The caller is responsible for:
+    - Setting/displacing face locks before calling this function.
+    - Emitting metrics from the returned ``CommitEvaluation``.
+    - Building ``IdentityDecision`` and revisions from the result.
 
-    Only evidence with ``can_set_face_lock=True`` can set or refresh a
-    face lock.  Propagated hints and association-derived evidence cannot.
+    Args:
+        entity: The entity being evaluated (provides identity history).
+        posterior: Combined Bayesian posterior (from ``combine_posteriors``).
+        face_likelihood: Face-only distribution (used for evidence detection).
+        reid_likelihood: ReID-only distribution (used for evidence detection).
+        captured_at: Frame wall-clock time.
+        entity_quality: Rolling crop-quality EMA for the entity.
+        face_locks: Mutable face-lock dict (read-only here; caller owns writes).
+        config: Full commit policy configuration.
+        contradicted: Whether a strong contradiction was detected upstream.
+        enable_sticky_maintenance: Hold identity on weak evidence when no
+            contradiction exists.
+        enforce_quality_gate: Block new commits below ``min_quality_to_commit``.
+        enforce_flip_debounce: Block rapid flips that don't clear dense thresholds.
+
+    Returns:
+        ``CommitEvaluation`` with all fields needed to build ``IdentityDecision``.
     """
-    # Find the best face-lock-eligible evidence.
-    best_face: IdentityEvidence | None = None
-    for ev in evidence_list:
-        if (
-            ev.can_set_face_lock
-            and ev.identity_id
-            and ev.confidence >= config.face_commit_min_confidence
-            and (best_face is None or ev.confidence > best_face.confidence)
-        ):
-            best_face = ev
+    (top_id, top_prob), margin = posterior.top_with_margin()
+    has_evidence = (
+        top_id in face_likelihood.distribution or top_id in reid_likelihood.distribution
+    )
 
-    existing_lock = state.face_locks.get(global_track_id)
+    prev_id = entity.current_identity_id
+    identity_unchanged = top_id == prev_id and prev_id is not None
+    within_maintenance_window = False
 
-    if best_face is not None:
-        if existing_lock is None or existing_lock.identity_id == best_face.identity_id:
-            state.face_locks[global_track_id] = _FaceLockState(
-                identity_id=best_face.identity_id,  # type: ignore[arg-type]
-                confidence=best_face.confidence,
-                locked_at=captured_at,
-            )
+    if identity_unchanged:
+        face_lock = face_locks.get(entity.entity_id)
+        if face_lock is not None and face_lock.identity_id == prev_id:
+            lock_age_s = (captured_at - face_lock.locked_at).total_seconds()
+            within_maintenance_window = lock_age_s <= config.face_lock_maintenance_max_age_s
+        elif entity.current_identity_committed_at is not None:
+            age_s = (captured_at - entity.current_identity_committed_at).total_seconds()
+            within_maintenance_window = age_s <= config.prior_maintenance_max_age_s
         else:
-            # Different identity at sufficient confidence: displace the lock.
-            logger.info(
-                "face_lock_displaced",
-                global_track_id=global_track_id,
-                old_identity=existing_lock.identity_id,
-                new_identity=best_face.identity_id,
-                new_confidence=round(best_face.confidence, 3),
+            age_s = (captured_at - entity.last_seen_at).total_seconds()
+            within_maintenance_window = age_s <= config.prior_maintenance_max_age_s
+
+    # Sticky maintenance: extend the window when identity dips (posterior says
+    # UNKNOWN or weak other) but the window has not expired and no strong
+    # contradiction exists.
+    if (
+        enable_sticky_maintenance
+        and prev_id is not None
+        and not within_maintenance_window
+        and not contradicted
+    ):
+        face_lock = face_locks.get(entity.entity_id)
+        if face_lock is not None and face_lock.identity_id == prev_id:
+            lock_age_s = (captured_at - face_lock.locked_at).total_seconds()
+            sticky_in_window = lock_age_s <= config.face_lock_maintenance_max_age_s
+        elif entity.current_identity_committed_at is not None:
+            age_s = (captured_at - entity.current_identity_committed_at).total_seconds()
+            sticky_in_window = age_s <= config.prior_maintenance_max_age_s
+        else:
+            age_s = (captured_at - entity.last_seen_at).total_seconds()
+            sticky_in_window = age_s <= config.prior_maintenance_max_age_s
+        if sticky_in_window:
+            within_maintenance_window = True
+
+    evidence_ok = has_evidence or within_maintenance_window
+
+    dense_candidates = sum(1 for p in posterior.distribution.values() if p > 0.3)
+    is_dense = dense_candidates >= 2
+    effective_commit_prob = config.commit_prob_dense if is_dense else config.commit_prob
+    effective_commit_margin = config.commit_margin_dense if is_dense else config.commit_margin
+
+    evidence_backed = False
+    if within_maintenance_window:
+        new_id: str | None = prev_id
+        evidence_backed = has_evidence
+    elif evidence_ok and top_prob >= effective_commit_prob and margin >= effective_commit_margin:
+        new_id = top_id if top_id != "UNKNOWN" else None
+        evidence_backed = has_evidence
+    else:
+        new_id = None
+
+    quality_gate_blocked = (
+        new_id is not None
+        and new_id != prev_id
+        and entity_quality < config.min_quality_to_commit
+    )
+    if quality_gate_blocked and enforce_quality_gate:
+        new_id = None
+        evidence_backed = False
+
+    flip_debounce_blocked = False
+    if (
+        prev_id is not None
+        and new_id is not None
+        and new_id != prev_id
+        and entity.current_identity_committed_at is not None
+    ):
+        age_s = (captured_at - entity.current_identity_committed_at).total_seconds()
+        if age_s <= config.flip_debounce_window_s:
+            clears_dense = (
+                top_prob >= config.commit_prob_dense and margin >= config.commit_margin_dense
             )
-            state.face_locks[global_track_id] = _FaceLockState(
-                identity_id=best_face.identity_id,  # type: ignore[arg-type]
-                confidence=best_face.confidence,
-                locked_at=captured_at,
-            )
+            flip_debounce_blocked = not clears_dense
+            if flip_debounce_blocked and enforce_flip_debounce:
+                new_id = prev_id
+                evidence_backed = False
+
+    return CommitEvaluation(
+        new_id=new_id,
+        evidence_backed=evidence_backed,
+        has_evidence=has_evidence,
+        within_maintenance_window=within_maintenance_window,
+        effective_commit_prob=effective_commit_prob,
+        effective_commit_margin=effective_commit_margin,
+        quality_gate_blocked=quality_gate_blocked,
+        flip_debounce_blocked=flip_debounce_blocked,
+    )

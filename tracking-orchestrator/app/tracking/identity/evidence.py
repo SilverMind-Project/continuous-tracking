@@ -10,23 +10,37 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
+from enum import StrEnum
 
-EvidenceSource = Literal[
-    "direct_face",
-    "reid",
-    "temporal_prior",
-    "height_proxy",
-    "operator",
-    "association_hint",
-]
+
+class EvidenceSource(StrEnum):
+    """Typed source of one identity evidence item.
+
+    Wire values are stable; rename requires a migration. StrEnum membership
+    means ``EvidenceSource.DIRECT_FACE == "direct_face"`` is True, so
+    existing string comparisons continue to work unchanged.
+    """
+
+    DIRECT_FACE = "direct_face"
+    REID = "reid"
+    TEMPORAL_PRIOR = "temporal_prior"
+    HEIGHT_PROXY = "height_proxy"
+    OPERATOR = "operator"
+    ASSOCIATION_HINT = "association_hint"
 
 
 # Evidence sources that can justify a new identity assignment.
-CAN_CREATE_IDENTITY: set[EvidenceSource] = {"direct_face", "reid", "operator"}
+CAN_CREATE_IDENTITY: set[EvidenceSource] = {
+    EvidenceSource.DIRECT_FACE,
+    EvidenceSource.REID,
+    EvidenceSource.OPERATOR,
+}
 
 # Evidence sources that can set a face lock on a global track.
-CAN_SET_FACE_LOCK: set[EvidenceSource] = {"direct_face", "operator"}
+CAN_SET_FACE_LOCK: set[EvidenceSource] = {
+    EvidenceSource.DIRECT_FACE,
+    EvidenceSource.OPERATOR,
+}
 
 
 @dataclass(frozen=True)
@@ -62,7 +76,7 @@ class IdentityEvidence:
     ) -> IdentityEvidence:
         """Create direct face evidence from an ArcFace service call."""
         return cls(
-            source="direct_face",
+            source=EvidenceSource.DIRECT_FACE,
             identity_id=identity_id,
             confidence=confidence,
             quality=quality,
@@ -80,7 +94,7 @@ class IdentityEvidence:
     ) -> IdentityEvidence:
         """Create an association hint (propagated or duplicate-view)."""
         return cls(
-            source="association_hint",
+            source=EvidenceSource.ASSOCIATION_HINT,
             identity_id=identity_id,
             confidence=confidence,
             quality=0.5,  # reduced weight for non-direct evidence
@@ -97,7 +111,7 @@ class IdentityEvidence:
     ) -> IdentityEvidence:
         """Create ReID-based evidence from gallery search."""
         return cls(
-            source="reid",
+            source=EvidenceSource.REID,
             identity_id=identity_id,
             confidence=confidence,
             quality=quality,
@@ -111,7 +125,7 @@ class IdentityEvidence:
     ) -> IdentityEvidence:
         """Create temporal prior evidence from previous assignment."""
         return cls(
-            source="temporal_prior",
+            source=EvidenceSource.TEMPORAL_PRIOR,
             identity_id=identity_id,
             confidence=confidence,
             quality=0.3,  # prior alone is weak
@@ -125,7 +139,7 @@ class IdentityEvidence:
     ) -> IdentityEvidence:
         """Create operator-applied identity correction evidence."""
         return cls(
-            source="operator",
+            source=EvidenceSource.OPERATOR,
             identity_id=identity_id,
             confidence=confidence,
             quality=1.0,
