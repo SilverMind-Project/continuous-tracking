@@ -95,3 +95,54 @@ def test_round_trip_handles_no_evidence() -> None:
     evidence = json.loads(pb.evidence_json)
     assert evidence["actor"] == "system"
     assert evidence["rewritten_rows"] == 0
+
+
+# -- M06 typed revision-range fields ----------------------------------------
+
+
+def test_m06_typed_fields_round_trip() -> None:
+    """New M06 fields serialize as typed proto fields (not evidence_json)."""
+    from app.proto.continuoustracking.v1 import tracking_pb2
+
+    start = datetime(2026, 6, 20, 12, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 6, 20, 12, 0, 30, tzinfo=UTC)
+    revision = IdentityRevision(
+        revision_id="rev-m06",
+        ph_id="ph-1",
+        previous_identity_id="bob",
+        new_identity_id="alice",
+        actor="user:carol",
+        reason="operator_correction",
+        applied_at=start,
+        rewritten_rows=2,
+        evidence=None,
+        revision_kind="operator_correction",
+        range_start=start,
+        range_end=end,
+        range_authority="operator",
+        revision_range_id="range-7",
+        correction_id="corr-9",
+        required_projections=("cts_internal", "cc"),
+        revision_schema_version="1",
+    )
+    pb = _to_proto(revision)
+    # Round-trip through the wire to prove the fields are real proto fields.
+    decoded = tracking_pb2.IdentityRevision.FromString(pb.SerializeToString())
+    assert decoded.revision_kind == "operator_correction"
+    assert decoded.range_start_unix_ns == int(start.timestamp() * 1e9)
+    assert decoded.range_end_unix_ns == int(end.timestamp() * 1e9)
+    assert decoded.range_authority == "operator"
+    assert decoded.revision_range_id == "range-7"
+    assert decoded.correction_id == "corr-9"
+    assert list(decoded.required_projections) == ["cts_internal", "cc"]
+    assert decoded.revision_schema_version == "1"
+
+
+def test_old_revision_leaves_m06_fields_empty() -> None:
+    """A legacy revision (no M06 metadata) leaves new fields at proto defaults."""
+    revision = _make_revision()
+    pb = _to_proto(revision)
+    assert pb.revision_kind == ""
+    assert pb.range_start_unix_ns == 0
+    assert pb.revision_range_id == ""
+    assert list(pb.required_projections) == []

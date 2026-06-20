@@ -544,6 +544,29 @@ class PostgresPHRepository:
             evidence=None,
         )
 
+    async def record_revision(
+        self, revision: IdentityRevision, *, kind: str = "manual_correct"
+    ) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO continuous_tracking.ph_revisions (
+                    revision_id, ph_id, previous_identity_id, new_identity_id,
+                    actor, reason, kind, applied_at, rewritten_rows
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT DO NOTHING
+                """,
+                revision.revision_id,
+                revision.ph_id,
+                revision.previous_identity_id,
+                revision.new_identity_id,
+                revision.actor,
+                revision.reason,
+                kind,
+                revision.applied_at,
+                revision.rewritten_rows,
+            )
+
     # -- merge --
 
     async def _merge_with_conn(

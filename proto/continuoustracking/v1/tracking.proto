@@ -206,6 +206,34 @@ message IdentityRevision {
 
   // Description of any conflict (e.g. duplicate active identity).
   string conflict = 17;
+
+  // -- M06 segment-correction / revision-range / projection fields --
+  // These are typed proto fields (NOT folded into evidence_json). Older readers
+  // ignore unknown fields and keep working per the M04 compatibility rules.
+
+  // Operator/inferred revision kind: operator_correction | operator_unknown |
+  // operator_frame_correction | operator_handoff | operator_compensation |
+  // inferred. Empty for legacy automatic revisions.
+  string revision_kind = 18;
+
+  // Effective range this revision applies to (operator authority is bounded to
+  // these observation timestamps). Zero when the revision is not range-scoped.
+  fixed64 range_start_unix_ns = 19;
+  fixed64 range_end_unix_ns = 20;
+
+  // Authority of the effective range: "operator" or "inferred".
+  string range_authority = 21;
+
+  // Stable IDs for the revision-range projection model.
+  string revision_range_id = 22;
+  string correction_id = 23;
+
+  // Projections that must acknowledge this revision_id before the correction
+  // job is complete (e.g. "cts_internal", "cc").
+  repeated string required_projections = 24;
+
+  // Schema version of the revision-range payload for forward compatibility.
+  string revision_schema_version = 25;
 }
 
 // IdentitySnapshot is a lightweight per-PH identity state for live

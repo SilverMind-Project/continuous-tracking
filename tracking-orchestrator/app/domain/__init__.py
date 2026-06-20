@@ -610,6 +610,15 @@ class IdentityRevision:
     applied_at: datetime
     rewritten_rows: int
     evidence: IdentityEvidence | None = None
+    # -- M06 revision-range / projection metadata (typed proto fields 18-25) --
+    revision_kind: str = ""
+    range_start: datetime | None = None
+    range_end: datetime | None = None
+    range_authority: str = ""
+    revision_range_id: str = ""
+    correction_id: str = ""
+    required_projections: tuple[str, ...] = ()
+    revision_schema_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -776,7 +785,12 @@ class GalleryEmbedding:
 
 @dataclass(frozen=True)
 class IdentityCorrection:
-    """Manual identity correction or merge decision."""
+    """Legacy GlobalTrack-era manual identity correction or merge decision.
+
+    Retained for the vestigial ``misc.save_correction`` store. New operator
+    corrections use :class:`IdentitySegmentCorrection` and the M06 revision-range
+    model below.
+    """
 
     correction_id: CorrectionId
     global_track_id: GlobalTrackId
@@ -785,6 +799,156 @@ class IdentityCorrection:
     corrected_at: datetime
     corrected_by: str = ""
     reason: str = ""
+
+
+# ---------------------------------------------------------------------------
+# M06: Segment correction, revision ranges, jobs, and effective projections
+# ---------------------------------------------------------------------------
+
+# Structured reason codes captured on every operator correction.
+CorrectionReasonCode = Literal[
+    "wrong_person",
+    "identity_uncertain",
+    "track_handoff",
+    "duplicate_hypothesis",
+    "bad_bbox",
+    "other",
+]
+
+# Kind of correction operation. ``geometry`` shares the audit envelope but is a
+# separate revision type; ``compensation`` is an undo.
+CorrectionKind = Literal[
+    "label",
+    "frame_only",
+    "handoff_split",
+    "geometry",
+    "compensation",
+]
+
+# Whether an effective range was set by an operator or by inference. Operator
+# ranges are authoritative inside their bounds.
+RevisionAuthority = Literal["operator", "inferred"]
+
+RevisionJobStatus = Literal["pending", "applying", "completed", "failed"]
+
+ProjectionAckStatus = Literal["acked", "failed"]
+
+
+@dataclass(frozen=True)
+class IdentitySegmentCorrection:
+    """Authoritative, append-only operator correction over an observation range.
+
+    Operator truth is immutable: the raw inference in ``identity_decisions`` is
+    never edited. Applying a correction writes one or more
+    :class:`IdentityRevisionRange` rows and an :class:`IdentityRevisionJob`.
+
+    ``target_identity_id is None`` together with ``set_unknown`` expresses an
+    explicit "Set to Unknown". An empty identity that is not ``set_unknown`` is
+    rejected at the service boundary.
+    """
+
+    correction_id: CorrectionId
+    ph_id: PHId
+    actor: str
+    reason_code: CorrectionReasonCode
+    observation_start: datetime
+    observation_end: datetime
+    base_ph_version: int
+    revision_id: RevisionId
+    target_identity_id: IdentityId | None = None
+    set_unknown: bool = False
+    kind: CorrectionKind = "label"
+    frame_only: bool = False
+    note: str | None = None
+    source_view: str | None = None
+    reviewed_frame_id: str | None = None
+    reviewed_bbox: dict[str, Any] | None = None
+    base_revision_id: RevisionId | None = None
+    compensates_correction_id: CorrectionId | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class IdentityRevisionRange:
+    """Effective identity for a PH over an explicit time range.
+
+    Operator ranges (``authority == 'operator'``) are authoritative inside their
+    bounds and cannot be superseded by inferred ranges. A live range has
+    ``superseded_by_range_id is None``.
+    """
+
+    range_id: str
+    revision_id: RevisionId
+    ph_id: PHId
+    authority: RevisionAuthority
+    range_start: datetime
+    range_end: datetime
+    effective_identity_id: IdentityId | None = None  # None == Unknown
+    correction_id: CorrectionId | None = None
+    supersedes_range_id: str | None = None
+    superseded_by_range_id: str | None = None
+    compensated_by_revision_id: RevisionId | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class IdentityRevisionJob:
+    """Projection lifecycle for one revision.
+
+    A correction is complete only after every entry in ``required_projections``
+    acknowledges the same ``revision_id``. Retries are idempotent; an accepted
+    correction is never rolled back to recover from a projection failure.
+    """
+
+    job_id: str
+    revision_id: RevisionId
+    status: RevisionJobStatus = "pending"
+    required_projections: tuple[str, ...] = ()
+    correction_id: CorrectionId | None = None
+    attempts: int = 0
+    last_error: str | None = None
+    row_counts: dict[str, int] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class ProjectionAck:
+    """One consumer's acknowledgement that it applied a revision."""
+
+    revision_id: RevisionId
+    consumer: str
+    schema_version: str
+    status: ProjectionAckStatus = "acked"
+    counts: dict[str, int] = field(default_factory=dict)
+    applied_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class SegmentBoundary:
+    """One boundary of a proposed segment, with the reason it was chosen."""
+
+    observation_id: str
+    captured_at: datetime
+    reason: str  # association_discontinuity | identity_anchor | split | merge |
+    #             operator_revision | segment_edge
+
+
+@dataclass(frozen=True)
+class SegmentProposal:
+    """Advisory proposed correction segment for caregiver review.
+
+    The proposal is advisory only; applying requires an explicit confirmed
+    start/end. ``ph_version`` is the optimistic token; a stale token forces
+    recompute (HTTP 409).
+    """
+
+    ph_id: PHId
+    observation_ids: list[str]
+    start: SegmentBoundary
+    end: SegmentBoundary
+    ph_version: int
+    effective_identity_id: IdentityId | None = None
 
 
 PrivacyPolicy = Literal["drop_detection", "blur_region", "mask_region"]

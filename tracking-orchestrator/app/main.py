@@ -659,6 +659,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     set_ph_repository(_ph_repo_n1)  # type: ignore[arg-type]
     deps_ph_repo = _ph_repo_n1
 
+    # M06 identity-correction repository (segment corrections + revision ranges).
+    from .storage.corrections import InMemoryIdentityCorrectionRepository
+    from .storage.postgres.correction_repo import PostgresIdentityCorrectionRepository
+
+    correction_repo_obj = (
+        PostgresIdentityCorrectionRepository(_pool)
+        if _pool is not None
+        else InMemoryIdentityCorrectionRepository()
+    )
+
     # Wire revision publisher for manual PH corrections.
     if _pipeline._revision_publisher is not None:
         set_revision_publisher(_pipeline._revision_publisher)
@@ -837,11 +847,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.keyframe_revalidator = _revalidator
         app.state.keyframe_revalidator_task = asyncio.create_task(_revalidator.run())
 
-    # Wire corrections and live routers to the PH repository.
-    set_corrections_context(
+    # Wire the M06 correction service (single owner of operator corrections).
+    from .services.identity_correction_service import IdentityCorrectionService
+
+    correction_service = IdentityCorrectionService(
         ph_repo=deps_ph_repo,  # type: ignore[arg-type]
+        correction_repo=correction_repo_obj,
         publisher=_pipeline._revision_publisher,
+        rewriter=identity_rewriter,
     )
+    set_corrections_context(correction_service)
+    # Route the PH inspector and batch correction endpoints through the same
+    # service so every correction writes an effective revision range (M06).
+    from .routers.ph import set_correction_service as set_ph_correction_service
+
+    set_ph_correction_service(correction_service)
     set_live_context(
         ph_repo=deps_ph_repo,  # type: ignore[arg-type]
         keyframe_repo=keyframe_repo,

@@ -1,29 +1,43 @@
-"""Manual identity-correction endpoints consumed by the CC BFF.
+"""Identity-correction endpoints consumed by the CC BFF.
 
-Provides a single authenticated call surface for caregivers to override the
-Bayesian identity assignment on a PersonHypothesis. Each correction is expressed
-as a synthetic IdentityRevision with reason="manual" so the downstream
-revision-stream consumers handle it identically to an automated revision.
+This router is a thin adapter over :class:`IdentityCorrectionService`, the single
+owner of operator corrections (M06). Routes never mutate repositories directly.
 
-The endpoint calls ph_repo.correct_identity(), which atomically updates the PH's
-identity and persists the IdentityRevision, then publishes the revision to Redis.
+Surface:
+
+* ``POST /internal/corrections/propose`` -- advisory segment proposal.
+* ``POST /internal/corrections/apply`` -- explicit frame-only/bounded correction
+  or explicit Set-to-Unknown, guarded by an optimistic version token.
+* ``POST /internal/corrections/{correction_id}/compensate`` -- undo via a
+  compensating revision (never deletes the original).
+* ``POST /internal/projection-acks`` -- downstream projection acknowledgement
+  (CC posts here after applying a revision); completes the revision job.
+* ``POST /internal/corrections`` -- **deprecated** whole-PH compatibility adapter
+  that proposes the current segment and applies it. Removed once the CC admin UI
+  (M08) calls the explicit ``/apply`` API. See ``docs/api/reference.md``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from typing import Any, NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
-from ..domain import IdentityRevision
-from ..storage.base import (
-    InMemoryPHRepository,
-    PHRepositoryProtocol,
+from ..domain import ProjectionAck
+from ..services.identity_correction_service import (
+    CorrectionConflictError,
+    CorrectionError,
+    EmptyIdentityError,
+    IdentityCorrectionService,
+    PHNotFoundError,
+    StaleVersionError,
 )
-from ..transport.revision_publisher import RevisionPublisher
+
+_HTTP_422 = 422  # status.HTTP_422_UNPROCESSABLE_ENTITY is deprecated in Starlette
 
 logger = get_logger(__name__)
 
@@ -31,45 +45,110 @@ router = APIRouter(tags=["corrections-internal"])
 
 
 # ---------------------------------------------------------------------------
-# Dependency wiring: module-level singletons overridden at startup.
+# Dependency wiring: module-level singleton overridden at startup.
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class _CorrectionContext:
-    """Injected services needed to execute a manual correction."""
-
-    ph_repo: PHRepositoryProtocol
-    publisher: RevisionPublisher | None
+    service: IdentityCorrectionService | None
 
 
-_ctx: _CorrectionContext = _CorrectionContext(
-    ph_repo=InMemoryPHRepository(),
-    publisher=None,
-)
+_ctx: _CorrectionContext = _CorrectionContext(service=None)
 
 
 def get_context() -> _CorrectionContext:
     return _ctx
 
 
-def set_context(
-    ph_repo: PHRepositoryProtocol,
-    publisher: RevisionPublisher | None,
-) -> None:
-    """Wire production repositories + publisher at startup (called from lifespan)."""
+def set_context(service: IdentityCorrectionService) -> None:
+    """Wire the production correction service at startup (called from lifespan)."""
     global _ctx
-    _ctx = _CorrectionContext(ph_repo=ph_repo, publisher=publisher)
+    _ctx = _CorrectionContext(service=service)
+
+
+def _require_service(ctx: _CorrectionContext) -> IdentityCorrectionService:
+    if ctx.service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "corrections.unavailable", "message": "service not wired"},
+        )
+    return ctx.service
 
 
 # ---------------------------------------------------------------------------
-# Request / response schemas
+# Schemas
 # ---------------------------------------------------------------------------
 
 
+class ProposeRequest(BaseModel):
+    ph_id: str = Field(..., min_length=1, max_length=128)
+    observation_id: str | None = Field(default=None, max_length=128)
+    at: datetime | None = None
+
+
+class SegmentBoundaryModel(BaseModel):
+    observation_id: str
+    captured_at: datetime
+    reason: str
+
+
+class ProposalResponse(BaseModel):
+    ph_id: str
+    observation_ids: list[str]
+    start: SegmentBoundaryModel
+    end: SegmentBoundaryModel
+    ph_version: int
+    effective_identity_id: str | None
+
+
+class ApplyRequest(BaseModel):
+    ph_id: str = Field(..., min_length=1, max_length=128)
+    actor: str = Field(..., min_length=1, max_length=128)
+    reason_code: str = Field(..., max_length=64)
+    observation_start: datetime
+    observation_end: datetime
+    base_ph_version: int
+    target_identity_id: str | None = Field(default=None, max_length=128)
+    set_unknown: bool = False
+    frame_only: bool = False
+    note: str | None = Field(default=None, max_length=2048)
+    source_view: str | None = Field(default=None, max_length=64)
+    reviewed_frame_id: str | None = Field(default=None, max_length=128)
+    reviewed_bbox: dict[str, Any] | None = None
+    at_observation_id: str | None = Field(default=None, max_length=128)
+
+
+class CorrectionResultResponse(BaseModel):
+    revision_id: str
+    correction_id: str
+    ph_id: str
+    previous_identity_id: str | None
+    new_identity_id: str | None
+    range_id: str
+    new_ph_id: str | None
+    job_status: str
+
+
+class CompensateRequest(BaseModel):
+    actor: str = Field(..., min_length=1, max_length=128)
+
+
+class ProjectionAckRequest(BaseModel):
+    revision_id: str = Field(..., min_length=1, max_length=128)
+    consumer: str = Field(..., min_length=1, max_length=64)
+    schema_version: str = Field(..., min_length=1, max_length=32)
+    status: str = Field(default="acked", max_length=16)
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class ProjectionAckResponse(BaseModel):
+    revision_id: str
+    completed: bool
+
+
+# Legacy whole-PH correction (deprecated).
 class CorrectionRequest(BaseModel):
-    """Body for POST /internal/corrections."""
-
     ph_id: str = Field(..., min_length=1, max_length=128)
     new_identity_id: str | None = Field(default=None, max_length=128)
     actor: str = Field(..., min_length=1, max_length=128)
@@ -87,73 +166,187 @@ class CorrectionResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# POST /internal/corrections
+# Error mapping
 # ---------------------------------------------------------------------------
 
 
-@router.post("/internal/corrections", response_model=CorrectionResponse)
-async def apply_correction(
-    body: CorrectionRequest,
-    ctx: _CorrectionContext = Depends(get_context),
-) -> CorrectionResponse:
-    """Apply a manual identity override for one PersonHypothesis.
-
-    Semantics
-    ---------
-    - The PH is loaded; if it doesn't exist we return 404 so the UI can refresh.
-    - ph_repo.correct_identity() atomically updates the PH identity and persists
-      the IdentityRevision.
-    - The revision is published to Redis. Publishing is best-effort: if Redis is
-      unreachable the HTTP call still succeeds (local state is already consistent).
-    """
-    ph = await ctx.ph_repo.get(body.ph_id)
-    if ph is None:
+def _raise_for_correction_error(exc: CorrectionError) -> NoReturn:
+    if isinstance(exc, PHNotFoundError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "ph.not_found",
-                "message": f"PH {body.ph_id} not found.",
-            },
-        )
-
-    previous_identity_id = ph.current_identity_id
-
-    try:
-        revision: IdentityRevision = await ctx.ph_repo.correct_identity(
-            body.ph_id,
-            new_identity_id=body.new_identity_id,
-            reason=body.reason,
-            actor=body.actor,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "correction.rejected", "message": str(exc)},
+            detail={"code": "correction.not_found", "message": str(exc)},
         ) from exc
+    if isinstance(exc, StaleVersionError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "correction.stale_version", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, EmptyIdentityError):
+        raise HTTPException(
+            status_code=_HTTP_422,
+            detail={"code": "correction.empty_identity", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, CorrectionConflictError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "correction.conflict", "message": str(exc)},
+        ) from exc
+    raise HTTPException(
+        status_code=_HTTP_422,
+        detail={"code": "correction.rejected", "message": str(exc)},
+    ) from exc
 
-    if ctx.publisher is not None and ctx.publisher.is_connected:
-        try:
-            await ctx.publisher.publish(revision)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "correction_publish_failed",
-                revision_id=revision.revision_id,
-                error=str(exc),
-            )
 
-    logger.info(
-        "manual_identity_correction_applied",
-        revision_id=revision.revision_id,
-        ph_id=body.ph_id,
-        previous_identity_id=previous_identity_id,
-        new_identity_id=body.new_identity_id,
-        actor=body.actor,
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.post("/internal/corrections/propose", response_model=ProposalResponse)
+async def propose_segment(
+    body: ProposeRequest,
+    ctx: _CorrectionContext = Depends(get_context),
+) -> ProposalResponse:
+    service = _require_service(ctx)
+    try:
+        proposal = await service.propose_segment(
+            body.ph_id, observation_id=body.observation_id, at=body.at
+        )
+    except CorrectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "correction.propose_failed", "message": str(exc)},
+        ) from exc
+    return ProposalResponse(
+        ph_id=proposal.ph_id,
+        observation_ids=proposal.observation_ids,
+        start=SegmentBoundaryModel(
+            observation_id=proposal.start.observation_id,
+            captured_at=proposal.start.captured_at,
+            reason=proposal.start.reason,
+        ),
+        end=SegmentBoundaryModel(
+            observation_id=proposal.end.observation_id,
+            captured_at=proposal.end.captured_at,
+            reason=proposal.end.reason,
+        ),
+        ph_version=proposal.ph_version,
+        effective_identity_id=proposal.effective_identity_id,
     )
 
+
+@router.post("/internal/corrections/apply", response_model=CorrectionResultResponse)
+async def apply_correction(
+    body: ApplyRequest,
+    ctx: _CorrectionContext = Depends(get_context),
+) -> CorrectionResultResponse:
+    service = _require_service(ctx)
+    try:
+        result = await service.apply_correction(
+            ph_id=body.ph_id,
+            actor=body.actor,
+            reason_code=body.reason_code,  # type: ignore[arg-type]
+            observation_start=body.observation_start,
+            observation_end=body.observation_end,
+            base_ph_version=body.base_ph_version,
+            target_identity_id=body.target_identity_id,
+            set_unknown=body.set_unknown,
+            frame_only=body.frame_only,
+            note=body.note,
+            source_view=body.source_view,
+            reviewed_frame_id=body.reviewed_frame_id,
+            reviewed_bbox=body.reviewed_bbox,
+            at_observation_id=body.at_observation_id,
+        )
+    except CorrectionError as exc:
+        _raise_for_correction_error(exc)
+    return _result_response(result)
+
+
+@router.post(
+    "/internal/corrections/{correction_id}/compensate",
+    response_model=CorrectionResultResponse,
+)
+async def compensate_correction(
+    correction_id: str,
+    body: CompensateRequest,
+    ctx: _CorrectionContext = Depends(get_context),
+) -> CorrectionResultResponse:
+    service = _require_service(ctx)
+    try:
+        result = await service.compensate(correction_id, actor=body.actor)
+    except CorrectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "correction.compensate_failed", "message": str(exc)},
+        ) from exc
+    return _result_response(result)
+
+
+@router.post("/internal/projection-acks", response_model=ProjectionAckResponse)
+async def record_projection_ack(
+    body: ProjectionAckRequest,
+    ctx: _CorrectionContext = Depends(get_context),
+) -> ProjectionAckResponse:
+    service = _require_service(ctx)
+    completed = await service.record_projection_ack(
+        ProjectionAck(
+            revision_id=body.revision_id,
+            consumer=body.consumer,
+            schema_version=body.schema_version,
+            status=body.status,  # type: ignore[arg-type]
+            counts=body.counts,
+        )
+    )
+    return ProjectionAckResponse(revision_id=body.revision_id, completed=completed)
+
+
+@router.post("/internal/corrections", response_model=CorrectionResponse, deprecated=True)
+async def apply_correction_legacy(
+    body: CorrectionRequest,
+    response: Response,
+    ctx: _CorrectionContext = Depends(get_context),
+) -> CorrectionResponse:
+    """Deprecated whole-PH correction adapter.
+
+    Proposes the current segment and applies it through the service so legacy
+    callers keep working until the explicit ``/apply`` API is adopted (M08).
+    """
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = '</internal/corrections/apply>; rel="successor-version"'
+    service = _require_service(ctx)
+    try:
+        proposal = await service.propose_segment(body.ph_id)
+        result = await service.apply_correction(
+            ph_id=body.ph_id,
+            actor=body.actor,
+            reason_code="other",
+            observation_start=proposal.start.captured_at,
+            observation_end=proposal.end.captured_at,
+            base_ph_version=proposal.ph_version,
+            target_identity_id=body.new_identity_id,
+            set_unknown=body.new_identity_id is None,
+            note=body.reason,
+        )
+    except CorrectionError as exc:
+        _raise_for_correction_error(exc)
     return CorrectionResponse(
-        revision_id=revision.revision_id,
-        ph_id=body.ph_id,
-        previous_identity_id=previous_identity_id,
-        new_identity_id=body.new_identity_id,
-        applied_at=revision.applied_at.isoformat(),
+        revision_id=result.revision_id,
+        ph_id=result.ph_id,
+        previous_identity_id=result.previous_identity_id,
+        new_identity_id=result.new_identity_id,
+        applied_at=datetime.now().astimezone().isoformat(),
+    )
+
+
+def _result_response(result: Any) -> CorrectionResultResponse:
+    return CorrectionResultResponse(
+        revision_id=result.revision_id,
+        correction_id=result.correction_id,
+        ph_id=result.ph_id,
+        previous_identity_id=result.previous_identity_id,
+        new_identity_id=result.new_identity_id,
+        range_id=result.range_id,
+        new_ph_id=result.new_ph_id,
+        job_status=result.job.status,
     )

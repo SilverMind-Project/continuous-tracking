@@ -61,17 +61,56 @@ router = APIRouter(tags=["ph"])
 
 _repo: PHRepositoryProtocol | None = None
 _revision_publisher: object | None = None  # RevisionPublisher
+_correction_service: Any | None = None  # IdentityCorrectionService
 
 
 def set_ph_repository(repo: PHRepositoryProtocol) -> None:
-    global _repo
+    global _repo, _correction_service
     _repo = repo
+    # Drop any lazily-built service so it rebinds to the new repo.
+    if _correction_service is not None and getattr(
+        _correction_service, "_lazy", False
+    ):
+        _correction_service = None
 
 
 def set_revision_publisher(publisher: object) -> None:
     """Inject RevisionPublisher for manual correction publishing."""
     global _revision_publisher
     _revision_publisher = publisher
+
+
+def set_correction_service(service: object) -> None:
+    """Inject the shared IdentityCorrectionService (production wiring).
+
+    When unset, the correct/batch_correct routes lazily build a service bound to
+    the wired PH repository so corrections always write effective revision ranges.
+    """
+    global _correction_service
+    _correction_service = service
+
+
+def _get_correction_service() -> Any:
+    """Return the shared correction service, building a lazy one if needed."""
+    global _correction_service
+    if _correction_service is not None:
+        return _correction_service
+    from ..services.identity_correction_service import IdentityCorrectionService
+    from ..storage.corrections import InMemoryIdentityCorrectionRepository
+
+    if _repo is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "ph.repository.not_wired", "message": "PH repository not configured"},
+        )
+    service = IdentityCorrectionService(
+        ph_repo=_repo,
+        correction_repo=InMemoryIdentityCorrectionRepository(),
+        publisher=_revision_publisher,
+    )
+    service._lazy = True  # type: ignore[attr-defined]
+    _correction_service = service
+    return service
 
 
 async def get_repo() -> PHRepositoryProtocol:
@@ -81,6 +120,21 @@ async def get_repo() -> PHRepositoryProtocol:
             detail={"code": "ph.repository.not_wired", "message": "PH repository not configured"},
         )
     return _repo
+
+
+def _revision_response_from_result(result: Any, *, kind: str) -> RevisionResponse:
+    """Build a RevisionResponse from an IdentityCorrectionService result."""
+    return RevisionResponse(
+        revision_id=result.revision_id,
+        ph_id=result.ph_id,
+        previous_identity_id=result.previous_identity_id,
+        new_identity_id=result.new_identity_id,
+        actor="",
+        reason=kind,
+        kind=kind,
+        applied_at=datetime.now(UTC),
+        rewritten_rows=result.job.row_counts.get("cts_rewritten_rows", 0),
+    )
 
 
 async def _publish_manual_revision(revision: IdentityRevision, kind: str) -> None:
@@ -265,29 +319,29 @@ async def batch_correct(
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> BatchCorrectResponse:
     actor = _actor_from_request(request)
-    idem_key = _idempotency_key_from_request(request)
-    ph_ids = [item.ph_id for item in body.corrections]
-    new_identity_ids = [item.new_identity_id for item in body.corrections]
-    reasons = [item.reason for item in body.corrections]
+    from ..services.identity_correction_service import CorrectionError
+
+    service = _get_correction_service()
+    results = []
     try:
-        revs = await repo.batch_correct(
-            ph_ids=ph_ids,
-            new_identity_ids=new_identity_ids,
-            actor=actor,
-            reasons=reasons,
-            idempotency_key=idem_key,
-        )
-    except ValueError as exc:
+        for item in body.corrections:
+            results.append(
+                await service.apply_whole_ph_correction(
+                    ph_id=item.ph_id,
+                    actor=actor,
+                    new_identity_id=item.new_identity_id,
+                    reason=item.reason,
+                )
+            )
+    except CorrectionError as exc:
         raise HTTPException(
             status_code=422,
             detail={"code": "ph.batch_correct.invalid", "message": str(exc)},
         ) from exc
-    metrics.cts_ph_corrections_total.labels(actor="batch").inc(len(revs))
-    for rev in revs:
-        await _publish_manual_revision(rev, "manual_correct")
+    metrics.cts_ph_corrections_total.labels(actor="batch").inc(len(results))
     return BatchCorrectResponse(
-        revisions=[RevisionResponse.from_domain(r, kind="manual_correct") for r in revs],
-        applied=len(revs),
+        revisions=[_revision_response_from_result(r, kind="manual_correct") for r in results],
+        applied=len(results),
         errors=[],
     )
 
@@ -452,24 +506,24 @@ async def correct_identity(
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> CorrectIdentityResponse:
     actor = _actor_from_request(request)
-    idem_key = _idempotency_key_from_request(request)
+    from ..services.identity_correction_service import CorrectionError
+
+    service = _get_correction_service()
     try:
-        revision = await repo.correct_identity(
+        result = await service.apply_whole_ph_correction(
             ph_id=ph_id,
+            actor=actor,
             new_identity_id=body.new_identity_id,
             reason=body.reason,
-            actor=actor,
-            idempotency_key=idem_key,
         )
-    except ValueError as exc:
+    except CorrectionError as exc:
         raise HTTPException(
             status_code=422,
             detail={"code": "ph.correct.invalid", "message": str(exc)},
         ) from exc
     metrics.cts_ph_corrections_total.labels(actor="operator").inc()
-    await _publish_manual_revision(revision, "manual_correct")
     return CorrectIdentityResponse(
-        revision=RevisionResponse.from_domain(revision, kind="manual_correct"),
+        revision=_revision_response_from_result(result, kind="manual_correct"),
     )
 
 

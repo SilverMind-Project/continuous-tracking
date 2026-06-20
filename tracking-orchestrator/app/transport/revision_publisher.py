@@ -109,5 +109,22 @@ def _to_proto(revision: IdentityRevision) -> tracking_pb2.IdentityRevision:
             default=str,
         ),
     )
+    # -- M06 typed revision-range / projection fields (18-25) --
+    if revision.revision_kind:
+        pb.revision_kind = revision.revision_kind
+    if revision.range_start is not None:
+        pb.range_start_unix_ns = int(revision.range_start.timestamp() * 1e9)
+    if revision.range_end is not None:
+        pb.range_end_unix_ns = int(revision.range_end.timestamp() * 1e9)
+    if revision.range_authority:
+        pb.range_authority = revision.range_authority
+    if revision.revision_range_id:
+        pb.revision_range_id = revision.revision_range_id
+    if revision.correction_id:
+        pb.correction_id = revision.correction_id
+    if revision.required_projections:
+        pb.required_projections.extend(revision.required_projections)
+    if revision.revision_schema_version:
+        pb.revision_schema_version = revision.revision_schema_version
     # tracklet_ids and map_identity_id left at proto defaults (empty / "")
     return pb

@@ -20,6 +20,10 @@ from ..domain import (
     WorldObservation,
 )
 from .annotations import BboxAnnotationRepository, InMemoryBboxAnnotationRepository
+from .corrections import (
+    IdentityCorrectionRepositoryProtocol,
+    InMemoryIdentityCorrectionRepository,
+)
 from .gait import (
     GaitBoutRepository,
     GaitDailyRepository,
@@ -183,6 +187,16 @@ class PHRepositoryProtocol(Protocol):
         limit: int = 50,
         before_id: str | None = None,
     ) -> tuple[list[IdentityRevision], bool]: ...
+    async def record_revision(
+        self, revision: IdentityRevision, *, kind: str = "manual_correct"
+    ) -> None:
+        """Append a revision row to the audit feed (``ph_revisions``).
+
+        Used by :class:`IdentityCorrectionService` so operator corrections show
+        in the revisions feed and reach the CC rewriter, while the effective
+        projection is carried separately by revision ranges.
+        """
+        ...
 
 
 class WorldObservationRepositoryProtocol(Protocol):
@@ -747,6 +761,12 @@ class InMemoryPHRepository:
         ][:limit]
         return await self.delete_many(candidates, actor="system", reason="unknown_purge")
 
+    async def record_revision(
+        self, revision: IdentityRevision, *, kind: str = "manual_correct"
+    ) -> None:
+        async with self._lock:
+            self._revisions.append(revision)
+
     async def list_revisions(
         self,
         *,
@@ -982,6 +1002,7 @@ __all__ = [
     "InMemoryGaitBoutRepository",
     "InMemoryGaitDailyRepository",
     "InMemoryGalleryRepository",
+    "InMemoryIdentityCorrectionRepository",
     "InMemoryIdentityDecisionRepository",
     "InMemoryKeyframeRepository",
     "InMemoryPHRepository",
@@ -990,6 +1011,7 @@ __all__ = [
     "InMemoryTrajectoryRepository",
     "InMemoryWorldObservationRepository",
     "KeyframeRepository",
+    "IdentityCorrectionRepositoryProtocol",
     "IdentityDecisionRepositoryProtocol",
     "PHRepositoryProtocol",
     "PrivacyRepository",
