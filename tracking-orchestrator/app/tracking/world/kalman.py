@@ -12,6 +12,7 @@ when S is poorly conditioned.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -196,8 +197,18 @@ def mahalanobis2_position(
     """Squared Mahalanobis distance of an observation under the predicted state.
 
     Returned in chi-squared distribution with 2 dof. Used by the gate.
+
+    Fails closed: returns ``math.inf`` (never raises, never returns ``NaN``) when
+    any input is non-finite or the innovation-covariance solve is singular, so an
+    invalid pair is gated out instead of leaking ``NaN`` into the cost matrix and
+    the Hungarian solver. The caller maps ``inf`` to its ``GATE_INF`` sentinel.
     """
     z = np.array([observation_x_m, observation_y_m], dtype=np.float64)
+    R = np.asarray(observation_cov_m2, dtype=np.float64)  # noqa: N806
+    if not (np.all(np.isfinite(z)) and np.all(np.isfinite(state.mean))):
+        return math.inf
+    if not (np.all(np.isfinite(state.covariance)) and np.all(np.isfinite(R))):
+        return math.inf
     H = np.array(  # noqa: N806
         [
             [1.0, 0.0, 0.0, 0.0],
@@ -205,8 +216,13 @@ def mahalanobis2_position(
         ],
         dtype=np.float64,
     )
-    R = observation_cov_m2  # noqa: N806
     y = z - H @ state.mean
     S = H @ state.covariance @ H.T + R  # noqa: N806
-    x = np.linalg.solve(S, y)
-    return float(y @ x)
+    try:
+        x = np.linalg.solve(S, y)
+    except np.linalg.LinAlgError:
+        return math.inf
+    d2 = float(y @ x)
+    if not math.isfinite(d2):
+        return math.inf
+    return d2

@@ -117,6 +117,12 @@ class Metrics:
     worldtracker_dedup_clusters_total: Counter
     worldtracker_observation_missing_floorpoint_total: Counter
 
+    # ---- M03 association integrity (primary pass only) -----------------
+    worldtracker_association_rejections_total: Counter  # label: reason
+    worldtracker_association_outcome_total: Counter  # label: outcome
+    worldtracker_appearance_updates_rejected_total: Counter  # label: reason
+    worldtracker_batch_skew_ms: Histogram  # label: camera_id
+
     # ---- Keyframe quality ----------------------------------------------
     keyframe_dropped_low_confidence_total: Counter
 
@@ -460,6 +466,28 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         worldtracker_observation_missing_floorpoint_total=_counter(
             "cts_worldtracker_observation_missing_floorpoint_total",
             "Observations skipped from dedup weighting due to missing calibrated floor point.",
+        ),
+        # ---- M03 association integrity (emitted from the primary pass only) ----
+        worldtracker_association_rejections_total=_counter(
+            "cts_worldtracker_association_rejections_total",
+            "Gated (PH, obs) pairs by typed reason in the primary association pass.",
+            ["reason"],
+        ),
+        worldtracker_association_outcome_total=_counter(
+            "cts_worldtracker_association_outcome_total",
+            "Primary-pass association outcomes: matched / unmatched_obs / unmatched_ph.",
+            ["outcome"],
+        ),
+        worldtracker_appearance_updates_rejected_total=_counter(
+            "cts_worldtracker_appearance_updates_rejected_total",
+            "Matched observations whose embedding was barred from PH appearance, by reason.",
+            ["reason"],
+        ),
+        worldtracker_batch_skew_ms=_hist(
+            "cts_worldtracker_batch_skew_ms",
+            "Per-camera observation age (now - captured_at) within a tracker batch.",
+            (1, 5, 10, 25, 50, 100, 200, 500, 1000),
+            ["camera_id"],
         ),
         # ---- Keyframe quality ----------------------------------------------
         keyframe_dropped_low_confidence_total=_counter(

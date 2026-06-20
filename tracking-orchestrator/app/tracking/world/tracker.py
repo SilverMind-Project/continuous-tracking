@@ -45,6 +45,7 @@ from ...storage.base import (
     WorldObservationRepositoryProtocol,
 )
 from ..orientation import update_view_prototypes
+from .appearance_policy import AppearanceDecision, evaluate_appearance_update
 from .association import associate
 from .config import WorldTrackerConfig
 from .dedup import dedup_observations
@@ -198,6 +199,27 @@ def _sanitize_identity_id(raw: str | None) -> str | None:
     if raw is not None and raw.lower() in ("", "unknown"):
         return None
     return raw
+
+
+def _record_appearance_rejection(
+    m: _metrics.Metrics,
+    ph_id: str,
+    obs: WorldObservation,
+    decision: AppearanceDecision,
+) -> None:
+    """Emit the diagnostic for a barred PH-local appearance update (M03 task 9).
+
+    Records the typed reason without labelling the embedding as the PH identity.
+    """
+    reason = str(decision.reason) if decision.reason is not None else "unknown"
+    m.worldtracker_appearance_updates_rejected_total.labels(reason=reason).inc()
+    logger.debug(
+        "ph_appearance_update_rejected",
+        ph_id=ph_id,
+        camera_id=obs.camera_id,
+        orientation=int(obs.orientation),
+        reason=reason,
+    )
 
 
 def _unpack_observations(observations: list[WorldObservation]) -> _ObsVectors:
@@ -383,6 +405,27 @@ class WorldTracker:
             obs_covs=obs_vecs.covs,
         )
 
+        # M03: record association integrity diagnostics from the PRIMARY pass
+        # only. The shadow and low-band passes below must not touch these
+        # counters or they would double/triple-count the same frame.
+        for _reason, _count in assignment.rejection_reasons.items():
+            m.worldtracker_association_rejections_total.labels(reason=_reason).inc(_count)
+        m.worldtracker_association_outcome_total.labels(outcome="matched").inc(
+            len(assignment.matched)
+        )
+        m.worldtracker_association_outcome_total.labels(outcome="unmatched_obs").inc(
+            len(assignment.unmatched_obs)
+        )
+        m.worldtracker_association_outcome_total.labels(outcome="unmatched_ph").inc(
+            len(assignment.unmatched_phs)
+        )
+        # Per-camera batch-skew histogram over the raw (pre-dedup) observations.
+        # Diagnostic only — it does not change ordering or the single-batch now.
+        for _raw in raw_observations:
+            _skew_ms = (now - _raw.captured_at).total_seconds() * 1000.0
+            if _skew_ms >= 0.0:
+                m.worldtracker_batch_skew_ms.labels(camera_id=_raw.camera_id).observe(_skew_ms)
+
         # Shadow association under relaxed uncalibrated gate.
         if not cfg.enable_uncalibrated_gate_relax and any(not c for c in obs_vecs.calibrated):
             relaxed_cfg = replace(cfg, enable_uncalibrated_gate_relax=True)
@@ -450,17 +493,36 @@ class WorldTracker:
                 observation_y_m=obs.floor_point.y_mm / 1000.0,
                 observation_cov_m2=obs_r,
             )
-            new_gallery_mean = update_gallery_mean(
-                ph.gallery_mean, obs.embedding, ph.observation_count
+            # M03 contamination guard: a geometrically valid match may still be
+            # an appearance outlier. When it is, the Kalman state and
+            # observation_count still advance (the person was there) but
+            # gallery_mean / view prototypes / mean_quality are left untouched,
+            # and the embedding is never labelled with the PH identity.
+            appearance_decision = evaluate_appearance_update(
+                embedding=obs.embedding,
+                orientation=obs.orientation,
+                orientation_confidence=obs.orientation_confidence,
+                quality=obs.quality,
+                existing_prototypes=ph.view_prototypes,
+                cfg=cfg,
             )
-            new_prototypes = update_view_prototypes(
-                ph.view_prototypes,
-                obs.orientation,
-                obs.embedding,
-                obs.orientation_confidence,
-            )
+            if appearance_decision.accept:
+                new_gallery_mean = update_gallery_mean(
+                    ph.gallery_mean, obs.embedding, ph.observation_count
+                )
+                new_prototypes = update_view_prototypes(
+                    ph.view_prototypes,
+                    obs.orientation,
+                    obs.embedding,
+                    obs.orientation_confidence,
+                )
+                new_mean_quality = 0.1 * obs.quality + 0.9 * ph.mean_quality
+            else:
+                new_gallery_mean = ph.gallery_mean
+                new_prototypes = ph.view_prototypes
+                new_mean_quality = ph.mean_quality
+                _record_appearance_rejection(m, ph.ph_id, obs, appearance_decision)
             new_height = update_height_ema(ph.height_estimate_m, obs.height_estimate_m, alpha=0.1)
-            new_mean_quality: float = 0.1 * obs.quality + 0.9 * ph.mean_quality
             room_id, room_name = resolve_room(
                 obs.floor_point.x_mm / 1000.0,
                 obs.floor_point.y_mm / 1000.0,
@@ -629,15 +691,31 @@ class WorldTracker:
                     cfg.initial_velocity_sigma_m_s,
                     obs.captured_at,
                 )
-                new_gallery_mean = update_gallery_mean(
-                    closed.gallery_mean, obs.embedding, closed.observation_count
+                # Reviving an existing PH's appearance is an association too; the
+                # same contamination guard applies. A rejected embedding reopens
+                # the PH and advances its count without touching appearance.
+                revival_decision = evaluate_appearance_update(
+                    embedding=obs.embedding,
+                    orientation=obs.orientation,
+                    orientation_confidence=obs.orientation_confidence,
+                    quality=obs.quality,
+                    existing_prototypes=closed.view_prototypes,
+                    cfg=cfg,
                 )
-                new_prototypes_rev = update_view_prototypes(
-                    closed.view_prototypes,
-                    obs.orientation,
-                    obs.embedding,
-                    obs.orientation_confidence,
-                )
+                if revival_decision.accept:
+                    new_gallery_mean = update_gallery_mean(
+                        closed.gallery_mean, obs.embedding, closed.observation_count
+                    )
+                    new_prototypes_rev = update_view_prototypes(
+                        closed.view_prototypes,
+                        obs.orientation,
+                        obs.embedding,
+                        obs.orientation_confidence,
+                    )
+                else:
+                    new_gallery_mean = closed.gallery_mean
+                    new_prototypes_rev = closed.view_prototypes
+                    _record_appearance_rejection(m, closed.ph_id, obs, revival_decision)
                 new_ph = PersonHypothesis(
                     ph_id=closed.ph_id,
                     state_mean=(

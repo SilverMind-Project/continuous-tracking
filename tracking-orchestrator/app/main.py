@@ -304,6 +304,22 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         low_confidence_floor=wt.as_float("low_confidence_floor"),
         recovery_gate_chi2=wt.as_float("recovery_gate_chi2"),
         measure_low_confidence_band=wt.as_bool("measure_low_confidence_band"),
+        # Association covariance/point validation (M03)
+        enable_covariance_validation=wt.as_bool("enable_covariance_validation"),
+        covariance_max_trace_m2=wt.as_float("covariance_max_trace_m2"),
+        covariance_symmetry_tol_m2=wt.as_float("covariance_symmetry_tol_m2"),
+        covariance_psd_tol_m2=wt.as_float("covariance_psd_tol_m2"),
+        # Typed authoritative identity evidence (M03 task 5)
+        enable_reid_disagreement_cost=wt.as_bool("enable_reid_disagreement_cost"),
+        reid_disagreement_cost=wt.as_float("reid_disagreement_cost"),
+        # PH-local appearance contamination guard (M03 tasks 7-9)
+        enable_appearance_outlier_rejection=wt.as_bool("enable_appearance_outlier_rejection"),
+        appearance_min_quality=wt.as_float("appearance_min_quality"),
+        appearance_embedding_norm_tol=wt.as_float("appearance_embedding_norm_tol"),
+        appearance_outlier_min_sim=wt.as_float("appearance_outlier_min_sim"),
+        appearance_new_orientation_min_confidence=wt.as_float(
+            "appearance_new_orientation_min_confidence"
+        ),
     )
 
 

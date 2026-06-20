@@ -45,8 +45,62 @@ class WorldTrackerConfig:
     # ---- Appearance ----
     height_sigma_m: float = 0.15
 
+    # ---- PH-local appearance-update contamination guard (M03 tasks 7-9) ----
+    # One bad association must not immediately pollute a PH's appearance state.
+    # An embedding is EMA'd into gallery_mean / view prototypes / mean_quality
+    # only when it is finite, unit-normalised, quality-qualified, orientation-
+    # valid, and either consistent with the matching orientation prototype or
+    # initialising a new qualified orientation. Rejected embeddings advance the
+    # Kalman state and observation_count but touch NO appearance state, and are
+    # never labelled as the PH's identity.
+    #
+    # Ships ON: M03's completion criterion ("one bad association cannot
+    # immediately pollute PH-local prototypes") is a property of the shipped
+    # milestone, not of a flag that has to be flipped. The flag is a kill-switch
+    # that DEFAULTS ON, for rollback only.
+    enable_appearance_outlier_rejection: bool = True
+    # Minimum crop quality [0,1] for an embedding to update appearance state.
+    appearance_min_quality: float = 0.30
+    # An embedding whose L2 norm is at/below this is degenerate (zero vector)
+    # and carries no appearance information; it is rejected. Real SOLIDER
+    # embeddings are unit length and pass; non-unit vectors are normalised
+    # internally for the cross-person cosine comparison.
+    appearance_embedding_norm_tol: float = 1e-6
+    # Cosine similarity floor against the matching orientation prototype. Below
+    # this an established orientation's embedding is treated as a cross-person
+    # outlier and rejected. New (not-yet-seen) orientations bypass this and are
+    # admitted on quality + orientation confidence alone.
+    appearance_outlier_min_sim: float = 0.35
+    # Minimum orientation confidence to initialise a NEW orientation prototype.
+    appearance_new_orientation_min_confidence: float = 0.30
+
     # ---- Identity conflict hard gate ----
     face_conflict_threshold: float = 0.70
+
+    # ---- Association covariance/point validation (M03) ----
+    # Fail-closed validation of floor points and observation covariance before
+    # the Mahalanobis gate. Non-finite points/covariance always gate out (pure
+    # safety, not flagged). This flag additionally enforces the symmetry/PSD
+    # checks and the trace cap below; defaults ON because an invalid covariance
+    # must never gate-match. Flip OFF only for development A/B comparison.
+    enable_covariance_validation: bool = True
+    # Reject observation covariance whose position-trace exceeds this (m²).
+    # Above any legitimate observation covariance, below jump-rescuing inflation.
+    covariance_max_trace_m2: float = 20.0
+    covariance_symmetry_tol_m2: float = 1e-6
+    covariance_psd_tol_m2: float = -1e-9
+
+    # ---- Typed authoritative identity evidence in association (M03 task 5) ----
+    # Operator-confirmed PH identity is absolute authority: a conflicting
+    # recognized face hard-gates regardless of face_conflict_threshold, and a
+    # sub-threshold same-identity face cannot weaken it. Wired from PH metadata.
+    # Verified-ReID disagreement is a configurable STRONG COST, never a hard
+    # gate. The input (a per-observation verified-ReID identity) is plumbed by
+    # M05 governed-gallery; until then no verified-ReID id reaches association,
+    # so this is inert. Default OFF for that cross-milestone dependency, NOT as
+    # a "ship dark" robustness toggle.
+    enable_reid_disagreement_cost: bool = False
+    reid_disagreement_cost: float = 0.6  # added to pair cost on verified disagreement
 
     # ---- PH lifecycle ----
     ph_close_grace_s: float = 5.0

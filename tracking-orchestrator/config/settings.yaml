@@ -486,6 +486,46 @@ world_tracker:
   # revert to false once the capture is complete.
   measure_low_confidence_band: false
 
+  # ---- Association covariance/point validation (M03) ----
+  # Fail-closed validation of floor points and observation covariance before the
+  # Mahalanobis gate. Non-finite points/covariance ALWAYS gate out regardless of
+  # this flag (pure safety); this toggles the symmetry/PSD/trace-cap checks.
+  # Default true: an invalid covariance must never gate-match. Flip false only
+  # for development A/B comparison.
+  enable_covariance_validation: true
+  # Reject observation covariance whose position-trace exceeds this (m^2). Above
+  # any legitimate observation covariance (largest fixture trace is 8.0), below
+  # the inflated magnitudes that would otherwise rescue an implausible jump.
+  covariance_max_trace_m2: 20.0
+  covariance_symmetry_tol_m2: 0.000001
+  covariance_psd_tol_m2: -0.000000001
+
+  # ---- Typed authoritative identity evidence (M03 task 5) ----
+  # Verified-ReID disagreement is a configurable strong cost, never a hard gate.
+  # The verified-ReID identity input is plumbed by M05; until then no id reaches
+  # association, so this is inert. Default false for that dependency.
+  enable_reid_disagreement_cost: false
+  reid_disagreement_cost: 0.6
+
+  # ---- PH-local appearance contamination guard (M03 tasks 7-9) ----
+  # One bad association must not immediately pollute a PH's appearance state.
+  # An embedding updates gallery_mean / view prototypes / mean_quality only when
+  # finite, non-degenerate, quality-qualified, orientation-valid, and either
+  # consistent with the matching orientation prototype or initialising a new
+  # qualified orientation. Default true: this is a property of the shipped
+  # milestone; the flag is a kill-switch that defaults ON for rollback only.
+  enable_appearance_outlier_rejection: true
+  appearance_min_quality: 0.30
+  # L2 norm at/below this is degenerate (zero vector) and rejected; real SOLIDER
+  # embeddings are unit length and pass, non-unit vectors are normalised for the
+  # cross-person cosine comparison.
+  appearance_embedding_norm_tol: 0.000001
+  # Cosine floor against the matching orientation prototype; below it an
+  # established orientation's embedding is treated as a cross-person outlier.
+  appearance_outlier_min_sim: 0.35
+  # Minimum orientation confidence to initialise a NEW orientation prototype.
+  appearance_new_orientation_min_confidence: 0.30
+
 # Gait and mobility analytics (Milestone 3)
 #
 # Threshold rationale:

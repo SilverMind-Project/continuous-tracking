@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 
 import numpy as np
 import numpy.typing as npt
@@ -10,7 +11,7 @@ from scipy.optimize import linear_sum_assignment
 
 from ...domain import ViewPrototype, tuple_to_cov2x2
 from .config import WorldTrackerConfig
-from .cost_matrix import GATE_INF, pair_cost
+from .cost_matrix import GATE_INF, RejectionReason, pair_cost_detail
 from .kalman import KalmanState
 
 NDArrayF8 = npt.NDArray[np.float64]
@@ -18,11 +19,19 @@ NDArrayF8 = npt.NDArray[np.float64]
 
 @dataclass(frozen=True)
 class Assignment:
-    """Result of one frame's Hungarian association."""
+    """Result of one frame's Hungarian association.
+
+    ``rejection_reasons`` counts, per typed :class:`RejectionReason`, every
+    (PH, observation) pair that was gated out of the cost matrix. It is a
+    diagnostic only — it never influences the assignment. Callers emit it as a
+    metric from the PRIMARY association pass alone; shadow / low-band passes
+    discard it so the diagnostics are not double-counted.
+    """
 
     matched: list[tuple[int, int]]  # (ph_index, obs_index)
     unmatched_phs: list[int]
     unmatched_obs: list[int]
+    rejection_reasons: dict[str, int] = field(default_factory=dict)
 
 
 def associate(
@@ -40,12 +49,16 @@ def associate(
     obs_calibrated: list[bool] | None = None,
     ph_view_prototypes: list[tuple[ViewPrototype, ...]] | None = None,
     obs_covs: list[tuple[float, float, float, float] | None] | None = None,
+    ph_identity_operator_confirmed: list[bool] | None = None,
+    obs_verified_reid_identity_ids: list[str | None] | None = None,
 ) -> Assignment:
     """Hungarian assignment with gating.
 
-    Pairs whose cost is GATE_INF are excluded from the matched set.
-    When obs_covs is provided, each observation's covariance is used in the
-    Mahalanobis gate so uncertain observations gate more permissively.
+    Pairs whose cost is GATE_INF are excluded from the matched set and counted
+    by typed reason in the returned ``rejection_reasons``. When obs_covs is
+    provided, each observation's covariance is used in the Mahalanobis gate so
+    uncertain observations gate more permissively (subject to the M03 covariance
+    validity / trace-cap guards).
     """
     n_ph = len(ph_states)
     n_obs = len(obs_floor_points)
@@ -59,13 +72,24 @@ def associate(
     cov_tuples: list[tuple[float, float, float, float] | None] = (
         obs_covs if obs_covs is not None else [None] * n_obs
     )
+    operator_confirmed = (
+        ph_identity_operator_confirmed
+        if ph_identity_operator_confirmed is not None
+        else [False] * n_ph
+    )
+    verified_reid_ids: list[str | None] = (
+        obs_verified_reid_identity_ids
+        if obs_verified_reid_identity_ids is not None
+        else [None] * n_obs
+    )
 
     cost = np.full((n_ph, n_obs), GATE_INF, dtype=np.float64)
+    reason_counts: Counter[str] = Counter()
     for i in range(n_ph):
         for j in range(n_obs):
             cov_t = cov_tuples[j]
             obs_cov_m2: NDArrayF8 | None = tuple_to_cov2x2(cov_t) if cov_t is not None else None
-            cost[i, j] = pair_cost(
+            pair, reason = pair_cost_detail(
                 ph_state=ph_states[i],
                 ph_gallery_mean=ph_gallery_means[i],
                 ph_current_identity_id=ph_identity_ids[i],
@@ -80,7 +104,14 @@ def associate(
                 calibrated=calib_flags[j],
                 ph_view_prototypes=prototypes[i],
                 obs_cov_m2=obs_cov_m2,
+                ph_identity_is_operator_confirmed=operator_confirmed[i],
+                obs_verified_reid_identity_id=verified_reid_ids[j],
             )
+            cost[i, j] = pair
+            if reason is not RejectionReason.MATCHED:
+                reason_counts[str(reason)] += 1
+
+    rejection_reasons = dict(reason_counts)
 
     # If every pair is gated, skip the solver.
     if not np.any(cost < GATE_INF):
@@ -88,6 +119,7 @@ def associate(
             matched=[],
             unmatched_phs=list(range(n_ph)),
             unmatched_obs=list(range(n_obs)),
+            rejection_reasons=rejection_reasons,
         )
 
     row_ind, col_ind = linear_sum_assignment(cost)
@@ -103,4 +135,9 @@ def associate(
 
     unmatched_phs = [i for i in range(n_ph) if i not in matched_phs]
     unmatched_obs = [j for j in range(n_obs) if j not in matched_obs]
-    return Assignment(matched=matched, unmatched_phs=unmatched_phs, unmatched_obs=unmatched_obs)
+    return Assignment(
+        matched=matched,
+        unmatched_phs=unmatched_phs,
+        unmatched_obs=unmatched_obs,
+        rejection_reasons=rejection_reasons,
+    )
