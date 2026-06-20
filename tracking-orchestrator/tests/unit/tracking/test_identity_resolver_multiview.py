@@ -49,6 +49,7 @@ class _FakePH:
         self._camera_ids = camera_ids
         self.current_identity_id = current_identity_id
         self.current_identity_committed_at = None
+        self.last_independent_identity_evidence_at = None
         self.last_seen_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
         self.started_at = self.last_seen_at
         self._view_prototypes = view_prototypes

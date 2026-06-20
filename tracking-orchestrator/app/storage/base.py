@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import uuid
 from datetime import UTC, datetime
@@ -75,9 +76,13 @@ class PHRepositoryProtocol(Protocol):
     async def list_closed_since(
         self, since: datetime, limit: int = 100
     ) -> list[PersonHypothesis]: ...
-    async def update_identity(
-        self, ph_id: str, identity_id: str | None, committed_at: datetime
+    async def evidence_backed_commit(
+        self, ph_id: str, identity_id: str, evidence_at: datetime, committed_at: datetime
     ) -> None: ...
+    async def prior_only_update(
+        self, ph_id: str, identity_id: str, committed_at: datetime
+    ) -> None: ...
+    async def clear_to_unknown(self, ph_id: str, committed_at: datetime) -> None: ...
 
     async def list_active(
         self,
@@ -205,7 +210,7 @@ class InMemoryPHRepository:
         self._batch_idempotency: dict[str, list[IdentityRevision]] = {}
         self._lock = asyncio.Lock()
 
-    # -- save / get / list_open / list_closed_since / update_identity --
+    # -- save / get / list_open / list_closed_since / identity operations --
 
     async def save(self, ph: PersonHypothesis) -> None:
         async with self._lock:
@@ -227,31 +232,41 @@ class InMemoryPHRepository:
         closed.sort(key=lambda ph: ph.closed_at, reverse=True)  # type: ignore[arg-type,return-value]
         return closed[:limit]
 
-    async def update_identity(
-        self, ph_id: str, identity_id: str | None, committed_at: datetime
+    async def evidence_backed_commit(
+        self, ph_id: str, identity_id: str, evidence_at: datetime, committed_at: datetime
     ) -> None:
         async with self._lock:
             ph = self._phs.get(ph_id)
             if ph is not None:
-                self._phs[ph_id] = PersonHypothesis(
-                    ph_id=ph.ph_id,
-                    state_mean=ph.state_mean,
-                    state_cov=ph.state_cov,
-                    born_at=ph.born_at,
-                    last_seen_at=ph.last_seen_at,
-                    last_seen_camera=ph.last_seen_camera,
-                    observation_count=ph.observation_count,
+                self._phs[ph_id] = dataclasses.replace(
+                    ph,
                     current_identity_id=identity_id,
                     current_identity_committed_at=committed_at,
-                    gallery_mean=ph.gallery_mean,
-                    height_estimate_m=ph.height_estimate_m,
-                    active_cameras=ph.active_cameras,
-                    closed_at=ph.closed_at,
-                    last_floor_speed_m_s=ph.last_floor_speed_m_s,
-                    last_posture=ph.last_posture,
-                    metadata=ph.metadata,
-                    mean_quality=ph.mean_quality,
-                    view_prototypes=ph.view_prototypes,
+                    last_independent_identity_evidence_at=evidence_at,
+                )
+
+    async def prior_only_update(
+        self, ph_id: str, identity_id: str, committed_at: datetime
+    ) -> None:
+        async with self._lock:
+            ph = self._phs.get(ph_id)
+            if ph is not None:
+                self._phs[ph_id] = dataclasses.replace(
+                    ph,
+                    current_identity_id=identity_id,
+                    current_identity_committed_at=committed_at,
+                    # last_independent_identity_evidence_at is intentionally unchanged
+                )
+
+    async def clear_to_unknown(self, ph_id: str, committed_at: datetime) -> None:
+        async with self._lock:
+            ph = self._phs.get(ph_id)
+            if ph is not None:
+                self._phs[ph_id] = dataclasses.replace(
+                    ph,
+                    current_identity_id=None,
+                    current_identity_committed_at=committed_at,
+                    # last_independent_identity_evidence_at is intentionally unchanged
                 )
 
     async def list_active(
@@ -435,6 +450,7 @@ class InMemoryPHRepository:
                 observation_count=ph.observation_count,
                 current_identity_id=new_identity_id,
                 current_identity_committed_at=now,
+                last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
                 gallery_mean=ph.gallery_mean,
                 height_estimate_m=ph.height_estimate_m,
                 active_cameras=ph.active_cameras,
@@ -496,6 +512,7 @@ class InMemoryPHRepository:
                 observation_count=source.observation_count,
                 current_identity_id=source.current_identity_id,
                 current_identity_committed_at=source.current_identity_committed_at,
+                last_independent_identity_evidence_at=source.last_independent_identity_evidence_at,
                 gallery_mean=source.gallery_mean,
                 height_estimate_m=source.height_estimate_m,
                 active_cameras=source.active_cameras,
@@ -594,6 +611,7 @@ class InMemoryPHRepository:
                 observation_count=len(earlier_obs),
                 current_identity_id=ph.current_identity_id,
                 current_identity_committed_at=ph.current_identity_committed_at,
+                last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
                 gallery_mean=ph.gallery_mean,
                 height_estimate_m=ph.height_estimate_m,
                 active_cameras=ph.active_cameras,
@@ -614,6 +632,7 @@ class InMemoryPHRepository:
                 observation_count=len(later_obs),
                 current_identity_id=ph.current_identity_id,
                 current_identity_committed_at=ph.current_identity_committed_at,
+                last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
                 gallery_mean=ph.gallery_mean,
                 height_estimate_m=ph.height_estimate_m,
                 active_cameras=ph.active_cameras,
@@ -669,6 +688,7 @@ class InMemoryPHRepository:
                     observation_count=ph.observation_count,
                     current_identity_id=new_identity_id,
                     current_identity_committed_at=now,
+                    last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
                     gallery_mean=ph.gallery_mean,
                     height_estimate_m=ph.height_estimate_m,
                     active_cameras=ph.active_cameras,

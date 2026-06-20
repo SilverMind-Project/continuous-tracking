@@ -47,10 +47,16 @@ def _make_gt(
     ph_id: str = "ph-1",
     current_identity_id: str | None = None,
     committed_at: datetime | None = None,
+    evidence_at: datetime | None = None,
     tracklet_ids: list[str] | None = None,
     camera_ids: list[str] | None = None,
 ) -> GlobalTrack:
     now = datetime.now(UTC)
+    # Mirror production: when a GT has a committed identity, the evidence clock
+    # defaults to committed_at so the 30-second maintenance window is open.
+    resolved_evidence_at = evidence_at
+    if current_identity_id is not None and resolved_evidence_at is None:
+        resolved_evidence_at = committed_at if committed_at is not None else now
     return GlobalTrack(
         global_track_id=ph_id,
         camera_ids=camera_ids or ["cam-a"],
@@ -59,6 +65,7 @@ def _make_gt(
         last_seen_at=now,
         current_identity_id=current_identity_id,
         current_identity_committed_at=committed_at,
+        last_independent_identity_evidence_at=resolved_evidence_at,
         state="active",
     )
 
@@ -233,24 +240,39 @@ async def test_quality_gate_does_not_block_maintenance(fresh_metrics: Metrics) -
 
 
 @pytest.mark.asyncio
-async def test_quality_gate_face_lock_threshold(fresh_metrics: Metrics) -> None:
+async def test_quality_gate_commit_threshold_boundary(fresh_metrics: Metrics) -> None:
+    """Quality gate fires below min_quality_to_commit; passes above it.
+
+    With min_quality_to_commit=0.35, quality=0.30 is blocked (no commit,
+    counter increments) and quality=0.40 succeeds (no counter increment).
+    Face locks were removed in M02; the face-lock threshold no longer fires
+    a separate gate event.
+    """
     config = ResolverConfig(
         enable_quality_gate=True,
         min_quality_to_commit=0.35,
-        min_quality_to_face_lock=0.45,
         face_commit_min_confidence=0.70,
     )
     resolver = await _resolver(config)
 
-    outcome = await resolver.resolve(
+    # Below threshold: gate fires, commit blocked.
+    outcome_low = await resolver.resolve(
+        hypotheses=[_make_gt()],
+        new_face_anchors=[_anchor("alice")],
+        captured_at=datetime.now(UTC),
+        ph_qualities={"ph-1": 0.30},
+    )
+    assert outcome_low.decisions[0].identity_id is None
+    assert _metric_total(fresh_metrics.identity_quality_gate_blocks_total) == 1.0
+
+    # Above threshold: commit succeeds, counter does not increment.
+    outcome_ok = await resolver.resolve(
         hypotheses=[_make_gt()],
         new_face_anchors=[_anchor("alice")],
         captured_at=datetime.now(UTC),
         ph_qualities={"ph-1": 0.40},
     )
-
-    assert outcome.decisions[0].identity_id == "alice"
-    assert resolver.get_face_locked_identity("ph-1") is None
+    assert outcome_ok.decisions[0].identity_id == "alice"
     assert _metric_total(fresh_metrics.identity_quality_gate_blocks_total) == 1.0
 
 

@@ -54,7 +54,6 @@ from ..observability import metrics
 from ..storage.base import GalleryRepository
 from .identity.commit_policy import (
     CommitEvaluation,
-    FaceLock,
     compute_contradiction,
 )
 from .identity.commit_policy import (
@@ -67,9 +66,6 @@ from .identity.posterior import EvidencePosterior, combine_posteriors
 logger = get_logger(__name__)
 
 
-# _FaceLock and _CommitEvaluation are now public types in identity.commit_policy.
-# Aliases keep internal references consistent.
-_FaceLock = FaceLock
 _CommitEvaluation = CommitEvaluation
 
 
@@ -144,15 +140,11 @@ class ResolverConfig:
     # allowing ordinary no-pose detections to commit.
     min_quality_to_commit: float = 0.35
 
-    # Minimum PH crop-quality EMA needed to set or refresh a face lock.
-    # Face locks last longer than ordinary prior maintenance, so they require a
-    # cleaner crop than the baseline commit threshold while staying reachable
-    # for no-pose frames whose practical maximum is 0.60.
+    # Retained for CommitPolicy parity; face-lock mechanism removed in M02.
     min_quality_to_face_lock: float = 0.45
 
-    # Shadow flag for quality gating.  When false, low-quality commits and face
-    # locks are allowed but counted in cts_identity_quality_gate_blocks_total.
-    enable_quality_gate: bool = False
+    # Quality gate — now enabled by default in M02.
+    enable_quality_gate: bool = True
 
     # Higher commit threshold used in dense scenes (≥ 2 candidate
     # identities with posterior > 0.3).  Prevents confident-but-wrong
@@ -174,10 +166,8 @@ class ResolverConfig:
     # decisions the debounce would have changed.
     enable_flip_debounce: bool = False
 
-    # Batch-level guardrail: prevent two active PHs in the same resolver call
-    # from acquiring the same resident identity unless each duplicate has strong
-    # direct ArcFace evidence for that identity.  Ships shadow-first.
-    enable_duplicate_active_identity_guard: bool = False
+    # Duplicate-active identity guard — authoritative in M02.
+    enable_duplicate_active_identity_guard: bool = True
 
     # Minimum direct face confidence required to bypass the duplicate-active
     # identity guard.  This is stricter than face_commit_min_confidence because
@@ -224,13 +214,10 @@ class ResolverConfig:
     contradiction_posterior_prob: float = 0.80
     contradiction_posterior_margin: float = 0.20
 
-    # Maximum age (seconds) of the most recent evidence-backed commit
-    # before the prior alone is no longer sufficient to maintain an
-    # identity.  Set longer than the face-id cooldown (default 5 s) so
-    # identity survives gaps between face-id calls, but short enough
-    # that a person who left and returned hours later still requires
-    # fresh evidence.
-    prior_maintenance_max_age_s: float = 120.0
+    # Maximum age (seconds) of last_independent_identity_evidence_at before
+    # prior-only maintenance expires.  Measured from the last qualifying
+    # independent evidence (direct face or ReID), not from the last label write.
+    prior_maintenance_max_age_s: float = 30.0
 
     # Minimum cosine similarity for applying the face-confirmed entry
     # likelihood boost.  Below this value the raw logistic is used
@@ -275,18 +262,12 @@ class ResolverConfig:
     # coherence boost would change.
     coherence_shadow_sample_rate: float = 0.0
 
-    # --- Face lock ---
-    # Minimum face anchor confidence to set a face lock on a GlobalTrack.
-    # Face locks extend the maintenance window to face_lock_maintenance_max_age_s
-    # so that a face-confirmed identity persists across frames where face-id is
-    # on cooldown or the person turns away.
+    # Minimum face anchor confidence to drive a commit via the posterior path.
     face_commit_min_confidence: float = 0.70
 
-    # How long (seconds) a face-locked identity is maintained without fresh face
-    # evidence.  Much longer than prior_maintenance_max_age_s because a face ID
-    # commit represents a high-confidence, hardware-verified identification that
-    # should persist until a contradicting face match arrives.
-    face_lock_maintenance_max_age_s: float = 300
+    # Calibrated ArcFace confidence required for direct-face authority (M02).
+    # Fails closed: authority never fires when calibrated_confidence is None.
+    arcface_authority_calibrated_confidence: float = 0.80
 
     # --- Cross-GT face propagation ---
     # Minimum gallery cosine similarity for propagating a face-confirmed identity
@@ -364,8 +345,6 @@ class IdentityResolver:
         )
         # Revision rate limiter: global_track_id -> list of revision timestamps
         self._revision_log: dict[str, list[datetime]] = defaultdict(list)
-        # Face locks: global_track_id -> _FaceLock tracking the strongest committed face identity.
-        self._face_locks: dict[str, _FaceLock] = {}
 
     async def resolve(
         self,
@@ -520,6 +499,7 @@ class IdentityResolver:
                 captured_at,
             )
 
+            arcface_authority = self._check_arcface_authority(entity, augmented_anchors)
             decision = self._commit(
                 entity,
                 posterior,
@@ -528,6 +508,7 @@ class IdentityResolver:
                 captured_at,
                 best_face_conf,
                 entity_quality=entity_quality,
+                arcface_authority=arcface_authority,
             )
             # Attach evidence summary.
             ep = EvidencePosterior(
@@ -542,6 +523,11 @@ class IdentityResolver:
                     s: sum(1 for ev in evidence_items if ev.source == s)
                     for s in {ev.source for ev in evidence_items}
                 },
+            )
+            # Clock refresh only for qualifying independent evidence (direct face + ReID).
+            # Propagated face (association_hint) and height do not advance the evidence clock.
+            has_qualifying_evidence = any(
+                ev.source in ("direct_face", "reid") for ev in evidence_items
             )
             # Use the *original* anchors/evidence (pre-propagation) so the
             # duplicate-guard bypass only trusts a PH's own direct face — a
@@ -559,7 +545,7 @@ class IdentityResolver:
                 revises_previous=decision.revises_previous,
                 previous_identity_id=decision.previous_identity_id,
                 reason=decision.reason,
-                evidence_backed=decision.evidence_backed,
+                evidence_backed=decision.evidence_backed and has_qualifying_evidence,
                 evidence={
                     "sources": ep.evidence_summary,
                     "direct_face_confidence": direct_face_confidence,
@@ -660,15 +646,52 @@ class IdentityResolver:
 
             occupied = bool(holders) or identity_id in external
             if not occupied:
-                # No incumbent: let the strongest new assignment claim it.
-                winner = max(
-                    candidates,
-                    key=lambda item: (
-                        item.decision.posterior.top_identity()[1],
-                        item.decision.posterior.top_with_margin()[1],
-                    ),
-                )
-                candidates = [c for c in candidates if c is not winner]
+                # No incumbent: rank candidates and pick a winner unless tied.
+                # Rank: evidence_backed (True > False), direct_face_confidence,
+                # posterior_prob, margin, evidence freshness (more recent = better),
+                # then ph_id for stable ordering only.
+                def _rank_key(
+                    item: _PendingIdentityDecision,
+                ) -> tuple[bool, float, float, float, float, str]:
+                    top_prob = item.decision.posterior.top_identity()[1]
+                    margin = item.decision.posterior.top_with_margin()[1]
+                    ev_at = item.entity.last_independent_identity_evidence_at
+                    freshness = ev_at.timestamp() if ev_at is not None else 0.0
+                    return (
+                        item.decision.evidence_backed,
+                        item.direct_face_confidence,
+                        top_prob,
+                        margin,
+                        freshness,
+                        item.decision.ph_id,  # stable ordering; not a semantic tie-break
+                    )
+
+                ranked = sorted(candidates, key=_rank_key, reverse=True)
+                # Detect effective tie: top two match on all meaningful criteria.
+                def _tied(a: _PendingIdentityDecision, b: _PendingIdentityDecision) -> bool:
+                    return (
+                        a.decision.evidence_backed == b.decision.evidence_backed
+                        and abs(a.direct_face_confidence - b.direct_face_confidence) < 1e-6
+                        and abs(
+                            a.decision.posterior.top_identity()[1]
+                            - b.decision.posterior.top_identity()[1]
+                        ) < 1e-6
+                        and abs(
+                            a.decision.posterior.top_with_margin()[1]
+                            - b.decision.posterior.top_with_margin()[1]
+                        ) < 1e-6
+                        and a.entity.last_independent_identity_evidence_at
+                        == b.entity.last_independent_identity_evidence_at
+                    )
+
+                if len(ranked) >= 2 and _tied(ranked[0], ranked[1]):
+                    # Tie → block all contenders.
+                    candidates_to_block = ranked
+                else:
+                    # One clear winner; block the rest.
+                    candidates_to_block = ranked[1:]
+
+                candidates = candidates_to_block
 
             for item in candidates:
                 blocked[item.decision.ph_id] = identity_id
@@ -694,6 +717,47 @@ class IdentityResolver:
             ),
             evidence_backed=False,
         )
+
+    # ------------------------------------------------------------------
+    # ArcFace authority (M02)
+    # ------------------------------------------------------------------
+
+    def _check_arcface_authority(
+        self,
+        entity: IdentityResolvableEntity,
+        face_anchors: list[FaceAnchor],
+    ) -> str | None:
+        """Check for qualifying authoritative ArcFace anchors for this entity.
+
+        Returns:
+        - None        if no qualifying anchor (calibrated_confidence is None or below threshold).
+        - "CONFLICT"  if two qualifying anchors name different identities.
+        - identity_id if exactly one qualifying identity found.
+
+        Fails closed: calibrated_confidence=None (the default) never creates authority.
+        """
+        threshold = self._config.arcface_authority_calibrated_confidence
+        entity_obs = set(entity.observation_ids)
+        qualifying: dict[str, float] = {}  # identity_id → best calibrated_confidence
+        for fa in face_anchors:
+            if not (
+                fa.tracklet_id in entity_obs
+                or fa.tracklet_id == entity.entity_id
+                or fa.detection_id in entity_obs
+            ):
+                continue
+            if fa.recognition_state != "recognized":
+                continue
+            if fa.calibrated_confidence is None or fa.calibrated_confidence < threshold:
+                continue
+            prev_best = qualifying.get(fa.person_id, 0.0)
+            if fa.calibrated_confidence > prev_best:
+                qualifying[fa.person_id] = fa.calibrated_confidence
+        if not qualifying:
+            return None
+        if len(qualifying) == 1:
+            return next(iter(qualifying))
+        return "CONFLICT"
 
     # ------------------------------------------------------------------
     # Prior construction
@@ -1363,69 +1427,66 @@ class IdentityResolver:
         captured_at: datetime,
         best_face_confidence: float | None = None,
         entity_quality: float = 1.0,
+        *,
+        arcface_authority: str | None = None,
     ) -> IdentityDecision:
         """Apply the commit rule to produce an identity decision.
 
-        Commits an identity if:
-        - top_probability >= commit_prob AND margin >= commit_margin
-        - At least one non-prior evidence source (face or ReID) supports
-          the top identity.  This prevents the temporal prior from
-          committing an assignment on its own — a strong prior should
-          maintain an existing assignment but not create one.
+        ``arcface_authority`` is pre-computed by the caller from the entity's
+        direct face anchors:
+        - None   → no qualifying authoritative anchor
+        - "CONFLICT" → two qualifying anchors for different identities → Unknown
+        - <id>   → one qualifying anchor; bypass quality gate and debounce
 
-        Face locks: when a face anchor's confidence exceeds face_commit_min_confidence,
-        a face lock is set on this entity.  The face-locked identity uses the longer
-        face_lock_maintenance_max_age_s window so it persists across frames where
-        face-id is on cooldown.  A different identity's face anchor at the same
-        threshold displaces the lock.
-
-        Otherwise, the decision is UNKNOWN (None).
+        When no authoritative anchor exists (default in production until M10
+        supplies calibrated_confidence), the normal Bayesian posterior path runs.
         """
         (top_id, top_prob), margin = posterior.top_with_margin()
 
-        # --- Face lock management ---
-        existing_lock = self._face_locks.get(entity.entity_id)
-        is_face_evidence = top_id in face_likelihood.distribution and top_id not in ("UNKNOWN", "")
-        quality_gate_counted = False
-        face_lock_quality_blocked = (
-            is_face_evidence
-            and best_face_confidence is not None
-            and best_face_confidence >= self._config.face_commit_min_confidence
-            and entity_quality < self._config.min_quality_to_face_lock
-        )
-        # Narrow type: only enter the block when confidence is a float.
-        if (
-            is_face_evidence
-            and best_face_confidence is not None
-            and best_face_confidence >= self._config.face_commit_min_confidence
-            and (not face_lock_quality_blocked or not self._config.enable_quality_gate)
-        ):
-            face_conf: float = best_face_confidence  # narrowed
-            if existing_lock is None or existing_lock.identity_id == top_id:
-                self._face_locks[entity.entity_id] = _FaceLock(
-                    identity_id=top_id,
-                    confidence=face_conf,
-                    locked_at=captured_at,
-                )
-            else:
-                logger.info(
-                    "face_lock_displaced",
-                    entity_id=entity.entity_id,
-                    old_identity=existing_lock.identity_id,
-                    new_identity=top_id,
-                    old_confidence=round(existing_lock.confidence, 3),
-                    new_confidence=round(face_conf, 3),
-                )
-                self._face_locks[entity.entity_id] = _FaceLock(
-                    identity_id=top_id,
-                    confidence=face_conf,
-                    locked_at=captured_at,
-                )
-        if face_lock_quality_blocked:
-            metrics.metrics.identity_quality_gate_blocks_total.inc()
-            quality_gate_counted = True
+        # --- ArcFace authority pre-emption (M02) ---
+        if arcface_authority == "CONFLICT":
+            prev_id = entity.current_identity_id
+            logger.info(
+                "arcface_authority_conflict",
+                entity_id=entity.entity_id,
+                prev_id=prev_id,
+            )
+            metrics.metrics.identity_commits_total.labels(source="arcface_conflict").inc()
+            return IdentityDecision(
+                ph_id=entity.entity_id,
+                identity_id=None,
+                posterior=posterior,
+                revises_previous=(prev_id is not None),
+                previous_identity_id=prev_id,
+                reason="arcface_authority_conflict: two qualifying anchors for different identities",  # noqa: E501
+                evidence_backed=False,
+            )
+        if arcface_authority is not None:
+            prev_id = entity.current_identity_id
+            revises = arcface_authority != prev_id
+            reason = (
+                f"arcface_authority: {arcface_authority}"
+                if revises
+                else ""
+            )
+            logger.debug(
+                "arcface_authority_commit",
+                entity_id=entity.entity_id,
+                identity_id=arcface_authority,
+                revises=revises,
+            )
+            metrics.metrics.identity_commits_total.labels(source="arcface_authority").inc()
+            return IdentityDecision(
+                ph_id=entity.entity_id,
+                identity_id=arcface_authority,
+                posterior=posterior,
+                revises_previous=revises,
+                previous_identity_id=prev_id,
+                reason=reason,
+                evidence_backed=True,
+            )
 
-        # Compute contradiction for sticky maintenance.
+        # --- Normal Bayesian posterior path ---
         prev_id = entity.current_identity_id
         contradicted = compute_contradiction(
             prev_id=prev_id,
@@ -1451,9 +1512,8 @@ class IdentityResolver:
         )
 
         new_id = live_eval.new_id
-        if live_eval.quality_gate_blocked and not quality_gate_counted:
+        if live_eval.quality_gate_blocked:
             metrics.metrics.identity_quality_gate_blocks_total.inc()
-            quality_gate_counted = True
 
         # Sticky maintenance shadow — compute what sticky would decide.
         if not self._config.enable_sticky_maintenance and prev_id is not None:
@@ -1496,16 +1556,17 @@ class IdentityResolver:
             and not live_eval.has_evidence
         ):
             metrics.metrics.identity_decays_total.inc()
+            evidence_age_s: float
+            ev_ts = entity.last_independent_identity_evidence_at
+            if ev_ts is not None:
+                evidence_age_s = (captured_at - ev_ts).total_seconds()
+            else:
+                evidence_age_s = (captured_at - entity.last_seen_at).total_seconds()
             logger.info(
                 "identity_maintenance_window_expired",
                 entity_id=entity.entity_id,
                 prev_identity_id=prev_id,
-                identity_age_s=round(
-                    (
-                        captured_at - (entity.current_identity_committed_at or entity.last_seen_at)
-                    ).total_seconds(),
-                    1,
-                ),
+                evidence_age_s=round(evidence_age_s, 1),
                 max_age_s=self._config.prior_maintenance_max_age_s,
             )
 
@@ -1527,9 +1588,14 @@ class IdentityResolver:
         if prev_id is not None and new_id is not None and new_id != prev_id:
             metrics.metrics.identity_flips_total.inc()
         if new_id is not None and revises:
-            metrics.metrics.identity_commits_total.labels(
-                source="face" if top_id in face_likelihood.distribution else "reid",
-            ).inc()
+            # Fix: label prior-held decisions as temporal_prior, not face/reid.
+            if not live_eval.has_evidence:
+                commit_source = "temporal_prior"
+            elif top_id in face_likelihood.distribution:
+                commit_source = "face"
+            else:
+                commit_source = "reid"
+            metrics.metrics.identity_commits_total.labels(source=commit_source).inc()
 
         if new_id is None:
             if prev_id is not None:
@@ -1575,7 +1641,7 @@ class IdentityResolver:
             commit_prob_dense=c.commit_prob_dense,
             commit_margin_dense=c.commit_margin_dense,
             prior_maintenance_max_age_s=c.prior_maintenance_max_age_s,
-            face_lock_maintenance_max_age_s=c.face_lock_maintenance_max_age_s,
+            arcface_authority_calibrated_confidence=c.arcface_authority_calibrated_confidence,
             face_commit_min_confidence=c.face_commit_min_confidence,
             min_quality_to_face_lock=c.min_quality_to_face_lock,
             min_quality_to_commit=c.min_quality_to_commit,
@@ -1610,7 +1676,6 @@ class IdentityResolver:
             reid_likelihood=reid_likelihood,
             captured_at=captured_at,
             entity_quality=entity_quality,
-            face_locks=self._face_locks,
             config=self._to_commit_policy(),
             contradicted=contradicted,
             enable_sticky_maintenance=enable_sticky_maintenance,
@@ -1908,11 +1973,6 @@ class IdentityResolver:
         if self._gallery_cache is not None:
             return await self._gallery_cache.gallery_similarity(tids_a, tids_b)
         return await self._gallery_repo.gallery_similarity(tids_a, tids_b)
-
-    def get_face_locked_identity(self, global_track_id: str) -> str | None:
-        """Return the face-locked identity for a GT, or None if not locked."""
-        lock = self._face_locks.get(global_track_id)
-        return lock.identity_id if lock is not None else None
 
     def register_identity(self, identity: Identity) -> None:
         """Register a known identity for display name lookup."""

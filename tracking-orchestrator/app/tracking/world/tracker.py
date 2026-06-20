@@ -135,6 +135,10 @@ class _PHResolvable:
         return self._ph.current_identity_committed_at
 
     @property
+    def last_independent_identity_evidence_at(self) -> datetime | None:
+        return self._ph.last_independent_identity_evidence_at
+
+    @property
     def last_seen_at(self) -> datetime:
         return self._ph.last_seen_at
 
@@ -488,6 +492,7 @@ class WorldTracker:
                 observation_count=ph.observation_count + 1,
                 current_identity_id=ph.current_identity_id,
                 current_identity_committed_at=ph.current_identity_committed_at,
+                last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
                 gallery_mean=new_gallery_mean,
                 height_estimate_m=new_height,
                 active_cameras=ph.active_cameras | cluster_cameras,
@@ -648,6 +653,7 @@ class WorldTracker:
                     observation_count=closed.observation_count + 1,
                     current_identity_id=closed.current_identity_id,
                     current_identity_committed_at=closed.current_identity_committed_at,
+                    last_independent_identity_evidence_at=closed.last_independent_identity_evidence_at,
                     gallery_mean=new_gallery_mean,
                     height_estimate_m=closed.height_estimate_m,
                     active_cameras=closed.active_cameras | spawn_cameras,
@@ -887,6 +893,7 @@ class WorldTracker:
                         observation_count=ph.observation_count,
                         current_identity_id=ph.current_identity_id,
                         current_identity_committed_at=ph.current_identity_committed_at,
+                        last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
                         gallery_mean=ph.gallery_mean,
                         height_estimate_m=ph.height_estimate_m,
                         active_cameras=ph.active_cameras | frozenset([obs.camera_id]),
@@ -1356,6 +1363,7 @@ def _advance_unmatched_ph(
             observation_count=ph.observation_count,
             current_identity_id=ph.current_identity_id,
             current_identity_committed_at=ph.current_identity_committed_at,
+            last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
             gallery_mean=ph.gallery_mean,
             height_estimate_m=ph.height_estimate_m,
             active_cameras=ph.active_cameras,
@@ -1383,6 +1391,7 @@ def _advance_unmatched_ph(
         observation_count=ph.observation_count,
         current_identity_id=ph.current_identity_id,
         current_identity_committed_at=ph.current_identity_committed_at,
+        last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
         gallery_mean=ph.gallery_mean,
         height_estimate_m=ph.height_estimate_m,
         active_cameras=ph.active_cameras,
@@ -1493,12 +1502,26 @@ async def _resolve_identities(
         logger.exception("identity_resolution_failed")
         raise
 
-    # Apply identity decisions.
+    # Apply identity decisions using explicit repo operations that preserve
+    # last_independent_identity_evidence_at semantics.
     for decision in outcome.decisions:
-        if decision.identity_id:
-            await ph_repo.update_identity(
+        if decision.identity_id is not None:
+            if decision.evidence_backed:
+                await ph_repo.evidence_backed_commit(
+                    ph_id=decision.ph_id,
+                    identity_id=decision.identity_id,
+                    evidence_at=now,
+                    committed_at=now,
+                )
+            else:
+                await ph_repo.prior_only_update(
+                    ph_id=decision.ph_id,
+                    identity_id=decision.identity_id,
+                    committed_at=now,
+                )
+        elif decision.revises_previous and decision.previous_identity_id is not None:
+            await ph_repo.clear_to_unknown(
                 ph_id=decision.ph_id,
-                identity_id=decision.identity_id,
                 committed_at=now,
             )
         identity_by_ph[decision.ph_id] = {

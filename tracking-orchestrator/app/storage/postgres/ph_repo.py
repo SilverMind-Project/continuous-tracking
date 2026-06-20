@@ -111,7 +111,7 @@ class PostgresPHRepository:
     def __init__(self, pool: Any) -> None:
         self._pool = pool
 
-    # -- save / get / list_open / list_closed_since / update_identity --
+    # -- save / get / list_open / list_closed_since / identity operations --
 
     async def save(self, ph: PersonHypothesis) -> None:
         async with self._pool.acquire() as conn:
@@ -121,11 +121,12 @@ class PostgresPHRepository:
                     ph_id, born_at, closed_at, last_seen_at, last_seen_camera,
                     observation_count, current_identity_id,
                     current_identity_committed_at,
+                    last_independent_identity_evidence_at,
                     state_mean, state_cov, gallery_mean, height_m,
                     active_cameras, metadata, mean_quality, view_prototypes
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                    $14::jsonb, $15, $16
+                    $14, $15::jsonb, $16, $17
                 )
                 ON CONFLICT (ph_id) DO UPDATE SET
                     closed_at = COALESCE(EXCLUDED.closed_at, ph.closed_at),
@@ -138,6 +139,10 @@ class PostgresPHRepository:
                     current_identity_committed_at = COALESCE(
                         EXCLUDED.current_identity_committed_at,
                         ph.current_identity_committed_at
+                    ),
+                    last_independent_identity_evidence_at = COALESCE(
+                        EXCLUDED.last_independent_identity_evidence_at,
+                        ph.last_independent_identity_evidence_at
                     ),
                     state_mean = EXCLUDED.state_mean,
                     state_cov = EXCLUDED.state_cov,
@@ -156,6 +161,7 @@ class PostgresPHRepository:
                 ph.observation_count,
                 ph.current_identity_id,
                 ph.current_identity_committed_at,
+                ph.last_independent_identity_evidence_at,
                 list(ph.state_mean),
                 list(ph.state_cov),
                 ph.gallery_mean,
@@ -198,8 +204,23 @@ class PostgresPHRepository:
             )
         return [_row_to_ph(row) for row in rows]
 
-    async def update_identity(
-        self, ph_id: str, identity_id: str | None, committed_at: datetime
+    async def evidence_backed_commit(
+        self, ph_id: str, identity_id: str, evidence_at: datetime, committed_at: datetime
+    ) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE continuous_tracking.person_hypotheses "
+                "SET current_identity_id = $2, current_identity_committed_at = $3, "
+                "last_independent_identity_evidence_at = $4 "
+                "WHERE ph_id = $1",
+                ph_id,
+                identity_id,
+                committed_at,
+                evidence_at,
+            )
+
+    async def prior_only_update(
+        self, ph_id: str, identity_id: str, committed_at: datetime
     ) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -208,6 +229,16 @@ class PostgresPHRepository:
                 "WHERE ph_id = $1",
                 ph_id,
                 identity_id,
+                committed_at,
+            )
+
+    async def clear_to_unknown(self, ph_id: str, committed_at: datetime) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE continuous_tracking.person_hypotheses "
+                "SET current_identity_id = NULL, current_identity_committed_at = $2 "
+                "WHERE ph_id = $1",
+                ph_id,
                 committed_at,
             )
 
@@ -1096,6 +1127,7 @@ def _row_to_ph(row: Any) -> PersonHypothesis:
         observation_count=int(row["observation_count"]),
         current_identity_id=str(row["current_identity_id"]) if row["current_identity_id"] else None,
         current_identity_committed_at=row.get("current_identity_committed_at"),
+        last_independent_identity_evidence_at=row.get("last_independent_identity_evidence_at"),
         gallery_mean=row["gallery_mean"],
         height_estimate_m=row.get("height_m"),
         active_cameras=frozenset(row["active_cameras"] or []),

@@ -92,6 +92,8 @@ class IdentityResolvableEntity(Protocol):
     @property
     def current_identity_committed_at(self) -> datetime | None: ...
     @property
+    def last_independent_identity_evidence_at(self) -> datetime | None: ...
+    @property
     def last_seen_at(self) -> datetime: ...
     @property
     def started_at(self) -> datetime: ...
@@ -221,6 +223,7 @@ class PersonHypothesis:
     observation_count: int
     current_identity_id: str | None = None
     current_identity_committed_at: datetime | None = None
+    last_independent_identity_evidence_at: datetime | None = None
     gallery_mean: list[float] | None = None  # L2-normalised SOLIDER embedding
     height_estimate_m: float | None = None
     active_cameras: frozenset[str] = frozenset()
@@ -478,6 +481,7 @@ class GlobalTrack:
     last_seen_at: datetime
     current_identity_id: IdentityId | None = None
     current_identity_committed_at: datetime | None = None
+    last_independent_identity_evidence_at: datetime | None = None
     state: Literal["active", "closed"] = "active"
     last_posterior_jsonb: dict[str, Any] | None = None
 
@@ -572,6 +576,9 @@ class FaceAnchor:
     similarity: float = 0.0
     # head pose yaw in degrees (primary frontality axis).
     yaw_deg: float = 0.0
+    # Calibrated ArcFace confidence from model calibration pipeline (M10).
+    # None means no calibration available → authority fails closed.
+    calibrated_confidence: float | None = None
 
 
 @dataclass(frozen=True)

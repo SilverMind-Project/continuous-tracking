@@ -1,8 +1,8 @@
 """Commit policy: typed evaluation of identity assignment and maintenance.
 
 Provides the canonical, pure commit evaluation function used by
-``IdentityResolver``. All state (face locks, entity, config) is passed
-explicitly so the function is testable without the full resolver.
+``IdentityResolver``. All state (entity, config) is passed explicitly so
+the function is testable without the full resolver.
 
 ``CommitPolicy`` is imported from ``policy.py`` and re-exported here for
 backward compatibility with existing imports.
@@ -20,13 +20,10 @@ from .policy import CommitPolicy
 
 logger = get_logger(__name__)
 
-# Re-export CommitPolicy so ``from .commit_policy import CommitPolicy`` works.
 __all__ = [
     "CommitDecision",
     "CommitEvaluation",
     "CommitPolicy",
-    "CommitPolicyState",
-    "FaceLock",
     "compute_contradiction",
     "evaluate_commit",
 ]
@@ -35,20 +32,6 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Domain types
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class FaceLock:
-    """Tracks a face-confirmed identity for one entity across frames.
-
-    Set when a face anchor's confidence exceeds ``CommitPolicy.face_commit_min_confidence``.
-    Displaced when a different identity's face anchor clears the same threshold.
-    Not frozen: the resolver mutates ``locked_at`` on refresh.
-    """
-
-    identity_id: str
-    confidence: float
-    locked_at: datetime
 
 
 @dataclass(frozen=True)
@@ -83,19 +66,6 @@ class CommitDecision:
     evidence_backed: bool
     evidence_summary: dict[str, int] = field(default_factory=dict)
     metadata: dict[str, object] = field(default_factory=dict)
-
-
-@dataclass
-class CommitPolicyState:
-    """Backward-compatibility wrapper around face_locks dict.
-
-    The canonical ``evaluate_commit`` takes ``face_locks`` explicitly.
-    This shim lets existing callers pass a ``CommitPolicyState`` object
-    without rewriting call sites. Scheduled for removal in M02.
-    """
-
-    face_locks: dict[str, FaceLock] = field(default_factory=dict)
-    revision_log: dict[str, list[datetime]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +126,6 @@ def evaluate_commit(
     reid_likelihood: PosteriorDist,
     captured_at: datetime,
     entity_quality: float,
-    face_locks: dict[str, FaceLock],
     config: CommitPolicy,
     *,
     contradicted: bool = False,
@@ -164,25 +133,26 @@ def evaluate_commit(
     enforce_quality_gate: bool,
     enforce_flip_debounce: bool,
 ) -> CommitEvaluation:
-    """Evaluate the commit rule without mutating locks or emitting metrics.
+    """Evaluate the commit rule without mutating state or emitting metrics.
 
     This is the single canonical implementation. ``IdentityResolver._commit``
-    delegates here after managing face locks and computing ``contradicted``.
+    delegates here after computing ``contradicted``.
 
-    All state is passed explicitly so the function is pure and testable.
-    The caller is responsible for:
-    - Setting/displacing face locks before calling this function.
-    - Emitting metrics from the returned ``CommitEvaluation``.
-    - Building ``IdentityDecision`` and revisions from the result.
+    Maintenance window is anchored to ``entity.last_independent_identity_evidence_at``
+    (the evidence clock), never to ``current_identity_committed_at``. Prior-only
+    decisions that advance ``current_identity_committed_at`` without refreshing the
+    evidence clock therefore do not extend the maintenance window.
+
+    Flip-debounce uses ``current_identity_committed_at`` because it guards against
+    rapid label changes, not evidence staleness.
 
     Args:
         entity: The entity being evaluated (provides identity history).
-        posterior: Combined Bayesian posterior (from ``combine_posteriors``).
+        posterior: Combined Bayesian posterior.
         face_likelihood: Face-only distribution (used for evidence detection).
         reid_likelihood: ReID-only distribution (used for evidence detection).
         captured_at: Frame wall-clock time.
         entity_quality: Rolling crop-quality EMA for the entity.
-        face_locks: Mutable face-lock dict (read-only here; caller owns writes).
         config: Full commit policy configuration.
         contradicted: Whether a strong contradiction was detected upstream.
         enable_sticky_maintenance: Hold identity on weak evidence when no
@@ -203,16 +173,12 @@ def evaluate_commit(
     within_maintenance_window = False
 
     if identity_unchanged:
-        face_lock = face_locks.get(entity.entity_id)
-        if face_lock is not None and face_lock.identity_id == prev_id:
-            lock_age_s = (captured_at - face_lock.locked_at).total_seconds()
-            within_maintenance_window = lock_age_s <= config.face_lock_maintenance_max_age_s
-        elif entity.current_identity_committed_at is not None:
-            age_s = (captured_at - entity.current_identity_committed_at).total_seconds()
+        evidence_ts = entity.last_independent_identity_evidence_at
+        if evidence_ts is not None:
+            age_s = (captured_at - evidence_ts).total_seconds()
             within_maintenance_window = age_s <= config.prior_maintenance_max_age_s
-        else:
-            age_s = (captured_at - entity.last_seen_at).total_seconds()
-            within_maintenance_window = age_s <= config.prior_maintenance_max_age_s
+        # If evidence_ts is None: entity was never backed by independent evidence;
+        # the maintenance window is not open.
 
     # Sticky maintenance: extend the window when identity dips (posterior says
     # UNKNOWN or weak other) but the window has not expired and no strong
@@ -223,18 +189,11 @@ def evaluate_commit(
         and not within_maintenance_window
         and not contradicted
     ):
-        face_lock = face_locks.get(entity.entity_id)
-        if face_lock is not None and face_lock.identity_id == prev_id:
-            lock_age_s = (captured_at - face_lock.locked_at).total_seconds()
-            sticky_in_window = lock_age_s <= config.face_lock_maintenance_max_age_s
-        elif entity.current_identity_committed_at is not None:
-            age_s = (captured_at - entity.current_identity_committed_at).total_seconds()
-            sticky_in_window = age_s <= config.prior_maintenance_max_age_s
-        else:
-            age_s = (captured_at - entity.last_seen_at).total_seconds()
-            sticky_in_window = age_s <= config.prior_maintenance_max_age_s
-        if sticky_in_window:
-            within_maintenance_window = True
+        evidence_ts = entity.last_independent_identity_evidence_at
+        if evidence_ts is not None:
+            age_s = (captured_at - evidence_ts).total_seconds()
+            if age_s <= config.prior_maintenance_max_age_s:
+                within_maintenance_window = True
 
     evidence_ok = has_evidence or within_maintenance_window
 

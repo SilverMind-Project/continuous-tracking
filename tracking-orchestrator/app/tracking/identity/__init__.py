@@ -4,8 +4,6 @@ from .commit_policy import (
     CommitDecision,
     CommitEvaluation,
     CommitPolicy,
-    CommitPolicyState,
-    FaceLock,
     compute_contradiction,
     evaluate_commit,
 )
@@ -16,7 +14,7 @@ from .conflicts import (
     classify_posterior_conflict,
     rank_duplicate_contenders,
 )
-from .evidence import CAN_CREATE_IDENTITY, CAN_SET_FACE_LOCK, EvidenceSource, IdentityEvidence
+from .evidence import CAN_CREATE_IDENTITY, EvidenceSource, IdentityEvidence
 from .gallery_governance import (
     GalleryEntryState,
     GalleryGovernanceConfig,
@@ -35,18 +33,15 @@ from .types import (
 
 __all__ = [
     "CAN_CREATE_IDENTITY",
-    "CAN_SET_FACE_LOCK",
     "CommitDecision",
     "CommitEvaluation",
     "CommitPolicy",
-    "CommitPolicyState",
     "ConflictClassification",
     "DecisionEvidence",
     "DuplicateContender",
     "EvidenceContribution",
     "EvidencePosterior",
     "EvidenceSource",
-    "FaceLock",
     "GalleryEntryState",
     "GalleryGovernanceConfig",
     "GalleryGovernanceService",

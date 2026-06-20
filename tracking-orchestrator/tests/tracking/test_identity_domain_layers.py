@@ -101,12 +101,13 @@ class TestTypedSourceDistinction:
         assert EvidenceSource.OPERATOR == "operator"
         assert EvidenceSource.ASSOCIATION_HINT == "association_hint"
 
-    def test_direct_face_sets_face_lock_propagated_does_not(self) -> None:
+    def test_direct_face_advances_evidence_clock_propagated_does_not(self) -> None:
+        """Direct face evidence refreshes the evidence clock; propagated face does not."""
         direct = IdentityEvidence.direct_face("alice", 0.95, "tl-1", _NOW)
         propagated = IdentityEvidence.association_hint("alice", 0.95, "tl-1", _NOW)
 
-        assert direct.can_set_face_lock
-        assert not propagated.can_set_face_lock
+        assert direct.can_advance_evidence_clock
+        assert not propagated.can_advance_evidence_clock
 
     def test_direct_face_can_create_identity_hint_cannot(self) -> None:
         direct = IdentityEvidence.direct_face("alice", 0.95, "tl-1", _NOW)

@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 from prometheus_client import Counter
 
+from app.inference.evidence import FaceEvidence
 from tests.integration._replay import _ROOM_POLYGONS, FIXTURES_DIR, load_fixture
 
 BASE_TIME = datetime(2026, 5, 28, 9, 0, 0, tzinfo=UTC)
@@ -99,12 +100,31 @@ async def _replay_with_continuity_features(
     for i, frame_obs in enumerate(steps):
         frame_now = BASE_TIME + timedelta(seconds=i * 0.5)
         # Extract face anchors from observations for the resolver.
-        face_anchors = [obs.face_anchor for obs in frame_obs if obs.face_anchor is not None] or None
+        raw_anchors = [obs.face_anchor for obs in frame_obs if obs.face_anchor is not None]
+        face_anchors = raw_anchors or None
+        # Mirror each anchor as FaceEvidence(source="direct"), exactly as
+        # FaceIdentityStage does in production.  Without this, evidence_backed
+        # stays False and last_independent_identity_evidence_at is never set.
+        # detection_id must be passed so _resolve_identities can remap
+        # the tracklet_id to the PH id via det_to_ph.
+        face_evidence = [
+            FaceEvidence(
+                person_id=fa.person_id,
+                confidence=fa.confidence,
+                tracklet_id=fa.tracklet_id,
+                detection_id=fa.detection_id,
+                source="direct",
+                quality=fa.quality,
+                captured_at=fa.captured_at or frame_now,
+            )
+            for fa in raw_anchors
+        ] or None
         await tracker.step(
             observations=frame_obs,
             now=frame_now,
             room_polygons=_ROOM_POLYGONS,
             face_anchors=face_anchors,
+            face_evidence=face_evidence,
         )
 
     return ph_repo, tracker
@@ -134,12 +154,26 @@ async def _replay_shadow(
     steps = load_fixture(fixture)
     for i, frame_obs in enumerate(steps):
         frame_now = BASE_TIME + timedelta(seconds=i * 0.5)
-        face_anchors = [obs.face_anchor for obs in frame_obs if obs.face_anchor is not None] or None
+        raw_anchors = [obs.face_anchor for obs in frame_obs if obs.face_anchor is not None]
+        face_anchors = raw_anchors or None
+        face_evidence = [
+            FaceEvidence(
+                person_id=fa.person_id,
+                confidence=fa.confidence,
+                tracklet_id=fa.tracklet_id,
+                detection_id=fa.detection_id,
+                source="direct",
+                quality=fa.quality,
+                captured_at=fa.captured_at or frame_now,
+            )
+            for fa in raw_anchors
+        ] or None
         await tracker.step(
             observations=frame_obs,
             now=frame_now,
             room_polygons=_ROOM_POLYGONS,
             face_anchors=face_anchors,
+            face_evidence=face_evidence,
         )
 
     return ph_repo
@@ -346,11 +380,13 @@ class TestContinuityShadowMetrics:
             gallery_repo=gallery,
             config=ResolverConfig(
                 enable_sticky_maintenance=False,  # shadow mode
-                prior_maintenance_max_age_s=120.0,
+                prior_maintenance_max_age_s=30.0,
             ),
         )
 
         # Build a PH-like resolvable with committed alice identity.
+        # Evidence clock is within the 30 s window so sticky maintenance WOULD
+        # hold alice, while the live path (no sticky) demotes to UNKNOWN.
         committed_at = now - timedelta(seconds=5)
 
         from types import SimpleNamespace
@@ -361,8 +397,10 @@ class TestContinuityShadowMetrics:
             camera_ids=["cam-a"],
             current_identity_id="alice",
             current_identity_committed_at=committed_at,
+            last_independent_identity_evidence_at=committed_at,
             last_seen_at=now,
             started_at=now - timedelta(seconds=60),
+            view_prototypes=(),
         )
 
         # Posterior says UNKNOWN dominates (no face, no ReID evidence).
@@ -377,8 +415,8 @@ class TestContinuityShadowMetrics:
         )
 
         decision = resolver._commit(entity, posterior, face, reid, now)
-        # Live: identity_unchanged is False (top_id="UNKNOWN" != "alice"),
-        # no standard maintenance window → demotes to UNKNOWN.
+        # Live (no sticky): posterior says UNKNOWN, sticky extension doesn't fire.
+        # Regular window fires on identity_unchanged only; UNKNOWN != alice so it doesn't.
         assert decision.identity_id is None, "live decision should demote to UNKNOWN"
 
         after = _labeled_counter_value(

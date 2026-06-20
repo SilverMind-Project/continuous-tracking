@@ -10,12 +10,10 @@ from app.domain import GlobalTrack, PosteriorDist
 from app.tracking.identity.commit_policy import (
     CommitEvaluation,
     CommitPolicy,
-    FaceLock,
     evaluate_commit,
 )
 from app.tracking.identity.evidence import (
     CAN_CREATE_IDENTITY,
-    CAN_SET_FACE_LOCK,
     EvidenceSource,
     IdentityEvidence,
 )
@@ -33,7 +31,11 @@ def _make_gt(
     ph_id: str = "gt-1",
     current_identity_id: str | None = None,
     current_identity_committed_at: datetime | None = None,
+    last_independent_identity_evidence_at: datetime | None = None,
 ) -> GlobalTrack:
+    evidence_at = last_independent_identity_evidence_at
+    if current_identity_id is not None and evidence_at is None:
+        evidence_at = current_identity_committed_at or _NOW
     return GlobalTrack(
         global_track_id=ph_id,
         camera_ids=["cam_a"],
@@ -43,6 +45,7 @@ def _make_gt(
         current_identity_id=current_identity_id,
         state="active",
         current_identity_committed_at=current_identity_committed_at,
+        last_independent_identity_evidence_at=evidence_at,
     )
 
 
@@ -53,7 +56,6 @@ def _call_evaluate(
     reid_likelihood: PosteriorDist,
     *,
     config: CommitPolicy | None = None,
-    face_locks: dict[str, FaceLock] | None = None,
     contradicted: bool = False,
 ) -> CommitEvaluation:
     return evaluate_commit(
@@ -63,7 +65,6 @@ def _call_evaluate(
         reid_likelihood=reid_likelihood,
         captured_at=_NOW,
         entity_quality=1.0,
-        face_locks=face_locks if face_locks is not None else {},
         config=config or CommitPolicy(),
         contradicted=contradicted,
         enable_sticky_maintenance=False,
@@ -78,48 +79,46 @@ def _call_evaluate(
 
 
 class TestIdentityEvidence:
-    def test_direct_face_can_create_and_set_face_lock(self) -> None:
+    def test_direct_face_can_create_identity(self) -> None:
         ev = IdentityEvidence.direct_face(
             identity_id="alice", confidence=0.95, tracklet_id="tl-1", captured_at=_NOW
         )
         assert ev.can_create_identity
-        assert ev.can_set_face_lock
+        assert ev.can_advance_evidence_clock
         assert ev.source == "direct_face"
         assert ev.source == EvidenceSource.DIRECT_FACE
 
-    def test_association_hint_cannot_create_or_set_face_lock(self) -> None:
+    def test_association_hint_cannot_create_or_advance_clock(self) -> None:
         ev = IdentityEvidence.association_hint(
             identity_id="alice", confidence=0.8, tracklet_id="tl-1", captured_at=_NOW
         )
         assert not ev.can_create_identity
-        assert not ev.can_set_face_lock
+        assert not ev.can_advance_evidence_clock
         assert ev.source == "association_hint"
 
     def test_temporal_prior_cannot_create_identity(self) -> None:
         ev = IdentityEvidence.temporal_prior(identity_id="alice", confidence=0.6)
         assert not ev.can_create_identity
-        assert not ev.can_set_face_lock
+        assert not ev.can_advance_evidence_clock
         assert ev.source == "temporal_prior"
 
-    def test_reid_can_create_but_not_set_face_lock(self) -> None:
+    def test_reid_can_create_and_advance_clock(self) -> None:
         ev = IdentityEvidence.reid(identity_id="bob", confidence=0.75)
         assert ev.can_create_identity
-        assert not ev.can_set_face_lock
+        assert ev.can_advance_evidence_clock
 
-    def test_operator_can_create_and_set_face_lock(self) -> None:
+    def test_operator_can_create_but_not_advance_clock(self) -> None:
         ev = IdentityEvidence.operator_correction(identity_id="alice")
         assert ev.can_create_identity
-        assert ev.can_set_face_lock
+        assert not ev.can_advance_evidence_clock  # operator override is not an observation
 
     def test_source_sets_are_correct(self) -> None:
         expected_create = {EvidenceSource.DIRECT_FACE, EvidenceSource.REID, EvidenceSource.OPERATOR}
         assert expected_create == CAN_CREATE_IDENTITY
-        assert {EvidenceSource.DIRECT_FACE, EvidenceSource.OPERATOR} == CAN_SET_FACE_LOCK
 
     def test_source_sets_equal_strings(self) -> None:
         # StrEnum: members compare equal to their wire strings.
         assert {"direct_face", "reid", "operator"} == CAN_CREATE_IDENTITY
-        assert {"direct_face", "operator"} == CAN_SET_FACE_LOCK
 
     def test_evidence_source_is_str_subtype(self) -> None:
         assert EvidenceSource.DIRECT_FACE == "direct_face"
@@ -177,10 +176,10 @@ class TestPosteriorCombiner:
         # Prior gives some mass to the previous identity.
         assert ep.distribution.get("alice", 0) > 0
 
-    def test_association_hint_cannot_set_face_lock(self) -> None:
-        """Association hints must not be eligible for face lock."""
+    def test_association_hint_cannot_advance_evidence_clock(self) -> None:
+        """Association hints must not advance the identity evidence clock."""
         ev = IdentityEvidence.association_hint("alice", 0.95, "tl-1", _NOW)
-        assert not ev.can_set_face_lock
+        assert not ev.can_advance_evidence_clock
 
     def test_entropy_is_computed(self) -> None:
         """Posterior must have non-zero entropy with mixed evidence."""
@@ -268,18 +267,17 @@ class TestCommitPolicy:
         assert result.effective_commit_prob == pytest.approx(0.80)
 
     def test_maintenance_window_holds_identity(self) -> None:
-        """Within maintenance window, held identity persists even without evidence."""
-        committed_at = _NOW
+        """Within the evidence clock window, held identity persists without fresh evidence."""
         entity = _make_gt(
             ph_id="gt-1",
             current_identity_id="alice",
-            current_identity_committed_at=committed_at,
+            current_identity_committed_at=_NOW,
+            last_independent_identity_evidence_at=_NOW,
         )
-        # Posterior still says alice but no face/reid → within_maintenance_window matters.
         posterior = PosteriorDist({"alice": 0.55, "UNKNOWN": 0.45})
         face_likelihood = PosteriorDist({"UNKNOWN": 1.0})
         reid_likelihood = PosteriorDist({"UNKNOWN": 1.0})
-        config = CommitPolicy(prior_maintenance_max_age_s=120.0)
+        config = CommitPolicy(prior_maintenance_max_age_s=30.0)
 
         result = _call_evaluate(
             entity, posterior, face_likelihood, reid_likelihood, config=config
@@ -303,7 +301,6 @@ class TestCommitPolicy:
             reid_likelihood=reid_likelihood,
             captured_at=_NOW,
             entity_quality=0.30,  # below threshold
-            face_locks={},
             config=config,
             enable_sticky_maintenance=False,
             enforce_quality_gate=True,
@@ -328,7 +325,6 @@ class TestCommitPolicy:
             reid_likelihood=reid_likelihood,
             captured_at=_NOW,
             entity_quality=0.30,
-            face_locks={},
             config=config,
             enable_sticky_maintenance=False,
             enforce_quality_gate=False,

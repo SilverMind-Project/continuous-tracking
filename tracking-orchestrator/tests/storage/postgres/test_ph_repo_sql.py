@@ -128,8 +128,8 @@ async def test_save_casts_metadata_parameter_to_jsonb() -> None:
 
     await repo.save(_domain_ph(metadata={"display_name": "Bob"}))
 
-    assert "$14::jsonb" in conn.execute_sql
-    assert conn.execute_args[13] == '{"display_name": "Bob"}'
+    assert "$15::jsonb" in conn.execute_sql
+    assert conn.execute_args[14] == '{"display_name": "Bob"}'
 
 
 @pytest.mark.asyncio

@@ -61,6 +61,7 @@ def _make_ph(ph_id: str = "ph-1", *, now: datetime | None = None) -> PersonHypot
         last_seen_at=now,
         last_seen_camera="cam1",
         observation_count=1,
+        mean_quality=0.9,  # above default min_quality_to_commit=0.25
     )
 
 

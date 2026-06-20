@@ -305,7 +305,7 @@ resolver:
   commit_prob: 0.65
   commit_margin: 0.15
   face_weight_multiplier: 3.0
-  prior_maintenance_max_age_s: 120.0
+  prior_maintenance_max_age_s: 30.0
   min_quality_to_commit: 0.35
   min_quality_to_face_lock: 0.45
   enable_quality_gate: true
@@ -313,12 +313,12 @@ resolver:
   enable_flip_debounce: true
   # Shadow-first guard for duplicate active resident identities. Enable after
   # replay proves same-person cross-camera continuation still works.
-  enable_duplicate_active_identity_guard: false
+  enable_duplicate_active_identity_guard: true
   duplicate_identity_direct_face_min_confidence: 0.90
   # Identity-lock gate for emitted face anchors. This is intentionally stricter
   # than face_id.min_confidence, which only controls whether an anchor is emitted.
   face_commit_min_confidence: 0.70
-  face_lock_maintenance_max_age_s: 300
+  arcface_authority_calibrated_confidence: 0.80
 
   # Advanced / rarely changed constants.
   reid_decision_sim: 0.70

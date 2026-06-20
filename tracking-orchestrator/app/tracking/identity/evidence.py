@@ -36,12 +36,6 @@ CAN_CREATE_IDENTITY: set[EvidenceSource] = {
     EvidenceSource.OPERATOR,
 }
 
-# Evidence sources that can set a face lock on a global track.
-CAN_SET_FACE_LOCK: set[EvidenceSource] = {
-    EvidenceSource.DIRECT_FACE,
-    EvidenceSource.OPERATOR,
-}
-
 
 @dataclass(frozen=True)
 class IdentityEvidence:
@@ -155,6 +149,10 @@ class IdentityEvidence:
         return self.source in CAN_CREATE_IDENTITY
 
     @property
-    def can_set_face_lock(self) -> bool:
-        """Return True when this evidence can set a face lock on the GT."""
-        return self.source in CAN_SET_FACE_LOCK and self.identity_id is not None
+    def can_advance_evidence_clock(self) -> bool:
+        """Return True when this evidence qualifies to refresh the identity clock.
+
+        Only direct face recognition and verified ReID advance the clock;
+        propagated face (ASSOCIATION_HINT) and height proxy never do.
+        """
+        return self.source in {EvidenceSource.DIRECT_FACE, EvidenceSource.REID}

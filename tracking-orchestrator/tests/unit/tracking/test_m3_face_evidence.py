@@ -41,8 +41,14 @@ def _make_gt(
     observation_ids: list[str] | None = None,
     camera_ids: list[str] | None = None,
     current_identity_committed_at: datetime | None = None,
+    last_independent_identity_evidence_at: datetime | None = None,
 ) -> GlobalTrack:
     now = datetime.now(UTC)
+    # When an identity is committed, default the evidence clock to now so
+    # the 30-second maintenance window is open.
+    evidence_at = last_independent_identity_evidence_at
+    if current_identity_id is not None and evidence_at is None:
+        evidence_at = current_identity_committed_at if current_identity_committed_at else now
     return GlobalTrack(
         global_track_id=ph_id,
         camera_ids=camera_ids or ["cam_a"],
@@ -51,6 +57,7 @@ def _make_gt(
         last_seen_at=now,
         current_identity_id=current_identity_id,
         current_identity_committed_at=current_identity_committed_at,
+        last_independent_identity_evidence_at=evidence_at,
         state="active",
     )
 

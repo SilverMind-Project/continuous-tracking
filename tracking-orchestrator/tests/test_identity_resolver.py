@@ -85,8 +85,15 @@ def _make_gt(
     current_identity_id: str | None = None,
     camera_ids: list[str] | None = None,
     tracklet_ids: list[str] | None = None,
+    last_independent_identity_evidence_at: datetime | None = None,
 ) -> GlobalTrack:
     now = datetime.now(UTC)
+    # When an identity is committed, default the evidence clock to now so
+    # the 30-second maintenance window is open.  Tests that need an expired
+    # clock must pass last_independent_identity_evidence_at explicitly.
+    evidence_at = last_independent_identity_evidence_at
+    if current_identity_id is not None and evidence_at is None:
+        evidence_at = now
     return GlobalTrack(
         global_track_id=ph_id,
         camera_ids=camera_ids or ["cam_a"],
@@ -94,6 +101,8 @@ def _make_gt(
         started_at=now,
         last_seen_at=now,
         current_identity_id=current_identity_id,
+        current_identity_committed_at=now if current_identity_id is not None else None,
+        last_independent_identity_evidence_at=evidence_at,
         state="active",
     )
 
@@ -698,14 +707,18 @@ class TestIdentityResolver:
         assert decision1.identity_id == "person_0"
         assert decision1.revises_previous is True  # initial assignment
 
-        # Simulate the GT being updated in the DB.
+        # Simulate the GT being updated in the DB (evidence clock refreshed by
+        # the WorldTracker via evidence_backed_commit after Frame 1).
+        evidence_at = datetime.now(UTC)
         committed_gt = GlobalTrack(
             global_track_id=gt.global_track_id,
             camera_ids=gt.camera_ids,
             tracklet_ids=gt.tracklet_ids,
             started_at=gt.started_at,
-            last_seen_at=datetime.now(UTC),
+            last_seen_at=evidence_at,
             current_identity_id="person_0",
+            current_identity_committed_at=evidence_at,
+            last_independent_identity_evidence_at=evidence_at,
             state="active",
         )
 
@@ -919,126 +932,108 @@ class TestGalleryBoost:
         )
 
 
-class TestFaceLock:
-    """Tests for the face lock mechanism."""
+class TestEvidenceClock:
+    """Tests for the evidence-clock-based maintenance window (M02).
+
+    Face locks were removed in M02. Identity maintenance is now governed by
+    ``last_independent_identity_evidence_at`` and the 30-second window.
+    """
 
     @pytest.mark.asyncio
-    async def test_face_lock_set_on_high_confidence(self) -> None:
-        """A face anchor above face_commit_min_confidence sets a face lock."""
+    async def test_identity_maintained_within_30s_evidence_window(self) -> None:
+        """Identity is held when the evidence clock is within 30 seconds."""
+        from datetime import timedelta
+
         identities = [_make_identity("alice", "Alice")]
-        config = ResolverConfig(face_commit_min_confidence=0.60)
+        config = ResolverConfig(prior_maintenance_max_age_s=30.0)
         resolver = _make_resolver(identities=identities, config=config)
 
-        gt = _make_gt(ph_id="gt-1", tracklet_ids=["t1"])
-        anchor = _make_face_anchor("alice", confidence=0.90, tracklet_id="t1")
-
-        await resolver.resolve(
-            hypotheses=[gt],
-            new_face_anchors=[anchor],
-            captured_at=datetime.now(UTC),
-        )
-
-        locked_id = resolver.get_face_locked_identity("gt-1")
-        assert locked_id == "alice"
-
-    @pytest.mark.asyncio
-    async def test_face_lock_not_set_below_threshold(self) -> None:
-        """A weak face anchor below face_commit_min_confidence does not set a lock."""
-        identities = [_make_identity("alice", "Alice")]
-        config = ResolverConfig(face_commit_min_confidence=0.80)
-        resolver = _make_resolver(identities=identities, config=config)
-
-        gt = _make_gt(ph_id="gt-1", tracklet_ids=["t1"])
-        anchor = _make_face_anchor("alice", confidence=0.50, tracklet_id="t1")
-
-        await resolver.resolve(
-            hypotheses=[gt],
-            new_face_anchors=[anchor],
-            captured_at=datetime.now(UTC),
-        )
-
-        locked_id = resolver.get_face_locked_identity("gt-1")
-        assert locked_id is None
-
-    @pytest.mark.asyncio
-    async def test_face_lock_displaced_by_different_identity(self) -> None:
-        """A different identity's face anchor at sufficient confidence displaces the lock."""
-        identities = [_make_identity("alice", "Alice"), _make_identity("bob", "Bob")]
-        config = ResolverConfig(face_commit_min_confidence=0.60, commit_prob=0.50)
-        resolver = _make_resolver(identities=identities, config=config)
-
-        # First: alice face lock set.
-        gt = _make_gt(ph_id="gt-1", tracklet_ids=["t1"])
-        await resolver.resolve(
-            hypotheses=[gt],
-            new_face_anchors=[_make_face_anchor("alice", confidence=0.90, tracklet_id="t1")],
-            captured_at=datetime.now(UTC),
-        )
-        assert resolver.get_face_locked_identity("gt-1") == "alice"
-
-        # Second: bob face anchor displaces alice's lock.
-        gt = _make_gt(
-            ph_id="gt-1",
-            current_identity_id="alice",
+        now = datetime.now(UTC)
+        # Set evidence clock to 5 s ago — within the 30 s window.
+        evidence_at = now - timedelta(seconds=5)
+        gt = GlobalTrack(
+            global_track_id="gt-1",
+            camera_ids=["cam_a"],
             tracklet_ids=["t1"],
+            started_at=evidence_at,
+            last_seen_at=now,
+            current_identity_id="alice",
+            current_identity_committed_at=evidence_at,
+            last_independent_identity_evidence_at=evidence_at,
+            state="active",
         )
-        await resolver.resolve(
+        outcome = await resolver.resolve(
             hypotheses=[gt],
-            new_face_anchors=[_make_face_anchor("bob", confidence=0.90, tracklet_id="t1")],
-            captured_at=datetime.now(UTC),
+            new_face_anchors=[],
+            captured_at=now,
         )
-        assert resolver.get_face_locked_identity("gt-1") == "bob"
+
+        assert outcome.decisions[0].identity_id == "alice"
 
     @pytest.mark.asyncio
-    async def test_face_locked_identity_maintained_across_frames(self) -> None:
-        """Face-locked identity is maintained when the person turns away.
-
-        In production, CrossCameraAssociator.associate() sets gt.last_seen_at =
-        captured_at every frame, so age_s ≈ 0 and within_maintenance_window is
-        always True for active GTs.  This test replicates that invariant: even
-        with no face evidence and no strong ReID (simulated by an empty gallery),
-        the identity persists as long as the GT is active.
-        """
+    async def test_identity_expires_after_30s_evidence_window(self) -> None:
+        """Identity is demoted to Unknown when the evidence clock exceeds 30 seconds."""
         from datetime import timedelta
 
         identities = [_make_identity("alice", "Alice")]
         config = ResolverConfig(
-            face_commit_min_confidence=0.60,
-            prior_maintenance_max_age_s=120.0,  # default
+            prior_maintenance_max_age_s=30.0,
+            enable_sticky_maintenance=False,
         )
         resolver = _make_resolver(identities=identities, config=config)
 
         now = datetime.now(UTC)
-
-        # First: commit alice via face anchor.
-        gt = _make_gt(ph_id="gt-1", tracklet_ids=["t1"])
-        await resolver.resolve(
-            hypotheses=[gt],
-            new_face_anchors=[_make_face_anchor("alice", confidence=0.95, tracklet_id="t1")],
-            captured_at=now,
-        )
-        assert resolver.get_face_locked_identity("gt-1") == "alice"
-
-        # Second frame (alice assigned, face locked, no fresh face/ReID evidence).
-        # The cross-cam assoc stamps last_seen_at = captured_at → age_s = 0.
-        # This simulates the person turning away from the camera.
-        next_frame = now + timedelta(seconds=5)
-        gt_with_alice = GlobalTrack(
+        # Evidence clock is 31 s ago — outside the 30 s window.
+        evidence_at = now - timedelta(seconds=31)
+        gt = GlobalTrack(
             global_track_id="gt-1",
             camera_ids=["cam_a"],
             tracklet_ids=["t1"],
-            started_at=now,
-            last_seen_at=next_frame,  # cross-cam sets this to captured_at
+            started_at=evidence_at,
+            last_seen_at=now,
             current_identity_id="alice",
+            current_identity_committed_at=evidence_at,
+            last_independent_identity_evidence_at=evidence_at,
             state="active",
         )
         outcome = await resolver.resolve(
-            hypotheses=[gt_with_alice],
+            hypotheses=[gt],
             new_face_anchors=[],
-            captured_at=next_frame,
+            captured_at=now,
         )
 
-        assert outcome.decisions[0].identity_id == "alice"
+        assert outcome.decisions[0].identity_id is None
+
+    @pytest.mark.asyncio
+    async def test_no_evidence_clock_means_no_maintenance_window(self) -> None:
+        """An entity without an evidence clock has no maintenance window."""
+        from datetime import timedelta
+
+        identities = [_make_identity("alice", "Alice")]
+        config = ResolverConfig(prior_maintenance_max_age_s=30.0)
+        resolver = _make_resolver(identities=identities, config=config)
+
+        now = datetime.now(UTC)
+        # No last_independent_identity_evidence_at set (e.g., migrated PH).
+        gt = GlobalTrack(
+            global_track_id="gt-1",
+            camera_ids=["cam_a"],
+            tracklet_ids=["t1"],
+            started_at=now - timedelta(seconds=5),
+            last_seen_at=now,
+            current_identity_id="alice",
+            current_identity_committed_at=now - timedelta(seconds=5),
+            last_independent_identity_evidence_at=None,  # no evidence clock
+            state="active",
+        )
+        outcome = await resolver.resolve(
+            hypotheses=[gt],
+            new_face_anchors=[],
+            captured_at=now,
+        )
+
+        # No evidence clock → maintenance window is not open → identity demoted.
+        assert outcome.decisions[0].identity_id is None
 
 
 class TestCrossGtFacePropagation:
@@ -1102,10 +1097,12 @@ class TestCrossGtFacePropagation:
             captured_at=datetime.now(UTC),
         )
 
-        # GT-B should have received a synthetic face anchor and committed alice.
+        # GT-A commits alice directly (direct face evidence).
+        # GT-B also resolves alice via propagated anchor but the duplicate-active
+        # guard (enabled by default in M02) blocks it since GT-A already holds alice.
         decisions_by_gt = {d.ph_id: d for d in outcome.decisions}
         assert decisions_by_gt["gt-a"].identity_id == "alice"
-        assert decisions_by_gt["gt-b"].identity_id == "alice"
+        assert decisions_by_gt["gt-b"].identity_id is None
 
     @pytest.mark.asyncio
     async def test_face_not_propagated_to_dissimilar_gt(self) -> None:

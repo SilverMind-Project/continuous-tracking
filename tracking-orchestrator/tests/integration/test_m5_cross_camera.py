@@ -30,6 +30,7 @@ async def _replay_with_cross_camera_revival(
 ) -> Any:
     """Replay a fixture with PH revival and cross-camera revival enabled."""
     from app.domain import Identity
+    from app.inference.evidence import FaceEvidence
     from app.storage.base import InMemoryGalleryRepository
     from app.storage.postgres.ph_repo import (
         PostgresPHRepository,
@@ -61,12 +62,27 @@ async def _replay_with_cross_camera_revival(
 
     steps = load_fixture(FIXTURES_DIR / fixture_name)
     for i, frame_obs in enumerate(steps):
-        face_anchors = [o.face_anchor for o in frame_obs if o.face_anchor is not None] or None
+        frame_now = BASE_TIME + timedelta(seconds=i * 0.5)
+        raw_anchors = [o.face_anchor for o in frame_obs if o.face_anchor is not None]
+        face_anchors = raw_anchors or None
+        face_evidence = [
+            FaceEvidence(
+                person_id=fa.person_id,
+                confidence=fa.confidence,
+                tracklet_id=fa.tracklet_id or "",
+                detection_id=fa.detection_id,
+                source="direct",
+                quality=fa.quality,
+                captured_at=fa.captured_at or frame_now,
+            )
+            for fa in raw_anchors
+        ] or None
         await tracker.step(
             observations=frame_obs,
-            now=BASE_TIME + timedelta(seconds=i * 0.5),
+            now=frame_now,
             room_polygons=_ROOM_POLYGONS,
             face_anchors=face_anchors,
+            face_evidence=face_evidence,
         )
     return ph_repo
 
