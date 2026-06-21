@@ -32,6 +32,12 @@ class BboxAnnotationRepository(Protocol):
 
     async def get_bbox_annotations_for_keyframe(self, keyframe_id: str) -> list[BboxAnnotation]: ...
 
+    async def get_bbox_annotations_for_keyframes(
+        self, keyframe_ids: list[str]
+    ) -> list[BboxAnnotation]:
+        """Batch fetch annotations for many keyframes in one query (M07 read model)."""
+        ...
+
     async def get_bbox_annotations_for_ph(self, ph_id: str) -> list[BboxAnnotation]: ...
 
     async def update_identity_id(self, ph_id: str, identity_id: str) -> None:
@@ -103,6 +109,14 @@ class InMemoryBboxAnnotationRepository:
 
     async def get_bbox_annotations_for_keyframe(self, keyframe_id: str) -> list[BboxAnnotation]:
         return [self._rows[i] for i in self._by_keyframe.get(keyframe_id, [])]
+
+    async def get_bbox_annotations_for_keyframes(
+        self, keyframe_ids: list[str]
+    ) -> list[BboxAnnotation]:
+        result: list[BboxAnnotation] = []
+        for kf_id in keyframe_ids:
+            result.extend(self._rows[i] for i in self._by_keyframe.get(kf_id, []))
+        return result
 
     async def get_bbox_annotations_for_ph(self, ph_id: str) -> list[BboxAnnotation]:
         return [self._rows[i] for i in self._by_ph.get(ph_id, [])]

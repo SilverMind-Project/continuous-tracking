@@ -7,16 +7,16 @@ Implements IdentityDecisionRepositoryProtocol using asyncpg against the
 from __future__ import annotations
 
 import json
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import asyncpg
 
 from ...domain import (
-    IdentityDecision,
     IdentityDecisionGalleryHit,
     IdentityEvidenceItem,
+    IdentityProvenanceDecision,
 )
 
 
@@ -24,7 +24,7 @@ class PostgresIdentityDecisionRepository:
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
 
-    async def save(self, decision: IdentityDecision) -> None:
+    async def save(self, decision: IdentityProvenanceDecision) -> None:
         # Use a transaction to ensure atomic writes
         async with self._pool.acquire() as conn:
             async with conn.transaction():
@@ -122,7 +122,7 @@ class PostgresIdentityDecisionRepository:
                         hit_args
                     )
 
-    async def get_decision(self, decision_id: str) -> IdentityDecision | None:
+    async def get_decision(self, decision_id: str) -> IdentityProvenanceDecision | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT * FROM continuous_tracking.identity_decisions WHERE decision_id = $1",
@@ -132,7 +132,7 @@ class PostgresIdentityDecisionRepository:
                 return None
             return await self._build_decision(conn, row)
 
-    async def get_by_ph_id(self, ph_id: str, limit: int = 50, offset: int = 0) -> tuple[list[IdentityDecision], int]:
+    async def get_by_ph_id(self, ph_id: str, limit: int = 50, offset: int = 0) -> tuple[list[IdentityProvenanceDecision], int]:
         async with self._pool.acquire() as conn:
             total_count = await conn.fetchval(
                 "SELECT count(*) FROM continuous_tracking.identity_decisions WHERE ph_id = $1",
@@ -152,7 +152,7 @@ class PostgresIdentityDecisionRepository:
                 decisions.append(await self._build_decision(conn, row))
             return decisions, total_count
 
-    async def get_by_observation_id(self, observation_id: str) -> IdentityDecision | None:
+    async def get_by_observation_id(self, observation_id: str) -> IdentityProvenanceDecision | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT * FROM continuous_tracking.identity_decisions WHERE observation_id = $1",
@@ -162,7 +162,70 @@ class PostgresIdentityDecisionRepository:
                 return None
             return await self._build_decision(conn, row)
 
-    async def _build_decision(self, conn: asyncpg.Connection, row: asyncpg.Record) -> IdentityDecision:
+    async def decisions_for_phs(
+        self, ph_ids: list[str], at_or_before: datetime
+    ) -> dict[str, list[IdentityProvenanceDecision]]:
+        """Decisions per PH with ``captured_at <= at_or_before``, newest-first (M07).
+
+        One query keyed by the page's PH set; the read model joins the latest
+        decision at or before each frame's capture time. No lower bound:
+        decisions are persisted only at identity change points, so the
+        applicable decision for a held PH can predate the page's scan window.
+        Evidence items and gallery hits are intentionally not joined (the read
+        model needs only core provenance; the detail endpoint serves the full
+        chains).
+        """
+        if not ph_ids:
+            return {}
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    decision_id, ph_id, captured_at, authority, decision_source,
+                    observation_id, inferred_identity_id, effective_identity_id,
+                    conflict_kind, top_probability, second_probability,
+                    posterior_entropy, last_independent_evidence_at,
+                    config_hash, resolver_version, model_set_version,
+                    diagnostics_schema_version
+                FROM continuous_tracking.identity_decisions
+                WHERE ph_id = ANY($1::uuid[])
+                  AND captured_at <= $2
+                ORDER BY ph_id, captured_at DESC
+                """,
+                ph_ids,
+                at_or_before,
+            )
+        result: dict[str, list[IdentityProvenanceDecision]] = {}
+        for row in rows:
+            result.setdefault(str(row["ph_id"]), []).append(
+                IdentityProvenanceDecision(
+                    decision_id=str(row["decision_id"]),
+                    ph_id=str(row["ph_id"]),
+                    captured_at=row["captured_at"].replace(tzinfo=UTC),
+                    authority=row["authority"],
+                    decision_source=row["decision_source"],
+                    diagnostics={},
+                    observation_id=str(row["observation_id"]) if row["observation_id"] else None,
+                    inferred_identity_id=row["inferred_identity_id"],
+                    effective_identity_id=row["effective_identity_id"],
+                    conflict_kind=row["conflict_kind"],
+                    top_probability=row["top_probability"],
+                    second_probability=row["second_probability"],
+                    posterior_entropy=row["posterior_entropy"],
+                    last_independent_evidence_at=(
+                        row["last_independent_evidence_at"].replace(tzinfo=UTC)
+                        if row["last_independent_evidence_at"]
+                        else None
+                    ),
+                    config_hash=row["config_hash"],
+                    resolver_version=row["resolver_version"],
+                    model_set_version=row["model_set_version"],
+                    diagnostics_schema_version=row["diagnostics_schema_version"],
+                )
+            )
+        return result
+
+    async def _build_decision(self, conn: asyncpg.Connection, row: asyncpg.Record) -> IdentityProvenanceDecision:
         ev_rows = await conn.fetch(
             "SELECT * FROM continuous_tracking.identity_evidence_items WHERE decision_id = $1",
             row["decision_id"]
@@ -171,7 +234,7 @@ class PostgresIdentityDecisionRepository:
             "SELECT * FROM continuous_tracking.identity_decision_gallery_hits WHERE decision_id = $1 ORDER BY rank ASC",
             row["decision_id"]
         )
-        
+
         evidence_items = []
         for ev in ev_rows:
             evidence_items.append(IdentityEvidenceItem(
@@ -187,7 +250,7 @@ class PostgresIdentityDecisionRepository:
                 directness=ev["directness"],
                 authoritative_eligibility=ev["authoritative_eligibility"],
             ))
-            
+
         gallery_hits = []
         for hit in hit_rows:
             gallery_hits.append(IdentityDecisionGalleryHit(
@@ -202,7 +265,7 @@ class PostgresIdentityDecisionRepository:
                 orientation=hit["orientation"],
             ))
 
-        return IdentityDecision(
+        return IdentityProvenanceDecision(
             decision_id=str(row["decision_id"]),
             ph_id=str(row["ph_id"]),
             captured_at=row["captured_at"].replace(tzinfo=UTC),

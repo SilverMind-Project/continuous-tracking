@@ -213,6 +213,21 @@ class PostgresGalleryRepository(GalleryRepository):
             source_episode_id=str(row["source_episode_id"]) if row.get("source_episode_id") else None,
         )
 
+    async def phs_with_pending_reid(self, ph_ids: list[str]) -> set[str]:
+        if not ph_ids:
+            return set()
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ph_id::text AS ph_id
+                FROM continuous_tracking.reid_gallery
+                WHERE state = 'pending_review'
+                  AND ph_id = ANY($1::uuid[])
+                """,
+                ph_ids,
+            )
+        return {row["ph_id"] for row in rows if row["ph_id"]}
+
     async def list_gallery_entries(
         self, identity_id: str | None = None, active_only: bool = True
     ) -> list[GalleryEmbedding]:

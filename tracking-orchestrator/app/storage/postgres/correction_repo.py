@@ -162,6 +162,27 @@ class PostgresIdentityCorrectionRepository:
             rows = await conn.fetch(sql, ph_id)
         return [_range_from_row(r) for r in rows]
 
+    async def live_ranges_for_phs(
+        self, ph_ids: list[str]
+    ) -> dict[str, list[IdentityRevisionRange]]:
+        if not ph_ids:
+            return {}
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM continuous_tracking.identity_revision_ranges
+                WHERE ph_id = ANY($1::uuid[])
+                  AND superseded_by_range_id IS NULL
+                ORDER BY ph_id, created_at ASC
+                """,
+                ph_ids,
+            )
+        result: dict[str, list[IdentityRevisionRange]] = {}
+        for row in rows:
+            rng = _range_from_row(row)
+            result.setdefault(rng.ph_id, []).append(rng)
+        return result
+
     async def effective_identity(
         self, ph_id: str, at: datetime
     ) -> tuple[str | None, RevisionAuthority | None]:

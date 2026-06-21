@@ -213,6 +213,18 @@ class IdentityDecisionRepositoryProtocol(Protocol):
     async def get_decision(self, decision_id: str) -> IdentityProvenanceDecision | None: ...
     async def get_by_ph_id(self, ph_id: str, limit: int = 50, offset: int = 0) -> tuple[list[IdentityProvenanceDecision], int]: ...
     async def get_by_observation_id(self, observation_id: str) -> IdentityProvenanceDecision | None: ...
+    async def decisions_for_phs(
+        self, ph_ids: list[str], at_or_before: datetime
+    ) -> dict[str, list[IdentityProvenanceDecision]]:
+        """Decisions per PH with ``captured_at <= at_or_before`` (M07 read model).
+
+        Returned newest-first per PH so the read model can join the latest
+        decision at or before each physical frame's capture time, rather than
+        stamping the page's newest decision onto older frames. There is no lower
+        bound: decisions are persisted only at identity change points, so a held
+        PH's applicable decision can predate the page's scan window.
+        """
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -851,6 +863,19 @@ class InMemoryIdentityDecisionRepository:
                 return d
         return None
 
+    async def decisions_for_phs(
+        self, ph_ids: list[str], at_or_before: datetime
+    ) -> dict[str, list[IdentityProvenanceDecision]]:
+        wanted = set(ph_ids)
+        result: dict[str, list[IdentityProvenanceDecision]] = {}
+        for d in self._decisions.values():
+            if d.ph_id not in wanted or d.captured_at > at_or_before:
+                continue
+            result.setdefault(d.ph_id, []).append(d)
+        for rows in result.values():
+            rows.sort(key=lambda d: d.captured_at, reverse=True)
+        return result
+
 
 # ---------------------------------------------------------------------------
 # CameraTopologyRepository
@@ -991,6 +1016,8 @@ __all__ = [
     "GaitDailyRepository",
     "GalleryRepository",
     "HourlyActivitySummary",
+    "IdentityCorrectionRepositoryProtocol",
+    "IdentityDecisionRepositoryProtocol",
     "InMemoryActivityRepository",
     "InMemoryAssignmentRepository",
     "InMemoryBboxAnnotationRepository",
@@ -1011,8 +1038,6 @@ __all__ = [
     "InMemoryTrajectoryRepository",
     "InMemoryWorldObservationRepository",
     "KeyframeRepository",
-    "IdentityCorrectionRepositoryProtocol",
-    "IdentityDecisionRepositoryProtocol",
     "PHRepositoryProtocol",
     "PrivacyRepository",
     "SettingsRepository",

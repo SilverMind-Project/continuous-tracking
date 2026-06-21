@@ -20,16 +20,28 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from app.services.keyframe_read_model import (
+    KeyframeReadFilters,
+    KeyframeReadModelService,
+    KeyframeReadRepositoryBundle,
+)
 from app.storage.base import (
     BboxAnnotationRepository,
     DementiaSignalRepository,
+    IdentityDecisionRepositoryProtocol,
     InMemoryBboxAnnotationRepository,
     InMemoryDementiaSignalRepository,
+    InMemoryIdentityDecisionRepository,
     InMemoryKeyframeRepository,
     InMemoryTrajectoryRepository,
     KeyframeRepository,
     TrajectoryRepository,
 )
+from app.storage.corrections import (
+    IdentityCorrectionRepositoryProtocol,
+    InMemoryIdentityCorrectionRepository,
+)
+from app.storage.gallery import GalleryRepository, InMemoryGalleryRepository
 
 router = APIRouter(tags=["dashboard-internal"])
 
@@ -75,6 +87,42 @@ def set_bbox_repo(bbox: BboxAnnotationRepository) -> None:
     """Wire the production bbox annotation repository."""
     global _bbox_repo
     _bbox_repo = bbox
+
+
+# ---------------------------------------------------------------------------
+# M07 keyframe read model: provenance-bearing repos and the composing service
+# ---------------------------------------------------------------------------
+
+_decision_repo: IdentityDecisionRepositoryProtocol = InMemoryIdentityDecisionRepository()
+_correction_repo: IdentityCorrectionRepositoryProtocol = (
+    InMemoryIdentityCorrectionRepository()
+)
+_gallery_repo: GalleryRepository = InMemoryGalleryRepository()
+
+
+def set_read_model_repos(
+    *,
+    decision: IdentityDecisionRepositoryProtocol,
+    correction: IdentityCorrectionRepositoryProtocol,
+    gallery: GalleryRepository,
+) -> None:
+    """Wire the production provenance repos used by the keyframe read model."""
+    global _decision_repo, _correction_repo, _gallery_repo
+    _decision_repo = decision
+    _correction_repo = correction
+    _gallery_repo = gallery
+
+
+def get_keyframe_read_service() -> KeyframeReadModelService:
+    """Compose the M07 read-model service from the current repo singletons."""
+    bundle = KeyframeReadRepositoryBundle(
+        keyframe_repo=_keyframe_repo,
+        bbox_repo=_bbox_repo,
+        decision_repo=_decision_repo,
+        correction_repo=_correction_repo,
+        gallery_repo=_gallery_repo,
+    )
+    return KeyframeReadModelService(bundle)
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +315,59 @@ async def list_keyframes(
     return {
         "keyframes": [_keyframe_to_dict(k) for k in keyframes],
         "count": len(keyframes),
+    }
+
+
+@router.get("/internal/keyframes/grouped")
+async def list_keyframes_grouped(
+    camera_id: str | None = Query(None, description="Filter by camera"),
+    tag_reason: str | None = Query(None, description="Filter by trigger reason"),
+    after: str | None = Query(None, description="ISO-8601 start time"),
+    before: str | None = Query(None, description="ISO-8601 end time"),
+    effective_identity_id: str | None = Query(
+        None, description="Frame matches when any bbox has this effective identity"
+    ),
+    explicit_unknown: bool = Query(False, description="Only frames with an Unknown bbox"),
+    authority: str | None = Query(None, description="Match any bbox with this authority"),
+    decision_source: str | None = Query(
+        None, description="Match any bbox with this decision source"
+    ),
+    conflict_only: bool = Query(False, description="Only frames with a conflict bbox"),
+    pending_review_only: bool = Query(
+        False, description="Only frames with a pending-ReID bbox"
+    ),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    svc: KeyframeReadModelService = Depends(get_keyframe_read_service),
+) -> dict[str, Any]:
+    """Return keyframes grouped into one card per physical source frame (M07).
+
+    Trigger rows that reference the same ``(camera_id, minio_key, captured_at)``
+    collapse to one card carrying every visible bbox with full effective-identity
+    provenance. Identity-level filters are applied before grouped-frame
+    pagination; a matching frame still returns all of its bboxes for context.
+    """
+    after_dt = _parse_iso(after, "after")
+    before_dt = _parse_iso(before, "before")
+    filters = KeyframeReadFilters(
+        camera_id=camera_id,
+        tag_reason=tag_reason,
+        after=after_dt,
+        before=before_dt,
+        effective_identity_id=effective_identity_id,
+        explicit_unknown=explicit_unknown,
+        authority=authority,
+        decision_source=decision_source,
+        conflict_only=conflict_only,
+        pending_review_only=pending_review_only,
+    )
+    page = await svc.list_physical_frames(filters=filters, limit=limit, offset=offset)
+    return {
+        "frames": [_physical_frame_to_dict(f) for f in page.frames],
+        "total": page.total,
+        "truncated": page.truncated,
+        "limit": limit,
+        "offset": offset,
     }
 
 
@@ -476,6 +577,72 @@ def _point_to_dict(p: Any) -> dict[str, Any]:
         "posture": p.posture,
         "motion_energy": p.motion_energy,
         "identity_confidence": p.identity_confidence,
+    }
+
+
+def _parse_iso(value: str | None, field_name: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid {field_name} timestamp: {value!r}",
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _physical_frame_to_dict(card: Any) -> dict[str, Any]:
+    return {
+        "physical_frame_id": card.physical_frame_id,
+        "camera_id": card.camera_id,
+        "minio_key": card.minio_key,
+        "captured_at": card.captured_at.isoformat(),
+        "frame_width": card.frame_width,
+        "frame_height": card.frame_height,
+        "triggers": [
+            {
+                "keyframe_id": t.keyframe_id,
+                "ph_id": t.ph_id,
+                "tag_reason": t.tag_reason,
+            }
+            for t in card.triggers
+        ],
+        "trigger_reasons": card.trigger_reasons,
+        "unknown_count": card.unknown_count,
+        "conflict_count": card.conflict_count,
+        "pending_review_count": card.pending_review_count,
+        "bboxes": [
+            {
+                "bbox_id": b.bbox_id,
+                "ph_id": b.ph_id,
+                "x1": b.x1,
+                "y1": b.y1,
+                "x2": b.x2,
+                "y2": b.y2,
+                "detection_confidence": b.detection_confidence,
+                "frame_width": b.frame_width,
+                "frame_height": b.frame_height,
+                "inferred_identity_id": b.inferred_identity_id,
+                "effective_identity_id": b.effective_identity_id,
+                "authority": b.authority,
+                "decision_source": b.decision_source,
+                "calibrated_confidence": b.calibrated_confidence,
+                "conflict": b.conflict,
+                "conflict_kind": b.conflict_kind,
+                "revision_id": b.revision_id,
+                "pending_review": b.pending_review,
+                "decision_id": b.decision_id,
+                "override_x1": b.override_x1,
+                "override_y1": b.override_y1,
+                "override_x2": b.override_x2,
+                "override_y2": b.override_y2,
+            }
+            for b in card.bboxes
+        ],
     }
 
 

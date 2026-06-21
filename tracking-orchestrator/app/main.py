@@ -533,6 +533,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bbox_repo = PostgresBboxAnnotationRepository(_pool)
         baseline_repo = PostgresBehaviorBaselineRepository(_pool)
         gait_daily_repo = PostgresGaitDailyRepository(_pool)
+        from .storage.postgres.identity_decision_repo import (
+            PostgresIdentityDecisionRepository,
+        )
+
+        identity_decision_repo = PostgresIdentityDecisionRepository(_pool)
     else:
         gallery_repo = None
         trajectory_repo = None
@@ -542,6 +547,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bbox_repo = None
         baseline_repo = None
         gait_daily_repo = None
+        identity_decision_repo = None
 
     # -- Triton --
     triton_url = settings.as_str("triton.url")
@@ -719,6 +725,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         overlap_groups=declared_overlap_groups,
         baseline_repo=baseline_repo,
         gait_daily_repo=gait_daily_repo,
+        identity_provenance_repo=identity_decision_repo,
     )
     await _pipeline.initialize(deps)
 
@@ -886,6 +893,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     if bbox_repo is not None:
         dashboard_router_mod.set_bbox_repo(bbox_repo)  # type: ignore[arg-type]
+
+    # M07 keyframe read model: provenance-bearing repos for grouped cards.
+    if identity_decision_repo is not None and gallery_repo is not None:
+        dashboard_router_mod.set_read_model_repos(
+            decision=identity_decision_repo,
+            correction=correction_repo_obj,
+            gallery=gallery_repo,
+        )
 
     ph_maintenance = PHMaintenanceService(
         repo=deps_ph_repo,  # type: ignore[arg-type]

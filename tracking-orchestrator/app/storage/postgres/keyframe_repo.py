@@ -124,6 +124,41 @@ class PostgresKeyframeRepository(KeyframeRepository):
             result = await conn.execute(_SQL_UPDATE_RETENTION, keyframe_id, expires_at)
         return not result.endswith(" 0")
 
+    async def list_for_read_model(
+        self,
+        *,
+        camera_id: str | None = None,
+        tag_reason: str | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        limit: int = 5000,
+    ) -> list[TaggedKeyframe]:
+        sql = _SQL_LIST_KEYFRAMES
+        args: list[Any] = []
+        n = 1
+        if camera_id is not None:
+            sql += f" AND camera_id = ${n}"
+            args.append(camera_id)
+            n += 1
+        if tag_reason is not None:
+            sql += f" AND tag_reason = ${n}"
+            args.append(tag_reason)
+            n += 1
+        if after is not None:
+            sql += f" AND captured_at >= ${n}"
+            args.append(after)
+            n += 1
+        if before is not None:
+            sql += f" AND captured_at <= ${n}"
+            args.append(before)
+            n += 1
+        sql += f" ORDER BY captured_at DESC LIMIT ${n}"
+        args.append(limit)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, *args)
+        return [_row_to_keyframe(r) for r in rows]
+
     async def list_keyframes(
         self,
         ph_id: str | None = None,

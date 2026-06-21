@@ -103,6 +103,15 @@ class GalleryRepository(ABC):
         fallback that allows geometry to carry cross-camera pairs).
         """
 
+    async def phs_with_pending_reid(self, ph_ids: list[str]) -> set[str]:
+        """PHs in *ph_ids* that have a ``pending_review`` ReID candidate (M07).
+
+        Only ``pending_review`` entries count: ``operator_verified`` candidates
+        are already governed and ``rejected`` ones never resurface. Returns the
+        subset of *ph_ids* awaiting review so the read model can flag cards.
+        """
+        return set()
+
     @staticmethod
     def _cosine_between_centroids(
         entries_a: list[GalleryEmbedding],
@@ -150,6 +159,15 @@ class InMemoryGalleryRepository(GalleryRepository):
     async def get_gallery_entry(self, gallery_entry_id: str) -> GalleryEmbedding | None:
         return self._entries.get(gallery_entry_id)
 
+    async def phs_with_pending_reid(self, ph_ids: list[str]) -> set[str]:
+        wanted = set(ph_ids)
+        return {
+            entry.origin_tracklet_id
+            for entry in self._entries.values()
+            if entry.state == "pending_review"
+            and entry.origin_tracklet_id in wanted
+        }
+
     async def list_gallery_entries(
         self, identity_id: str | None = None, active_only: bool = True
     ) -> list[GalleryEmbedding]:
@@ -193,7 +211,7 @@ class InMemoryGalleryRepository(GalleryRepository):
     ) -> list[GalleryEmbedding]:
         if not tracklet_ids:
             return []
-        
+
         # If allowed_states is explicitly provided, filter by it.
         # Otherwise, for InMemory mock repo, we might want to default to pending_review and operator_verified to not break tests,
         # but to match prod, we should filter. Let's just use the provided states or don't filter if None to preserve test behavior.
@@ -202,13 +220,13 @@ class InMemoryGalleryRepository(GalleryRepository):
         # Let's check if the caller passed it.
         if allowed_states is not None:
             entries = [
-                entry for entry in self._entries.values() 
+                entry for entry in self._entries.values()
                 if entry.origin_tracklet_id in tracklet_ids
                 and entry.state in allowed_states
             ]
         else:
             entries = [
-                entry for entry in self._entries.values() 
+                entry for entry in self._entries.values()
                 if entry.origin_tracklet_id in tracklet_ids
             ]
         entries.sort(key=lambda e: e.seen_at, reverse=True)

@@ -52,6 +52,16 @@ class IdentityCorrectionRepositoryProtocol(Protocol):
     async def list_ranges(
         self, ph_id: str, *, live_only: bool = True
     ) -> list[IdentityRevisionRange]: ...
+    async def live_ranges_for_phs(
+        self, ph_ids: list[str]
+    ) -> dict[str, list[IdentityRevisionRange]]:
+        """Batch live revision ranges for many PHs (M07 read model).
+
+        Returns a mapping ``ph_id -> live ranges``; PHs with no live range are
+        omitted. Lets the keyframe read model resolve effective identity per
+        bbox in memory without an effective-identity query per box.
+        """
+        ...
     async def effective_identity(
         self, ph_id: str, at: datetime
     ) -> tuple[str | None, RevisionAuthority | None]:
@@ -146,6 +156,16 @@ class InMemoryIdentityCorrectionRepository:
         ]
         rows.sort(key=lambda r: r.created_at)
         return rows
+
+    async def live_ranges_for_phs(
+        self, ph_ids: list[str]
+    ) -> dict[str, list[IdentityRevisionRange]]:
+        result: dict[str, list[IdentityRevisionRange]] = {}
+        for ph_id in set(ph_ids):
+            ranges = await self.list_ranges(ph_id, live_only=True)
+            if ranges:
+                result[ph_id] = ranges
+        return result
 
     async def effective_identity(
         self, ph_id: str, at: datetime

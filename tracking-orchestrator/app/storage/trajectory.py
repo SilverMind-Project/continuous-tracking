@@ -90,6 +90,25 @@ class KeyframeRepository(ABC):
     ) -> list[TaggedKeyframe]:
         """List keyframes with optional filters."""
 
+    @abstractmethod
+    async def list_for_read_model(
+        self,
+        *,
+        camera_id: str | None = None,
+        tag_reason: str | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        limit: int = 5000,
+    ) -> list[TaggedKeyframe]:
+        """List keyframes for the M07 physical-frame read model.
+
+        Returns trigger rows matching the frame-level filters (camera, tag
+        reason, capture window) ordered by capture time descending. The read
+        model groups these into physical-frame cards, so all rows for a given
+        source frame must be returned together; identity-level filters are
+        applied after grouping.
+        """
+
 
 class InMemoryTrajectoryRepository(TrajectoryRepository):
     """In-memory store for trajectory points and room dwells."""
@@ -223,5 +242,26 @@ class InMemoryKeyframeRepository(KeyframeRepository):
             results = [k for k in results if k.ph_id == ph_id]
         if after is not None:
             results = [k for k in results if k.captured_at >= after]
+        results.sort(key=lambda k: k.captured_at, reverse=True)
+        return results[:limit]
+
+    async def list_for_read_model(
+        self,
+        *,
+        camera_id: str | None = None,
+        tag_reason: str | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        limit: int = 5000,
+    ) -> list[TaggedKeyframe]:
+        results = list(self._keyframes.values())
+        if camera_id is not None:
+            results = [k for k in results if k.camera_id == camera_id]
+        if tag_reason is not None:
+            results = [k for k in results if k.tag_reason == tag_reason]
+        if after is not None:
+            results = [k for k in results if k.captured_at >= after]
+        if before is not None:
+            results = [k for k in results if k.captured_at <= before]
         results.sort(key=lambda k: k.captured_at, reverse=True)
         return results[:limit]

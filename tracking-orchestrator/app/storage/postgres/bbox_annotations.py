@@ -71,6 +71,28 @@ class PostgresBboxAnnotationRepository:
             )
         return [_row_to_domain(r) for r in rows]
 
+    async def get_bbox_annotations_for_keyframes(
+        self, keyframe_ids: list[str]
+    ) -> list[BboxAnnotation]:
+        if not keyframe_ids:
+            return []
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, keyframe_id, ph_id::text, camera_id,
+                       x1, y1, x2, y2, detection_confidence,
+                       frame_width, frame_height, identity_id, created_at,
+                       bbox_age_frames,
+                       override_x1, override_y1, override_x2, override_y2,
+                       override_by, override_at
+                FROM continuous_tracking.keyframe_bbox_annotations
+                WHERE keyframe_id = ANY($1)
+                ORDER BY keyframe_id, created_at
+                """,
+                keyframe_ids,
+            )
+        return [_row_to_domain(r) for r in rows]
+
     async def get_bbox_annotations_for_ph(self, ph_id: str) -> list[BboxAnnotation]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(

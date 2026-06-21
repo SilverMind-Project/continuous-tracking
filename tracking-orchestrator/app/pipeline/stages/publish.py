@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import time as _time
 from typing import cast
 
 from structlog import get_logger
 
+from ...storage.base import IdentityDecisionRepositoryProtocol
 from ...transport.redis_streams import RedisStreamsTransport
 from ..frame_context import FrameContext
 from ..types import LiveConfigHolder
-from ...storage.base import GalleryRepository, IdentityDecisionRepositoryProtocol
 from ._room_maps import camera_room_name
 from .base import FrameStage
 
@@ -36,6 +36,9 @@ class PublishStage(FrameStage):
         # Per-camera last publish wall-clock timestamp (monotonic seconds).
         self._last_publish_time: dict[str, float] = {}
         self._missing_room_binding_warnings: set[str] = set()
+        # In-flight provenance writes; holds references so fire-and-forget save
+        # tasks are not garbage-collected before they complete.
+        self._pending_saves: set[asyncio.Task[None]] = set()
 
     async def run(self, ctx: FrameContext) -> None:
         camera_id = ctx.frame.camera_id
@@ -144,7 +147,9 @@ class PublishStage(FrameStage):
                         "decision_source": decision.decision_source,
                         "decision_id": decision.decision_id,
                         "conflict": decision.conflict,
-                        "last_independent_evidence_at_unix_ns": decision.last_independent_evidence_at_unix_ns,
+                        "last_independent_evidence_at_unix_ns": (
+                            decision.last_independent_evidence_at_unix_ns
+                        ),
                         "config_hash": decision.config_hash,
                         "model_set_version": decision.model_set_version,
                     }
@@ -152,11 +157,15 @@ class PublishStage(FrameStage):
 
 
         if self._identity_provenance_repo is not None and ctx.outcome_decisions:
-            import asyncio
             from datetime import UTC, datetime
+
             from ...domain import IdentityProvenanceDecision
 
             for decision in ctx.outcome_decisions:
+                # Persist at identity change points: initial commits, swaps, and
+                # conflict-to-unknown transitions all set ``revises_previous``.
+                # Held rounds carry no new provenance; the keyframe read model
+                # resolves a held identity from its last persisted decision.
                 if not decision.revises_previous:
                     continue
 
@@ -164,6 +173,14 @@ class PublishStage(FrameStage):
                 top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
                 top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
 
+                last_independent_at: datetime | None = None
+                if decision.last_independent_evidence_at_unix_ns:
+                    last_independent_at = datetime.fromtimestamp(
+                        decision.last_independent_evidence_at_unix_ns / 1e9, tz=UTC
+                    )
+
+                # IdentityProvenanceDecision is a frozen dataclass; build every
+                # field in the constructor rather than mutating after creation.
                 prov = IdentityProvenanceDecision(
                     decision_id=decision.decision_id or "unknown",
                     ph_id=decision.ph_id,
@@ -177,15 +194,17 @@ class PublishStage(FrameStage):
                     top_probability=top_prob,
                     second_probability=top2_prob,
                     posterior_entropy=decision.posterior.entropy(),
+                    last_independent_evidence_at=last_independent_at,
                     config_hash=decision.config_hash,
                     model_set_version=decision.model_set_version,
                 )
-                if decision.last_independent_evidence_at_unix_ns:
-                    prov.last_independent_evidence_at = datetime.fromtimestamp(
-                        decision.last_independent_evidence_at_unix_ns / 1e9, tz=UTC
-                    )
 
-                asyncio.create_task(self._identity_provenance_repo.save_decision(prov))
+                # Keep a strong reference until the write completes; a bare
+                # create_task may be garbage-collected mid-flight, silently
+                # dropping the decision write.
+                task = asyncio.create_task(self._identity_provenance_repo.save(prov))
+                self._pending_saves.add(task)
+                task.add_done_callback(self._pending_saves.discard)
 
         logger.info(
             "tracking_event_identity_payload",
