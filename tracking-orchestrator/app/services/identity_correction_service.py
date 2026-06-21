@@ -716,6 +716,18 @@ class IdentityCorrectionService:
             job=job,
         )
 
+    # -- job status ----------------------------------------------------------
+
+    async def get_job(self, revision_id: str) -> IdentityRevisionJob | None:
+        """Return the projection job for a revision, or None if unknown.
+
+        The admin UI polls this after applying a correction: ``apply`` returns
+        immediately with ``status="applying"`` and completion is asynchronous
+        (revision -> CC rewriter -> projection ack). A terminal ``completed`` /
+        ``failed`` status here is the honest signal that the correction is done.
+        """
+        return await self._corr.get_job(revision_id)
+
     # -- projection ack intake ----------------------------------------------
 
     async def record_projection_ack(self, ack: ProjectionAck) -> bool:

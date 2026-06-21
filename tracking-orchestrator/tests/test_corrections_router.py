@@ -207,6 +207,47 @@ def test_projection_ack_completes_job(client_and_publisher):
     assert ack.json()["completed"] is True
 
 
+def test_job_status_reflects_applying_then_completed(client_and_publisher):
+    client, _pub, *_ = client_and_publisher
+    prop = client.post("/internal/corrections/propose", json={"ph_id": "gt-1"}).json()
+    applied = client.post(
+        "/internal/corrections/apply",
+        json={
+            "ph_id": "gt-1",
+            "actor": "caregiver@home",
+            "reason_code": "wrong_person",
+            "observation_start": prop["start"]["captured_at"],
+            "observation_end": prop["end"]["captured_at"],
+            "base_ph_version": prop["ph_version"],
+            "target_identity_id": "grandpa",
+        },
+    ).json()
+    revision_id = applied["revision_id"]
+
+    # Before any external projection acks, the job is still applying.
+    pending = client.get(f"/internal/corrections/jobs/{revision_id}")
+    assert pending.status_code == 200
+    body = pending.json()
+    assert body["revision_id"] == revision_id
+    assert body["status"] == "applying"
+    assert "cc" in body["required_projections"]
+
+    # After the CC projection acks, the job completes.
+    client.post(
+        "/internal/projection-acks",
+        json={"revision_id": revision_id, "consumer": "cc", "schema_version": "1"},
+    )
+    done = client.get(f"/internal/corrections/jobs/{revision_id}").json()
+    assert done["status"] == "completed"
+
+
+def test_job_status_unknown_revision_returns_404(client_and_publisher):
+    client, *_ = client_and_publisher
+    resp = client.get("/internal/corrections/jobs/does-not-exist")
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "correction.job_not_found"
+
+
 def test_legacy_endpoint_marks_deprecated_and_applies(client_and_publisher):
     client, pub, _ph_repo, _corr = client_and_publisher
     resp = client.post(

@@ -147,6 +147,16 @@ class ProjectionAckResponse(BaseModel):
     completed: bool
 
 
+class JobStatusResponse(BaseModel):
+    revision_id: str
+    job_id: str
+    status: str
+    required_projections: list[str]
+    row_counts: dict[str, int]
+    attempts: int
+    last_error: str | None
+
+
 # Legacy whole-PH correction (deprecated).
 class CorrectionRequest(BaseModel):
     ph_id: str = Field(..., min_length=1, max_length=128)
@@ -281,6 +291,32 @@ async def compensate_correction(
             detail={"code": "correction.compensate_failed", "message": str(exc)},
         ) from exc
     return _result_response(result)
+
+
+@router.get(
+    "/internal/corrections/jobs/{revision_id}", response_model=JobStatusResponse
+)
+async def get_job_status(
+    revision_id: str,
+    ctx: _CorrectionContext = Depends(get_context),
+) -> JobStatusResponse:
+    """Projection-job status for a revision (polled by the admin UI)."""
+    service = _require_service(ctx)
+    job = await service.get_job(revision_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "correction.job_not_found", "message": revision_id},
+        )
+    return JobStatusResponse(
+        revision_id=job.revision_id,
+        job_id=job.job_id,
+        status=job.status,
+        required_projections=list(job.required_projections),
+        row_counts=dict(job.row_counts),
+        attempts=job.attempts,
+        last_error=job.last_error,
+    )
 
 
 @router.post("/internal/projection-acks", response_model=ProjectionAckResponse)
