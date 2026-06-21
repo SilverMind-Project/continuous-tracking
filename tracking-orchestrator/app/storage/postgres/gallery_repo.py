@@ -6,14 +6,27 @@ Handles identities, gallery embeddings, and ANN search via pgvector HNSW.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import asyncpg  # type: ignore[import-untyped]
 from structlog import get_logger
 
-from ...domain import GalleryEmbedding, Identity
+from ...domain import GalleryEmbedding, Identity, ReviewCandidate, ReviewEvent
 from ..base import GalleryRepository
+from ..gallery import ReviewConflictError, ReviewNotFoundError
 
 logger = get_logger(__name__)
+
+# Columns the M09 review queue projects from reid_gallery.
+_REVIEW_COLUMNS = """
+    id, identity_id, proposed_identity_id, effective_identity_id, state,
+    label_source, candidate_reason, model_version, preprocessing_version,
+    dimension, crop_key, source_frame_key, crop_hash, frame_hash, bbox,
+    crop_width, crop_height, ph_id, observation_id, keyframe_id, camera_id,
+    capture_time, confidence, orientation, quality, is_truncated, is_occluded,
+    source_episode_id, created_actor, created_at, seen_at, reviewed_actor,
+    reviewed_time, review_reason, review_note, audit_version
+"""
 
 # ---------------------------------------------------------------------------
 # SQL statements
@@ -73,7 +86,8 @@ _SQL_GET_GALLERY_ENTRY = """
 
 _SQL_LIST_GALLERY_ENTRIES = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
-           rg.seen_at, rg.face_confirmed, rg.orientation, rg.state, rg.source_episode_id, rg.camera_id
+           rg.seen_at, rg.face_confirmed, rg.orientation, rg.state,
+           rg.source_episode_id, rg.camera_id
     FROM continuous_tracking.reid_gallery rg
     INNER JOIN continuous_tracking.identities i ON rg.identity_id = i.identity_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
@@ -105,7 +119,8 @@ _SQL_SEARCH_SIMILAR = """
 
 _SQL_LIST_GALLERY_FOR_TRACKLETS = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
-           rg.seen_at, rg.face_confirmed, rg.orientation, rg.state, rg.source_episode_id, rg.camera_id
+           rg.seen_at, rg.face_confirmed, rg.orientation, rg.state,
+           rg.source_episode_id, rg.camera_id
     FROM continuous_tracking.reid_gallery rg
     WHERE rg.origin_tracklet_id = ANY($1::uuid[])
       AND rg.state = 'operator_verified'
@@ -210,7 +225,9 @@ class PostgresGalleryRepository(GalleryRepository):
             orientation=row.get("orientation", 4),
             camera_id=row.get("camera_id") or "",
             state=row.get("state", "pending_review"),
-            source_episode_id=str(row["source_episode_id"]) if row.get("source_episode_id") else None,
+            source_episode_id=(
+                str(row["source_episode_id"]) if row.get("source_episode_id") else None
+            ),
         )
 
     async def phs_with_pending_reid(self, ph_ids: list[str]) -> set[str]:
@@ -249,7 +266,9 @@ class PostgresGalleryRepository(GalleryRepository):
                 orientation=row.get("orientation", 4),
                 camera_id=row.get("camera_id") or "",
                 state=row.get("state", "pending_review"),
-                source_episode_id=str(row["source_episode_id"]) if row.get("source_episode_id") else None,
+                source_episode_id=(
+                str(row["source_episode_id"]) if row.get("source_episode_id") else None
+            ),
             )
             for row in rows
         ]
@@ -285,7 +304,11 @@ class PostgresGalleryRepository(GalleryRepository):
                     camera_id=row.get("camera_id") or "",
                     orientation=row.get("orientation", 4),
                     state=row.get("state", "pending_review"),
-                    source_episode_id=str(row["source_episode_id"]) if row.get("source_episode_id") else None,
+                    source_episode_id=(
+                        str(row["source_episode_id"])
+                        if row.get("source_episode_id")
+                        else None
+                    ),
                 ),
                 float(row["similarity"]),
             )
@@ -296,7 +319,12 @@ class PostgresGalleryRepository(GalleryRepository):
         self,
         tracklet_ids: set[str],
         limit: int = 20,
+        allowed_states: set[str] | None = None,
+        model_versions: set[str] | None = None,
     ) -> list[GalleryEmbedding]:
+        # The SQL already hard-restricts to operator_verified rows, matching the
+        # resolver's default {"operator_verified"} state set, so the extra
+        # state/version parameters are accepted for protocol parity.
         if not tracklet_ids:
             return []
         async with self._pool.acquire() as conn:
@@ -348,14 +376,305 @@ class PostgresGalleryRepository(GalleryRepository):
         tracklet_ids_a: set[str],
         tracklet_ids_b: set[str],
         limit: int = 20,
+        allowed_states: set[str] | None = None,
+        model_versions: set[str] | None = None,
     ) -> float:
-        entries_a = await self.list_gallery_entries_for_tracklets(tracklet_ids_a, limit)
-        entries_b = await self.list_gallery_entries_for_tracklets(tracklet_ids_b, limit)
+        entries_a = await self.list_gallery_entries_for_tracklets(
+            tracklet_ids_a, limit, allowed_states, model_versions
+        )
+        entries_b = await self.list_gallery_entries_for_tracklets(
+            tracklet_ids_b, limit, allowed_states, model_versions
+        )
         if not entries_a and not entries_b:
             return 0.0
         if not entries_a or not entries_b:
             return 0.5
         return self._cosine_between_centroids(entries_a, entries_b)
+
+    # -- M09 ReID review queue ------------------------------------------------
+
+    async def list_review_candidates(
+        self,
+        *,
+        state: str = "pending_review",
+        identity_id: str | None = None,
+        camera_id: str | None = None,
+        model_version: str | None = None,
+        source_type: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[ReviewCandidate], int]:
+        # One filtered window shared by the page query and the COUNT so the
+        # total reflects the same predicate the page was drawn from.
+        where = """
+            WHERE state = $1
+              AND ($2::text IS NULL OR identity_id = $2)
+              AND ($3::text IS NULL OR camera_id = $3)
+              AND ($4::text IS NULL OR model_version = $4)
+              AND ($5::text IS NULL OR candidate_reason = $5)
+              AND ($6::timestamptz IS NULL OR capture_time >= $6)
+              AND ($7::timestamptz IS NULL OR capture_time <= $7)
+        """
+        params = [state, identity_id, camera_id, model_version, source_type, since, until]
+        async with self._pool.acquire() as conn:
+            total = await conn.fetchval(
+                f"SELECT count(*) FROM continuous_tracking.reid_gallery {where}",
+                *params,
+            )
+            rows = await conn.fetch(
+                f"""
+                SELECT {_REVIEW_COLUMNS}
+                FROM continuous_tracking.reid_gallery
+                {where}
+                ORDER BY created_at ASC NULLS LAST, seen_at ASC
+                LIMIT $8 OFFSET $9
+                """,
+                *params,
+                limit,
+                offset,
+            )
+        return ([_row_to_review_candidate(r) for r in rows], int(total or 0))
+
+    async def get_review_candidate(self, candidate_id: str) -> ReviewCandidate | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT {_REVIEW_COLUMNS} FROM continuous_tracking.reid_gallery WHERE id = $1",
+                candidate_id,
+            )
+        return _row_to_review_candidate(row) if row is not None else None
+
+    async def list_review_events(self, candidate_id: str) -> list[ReviewEvent]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT event_id, entry_id, previous_state, new_state, actor,
+                       reason, note, event_time, audit_version
+                FROM continuous_tracking.gallery_review_events
+                WHERE entry_id = $1
+                ORDER BY event_time ASC, audit_version ASC
+                """,
+                candidate_id,
+            )
+        return [
+            ReviewEvent(
+                event_id=str(r["event_id"]),
+                entry_id=str(r["entry_id"]),
+                previous_state=r["previous_state"],
+                new_state=r["new_state"],
+                actor=r["actor"],
+                reason=r["reason"],
+                note=r["note"],
+                event_time=r["event_time"],
+                audit_version=r["audit_version"],
+            )
+            for r in rows
+        ]
+
+    async def count_review_queue(self) -> dict[str, int]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT state, count(*) AS n
+                FROM continuous_tracking.reid_gallery
+                GROUP BY state
+                """
+            )
+        counts = {"pending_review": 0, "operator_verified": 0, "rejected": 0}
+        for r in rows:
+            counts[str(r["state"])] = int(r["n"])
+        return counts
+
+    async def apply_review_action(
+        self,
+        candidate_id: str,
+        *,
+        action: str,
+        actor: str,
+        base_audit_version: int,
+        reason: str | None = None,
+        note: str | None = None,
+        new_identity_id: str | None = None,
+    ) -> ReviewCandidate:
+        async with self._pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                """
+                    SELECT state, audit_version
+                    FROM continuous_tracking.reid_gallery
+                    WHERE id = $1
+                    FOR UPDATE
+                    """,
+                candidate_id,
+            )
+            if row is None:
+                raise ReviewNotFoundError(candidate_id)
+            if row["state"] != "pending_review":
+                raise ReviewConflictError(
+                    f"{candidate_id} already reviewed (state={row['state']})"
+                )
+            if row["audit_version"] != base_audit_version:
+                raise ReviewConflictError(
+                    f"{candidate_id} stale audit_version "
+                    f"(have {row['audit_version']}, sent {base_audit_version})"
+                )
+            prev_state = row["state"]
+            next_version = base_audit_version + 1
+
+            if action == "reject":
+                # Vector bytes are nulled here; the crop object is removed by
+                # the service after this transaction commits. The crop_key,
+                # hashes, and audit metadata are retained as a fingerprint.
+                await conn.execute(
+                    """
+                        UPDATE continuous_tracking.reid_gallery
+                        SET state = 'rejected', embedding = NULL,
+                            reviewed_actor = $2, reviewed_time = now(),
+                            review_reason = $3, review_note = $4,
+                            audit_version = $5
+                        WHERE id = $1
+                        """,
+                    candidate_id, actor, reason, note, next_version,
+                )
+                new_state = "rejected"
+            elif action == "relabel":
+                await conn.execute(
+                    """
+                        UPDATE continuous_tracking.reid_gallery
+                        SET state = 'operator_verified', identity_id = $2,
+                            reviewed_actor = $3, reviewed_time = now(),
+                            review_reason = $4, review_note = $5,
+                            audit_version = $6
+                        WHERE id = $1
+                        """,
+                    candidate_id, new_identity_id, actor, reason, note, next_version,
+                )
+                new_state = "operator_verified"
+            elif action == "approve":
+                await conn.execute(
+                    """
+                        UPDATE continuous_tracking.reid_gallery
+                        SET state = 'operator_verified',
+                            reviewed_actor = $2, reviewed_time = now(),
+                            review_reason = $3, review_note = $4,
+                            audit_version = $5
+                        WHERE id = $1
+                        """,
+                    candidate_id, actor, reason, note, next_version,
+                )
+                new_state = "operator_verified"
+            else:
+                raise ValueError(f"unknown review action: {action}")
+
+            await conn.execute(
+                """
+                    INSERT INTO continuous_tracking.gallery_review_events
+                    (entry_id, previous_state, new_state, actor, reason, note, audit_version)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """,
+                candidate_id, prev_state, new_state, actor, reason, note, next_version,
+            )
+
+        updated = await self.get_review_candidate(candidate_id)
+        if updated is None:  # pragma: no cover - row cannot vanish mid-call
+            raise ReviewNotFoundError(candidate_id)
+        return updated
+
+    async def compensate_review(
+        self,
+        candidate_id: str,
+        *,
+        actor: str,
+        base_audit_version: int,
+    ) -> ReviewCandidate:
+        async with self._pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                """
+                    SELECT state, audit_version
+                    FROM continuous_tracking.reid_gallery
+                    WHERE id = $1
+                    FOR UPDATE
+                    """,
+                candidate_id,
+            )
+            if row is None:
+                raise ReviewNotFoundError(candidate_id)
+            if row["state"] != "operator_verified":
+                raise ReviewConflictError(
+                    f"{candidate_id} is not operator_verified (state={row['state']})"
+                )
+            if row["audit_version"] != base_audit_version:
+                raise ReviewConflictError(f"{candidate_id} stale audit_version")
+            next_version = base_audit_version + 1
+            await conn.execute(
+                """
+                    UPDATE continuous_tracking.reid_gallery
+                    SET state = 'pending_review', reviewed_actor = $2,
+                        reviewed_time = now(), review_reason = 'compensated',
+                        audit_version = $3
+                    WHERE id = $1
+                    """,
+                candidate_id, actor, next_version,
+            )
+            await conn.execute(
+                """
+                    INSERT INTO continuous_tracking.gallery_review_events
+                    (entry_id, previous_state, new_state, actor, reason, note, audit_version)
+                    VALUES ($1, 'operator_verified', 'pending_review', $2, 'compensated', NULL, $3)
+                    """,
+                candidate_id, actor, next_version,
+            )
+        updated = await self.get_review_candidate(candidate_id)
+        if updated is None:  # pragma: no cover
+            raise ReviewNotFoundError(candidate_id)
+        return updated
+
+
+def _row_to_review_candidate(row: asyncpg.Record) -> ReviewCandidate:
+    bbox = row["bbox"]
+    if isinstance(bbox, str):
+        try:
+            bbox = json.loads(bbox)
+        except (json.JSONDecodeError, TypeError):
+            bbox = None
+    return ReviewCandidate(
+        candidate_id=str(row["id"]),
+        identity_id=row["identity_id"],
+        proposed_identity_id=row["proposed_identity_id"],
+        effective_identity_id=row["effective_identity_id"],
+        state=row["state"],
+        label_source=row["label_source"],
+        candidate_reason=row["candidate_reason"],
+        model_version=row["model_version"],
+        preprocessing_version=row["preprocessing_version"],
+        dimension=row["dimension"],
+        crop_key=row["crop_key"],
+        source_frame_key=row["source_frame_key"],
+        crop_hash=row["crop_hash"],
+        frame_hash=row["frame_hash"],
+        bbox=bbox if isinstance(bbox, dict) else None,
+        crop_width=row["crop_width"],
+        crop_height=row["crop_height"],
+        ph_id=str(row["ph_id"]) if row["ph_id"] else None,
+        observation_id=str(row["observation_id"]) if row["observation_id"] else None,
+        keyframe_id=str(row["keyframe_id"]) if row["keyframe_id"] else None,
+        camera_id=row["camera_id"],
+        capture_time=row["capture_time"],
+        confidence=row["confidence"],
+        orientation=row["orientation"] if row["orientation"] is not None else 4,
+        quality=row["quality"] if row["quality"] is not None else 0.0,
+        is_truncated=bool(row["is_truncated"]),
+        is_occluded=bool(row["is_occluded"]),
+        source_episode_id=str(row["source_episode_id"]) if row["source_episode_id"] else None,
+        created_actor=row["created_actor"],
+        created_at=row["created_at"],
+        seen_at=row["seen_at"],
+        reviewed_actor=row["reviewed_actor"],
+        reviewed_time=row["reviewed_time"],
+        review_reason=row["review_reason"],
+        review_note=row["review_note"],
+        audit_version=row["audit_version"],
+    )
 
 
 def _embedding_to_pgvector(embedding: list[float]) -> str:

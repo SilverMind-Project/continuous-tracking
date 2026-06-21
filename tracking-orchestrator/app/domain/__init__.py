@@ -784,6 +784,69 @@ class GalleryEmbedding:
     source_episode_id: str | None = None
 
 @dataclass(frozen=True)
+class ReviewCandidate:
+    """A governed ReID gallery candidate as seen by the M09 review queue.
+
+    Carries the full crop/frame provenance, quality, and version metadata an
+    operator needs to audit one candidate. Distinct from
+    :class:`GalleryEmbedding` (the resolver's lean voting row) so the queue can
+    expose review fields without widening the hot identity path.
+    """
+
+    candidate_id: str
+    identity_id: str | None
+    proposed_identity_id: str | None
+    effective_identity_id: str | None
+    state: str
+    label_source: str | None
+    candidate_reason: str | None
+    model_version: str | None
+    preprocessing_version: str | None
+    dimension: int | None
+    crop_key: str | None
+    source_frame_key: str | None
+    crop_hash: str | None
+    frame_hash: str | None
+    bbox: dict[str, Any] | None
+    crop_width: int | None
+    crop_height: int | None
+    ph_id: str | None
+    observation_id: str | None
+    keyframe_id: str | None
+    camera_id: str | None
+    capture_time: datetime | None
+    confidence: float | None
+    orientation: int
+    quality: float
+    is_truncated: bool
+    is_occluded: bool
+    source_episode_id: str | None
+    created_actor: str | None
+    created_at: datetime | None
+    seen_at: datetime | None
+    reviewed_actor: str | None
+    reviewed_time: datetime | None
+    review_reason: str | None
+    review_note: str | None
+    audit_version: int
+
+
+@dataclass(frozen=True)
+class ReviewEvent:
+    """One immutable transition in a candidate's review history (M09)."""
+
+    event_id: str
+    entry_id: str
+    previous_state: str
+    new_state: str
+    actor: str
+    reason: str | None
+    note: str | None
+    event_time: datetime
+    audit_version: int
+
+
+@dataclass(frozen=True)
 class IdentityCorrection:
     """Legacy GlobalTrack-era manual identity correction or merge decision.
 

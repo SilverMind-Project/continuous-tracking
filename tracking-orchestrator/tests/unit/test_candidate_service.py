@@ -55,7 +55,11 @@ def mock_gallery_repo():
                     return {"state": self.data[candidate_id]["state"], "audit_version": self.data[candidate_id]["audit_version"], "identity_id": "test_id"}
                 return None
             elif "SELECT crop_key" in sql:
-                return {"crop_key": "some_key"}
+                # Faithful: return the row's real deterministic crop_key so the
+                # row-based delete in _transition_state removes the right object
+                # (the hardcoded "v1" delete that masked this was removed).
+                candidate_id = args[0]
+                return {"crop_key": f"reid-candidates/v1/{candidate_id}.jpg"}
             elif "SELECT previous_state" in sql:
                 return {"previous_state": "pending_review"}
             return None

@@ -56,6 +56,8 @@ from .routers.live import router as live_router
 from .routers.live import set_context as set_live_context
 from .routers.ph import router as ph_router
 from .routers.ph import set_ph_repository, set_revision_publisher
+from .routers.reid_review import router as reid_review_router
+from .routers.reid_review import set_context as set_reid_review_context
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
 from .sampling.keyframe_sampler import SamplerConfig
@@ -884,6 +886,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if gallery_repo is not None:
         gallery_router_mod.set_context(gallery_repo=gallery_repo, reid_embedder=reid_embedder)
 
+        # M09 ReID review queue: governed approve/relabel/reject over the gallery.
+        # active_model_versions is left unconfigured (None) for now: model
+        # incompatibility is surfaced once a current-version list is wired here.
+        from .services.reid_review_service import ReIDReviewService
+
+        reid_review_service = ReIDReviewService(
+            gallery_repo,
+            storage_client=_frame_fetcher,
+        )
+        set_reid_review_context(reid_review_service)
+
     if signal_repo is not None and trajectory_repo is not None and keyframe_repo is not None:
         dashboard_router_mod.set_repos(
             signal=signal_repo,
@@ -967,6 +980,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router)
     app.include_router(corrections_router)
     app.include_router(gallery_router)
+    app.include_router(reid_review_router)
     app.include_router(live_router)
     app.include_router(ph_router)
     app.include_router(trajectory_router)

@@ -155,12 +155,11 @@ class ReIDCandidateService:
         await self._transition_state(candidate_id, "operator_verified", actor, reason)
 
     async def reject_candidate(self, candidate_id: str, actor: str, reason: str = "", note: str = ""):
-        # Retrieve the crop_key before transitioning state, because the record might change
-        # Actually, get_gallery_entry returns crop_key? No, GalleryEmbedding doesn't have crop_key directly on the dataclass in all cases, but it's generated deterministically.
-        # Wait, the crop_key is purely deterministic: "reid-candidates/v1/{candidate_id}.jpg"
-        crop_key = f"reid-candidates/v1/{candidate_id}.jpg"
+        # _transition_state already deletes the row's real crop_key inside the
+        # transition. The earlier hardcoded "reid-candidates/v1/{id}.jpg" delete
+        # was wrong for any model_version != "v1" (it orphaned the real crop and
+        # could raise on a missing object), so it is gone.
         await self._transition_state(candidate_id, "rejected", actor, reason, note)
-        await self._storage.delete_object(crop_key)
 
     async def relabel_candidate(self, candidate_id: str, new_identity_id: str, actor: str, reason: str = ""):
         async with self._gallery_repo._pool.acquire() as conn:

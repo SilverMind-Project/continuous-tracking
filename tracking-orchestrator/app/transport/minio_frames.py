@@ -71,6 +71,15 @@ class MinioFrameFetcher:
             ContentType=content_type,
         )
 
+    async def delete_object(self, minio_key: str) -> None:
+        """Delete an object from MinIO (used by ReID rejection to remove a crop)."""
+        if self._client is None:
+            raise RuntimeError("MinioFrameFetcher is not connected")
+        await self._client.delete_object(
+            Bucket=self._config.bucket,
+            Key=minio_key,
+        )
+
     async def fetch_rgb(self, minio_key: str) -> npt.NDArray[np.uint8]:
         if self._client is None:
             raise RuntimeError("MinioFrameFetcher is not connected")
