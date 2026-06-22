@@ -22,7 +22,7 @@ from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from structlog import get_logger
 
-from .config import Settings, settings
+from .config import SettingNotFoundError, Settings, SettingsSection, settings
 from .domain import OverlapGroup
 from .observability.logging_config import configure_logging
 
@@ -409,6 +409,14 @@ def _build_ph_unknown_purge_config(s: Settings) -> PHUnknownPurgeConfig:
     )
 
 
+def _optional_str(section: SettingsSection, key: str, default: str = "") -> str:
+    """Read a string from a settings section, returning default if the key is absent."""
+    try:
+        return section.as_str(key)
+    except SettingNotFoundError:
+        return default
+
+
 def _build_face_id_config(
     s: Settings, camera_configs: dict[str, FaceIdCameraConfig]
 ) -> FaceIdConfig:
@@ -421,6 +429,8 @@ def _build_face_id_config(
         min_confidence=fi.as_float("min_confidence"),
         enabled=fi.as_bool("enabled"),
         camera_configs=camera_configs,
+        expected_arcface_model_version=_optional_str(fi, "expected_arcface_model_version"),
+        expected_preprocessing_version=_optional_str(fi, "expected_preprocessing_version"),
     )
 
 

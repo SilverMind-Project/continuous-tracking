@@ -152,6 +152,9 @@ class FaceIdConfig:
     min_confidence: float = 0.6
     enabled: bool = True
     camera_configs: dict[str, FaceIdCameraConfig] = field(default_factory=dict)
+    # M10: expected versions for calibration compatibility gating on the CTS side.
+    expected_arcface_model_version: str = ""
+    expected_preprocessing_version: str = ""
 
 
 @dataclass
@@ -591,6 +594,8 @@ class FrameProcessingPipeline:
                 face_id_min_confidence=self._config.face_id.min_confidence,
                 face_id_camera_configs=self._config.face_id.camera_configs,
                 last_face_id_by_tracklet=self._last_face_id_by_tracklet,
+                expected_arcface_model_version=self._config.face_id.expected_arcface_model_version,
+                expected_preprocessing_version=self._config.face_id.expected_preprocessing_version,
             ),
         ]
 

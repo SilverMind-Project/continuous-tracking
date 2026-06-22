@@ -116,3 +116,5 @@ class FaceEvidence:
     similarity: float = 0.0
     # Head pose yaw in degrees.
     yaw_deg: float = 0.0
+    # Calibrated ArcFace probability from the person-id service (None when degraded).
+    calibrated_confidence: float | None = None

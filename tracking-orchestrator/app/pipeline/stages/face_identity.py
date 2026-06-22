@@ -12,7 +12,7 @@ from structlog import get_logger
 
 from ...domain import BoundingBox, Detection, FaceAnchor, Identity
 from ...inference.evidence import FaceEvidence
-from ...inference.face_id_client import FaceIdentificationClient
+from ...inference.face_id_client import FaceIdentificationClient, FaceResult
 from ...observability import metrics as _metrics
 from ...storage.base import GalleryRepository
 from ..frame_context import FrameContext
@@ -116,6 +116,8 @@ class FaceIdentityStage(FrameStage):
         face_id_camera_configs: dict[str, FaceIdCameraConfig] | None = None,
         last_face_id_by_tracklet: dict[str, datetime] | None = None,
         face_service_version: str = "",
+        expected_arcface_model_version: str = "",
+        expected_preprocessing_version: str = "",
     ) -> None:
         self._face_id_client = face_id_client
         self._gallery_repo = gallery_repo
@@ -123,6 +125,8 @@ class FaceIdentityStage(FrameStage):
         self._face_id_min_confidence = face_id_min_confidence
         self._face_id_camera_configs = face_id_camera_configs or {}
         self._face_service_version = face_service_version
+        self._expected_arcface_model_version = expected_arcface_model_version
+        self._expected_preprocessing_version = expected_preprocessing_version
         # Cooldown dict keyed by stable track ID (not ephemeral detection_id).
         # Shared with the pipeline so the pruning interval in frame_pipeline.py
         # can also clear stale entries.
@@ -136,6 +140,23 @@ class FaceIdentityStage(FrameStage):
 
     def _get_face_id_config(self, camera_id: str) -> FaceIdCameraConfig:
         return self._face_id_camera_configs.get(camera_id, FaceIdCameraConfig())
+
+    def _resolve_calibrated_confidence(self, face: FaceResult) -> float | None:
+        """Return calibrated_confidence only when the service reports ready and versions match.
+
+        Any degraded status or version mismatch yields None so the authority gate fails closed.
+        """
+        if face.calibration_status != "ready":
+            return None
+        if self._expected_arcface_model_version and (
+            face.arcface_model_version != self._expected_arcface_model_version
+        ):
+            return None
+        if self._expected_preprocessing_version and (
+            face.preprocessing_version != self._expected_preprocessing_version
+        ):
+            return None
+        return face.calibrated_confidence
 
     async def run(self, ctx: FrameContext) -> None:
         camera_id = ctx.frame.camera_id
@@ -332,6 +353,7 @@ class FaceIdentityStage(FrameStage):
                             recognition_state="recognized",
                             similarity=face.similarity,
                             yaw_deg=face.yaw_deg,
+                            calibrated_confidence=self._resolve_calibrated_confidence(face),
                         )
                     )
                     recognized_count += 1
@@ -353,6 +375,7 @@ class FaceIdentityStage(FrameStage):
                             recognition_state="candidate",
                             similarity=face.similarity,
                             yaw_deg=face.yaw_deg,
+                            calibrated_confidence=None,  # candidates never carry calibrated authority
                         )
                     )
                     candidate_count += 1
@@ -372,6 +395,7 @@ class FaceIdentityStage(FrameStage):
                             recognition_state="unrecognized",
                             similarity=face.similarity,
                             yaw_deg=face.yaw_deg,
+                            calibrated_confidence=None,
                         )
                     )
                     unrecognized_count += 1
@@ -430,6 +454,7 @@ class FaceIdentityStage(FrameStage):
                     recognition_state=fa.recognition_state,
                     similarity=fa.similarity,
                     yaw_deg=fa.yaw_deg,
+                    calibrated_confidence=fa.calibrated_confidence,
                 )
             )
         ctx._face_evidence = evidence

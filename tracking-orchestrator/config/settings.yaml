@@ -70,6 +70,11 @@ face_id:
   # stricter identity-lock gate after an anchor exists.
   min_confidence: 0.6
   enabled: true
+  # M10: expected calibration versions. calibrated_confidence is set to None
+  # when the person-id response carries a different model or preprocessing version,
+  # ensuring the authority gate fails closed on model mismatches.
+  expected_arcface_model_version: "buffalo_l"
+  expected_preprocessing_version: "v1"
 
 # Dementia signal computation
 #

@@ -36,7 +36,9 @@ class FaceResult:
     recognition_state: str = "recognized"
     # Nearest centroid person_id, even below threshold.
     best_candidate_id: str | None = None
-    # Raw cosine similarity to best candidate.
+    # Raw cosine similarity to best candidate (alias of similarity, M10 contract).
+    raw_similarity: float = 0.0
+    # Raw cosine similarity (legacy field; kept for backward compatibility).
     similarity: float = 0.0
     # Head pose in degrees.
     yaw_deg: float = 0.0
@@ -44,6 +46,11 @@ class FaceResult:
     roll_deg: float = 0.0
     # SCRFD detection score.
     det_score: float = 0.0
+    # M10 calibration fields. calibrated_confidence is None in any degraded state.
+    calibrated_confidence: float | None = None
+    calibration_status: str = "degraded_missing"
+    arcface_model_version: str = ""
+    preprocessing_version: str = ""
 
 
 class FaceIdentificationClient:
@@ -172,6 +179,9 @@ class FaceIdentificationClient:
 
                 recognition_state = str(face.get("recognition_state", "recognized"))
 
+                raw_sim = float(face.get("raw_similarity", face.get("similarity", 0)))
+                cal_conf_raw = face.get("calibrated_confidence")
+                cal_conf: float | None = float(cal_conf_raw) if cal_conf_raw is not None else None
                 crop_results.append(
                     FaceResult(
                         person_id=face.get("person_id", "unknown"),
@@ -180,11 +190,16 @@ class FaceIdentificationClient:
                         bbox_normalized=[nx1, ny1, nx2, ny2],
                         recognition_state=recognition_state,
                         best_candidate_id=face.get("best_candidate_id"),
-                        similarity=float(face.get("similarity", 0)),
+                        raw_similarity=raw_sim,
+                        similarity=raw_sim,
                         yaw_deg=float(face.get("yaw_deg", 0)),
                         pitch_deg=float(face.get("pitch_deg", 0)),
                         roll_deg=float(face.get("roll_deg", 0)),
                         det_score=float(face.get("det_score", 0)),
+                        calibrated_confidence=cal_conf,
+                        calibration_status=str(face.get("calibration_status", "degraded_missing")),
+                        arcface_model_version=str(face.get("arcface_model_version", "")),
+                        preprocessing_version=str(face.get("preprocessing_version", "")),
                     )
                 )
 

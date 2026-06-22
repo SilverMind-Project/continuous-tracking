@@ -75,16 +75,30 @@ def _make_ctx(camera_id: str = "cam-1") -> FrameContext:
 
 
 class _FakeFaceResult:
-    def __init__(self, person_id: str, confidence: float):
+    def __init__(
+        self,
+        person_id: str,
+        confidence: float,
+        calibrated_confidence: float | None = None,
+        calibration_status: str = "degraded_missing",
+        arcface_model_version: str = "buffalo_l",
+        preprocessing_version: str = "v1",
+        recognition_state: str = "recognized",
+    ):
         self.person_id = person_id
         self.confidence = confidence
-        self.recognition_state = "recognized"
+        self.recognition_state = recognition_state
         self.best_candidate_id = person_id if person_id != "unknown" else None
+        self.raw_similarity = confidence
         self.similarity = confidence
         self.yaw_deg = 0.0
         self.pitch_deg = 0.0
         self.roll_deg = 0.0
         self.det_score = 0.85
+        self.calibrated_confidence = calibrated_confidence
+        self.calibration_status = calibration_status
+        self.arcface_model_version = arcface_model_version
+        self.preprocessing_version = preprocessing_version
 
 
 # ---------------------------------------------------------------------------
@@ -368,3 +382,187 @@ async def test_face_evidence_includes_detection_id_in_ph_mode():
     fe = ctx._face_evidence[0]
     assert fe.detection_id == "det-1"
     assert fe.person_id == "alice"
+
+
+# ---------------------------------------------------------------------------
+# M10: calibration authority contract tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_raw_similarity_0_95_with_null_calibrated_cannot_satisfy_authority():
+    """High raw similarity with degraded calibration must NOT produce a non-None
+    calibrated_confidence on the FaceAnchor. The authority gate reads calibrated_confidence
+    and fails closed on None.
+    """
+    client = AsyncMock(spec=FaceIdentificationClient)
+    # High raw similarity (0.95) but degraded calibration (status=degraded_missing)
+    result = _FakeFaceResult(
+        "alice",
+        confidence=0.95,
+        calibrated_confidence=None,
+        calibration_status="degraded_missing",
+    )
+    client.identify_crops.return_value = [(0, [result])]
+
+    stage = FaceIdentityStage(
+        face_id_client=client,
+        face_id_min_confidence=0.5,
+        face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
+        expected_arcface_model_version="buffalo_l",
+        expected_preprocessing_version="v1",
+    )
+
+    ctx = _make_ctx()
+    ctx.domain_detections = [_make_detection("det-authority-1")]
+    ctx.crops = [np.zeros((64, 64, 3), dtype=np.uint8)]
+
+    await stage.run(ctx)
+    assert ctx.face_anchors, "Expected a FaceAnchor"
+    anchor = ctx.face_anchors[0]
+    # calibrated_confidence must be None — raw similarity cannot substitute
+    assert anchor.calibrated_confidence is None, (
+        f"Expected None but got {anchor.calibrated_confidence}; "
+        "raw similarity must not satisfy the authority gate"
+    )
+
+
+@pytest.mark.asyncio
+async def test_calibrated_confidence_0_85_propagates_to_anchor():
+    """calibrated_confidence=0.85 from a ready artifact with matching versions
+    must propagate through to FaceAnchor so the resolver can grant authority.
+    """
+    client = AsyncMock(spec=FaceIdentificationClient)
+    result = _FakeFaceResult(
+        "alice",
+        confidence=0.90,
+        calibrated_confidence=0.85,
+        calibration_status="ready",
+        arcface_model_version="buffalo_l",
+        preprocessing_version="v1",
+    )
+    client.identify_crops.return_value = [(0, [result])]
+
+    stage = FaceIdentityStage(
+        face_id_client=client,
+        face_id_min_confidence=0.5,
+        face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
+        expected_arcface_model_version="buffalo_l",
+        expected_preprocessing_version="v1",
+    )
+
+    ctx = _make_ctx()
+    ctx.domain_detections = [_make_detection("det-authority-2")]
+    ctx.crops = [np.zeros((64, 64, 3), dtype=np.uint8)]
+
+    await stage.run(ctx)
+    assert ctx.face_anchors
+    anchor = ctx.face_anchors[0]
+    assert anchor.calibrated_confidence == pytest.approx(0.85), (
+        f"Expected 0.85 but got {anchor.calibrated_confidence}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_version_mismatch_nullifies_calibrated_confidence():
+    """When arcface_model_version from response doesn't match CTS expectation,
+    calibrated_confidence must be set to None on the FaceAnchor.
+    """
+    client = AsyncMock(spec=FaceIdentificationClient)
+    result = _FakeFaceResult(
+        "alice",
+        confidence=0.90,
+        calibrated_confidence=0.88,
+        calibration_status="ready",
+        arcface_model_version="some_other_model",  # mismatch
+        preprocessing_version="v1",
+    )
+    client.identify_crops.return_value = [(0, [result])]
+
+    stage = FaceIdentityStage(
+        face_id_client=client,
+        face_id_min_confidence=0.5,
+        face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
+        expected_arcface_model_version="buffalo_l",
+        expected_preprocessing_version="v1",
+    )
+
+    ctx = _make_ctx()
+    ctx.domain_detections = [_make_detection("det-version-mismatch")]
+    ctx.crops = [np.zeros((64, 64, 3), dtype=np.uint8)]
+
+    await stage.run(ctx)
+    assert ctx.face_anchors
+    anchor = ctx.face_anchors[0]
+    assert anchor.calibrated_confidence is None, (
+        f"Version mismatch must nullify calibrated_confidence, got {anchor.calibrated_confidence}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_calibrated_confidence_propagates_to_face_evidence():
+    """calibrated_confidence on FaceAnchor must flow into FaceEvidence."""
+    client = AsyncMock(spec=FaceIdentificationClient)
+    result = _FakeFaceResult(
+        "alice",
+        confidence=0.90,
+        calibrated_confidence=0.82,
+        calibration_status="ready",
+        arcface_model_version="buffalo_l",
+        preprocessing_version="v1",
+    )
+    client.identify_crops.return_value = [(0, [result])]
+
+    stage = FaceIdentityStage(
+        face_id_client=client,
+        face_id_min_confidence=0.5,
+        face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
+        expected_arcface_model_version="buffalo_l",
+        expected_preprocessing_version="v1",
+    )
+
+    ctx = _make_ctx()
+    ctx.domain_detections = [_make_detection("det-evidence")]
+    ctx.crops = [np.zeros((64, 64, 3), dtype=np.uint8)]
+
+    await stage.run(ctx)
+    assert ctx._face_evidence is not None
+    fe = ctx._face_evidence[0]
+    assert fe.calibrated_confidence == pytest.approx(0.82)
+
+
+@pytest.mark.asyncio
+async def test_candidate_anchor_never_carries_calibrated_confidence():
+    """Candidate state anchors must always have calibrated_confidence=None."""
+    client = AsyncMock(spec=FaceIdentificationClient)
+    result = _FakeFaceResult(
+        "alice",
+        confidence=0.35,
+        calibrated_confidence=0.50,  # would be valid if recognized
+        calibration_status="ready",
+        arcface_model_version="buffalo_l",
+        preprocessing_version="v1",
+        recognition_state="candidate",
+    )
+    result.best_candidate_id = "alice"
+    client.identify_crops.return_value = [(0, [result])]
+
+    stage = FaceIdentityStage(
+        face_id_client=client,
+        face_id_min_confidence=0.5,
+        face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
+        expected_arcface_model_version="buffalo_l",
+        expected_preprocessing_version="v1",
+    )
+
+    ctx = _make_ctx()
+    ctx.domain_detections = [_make_detection("det-candidate")]
+    ctx.crops = [np.zeros((64, 64, 3), dtype=np.uint8)]
+
+    await stage.run(ctx)
+    assert ctx.face_anchors
+    anchor = ctx.face_anchors[0]
+    assert anchor.recognition_state == "candidate"
+    assert anchor.calibrated_confidence is None, (
+        "Candidate anchors must never carry calibrated_confidence"
+    )
