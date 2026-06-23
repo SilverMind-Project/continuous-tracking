@@ -80,6 +80,17 @@ class MinioFrameFetcher:
             Key=minio_key,
         )
 
+    async def list_objects_by_prefix(self, prefix: str) -> list[str]:
+        """Return all object keys under *prefix* (handles S3 pagination internally)."""
+        if self._client is None:
+            raise RuntimeError("MinioFrameFetcher is not connected")
+        keys: list[str] = []
+        paginator = self._client.get_paginator("list_objects_v2")
+        async for page in paginator.paginate(Bucket=self._config.bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                keys.append(obj["Key"])
+        return keys
+
     async def fetch_rgb(self, minio_key: str) -> npt.NDArray[np.uint8]:
         if self._client is None:
             raise RuntimeError("MinioFrameFetcher is not connected")

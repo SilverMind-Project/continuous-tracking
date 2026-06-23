@@ -33,6 +33,29 @@ triton-models-jetson/**/1/*.engine
 triton-models-jetson/reports/
 calibration-data/
 
+# Private identity replay data -- household images/video, embeddings, populated
+# manifests, and generated reports must never be committed.
+# Committed: schema/example/harness only (see tests/private_identity_replay/).
+tracking-orchestrator/tests/private_identity_replay/data/
+**/*.households.json
+tracking-orchestrator/tests/private_identity_replay/**/manifest.json
+!tracking-orchestrator/tests/private_identity_replay/example/manifest.json
+tracking-orchestrator/tests/private_identity_replay/**/*.jpg
+tracking-orchestrator/tests/private_identity_replay/**/*.jpeg
+tracking-orchestrator/tests/private_identity_replay/**/*.png
+tracking-orchestrator/tests/private_identity_replay/**/*.mp4
+tracking-orchestrator/tests/private_identity_replay/**/*.npy
+tracking-orchestrator/tests/private_identity_replay/**/*.npz
+tracking-orchestrator/tests/private_identity_replay/**/*.pkl
+
+# Generated reset reports (contain MinIO object keys; may include internal paths).
+tracking-orchestrator/scripts/reset-report*.json
+**/reset-report*.json
+
+# Calibration candidate and holdout datasets.
+tracking-orchestrator/tests/calibration_candidates/
+tracking-orchestrator/tests/calibration_holdout/
+
 # Compiled Object files, Alias and Private Window files
 *.a
 *.o

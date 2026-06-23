@@ -1,0 +1,415 @@
+{
+  "schema_version": "1.0",
+  "dataset_name": "synthetic-fictional-example",
+  "created_at": "2026-06-21T00:00:00Z",
+  "identities": [
+    {
+      "identity_id": "fictional-alice-001",
+      "display_name": "Alice (fictional, train)",
+      "embedding_sha256": null
+    },
+    {
+      "identity_id": "fictional-bob-002",
+      "display_name": "Bob (fictional, train)",
+      "embedding_sha256": null
+    },
+    {
+      "identity_id": "fictional-carol-101",
+      "display_name": "Carol (fictional, val)",
+      "embedding_sha256": null
+    },
+    {
+      "identity_id": "fictional-dave-201",
+      "display_name": "Dave (fictional, test)",
+      "embedding_sha256": null
+    },
+    {
+      "identity_id": "fictional-eve-202",
+      "display_name": "Eve (fictional, test)",
+      "embedding_sha256": null
+    }
+  ],
+  "episodes": [
+    {
+      "episode_id": "ep-train-both-clear-faces",
+      "description": "Both persons visible with clear frontal faces. Covers: required case 'both visible with clear faces'.",
+      "split": "train",
+      "identity_ids": [
+        "fictional-alice-001",
+        "fictional-bob-002"
+      ],
+      "frames": [
+        {
+          "frame_index": 0,
+          "camera_id": "cam-living-room",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+          "identities": [
+            "fictional-alice-001",
+            "fictional-bob-002"
+          ],
+          "bboxes": [
+            {
+              "x": 100,
+              "y": 80,
+              "w": 60,
+              "h": 90
+            },
+            {
+              "x": 300,
+              "y": 75,
+              "w": 65,
+              "h": 95
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Synthetic frame -- pixel data not present; sha256 is a zero placeholder."
+        },
+        {
+          "frame_index": 1,
+          "camera_id": "cam-living-room",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+          "identities": [
+            "fictional-alice-001",
+            "fictional-bob-002"
+          ],
+          "bboxes": [
+            {
+              "x": 102,
+              "y": 82,
+              "w": 60,
+              "h": 90
+            },
+            {
+              "x": 298,
+              "y": 77,
+              "w": 65,
+              "h": 95
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "episode_id": "ep-train-profile-facing",
+      "description": "Both visible; one profile or back-facing. Covers: required case 'one profile/back-facing'.",
+      "split": "train",
+      "identity_ids": [
+        "fictional-alice-001",
+        "fictional-bob-002"
+      ],
+      "frames": [
+        {
+          "frame_index": 0,
+          "camera_id": "cam-hallway",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+          "identities": [
+            "fictional-alice-001",
+            "fictional-bob-002"
+          ],
+          "bboxes": [
+            {
+              "x": 50,
+              "y": 60,
+              "w": 55,
+              "h": 100
+            },
+            {
+              "x": 250,
+              "y": 60,
+              "w": 55,
+              "h": 100
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Bob is profile-facing."
+        }
+      ]
+    },
+    {
+      "episode_id": "ep-train-crossing-occlusion",
+      "description": "Crossing with partial occlusion. Covers: required case 'crossings and partial occlusion'.",
+      "split": "train",
+      "identity_ids": [
+        "fictional-alice-001",
+        "fictional-bob-002"
+      ],
+      "frames": [
+        {
+          "frame_index": 0,
+          "camera_id": "cam-living-room",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+          "identities": [
+            "fictional-alice-001"
+          ],
+          "bboxes": [
+            {
+              "x": 200,
+              "y": 80,
+              "w": 60,
+              "h": 90
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Bob occluded by Alice during crossing."
+        }
+      ]
+    },
+    {
+      "episode_id": "ep-train-seated-standing",
+      "description": "Seated and standing arrangement reproducing the confirmed misidentification incident. Covers: required case 'seated/standing arrangement from the confirmed incident'.",
+      "split": "train",
+      "identity_ids": [
+        "fictional-alice-001",
+        "fictional-bob-002"
+      ],
+      "frames": [
+        {
+          "frame_index": 0,
+          "camera_id": "cam-living-room",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000012",
+          "identities": [
+            "fictional-alice-001",
+            "fictional-bob-002"
+          ],
+          "bboxes": [
+            {
+              "x": 120,
+              "y": 180,
+              "w": 70,
+              "h": 60
+            },
+            {
+              "x": 220,
+              "y": 70,
+              "w": 60,
+              "h": 150
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Alice seated on the sofa, Bob standing beside her; the arrangement that previously swapped identities."
+        },
+        {
+          "frame_index": 1,
+          "camera_id": "cam-living-room",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000013",
+          "identities": [
+            "fictional-alice-001",
+            "fictional-bob-002"
+          ],
+          "bboxes": [
+            {
+              "x": 118,
+              "y": 178,
+              "w": 72,
+              "h": 62
+            },
+            {
+              "x": 215,
+              "y": 68,
+              "w": 62,
+              "h": 152
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Bob remains standing as Alice begins to rise; seated-to-standing transition."
+        }
+      ]
+    },
+    {
+      "episode_id": "ep-train-duplicate-ph-candidates",
+      "description": "Duplicate PersonHypothesis candidates. Covers: required case 'duplicate PH candidates'.",
+      "split": "train",
+      "identity_ids": [
+        "fictional-alice-001"
+      ],
+      "frames": [
+        {
+          "frame_index": 0,
+          "camera_id": "cam-living-room",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+          "identities": [
+            "fictional-alice-001",
+            "fictional-alice-001"
+          ],
+          "bboxes": [
+            {
+              "x": 100,
+              "y": 80,
+              "w": 60,
+              "h": 90
+            },
+            {
+              "x": 120,
+              "y": 82,
+              "w": 58,
+              "h": 88
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Two overlapping detections for the same person (duplicate PH scenario)."
+        }
+      ]
+    },
+    {
+      "episode_id": "ep-val-explicit-unknown",
+      "description": "Unknown person in frame. Covers: required case 'explicit Unknown frames'.",
+      "split": "val",
+      "identity_ids": [
+        "fictional-carol-101"
+      ],
+      "frames": [
+        {
+          "frame_index": 0,
+          "camera_id": "cam-living-room",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000006",
+          "identities": [
+            "fictional-carol-101"
+          ],
+          "bboxes": [
+            {
+              "x": 100,
+              "y": 80,
+              "w": 60,
+              "h": 90
+            }
+          ],
+          "has_explicit_unknown": true,
+          "notes": "Carol plus an unknown visitor. Only Carol is annotated with an identity."
+        }
+      ]
+    },
+    {
+      "episode_id": "ep-val-camera-overlap",
+      "description": "Camera overlap and transition. Covers: required case 'camera overlap and transitions'.",
+      "split": "val",
+      "identity_ids": [
+        "fictional-carol-101"
+      ],
+      "frames": [
+        {
+          "frame_index": 0,
+          "camera_id": "cam-living-room",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000007",
+          "identities": [
+            "fictional-carol-101"
+          ],
+          "bboxes": [
+            {
+              "x": 380,
+              "y": 80,
+              "w": 60,
+              "h": 90
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Carol near edge of living-room camera overlap zone."
+        },
+        {
+          "frame_index": 1,
+          "camera_id": "cam-hallway",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+          "identities": [
+            "fictional-carol-101"
+          ],
+          "bboxes": [
+            {
+              "x": 10,
+              "y": 80,
+              "w": 60,
+              "h": 90
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Carol enters hallway camera -- transition frame."
+        }
+      ]
+    },
+    {
+      "episode_id": "ep-test-face-absent-weak-reid",
+      "description": "Face absent; weak ReID confidence; prior expiry. Covers: required cases 'face absent, weak ReID, prior expiry'.",
+      "split": "test",
+      "identity_ids": [
+        "fictional-dave-201"
+      ],
+      "frames": [
+        {
+          "frame_index": 0,
+          "camera_id": "cam-hallway",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000009",
+          "identities": [
+            "fictional-dave-201"
+          ],
+          "bboxes": [
+            {
+              "x": 150,
+              "y": 80,
+              "w": 60,
+              "h": 90
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Back-to-camera; no face detection; ReID from appearance only."
+        }
+      ]
+    },
+    {
+      "episode_id": "ep-test-operator-correction",
+      "description": "Operator correction boundary. Covers: required case 'operator correction and handoff boundary'.",
+      "split": "test",
+      "identity_ids": [
+        "fictional-dave-201",
+        "fictional-eve-202"
+      ],
+      "frames": [
+        {
+          "frame_index": 0,
+          "camera_id": "cam-living-room",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000010",
+          "identities": [
+            "fictional-dave-201"
+          ],
+          "bboxes": [
+            {
+              "x": 100,
+              "y": 80,
+              "w": 60,
+              "h": 90
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Initial misidentification as Eve (to be corrected by operator in replay)."
+        }
+      ]
+    },
+    {
+      "episode_id": "ep-test-bad-geometry-outlier",
+      "description": "Bad geometry and appearance outlier. Covers: required cases 'bad geometry/covariance and appearance outliers'.",
+      "split": "test",
+      "identity_ids": [
+        "fictional-eve-202"
+      ],
+      "frames": [
+        {
+          "frame_index": 0,
+          "camera_id": "cam-living-room",
+          "frame_sha256": "0000000000000000000000000000000000000000000000000000000000000011",
+          "identities": [
+            "fictional-eve-202"
+          ],
+          "bboxes": [
+            {
+              "x": 5,
+              "y": 5,
+              "w": 30,
+              "h": 40
+            }
+          ],
+          "has_explicit_unknown": false,
+          "notes": "Very small bbox near frame edge -- high covariance, appearance outlier."
+        }
+      ]
+    }
+  ]
+}
