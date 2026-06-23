@@ -356,6 +356,49 @@ class TestPartialMinioFailure:
         assert report["reid-candidates/"] == {"count": 1, "deleted": 0, "failed": 0}
 
 
+class TestRawFrameSurvival:
+    """The reset must never empty frames/; the survival check proves it.
+
+    Spec: 'Only dedicated ReID crop prefix is deleted; raw frames/... remains.'
+    """
+
+    class _FakeFetcher:
+        def __init__(self, keys_by_prefix: dict[str, list[str]]) -> None:
+            self._by_prefix = keys_by_prefix
+
+        async def list_objects_by_prefix(self, prefix: str) -> list[str]:
+            return self._by_prefix.get(prefix, [])
+
+    @pytest.mark.asyncio
+    async def test_sampled_key_present_is_ok(self) -> None:
+        key = "frames/cam01/2026/06/23/00/abc.jpg"
+        fetcher = self._FakeFetcher({key: [key]})
+        result = await rsd._check_raw_frame_survival(fetcher, key)
+        assert result["exists"] is True
+        assert result["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_sampled_key_absent_but_frames_present_is_ok(self) -> None:
+        """Retention may have removed the sampled object; frames/ as a class survives."""
+        key = "frames/cam01/2026/06/17/20/stale.jpg"
+        fetcher = self._FakeFetcher({"frames/": ["frames/cam01/2026/06/23/00/fresh.jpg"]})
+        result = await rsd._check_raw_frame_survival(fetcher, key)
+        assert result["exists"] is False
+        assert result["frames_prefix_nonempty"] is True
+        assert result["ok"] is True
+        assert "retention" in result["note"]
+
+    @pytest.mark.asyncio
+    async def test_sampled_key_absent_and_frames_empty_fails(self) -> None:
+        """If frames/ is empty too, the check must fail -- it is not always-true theater."""
+        key = "frames/cam01/2026/06/17/20/stale.jpg"
+        fetcher = self._FakeFetcher({})
+        result = await rsd._check_raw_frame_survival(fetcher, key)
+        assert result["exists"] is False
+        assert result["frames_prefix_nonempty"] is False
+        assert result["ok"] is False
+
+
 # ---------------------------------------------------------------------------
 # Shell environment-guard test (production / non-development always aborts).
 #

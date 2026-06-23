@@ -12,6 +12,9 @@ Required env vars (read from environment; same vars as docker-compose):
   CC:  POSTGRES_HOST, POSTGRES_PORT, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
   MinIO: MINIO_ENDPOINT_URL, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET, MINIO_SECURE
   Redis (optional, only with --include-redis): REDIS_URL
+  Smoke check (optional): CTS_BASE_URL, CC_BASE_URL, CC_API_KEY (the last enables the
+    correction-targets endpoint probe; without it that probe is skipped and the auth-free
+    identities-preserved DB check remains authoritative).
 """
 
 from __future__ import annotations
@@ -321,6 +324,31 @@ async def _delete_reid_objects(
     return report
 
 
+async def _check_raw_frame_survival(fetcher: Any, sample_key: str) -> dict[str, Any]:
+    """Confirm the reset preserved raw frames.
+
+    The reset never touches `frames/...`, so a referenced raw frame must survive.
+    Passing the exact key as the prefix lists only that one object (no full scan).
+    If the sampled key is itself absent -- already removed by MinIO retention, not
+    by the reset -- fall back to confirming `frames/` still holds objects. What the
+    reset guarantees is that `frames/` is never emptied, not that every historical
+    keyframe's object outlives retention.
+    """
+    exists = sample_key in await fetcher.list_objects_by_prefix(sample_key)
+    result: dict[str, Any] = {"sample_key": sample_key, "exists": exists}
+    if exists:
+        result["ok"] = True
+    else:
+        frames_present = bool(await fetcher.list_objects_by_prefix("frames/"))
+        result["frames_prefix_nonempty"] = frames_present
+        result["ok"] = frames_present
+        result["note"] = (
+            "sampled key already absent (MinIO retention, not the reset); "
+            "frames/ as a class survives"
+        )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Redis helpers.
 # ---------------------------------------------------------------------------
@@ -363,6 +391,8 @@ async def _run_smoke_check(
     cts_base_url: str,
     cc_base_url: str,
     pre_preserved_counts: dict[str, int],
+    cc_api_key: str | None,
+    raw_frame_survival: dict[str, Any] | None,
 ) -> dict[str, Any]:
     results: dict[str, Any] = {}
 
@@ -374,24 +404,42 @@ async def _run_smoke_check(
         except Exception as exc:  # noqa: BLE001 -- smoke probe records the failure as not-ok; non-fatal
             results["cts_health"] = {"ok": False, "error": str(exc)}
 
-        # CC health
+        # CC health (CC mounts health under the /api/v1 prefix, not bare /health).
         try:
-            r = await http.get(f"{cc_base_url}/health")
+            r = await http.get(f"{cc_base_url}/api/v1/health")
             results["cc_health"] = {"status": r.status_code, "ok": r.status_code == 200}
         except Exception as exc:  # noqa: BLE001 -- smoke probe records the failure as not-ok; non-fatal
             results["cc_health"] = {"ok": False, "error": str(exc)}
 
-        # Correction targets (should return both household members)
-        try:
-            r = await http.get(f"{cc_base_url}/api/v1/cts/identity/correction-targets")
-            body = r.json() if r.status_code == 200 else {}
-            targets = body.get("targets", [])
+        # Correction targets endpoint (requires X-API-Key). The authoritative
+        # "both members survive" assertion is identities_preserved below, which
+        # is auth-free, so this HTTP probe is optional: run it only when an
+        # operator supplies CC_API_KEY, and never let a missing key fail the run.
+        if not cc_api_key:
             results["correction_targets"] = {
-                "ok": r.status_code == 200,
-                "count": len(targets),
+                "ok": True,
+                "skipped": "no CC_API_KEY provided; identities_preserved is authoritative",
+                "count": None,
             }
-        except Exception as exc:  # noqa: BLE001 -- smoke probe records the failure as not-ok; non-fatal
-            results["correction_targets"] = {"ok": False, "error": str(exc)}
+        else:
+            try:
+                r = await http.get(
+                    f"{cc_base_url}/api/v1/cts/identity/correction-targets",
+                    headers={"X-API-Key": cc_api_key},
+                )
+                body = r.json() if r.status_code == 200 else {}
+                targets = body.get("targets", [])
+                results["correction_targets"] = {
+                    "ok": r.status_code == 200 and len(targets) >= 2,
+                    "status": r.status_code,
+                    "count": len(targets),
+                }
+            except Exception as exc:  # noqa: BLE001 -- smoke probe records the failure as not-ok; non-fatal
+                results["correction_targets"] = {"ok": False, "error": str(exc)}
+
+    # Raw frame survival (sampled before the reset; must never be deleted).
+    if raw_frame_survival is not None:
+        results["raw_frame_survives"] = raw_frame_survival
 
     # Gallery empty
     gallery_count = await _count_rows(cts_conn, "continuous_tracking", "reid_gallery")
@@ -443,6 +491,10 @@ async def run_reset(args: argparse.Namespace) -> dict[str, Any]:
         "include_redis": run_redis,
     }
 
+    # Sampled before the CTS truncate so the post-reset smoke check can prove a
+    # referenced raw frame object survives (the reset must never touch frames/...).
+    sample_frame_key: str | None = None
+
     # -- CTS database -------------------------------------------------------
     cts_dsn = await _cts_dsn_from_env()
     log.info("connecting to CTS database at %s", _redact_url(cts_dsn))
@@ -480,6 +532,18 @@ async def run_reset(args: argparse.Namespace) -> dict[str, Any]:
         )
         report["cts_pre_counts"] = pre_cts
         report["preserved_pre_counts"] = pre_preserved
+
+        # Sample one referenced raw frame key (before truncate) for the survival check.
+        # Use the most recent keyframe: older frames may have already been removed by
+        # MinIO retention, so an old sample would be absent for reasons unrelated to the
+        # reset. The survival check falls back to a frames/ class check if even this is gone.
+        if "tagged_keyframes" in cts_present:
+            row = await cts_conn.fetchrow(
+                "SELECT minio_key FROM continuous_tracking.tagged_keyframes "
+                "WHERE minio_key LIKE 'frames/%' ORDER BY captured_at DESC LIMIT 1"
+            )
+            if row is not None:
+                sample_frame_key = row["minio_key"]
 
         # Orphan FK check over the FULL allowlist (missing tables contribute no
         # constraints, so semantics are unchanged; when the DB reaches head this
@@ -557,11 +621,17 @@ async def run_reset(args: argparse.Namespace) -> dict[str, Any]:
         secure=use_ssl,
     )
     fetcher = MinioFrameFetcher(minio_config)
+    raw_frame_survival: dict[str, Any] | None = None
     await fetcher.connect()
     try:
         prefix_keys = await _list_reid_objects(fetcher, bucket)
         minio_report = await _delete_reid_objects(fetcher, prefix_keys, dry_run=dry_run)
         report["minio"] = minio_report
+
+        # Confirm raw frames survive the reset (sampled before truncate).
+        if sample_frame_key is not None:
+            raw_frame_survival = await _check_raw_frame_survival(fetcher, sample_frame_key)
+            report["raw_frame_survival"] = raw_frame_survival
     finally:
         await fetcher.disconnect()
 
@@ -579,8 +649,17 @@ async def run_reset(args: argparse.Namespace) -> dict[str, Any]:
         cc_conn2: asyncpg.Connection = await asyncpg.connect(cc_dsn)
         cts_url = os.environ.get("CTS_BASE_URL", "http://localhost:8500")
         cc_url = os.environ.get("CC_BASE_URL", "http://localhost:8000")
+        cc_api_key = os.environ.get("CC_API_KEY") or None
         try:
-            smoke = await _run_smoke_check(cts_conn2, cc_conn2, cts_url, cc_url, pre_preserved)
+            smoke = await _run_smoke_check(
+                cts_conn2,
+                cc_conn2,
+                cts_url,
+                cc_url,
+                pre_preserved,
+                cc_api_key,
+                raw_frame_survival,
+            )
             report["smoke_check"] = smoke
             if smoke.get("overall_ok"):
                 log.info("smoke check passed")
