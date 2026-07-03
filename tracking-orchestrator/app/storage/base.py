@@ -211,8 +211,12 @@ class IdentityDecisionRepositoryProtocol(Protocol):
 
     async def save(self, decision: IdentityProvenanceDecision) -> None: ...
     async def get_decision(self, decision_id: str) -> IdentityProvenanceDecision | None: ...
-    async def get_by_ph_id(self, ph_id: str, limit: int = 50, offset: int = 0) -> tuple[list[IdentityProvenanceDecision], int]: ...
-    async def get_by_observation_id(self, observation_id: str) -> IdentityProvenanceDecision | None: ...
+    async def get_by_ph_id(
+        self, ph_id: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[IdentityProvenanceDecision], int]: ...
+    async def get_by_observation_id(
+        self, observation_id: str
+    ) -> IdentityProvenanceDecision | None: ...
     async def decisions_for_phs(
         self, ph_ids: list[str], at_or_before: datetime
     ) -> dict[str, list[IdentityProvenanceDecision]]:
@@ -851,7 +855,9 @@ class InMemoryIdentityDecisionRepository:
     async def get_decision(self, decision_id: str) -> IdentityProvenanceDecision | None:
         return self._decisions.get(decision_id)
 
-    async def get_by_ph_id(self, ph_id: str, limit: int = 50, offset: int = 0) -> tuple[list[IdentityProvenanceDecision], int]:
+    async def get_by_ph_id(
+        self, ph_id: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[IdentityProvenanceDecision], int]:
         results = [d for d in self._decisions.values() if d.ph_id == ph_id]
         results.sort(key=lambda d: d.captured_at, reverse=True)
         total = len(results)

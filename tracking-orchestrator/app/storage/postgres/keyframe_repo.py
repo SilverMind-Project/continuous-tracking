@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 from structlog import get_logger
 
 from ...domain import BboxAnnotation, TaggedKeyframe

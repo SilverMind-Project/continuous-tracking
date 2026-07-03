@@ -155,7 +155,6 @@ class PublishStage(FrameStage):
                     }
                 )
 
-
         if self._identity_provenance_repo is not None and ctx.outcome_decisions:
             from datetime import UTC, datetime
 

@@ -94,9 +94,7 @@ def set_bbox_repo(bbox: BboxAnnotationRepository) -> None:
 # ---------------------------------------------------------------------------
 
 _decision_repo: IdentityDecisionRepositoryProtocol = InMemoryIdentityDecisionRepository()
-_correction_repo: IdentityCorrectionRepositoryProtocol = (
-    InMemoryIdentityCorrectionRepository()
-)
+_correction_repo: IdentityCorrectionRepositoryProtocol = InMemoryIdentityCorrectionRepository()
 _gallery_repo: GalleryRepository = InMemoryGalleryRepository()
 
 
@@ -333,9 +331,7 @@ async def list_keyframes_grouped(
         None, description="Match any bbox with this decision source"
     ),
     conflict_only: bool = Query(False, description="Only frames with a conflict bbox"),
-    pending_review_only: bool = Query(
-        False, description="Only frames with a pending-ReID bbox"
-    ),
+    pending_review_only: bool = Query(False, description="Only frames with a pending-ReID bbox"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     svc: KeyframeReadModelService = Depends(get_keyframe_read_service),

@@ -356,9 +356,7 @@ async def test_inferred_range_outside_operator_window_is_recorded() -> None:
         end=far_start + timedelta(seconds=10),
     )
     assert rng.authority == "inferred"
-    ident, authority = await corr_repo.effective_identity(
-        "ph-1", far_start + timedelta(seconds=5)
-    )
+    ident, authority = await corr_repo.effective_identity("ph-1", far_start + timedelta(seconds=5))
     assert ident == "bob"
     assert authority == "inferred"
 
@@ -383,9 +381,7 @@ async def test_projection_ack_completes_job_idempotently() -> None:
     job = await corr_repo.get_job(result.revision_id)
     assert job is not None and job.status == "applying"
 
-    ack = ProjectionAck(
-        revision_id=result.revision_id, consumer="cc", schema_version="1"
-    )
+    ack = ProjectionAck(revision_id=result.revision_id, consumer="cc", schema_version="1")
     assert await svc.record_projection_ack(ack) is True
     # Replay is a no-op (still completed, single ack row).
     assert await svc.record_projection_ack(ack) is False

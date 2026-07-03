@@ -269,8 +269,7 @@ class ReIDReviewService:
             raise ReviewNotFoundError(candidate_id)
         if candidate.state != "operator_verified":
             raise ReviewConflictError(
-                f"only an operator_verified candidate can be compensated "
-                f"(state={candidate.state})"
+                f"only an operator_verified candidate can be compensated (state={candidate.state})"
             )
         return await self._repo.compensate_review(
             candidate_id,

@@ -182,7 +182,9 @@ class _CountingGalleryRepo(InMemoryGalleryRepository):
         model_versions: set[str] | None = None,
     ) -> list:
         self.call_count += 1
-        return await super().list_gallery_entries_for_tracklets(tracklet_ids, limit, allowed_states, model_versions)
+        return await super().list_gallery_entries_for_tracklets(
+            tracklet_ids, limit, allowed_states, model_versions
+        )
 
 
 class TestGalleryCacheLifecycle:

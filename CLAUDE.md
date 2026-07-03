@@ -288,10 +288,14 @@ cts-db status           # show applied / pending
 | File | Contents |
 | --- | --- |
 | `0001_init` | Complete baseline schema: all tables, hypertables, indexes, triggers, continuous aggregate, and retention policy. Squashes 20+ prior migrations plus U1 quality capture and PH-native cleanup. Drop and recreate the database to migrate from an older chain. |
+| `0002_gait_and_agitation_schema` | Gait and agitation schema objects; idempotent so it also repairs databases created from an intermediate baseline. |
+| `0003_identity_evidence_clock` | Independent-evidence clock columns for identity decisions. |
+| `0004_identity_provenance` | Identity decision, evidence item, and gallery-hit provenance tables. |
+| `0005_governed_reid_gallery` | Governed ReID gallery: review states, audit versions, crop/frame keys, review events. |
+| `0006_identity_corrections` | Segment corrections, revision ranges, correction jobs, and effective projections. |
+| `0007_keyframe_read_indexes` | Read-model indexes for keyframe identity displays. |
 
-**Pre-release lifecycle:** All schema changes fold into `0001_init.up.sql`. No incremental files exist. Existing dev databases must be dropped and recreated. Shape constraints belong in this baseline too; JSONB columns that the domain treats as objects must have object-shape `CHECK` constraints.
-
-**Post-release lifecycle:** Each atomic change gets its own `NNNN_description.up.sql` / `NNNN_description.down.sql`. Rollbacks are supported.
+**Lifecycle:** Each atomic change gets its own `NNNN_description.up.sql` / `NNNN_description.down.sql` pair on top of the `0001_init` baseline. Rollbacks are supported. Shape constraints belong in the migration that introduces the column; JSONB columns that the domain treats as objects must have object-shape `CHECK` constraints.
 
 **DATABASE_URL**: asyncpg expects a plain `postgresql://` DSN. If a `postgresql+asyncpg://` (SQLAlchemy-style) URL is provided, the `_normalize_dsn()` helper strips the `+asyncpg` prefix automatically.
 

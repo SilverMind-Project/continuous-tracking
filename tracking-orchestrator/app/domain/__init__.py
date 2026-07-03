@@ -783,6 +783,7 @@ class GalleryEmbedding:
     state: str = "pending_review"
     source_episode_id: str | None = None
 
+
 @dataclass(frozen=True)
 class ReviewCandidate:
     """A governed ReID gallery candidate as seen by the M09 review queue.

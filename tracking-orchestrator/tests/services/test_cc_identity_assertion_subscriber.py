@@ -10,7 +10,6 @@ import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from structlog.testing import capture_logs
 
 from app.proto.continuoustracking.v1.tracking_pb2 import CCIdentityAssertion
 from app.services.cc_identity_assertion_subscriber import (
@@ -113,9 +112,7 @@ async def test_subscriber_decodes_all_required_fields():
     )
     msg.calibrated_confidence = 0.92
 
-    fields: dict[bytes, bytes] = {
-        b"assertion": msg.SerializeToString()
-    }
+    fields: dict[bytes, bytes] = {b"assertion": msg.SerializeToString()}
 
     await subscriber._handle(b"msg-1", fields)
     result = await cache.get_recent()
@@ -168,9 +165,7 @@ async def test_subscriber_handles_malformed_captured_at():
         floor_y_m=0.0,
     )
 
-    fields: dict[bytes, bytes] = {
-        b"assertion": msg.SerializeToString()
-    }
+    fields: dict[bytes, bytes] = {b"assertion": msg.SerializeToString()}
 
     # Must not raise.
     await subscriber._handle(b"msg-3", fields)
@@ -195,9 +190,7 @@ async def test_subscriber_handles_malformed_floor_coordinates():
         captured_at_unix_ns=int(now.timestamp() * 1e9),
     )
 
-    fields: dict[bytes, bytes] = {
-        b"assertion": msg.SerializeToString()
-    }
+    fields: dict[bytes, bytes] = {b"assertion": msg.SerializeToString()}
 
     await subscriber._handle(b"msg-4", fields)
     result = await cache.get_recent()

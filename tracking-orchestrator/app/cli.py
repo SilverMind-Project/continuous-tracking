@@ -17,7 +17,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 from structlog import get_logger
 
 from .config import settings

@@ -39,12 +39,8 @@ class IdentityCorrectionRepositoryProtocol(Protocol):
 
     # -- corrections --
     async def save_correction(self, correction: IdentitySegmentCorrection) -> None: ...
-    async def get_correction(
-        self, correction_id: str
-    ) -> IdentitySegmentCorrection | None: ...
-    async def list_corrections(
-        self, ph_id: str
-    ) -> list[IdentitySegmentCorrection]: ...
+    async def get_correction(self, correction_id: str) -> IdentitySegmentCorrection | None: ...
+    async def list_corrections(self, ph_id: str) -> list[IdentitySegmentCorrection]: ...
 
     # -- revision ranges (effective projection) --
     async def save_range(self, revision_range: IdentityRevisionRange) -> None: ...
@@ -62,6 +58,7 @@ class IdentityCorrectionRepositoryProtocol(Protocol):
         bbox in memory without an effective-identity query per box.
         """
         ...
+
     async def effective_identity(
         self, ph_id: str, at: datetime
     ) -> tuple[str | None, RevisionAuthority | None]:
@@ -120,14 +117,10 @@ class InMemoryIdentityCorrectionRepository:
         async with self._lock:
             self._corrections[correction.correction_id] = correction
 
-    async def get_correction(
-        self, correction_id: str
-    ) -> IdentitySegmentCorrection | None:
+    async def get_correction(self, correction_id: str) -> IdentitySegmentCorrection | None:
         return self._corrections.get(correction_id)
 
-    async def list_corrections(
-        self, ph_id: str
-    ) -> list[IdentitySegmentCorrection]:
+    async def list_corrections(self, ph_id: str) -> list[IdentitySegmentCorrection]:
         rows = [c for c in self._corrections.values() if c.ph_id == ph_id]
         rows.sort(key=lambda c: c.observation_start)
         return rows
@@ -186,9 +179,7 @@ class InMemoryIdentityCorrectionRepository:
         return [
             r
             for r in live
-            if r.authority == "operator"
-            and r.range_start <= end
-            and r.range_end >= start
+            if r.authority == "operator" and r.range_start <= end and r.range_end >= start
         ]
 
     # -- jobs --
@@ -246,8 +237,7 @@ class InMemoryIdentityCorrectionRepository:
             await self.update_job(revision_id, status="failed")
             return False
         ready = all(
-            ack_by_consumer.get(p) is not None
-            and ack_by_consumer[p].status == "acked"
+            ack_by_consumer.get(p) is not None and ack_by_consumer[p].status == "acked"
             for p in job.required_projections
         )
         if ready:

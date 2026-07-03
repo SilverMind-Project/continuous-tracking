@@ -68,9 +68,7 @@ def set_ph_repository(repo: PHRepositoryProtocol) -> None:
     global _repo, _correction_service
     _repo = repo
     # Drop any lazily-built service so it rebinds to the new repo.
-    if _correction_service is not None and getattr(
-        _correction_service, "_lazy", False
-    ):
+    if _correction_service is not None and getattr(_correction_service, "_lazy", False):
         _correction_service = None
 
 

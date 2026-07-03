@@ -215,9 +215,7 @@ def test_reject_then_rejected_audit_remains(client_repo):
     assert r.status_code == 200
     assert r.json()["state"] == "rejected"
     # Rejected candidates are still visible by explicit state filter with audit intact.
-    rejected = client.get(
-        "/internal/reid-review/candidates", params={"state": "rejected"}
-    ).json()
+    rejected = client.get("/internal/reid-review/candidates", params={"state": "rejected"}).json()
     assert rejected["total"] == 1
     events = client.get("/internal/reid-review/candidates/c1/events").json()["events"]
     assert events[0]["new_state"] == "rejected"

@@ -251,8 +251,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         return {
             entry.origin_tracklet_id
             for entry in self._entries.values()
-            if entry.state == "pending_review"
-            and entry.origin_tracklet_id in wanted
+            if entry.state == "pending_review" and entry.origin_tracklet_id in wanted
         }
 
     # -- M09 ReID review queue ------------------------------------------------
@@ -284,7 +283,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         if until is not None:
             rows = [c for c in rows if c.capture_time is not None and c.capture_time <= until]
         # Oldest first: the queue surfaces the longest-waiting candidate at the top.
-        rows.sort(key=lambda c: (c.created_at or c.seen_at or datetime.min.replace(tzinfo=UTC)))
+        rows.sort(key=lambda c: c.created_at or c.seen_at or datetime.min.replace(tzinfo=UTC))
         total = len(rows)
         return (rows[offset : offset + limit], total)
 
@@ -323,9 +322,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         if current is None:
             raise ReviewNotFoundError(candidate_id)
         if current.state != "pending_review":
-            raise ReviewConflictError(
-                f"{candidate_id} already reviewed (state={current.state})"
-            )
+            raise ReviewConflictError(f"{candidate_id} already reviewed (state={current.state})")
         if current.audit_version != base_audit_version:
             raise ReviewConflictError(
                 f"{candidate_id} stale audit_version "
@@ -475,13 +472,14 @@ class InMemoryGalleryRepository(GalleryRepository):
         # preserve existing test behaviour.
         if allowed_states is not None:
             entries = [
-                entry for entry in self._entries.values()
-                if entry.origin_tracklet_id in tracklet_ids
-                and entry.state in allowed_states
+                entry
+                for entry in self._entries.values()
+                if entry.origin_tracklet_id in tracklet_ids and entry.state in allowed_states
             ]
         else:
             entries = [
-                entry for entry in self._entries.values()
+                entry
+                for entry in self._entries.values()
                 if entry.origin_tracklet_id in tracklet_ids
             ]
         entries.sort(key=lambda e: e.seen_at, reverse=True)

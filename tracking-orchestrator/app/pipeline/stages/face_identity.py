@@ -375,7 +375,8 @@ class FaceIdentityStage(FrameStage):
                             recognition_state="candidate",
                             similarity=face.similarity,
                             yaw_deg=face.yaw_deg,
-                            calibrated_confidence=None,  # candidates never carry calibrated authority
+                            # candidates never carry calibrated authority
+                            calibrated_confidence=None,
                         )
                     )
                     candidate_count += 1
