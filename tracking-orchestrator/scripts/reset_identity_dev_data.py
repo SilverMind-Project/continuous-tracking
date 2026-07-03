@@ -91,6 +91,7 @@ _CC_DELETE_TABLES: tuple[str, ...] = (
 )
 
 # MinIO prefixes that contain ReID candidate crops only.
+# Source: ReIDCandidateService in app/tracking/identity/candidate_service.py.
 # NEVER delete frames/... -- keyframes reference raw frame objects.
 _REID_PREFIXES: tuple[str, ...] = (
     "reid-candidates/",
