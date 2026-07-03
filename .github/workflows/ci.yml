@@ -37,24 +37,6 @@ jobs:
 
   python-test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: timescale/timescaledb-ha:pg17
-        env:
-          POSTGRES_USER: cts
-          POSTGRES_PASSWORD: cts
-          POSTGRES_DB: continuous_tracking
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -69,10 +51,14 @@ jobs:
         run: |
           test -x .venv/bin/python
           .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
-      - name: Run migrations
-        run: psql -h localhost -U cts -d continuous_tracking -f tracking-orchestrator/migrations/0001_init.sql
-        env:
-          PGPASSWORD: cts
+      # Integration-marked tests provision and migrate their own
+      # timescale/timescaledb-ha:pg18 testcontainer via the session-scoped
+      # `_postgres_container` fixture in tests/conftest.py (Docker is
+      # preinstalled on GitHub-hosted runners). The `services: postgres/redis`
+      # blocks and manual `psql -f .../0001_init.sql` step formerly here were
+      # dead weight: that file doesn't exist (migrations are `.up.sql`/
+      # `.down.sql` pairs, 0001-0007), nothing in the test suite ever read
+      # from those service containers, and this step failed on every run.
       - name: Run tests
         working-directory: tracking-orchestrator
         run: .venv/bin/pytest tests -v
@@ -100,14 +86,32 @@ jobs:
           go-version: "1.24.5"
       - name: Pin GOTOOLCHAIN
         run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
-      - name: Run Go quality gate
+      # Lint is covered by the separate go-lint job (golangci-lint-action
+      # installs the linter). `make check` in rtsp-ingress/Makefile also
+      # runs `lint`, which invokes the bare `golangci-lint` binary; this
+      # job never installs it, so `make check` here always failed with
+      # "golangci-lint: No such file or directory". Run vet/test/build only.
+      - name: Run Go vet, tests, and build
         working-directory: rtsp-ingress
-        run: make check
+        run: make vet test build
 
   proto-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.5"
+      - name: Pin GOTOOLCHAIN
+        run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+      # buf generate shells out to protoc-gen-go on PATH; it was never
+      # installed here, so the drift check always failed with "could not
+      # find protoc plugin for name go" before it ever compared output.
+      # Pin to the google.golang.org/protobuf version in rtsp-ingress/go.mod.
+      - name: Install protoc-gen-go
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - uses: bufbuild/buf-setup-action@v1
         with:
           version: "1.50.0"
