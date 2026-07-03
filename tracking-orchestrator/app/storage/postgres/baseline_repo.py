@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 from structlog import get_logger
 
 from ..signals import (

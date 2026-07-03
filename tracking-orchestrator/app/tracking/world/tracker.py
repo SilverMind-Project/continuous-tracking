@@ -1155,7 +1155,9 @@ class WorldTracker:
                     decision_source=str(id_data.get("decision_source") or ""),
                     decision_id=str(id_data.get("decision_id") or ""),
                     conflict=str(id_data.get("conflict") or ""),
-                    last_independent_evidence_at_unix_ns=int(id_data.get("last_independent_evidence_at_unix_ns") or 0),
+                    last_independent_evidence_at_unix_ns=int(
+                        id_data.get("last_independent_evidence_at_unix_ns") or 0  # type: ignore[call-overload]
+                    ),
                     config_hash=str(id_data.get("config_hash") or ""),
                     model_set_version=str(id_data.get("model_set_version") or ""),
                 )

@@ -526,7 +526,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
 
     if database_url:
-        import asyncpg  # type: ignore[import-untyped]
+        import asyncpg
 
         _pool = await asyncpg.create_pool(
             dsn=_normalize_dsn(database_url),

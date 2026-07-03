@@ -132,8 +132,12 @@ class CCIdentityAssertionSubscriber:
 
         # Use calibrated_confidence if present, fallback to legacy mapping or 0.7
         confidence = msg.calibrated_confidence if msg.HasField("calibrated_confidence") else 0.7
-        
-        captured_at = datetime.fromtimestamp(msg.captured_at_unix_ns / 1e9, tz=UTC) if msg.captured_at_unix_ns else datetime.now(UTC)
+
+        captured_at = (
+            datetime.fromtimestamp(msg.captured_at_unix_ns / 1e9, tz=UTC)
+            if msg.captured_at_unix_ns
+            else datetime.now(UTC)
+        )
 
         assertion = {
             "person_id": msg.person_id,

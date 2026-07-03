@@ -71,11 +71,16 @@ plugins = ["pydantic.mypy"]
 exclude = ["app/proto/"]
 
 [[tool.mypy.overrides]]
-module = ["shapely", "shapely.geometry", "scipy", "scipy.optimize"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["google.protobuf.*", "cv2", "shapely"]
+module = [
+    "asyncpg",
+    "cv2",
+    "google.protobuf.*",
+    "scipy",
+    "scipy.optimize",
+    "shapely",
+    "shapely.geometry",
+    "triton_shared.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

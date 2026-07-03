@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 from structlog import get_logger
 
 from ...domain import GalleryEmbedding, Identity, ReviewCandidate, ReviewEvent
@@ -267,8 +267,8 @@ class PostgresGalleryRepository(GalleryRepository):
                 camera_id=row.get("camera_id") or "",
                 state=row.get("state", "pending_review"),
                 source_episode_id=(
-                str(row["source_episode_id"]) if row.get("source_episode_id") else None
-            ),
+                    str(row["source_episode_id"]) if row.get("source_episode_id") else None
+                ),
             )
             for row in rows
         ]
@@ -305,9 +305,7 @@ class PostgresGalleryRepository(GalleryRepository):
                     orientation=row.get("orientation", 4),
                     state=row.get("state", "pending_review"),
                     source_episode_id=(
-                        str(row["source_episode_id"])
-                        if row.get("source_episode_id")
-                        else None
+                        str(row["source_episode_id"]) if row.get("source_episode_id") else None
                     ),
                 ),
                 float(row["similarity"]),
@@ -510,9 +508,7 @@ class PostgresGalleryRepository(GalleryRepository):
             if row is None:
                 raise ReviewNotFoundError(candidate_id)
             if row["state"] != "pending_review":
-                raise ReviewConflictError(
-                    f"{candidate_id} already reviewed (state={row['state']})"
-                )
+                raise ReviewConflictError(f"{candidate_id} already reviewed (state={row['state']})")
             if row["audit_version"] != base_audit_version:
                 raise ReviewConflictError(
                     f"{candidate_id} stale audit_version "
@@ -534,7 +530,11 @@ class PostgresGalleryRepository(GalleryRepository):
                             audit_version = $5
                         WHERE id = $1
                         """,
-                    candidate_id, actor, reason, note, next_version,
+                    candidate_id,
+                    actor,
+                    reason,
+                    note,
+                    next_version,
                 )
                 new_state = "rejected"
             elif action == "relabel":
@@ -547,7 +547,12 @@ class PostgresGalleryRepository(GalleryRepository):
                             audit_version = $6
                         WHERE id = $1
                         """,
-                    candidate_id, new_identity_id, actor, reason, note, next_version,
+                    candidate_id,
+                    new_identity_id,
+                    actor,
+                    reason,
+                    note,
+                    next_version,
                 )
                 new_state = "operator_verified"
             elif action == "approve":
@@ -560,7 +565,11 @@ class PostgresGalleryRepository(GalleryRepository):
                             audit_version = $5
                         WHERE id = $1
                         """,
-                    candidate_id, actor, reason, note, next_version,
+                    candidate_id,
+                    actor,
+                    reason,
+                    note,
+                    next_version,
                 )
                 new_state = "operator_verified"
             else:
@@ -572,7 +581,13 @@ class PostgresGalleryRepository(GalleryRepository):
                     (entry_id, previous_state, new_state, actor, reason, note, audit_version)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                     """,
-                candidate_id, prev_state, new_state, actor, reason, note, next_version,
+                candidate_id,
+                prev_state,
+                new_state,
+                actor,
+                reason,
+                note,
+                next_version,
             )
 
         updated = await self.get_review_candidate(candidate_id)
@@ -614,7 +629,9 @@ class PostgresGalleryRepository(GalleryRepository):
                         audit_version = $3
                     WHERE id = $1
                     """,
-                candidate_id, actor, next_version,
+                candidate_id,
+                actor,
+                next_version,
             )
             await conn.execute(
                 """
@@ -622,7 +639,9 @@ class PostgresGalleryRepository(GalleryRepository):
                     (entry_id, previous_state, new_state, actor, reason, note, audit_version)
                     VALUES ($1, 'operator_verified', 'pending_review', $2, 'compensated', NULL, $3)
                     """,
-                candidate_id, actor, next_version,
+                candidate_id,
+                actor,
+                next_version,
             )
         updated = await self.get_review_candidate(candidate_id)
         if updated is None:  # pragma: no cover

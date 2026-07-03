@@ -35,12 +35,14 @@ class GalleryCache:
 
     _repo: GalleryRepository
     max_age_s: float = 5.0
-    _entries_by_tracklets: dict[frozenset[str], list[GalleryEmbedding]] = field(
-        default_factory=dict
-    )
-    _similarity_cache: dict[tuple[frozenset[str], frozenset[str]], float] = field(
-        default_factory=dict
-    )
+    _entries_by_tracklets: dict[
+        tuple[frozenset[str], int, frozenset[str], frozenset[str]],
+        list[GalleryEmbedding],
+    ] = field(default_factory=dict)
+    _similarity_cache: dict[
+        tuple[frozenset[str], frozenset[str], int, frozenset[str], frozenset[str]],
+        float,
+    ] = field(default_factory=dict)
     _invalidated_at: float = field(default_factory=time.monotonic, init=False)
 
     def invalidate(self) -> None:
@@ -65,11 +67,11 @@ class GalleryCache:
         # Use frozen sets to ensure the cache key is immutable and hashable
         s_states = frozenset(allowed_states) if allowed_states else frozenset(["operator_verified"])
         s_models = frozenset(model_versions) if model_versions else frozenset()
-        key = (frozenset(tracklet_ids), s_states, s_models)
+        key = (frozenset(tracklet_ids), limit, s_states, s_models)
 
         if key not in self._entries_by_tracklets:
             self._entries_by_tracklets[key] = await self._repo.list_gallery_entries_for_tracklets(
-                tracklet_ids, 
+                tracklet_ids,
                 limit=limit,
                 allowed_states=allowed_states or {"operator_verified"},
                 model_versions=model_versions,
@@ -89,12 +91,20 @@ class GalleryCache:
         key_b = frozenset(tracklet_ids_b)
         s_states = frozenset(allowed_states) if allowed_states else frozenset(["operator_verified"])
         s_models = frozenset(model_versions) if model_versions else frozenset()
-        
-        cache_key = (key_a, key_b, s_states, s_models) if hash(key_a) <= hash(key_b) else (key_b, key_a, s_states, s_models)
-        
+
+        cache_key = (
+            (key_a, key_b, limit, s_states, s_models)
+            if hash(key_a) <= hash(key_b)
+            else (key_b, key_a, limit, s_states, s_models)
+        )
+
         if cache_key not in self._similarity_cache:
-            entries_a = await self.list_gallery_entries_for_tracklets(tracklet_ids_a, limit, allowed_states, model_versions)
-            entries_b = await self.list_gallery_entries_for_tracklets(tracklet_ids_b, limit, allowed_states, model_versions)
+            entries_a = await self.list_gallery_entries_for_tracklets(
+                tracklet_ids_a, limit, allowed_states, model_versions
+            )
+            entries_b = await self.list_gallery_entries_for_tracklets(
+                tracklet_ids_b, limit, allowed_states, model_versions
+            )
             if not entries_a and not entries_b:
                 self._similarity_cache[cache_key] = 0.0
             elif not entries_a or not entries_b:

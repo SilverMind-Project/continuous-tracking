@@ -168,9 +168,7 @@ async def test_unknown_and_conflict_counts_are_explicit() -> None:
         )
     )
 
-    svc = _service(
-        keyframe_repo=keyframe_repo, bbox_repo=bbox_repo, decision_repo=decision_repo
-    )
+    svc = _service(keyframe_repo=keyframe_repo, bbox_repo=bbox_repo, decision_repo=decision_repo)
     card = (await svc.list_physical_frames()).frames[0]
 
     assert card.unknown_count == 1
@@ -186,9 +184,7 @@ async def test_operator_correction_shows_effective_keeps_inferred() -> None:
     decision_repo = InMemoryIdentityDecisionRepository()
     correction_repo = InMemoryIdentityCorrectionRepository()
     kf = _keyframe("ph-alpha")
-    await _persist(
-        keyframe_repo, bbox_repo, kf, [_bbox(kf.keyframe_id, "ph-alpha", "amma", 10)]
-    )
+    await _persist(keyframe_repo, bbox_repo, kf, [_bbox(kf.keyframe_id, "ph-alpha", "amma", 10)])
     await decision_repo.save(
         IdentityProvenanceDecision(
             decision_id=str(uuid.uuid4()),
@@ -245,14 +241,10 @@ async def test_filters_apply_before_pagination_and_keep_context() -> None:
     # A second frame with neither identity.
     kf2 = _keyframe("ph-zeta", captured_at=_T0 + timedelta(seconds=30))
     kf2 = TaggedKeyframe(**{**kf2.__dict__, "minio_key": _KEY + "-other"})
-    await _persist(
-        keyframe_repo, bbox_repo, kf2, [_bbox(kf2.keyframe_id, "ph-zeta", "uncle", 10)]
-    )
+    await _persist(keyframe_repo, bbox_repo, kf2, [_bbox(kf2.keyframe_id, "ph-zeta", "uncle", 10)])
 
     svc = _service(keyframe_repo=keyframe_repo, bbox_repo=bbox_repo)
-    page = await svc.list_physical_frames(
-        filters=KeyframeReadFilters(effective_identity_id="amma")
-    )
+    page = await svc.list_physical_frames(filters=KeyframeReadFilters(effective_identity_id="amma"))
 
     assert page.total == 1
     card = page.frames[0]
@@ -289,9 +281,7 @@ async def test_decision_join_is_per_frame_not_page_max() -> None:
             )
         )
 
-    svc = _service(
-        keyframe_repo=keyframe_repo, bbox_repo=bbox_repo, decision_repo=decision_repo
-    )
+    svc = _service(keyframe_repo=keyframe_repo, bbox_repo=bbox_repo, decision_repo=decision_repo)
     frames = (await svc.list_physical_frames()).frames
     by_time = {f.captured_at: f for f in frames}
     assert by_time[t1].bboxes[0].inferred_identity_id == "amma"
@@ -429,9 +419,7 @@ async def test_pending_review_joins_only_eligible() -> None:
         )
     )
 
-    svc = _service(
-        keyframe_repo=keyframe_repo, bbox_repo=bbox_repo, gallery_repo=gallery_repo
-    )
+    svc = _service(keyframe_repo=keyframe_repo, bbox_repo=bbox_repo, gallery_repo=gallery_repo)
     card = (await svc.list_physical_frames()).frames[0]
 
     assert card.pending_review_count == 1

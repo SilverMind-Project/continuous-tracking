@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 
 from ...domain import BboxAnnotation
 

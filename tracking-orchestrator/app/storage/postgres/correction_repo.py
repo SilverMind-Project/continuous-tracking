@@ -13,7 +13,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 from structlog import get_logger
 
 from ...domain import (
@@ -89,20 +89,15 @@ class PostgresIdentityCorrectionRepository:
                 correction.created_at,
             )
 
-    async def get_correction(
-        self, correction_id: str
-    ) -> IdentitySegmentCorrection | None:
+    async def get_correction(self, correction_id: str) -> IdentitySegmentCorrection | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM continuous_tracking.identity_corrections "
-                "WHERE correction_id = $1",
+                "SELECT * FROM continuous_tracking.identity_corrections WHERE correction_id = $1",
                 correction_id,
             )
         return _correction_from_row(row) if row else None
 
-    async def list_corrections(
-        self, ph_id: str
-    ) -> list[IdentitySegmentCorrection]:
+    async def list_corrections(self, ph_id: str) -> list[IdentitySegmentCorrection]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT * FROM continuous_tracking.identity_corrections "
@@ -151,10 +146,7 @@ class PostgresIdentityCorrectionRepository:
     async def list_ranges(
         self, ph_id: str, *, live_only: bool = True
     ) -> list[IdentityRevisionRange]:
-        sql = (
-            "SELECT * FROM continuous_tracking.identity_revision_ranges "
-            "WHERE ph_id = $1"
-        )
+        sql = "SELECT * FROM continuous_tracking.identity_revision_ranges WHERE ph_id = $1"
         if live_only:
             sql += " AND superseded_by_range_id IS NULL"
         sql += " ORDER BY created_at ASC"
@@ -254,8 +246,7 @@ class PostgresIdentityCorrectionRepository:
     async def get_job(self, revision_id: str) -> IdentityRevisionJob | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM continuous_tracking.identity_revision_jobs "
-                "WHERE revision_id = $1",
+                "SELECT * FROM continuous_tracking.identity_revision_jobs WHERE revision_id = $1",
                 revision_id,
             )
         return _job_from_row(row) if row else None
@@ -337,8 +328,7 @@ class PostgresIdentityCorrectionRepository:
     async def list_acks(self, revision_id: str) -> list[ProjectionAck]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM continuous_tracking.identity_projection_acks "
-                "WHERE revision_id = $1",
+                "SELECT * FROM continuous_tracking.identity_projection_acks WHERE revision_id = $1",
                 revision_id,
             )
         return [_ack_from_row(r) for r in rows]
@@ -353,8 +343,7 @@ class PostgresIdentityCorrectionRepository:
             await self.update_job(revision_id, status="failed")
             return False
         ready = all(
-            ack_by_consumer.get(p) is not None
-            and ack_by_consumer[p].status == "acked"
+            ack_by_consumer.get(p) is not None and ack_by_consumer[p].status == "acked"
             for p in job.required_projections
         )
         if ready:
@@ -386,9 +375,7 @@ def _correction_from_row(row: Any) -> IdentitySegmentCorrection:
         source_view=row["source_view"],
         reviewed_frame_id=row["reviewed_frame_id"],
         reviewed_bbox=_loads_obj(row["reviewed_bbox"]),
-        base_revision_id=str(row["base_revision_id"])
-        if row["base_revision_id"]
-        else None,
+        base_revision_id=str(row["base_revision_id"]) if row["base_revision_id"] else None,
         compensates_correction_id=str(row["compensates_correction_id"])
         if row["compensates_correction_id"]
         else None,
@@ -406,9 +393,7 @@ def _range_from_row(row: Any) -> IdentityRevisionRange:
         range_end=row["range_end"],
         effective_identity_id=row["effective_identity_id"],
         correction_id=str(row["correction_id"]) if row["correction_id"] else None,
-        supersedes_range_id=str(row["supersedes_range_id"])
-        if row["supersedes_range_id"]
-        else None,
+        supersedes_range_id=str(row["supersedes_range_id"]) if row["supersedes_range_id"] else None,
         superseded_by_range_id=str(row["superseded_by_range_id"])
         if row["superseded_by_range_id"]
         else None,

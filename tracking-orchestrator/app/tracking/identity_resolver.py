@@ -29,7 +29,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -1247,39 +1247,44 @@ class IdentityResolver:
         coherence_active: bool = False,
     ) -> PosteriorDist:
         """Score gallery search hits into a PosteriorDist with trust-aware scoring."""
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
-        
-        # Apply source-episode/camera/orientation vote caps
-        # Group by (identity_id, source_episode_id, camera_id, orientation) and take the strongest vote
-        best_hit_per_group: dict[tuple, tuple[GalleryEmbedding, float, float]] = {}
+        now = datetime.now(UTC)
+
+        # Apply source-episode/camera/orientation vote caps: group by
+        # (identity_id, source_episode_id, camera_id, orientation) and take the
+        # strongest vote per group.
+        best_hit_per_group: dict[
+            tuple[str | None, str, str, int], tuple[GalleryEmbedding, float, float]
+        ] = {}
         for entry, sim in similar:
             logit = self._logistic(sim)
             # Verified multiplier default 2.0 before aggregation
             multiplier = 2.0 if entry.state == "operator_verified" else 1.0
-            
+
             # Seven-day exponential half-life, no floor
             # Ensure naive datetimes are treated as UTC if needed, but they should be aware.
-            seen_at = entry.seen_at if entry.seen_at.tzinfo else entry.seen_at.replace(tzinfo=timezone.utc)
+            seen_at = entry.seen_at if entry.seen_at.tzinfo else entry.seen_at.replace(tzinfo=UTC)
             age_days = (now - seen_at).total_seconds() / 86400.0
             recency = 2.0 ** (-age_days / 7.0) if age_days >= 0 else 1.0
-            
+
             weighted_logit = logit * multiplier * recency
-            
+
             group_key = (
                 entry.identity_id,
                 entry.source_episode_id or "",
                 entry.camera_id or "",
-                entry.orientation
+                entry.orientation,
             )
-            
-            if group_key not in best_hit_per_group or best_hit_per_group[group_key][2] < weighted_logit:
+
+            if (
+                group_key not in best_hit_per_group
+                or best_hit_per_group[group_key][2] < weighted_logit
+            ):
                 best_hit_per_group[group_key] = (entry, sim, weighted_logit)
 
         likelihood: dict[str, list[float]] = defaultdict(list)
         boosted = False
-        
-        for group_key, (entry, sim, weighted_logit) in best_hit_per_group.items():
+
+        for entry, sim, weighted_logit in best_hit_per_group.values():
             if (
                 entry.identity_id is not None
                 and sim >= self._config.identified_entry_boost_min_sim
@@ -1494,6 +1499,7 @@ class IdentityResolver:
             )
             metrics.metrics.identity_commits_total.labels(source="arcface_conflict").inc()
             import uuid
+
             return IdentityDecision(
                 ph_id=entity.entity_id,
                 identity_id=None,
@@ -1521,6 +1527,7 @@ class IdentityResolver:
             )
             metrics.metrics.identity_commits_total.labels(source="arcface_authority").inc()
             import uuid
+
             return IdentityDecision(
                 ph_id=entity.entity_id,
                 identity_id=arcface_authority,
@@ -1673,6 +1680,7 @@ class IdentityResolver:
             )
 
         import uuid
+
         commit_src = "temporal_prior"
         if not live_eval.has_evidence:
             commit_src = "temporal_prior"
@@ -1680,7 +1688,7 @@ class IdentityResolver:
             commit_src = "face"
         else:
             commit_src = "reid"
-            
+
         ev_ts = entity.last_independent_identity_evidence_at
         ev_ts_ns = int(ev_ts.timestamp() * 1e9) if ev_ts else 0
 

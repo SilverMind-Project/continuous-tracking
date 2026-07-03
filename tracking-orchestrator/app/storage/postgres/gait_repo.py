@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 
 from ...trajectory.gait import GaitDailyRecord, WalkingBout
 from ..gait import GaitBoutRepository, GaitDailyRepository

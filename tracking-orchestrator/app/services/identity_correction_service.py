@@ -184,9 +184,7 @@ class IdentityCorrectionService:
 
         start_obs, end_obs = obs[start_idx], obs[end_idx]
         version = await self._ph_version(ph_id, ph.observation_count)
-        effective, _authority = await self._corr.effective_identity(
-            ph_id, start_obs.captured_at
-        )
+        effective, _authority = await self._corr.effective_identity(ph_id, start_obs.captured_at)
         if effective is None:
             effective = ph.current_identity_id
 
@@ -198,9 +196,7 @@ class IdentityCorrectionService:
                 captured_at=start_obs.captured_at,
                 reason="segment_edge"
                 if start_idx == 0
-                else self._boundary_reason_backward(
-                    obs[start_idx - 1], start_obs, operator_ranges
-                )
+                else self._boundary_reason_backward(obs[start_idx - 1], start_obs, operator_ranges)
                 or "association_discontinuity",
             ),
             end=SegmentBoundary(
@@ -208,9 +204,7 @@ class IdentityCorrectionService:
                 captured_at=end_obs.captured_at,
                 reason="segment_edge"
                 if end_idx == len(obs) - 1
-                else self._boundary_reason_forward(
-                    end_obs, obs[end_idx + 1], operator_ranges
-                )
+                else self._boundary_reason_forward(end_obs, obs[end_idx + 1], operator_ranges)
                 or "association_discontinuity",
             ),
             ph_version=version,
@@ -270,9 +264,7 @@ class IdentityCorrectionService:
         return None
 
     @staticmethod
-    def _in_operator_range(
-        at: datetime, operator_ranges: list[IdentityRevisionRange]
-    ) -> bool:
+    def _in_operator_range(at: datetime, operator_ranges: list[IdentityRevisionRange]) -> bool:
         return any(r.range_start <= at <= r.range_end for r in operator_ranges)
 
     # -- apply ---------------------------------------------------------------
@@ -325,9 +317,7 @@ class IdentityCorrectionService:
 
         revision_id = str(uuid.uuid4())
         now = datetime.now(UTC)
-        previous_effective, _auth = await self._corr.effective_identity(
-            ph_id, observation_start
-        )
+        previous_effective, _auth = await self._corr.effective_identity(ph_id, observation_start)
         if previous_effective is None:
             previous_effective = ph.current_identity_id
 
@@ -429,9 +419,7 @@ class IdentityCorrectionService:
                 applied_at=datetime.now(UTC),
             )
         )
-        await self._corr.update_job(
-            revision_id, row_counts={"cts_rewritten_rows": cts_rows}
-        )
+        await self._corr.update_job(revision_id, row_counts={"cts_rewritten_rows": cts_rows})
         await self._corr.complete_job_if_ready(revision_id)
 
         # 6) Publish one idempotent revision for downstream (CC) projection.
@@ -487,11 +475,7 @@ class IdentityCorrectionService:
     ) -> str:
         live = await self._corr.list_ranges(ph_id, live_only=True)
         overlapping = [r for r in live if r.range_start <= end and r.range_end >= start]
-        supersedes = (
-            max(overlapping, key=lambda r: r.created_at).range_id
-            if overlapping
-            else None
-        )
+        supersedes = max(overlapping, key=lambda r: r.created_at).range_id if overlapping else None
         new_range = IdentityRevisionRange(
             range_id=str(uuid.uuid4()),
             revision_id=revision_id,
@@ -509,9 +493,7 @@ class IdentityCorrectionService:
             await self._corr.supersede_range(r.range_id, by_range_id=new_range.range_id)
         return new_range.range_id
 
-    def _is_live_edge(
-        self, ph: PersonHypothesis, observation_end: datetime
-    ) -> bool:
+    def _is_live_edge(self, ph: PersonHypothesis, observation_end: datetime) -> bool:
         if ph.closed_at is not None:
             return False
         grace = timedelta(seconds=self._cfg.prior_window_s)
@@ -595,9 +577,7 @@ class IdentityCorrectionService:
                 revision_id=revision_id,
                 operator_ranges=[r.range_id for r in conflicts],
             )
-            raise CorrectionConflictError(
-                "inferred revision overlaps a live operator range"
-            )
+            raise CorrectionConflictError("inferred revision overlaps a live operator range")
         new_range = IdentityRevisionRange(
             range_id=str(uuid.uuid4()),
             revision_id=revision_id,
@@ -613,9 +593,7 @@ class IdentityCorrectionService:
 
     # -- compensation (undo) -------------------------------------------------
 
-    async def compensate(
-        self, correction_id: str, *, actor: str
-    ) -> CorrectionResult:
+    async def compensate(self, correction_id: str, *, actor: str) -> CorrectionResult:
         """Undo a correction with a compensating revision.
 
         The original correction row and its range are retained for audit; a new
@@ -806,6 +784,4 @@ class IdentityCorrectionService:
         try:
             await publisher.publish(revision)  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001 - publish is best-effort
-            logger.warning(
-                "correction_publish_failed", revision_id=revision_id, error=str(exc)
-            )
+            logger.warning("correction_publish_failed", revision_id=revision_id, error=str(exc))

@@ -110,9 +110,7 @@ def test_grouped_endpoint_returns_one_card_with_all_bboxes() -> None:
 
 def test_grouped_endpoint_identity_filter() -> None:
     client = _client_with_data()
-    resp = client.get(
-        "/internal/keyframes/grouped", params={"effective_identity_id": "amma"}
-    )
+    resp = client.get("/internal/keyframes/grouped", params={"effective_identity_id": "amma"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 1

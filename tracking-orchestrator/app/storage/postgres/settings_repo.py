@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 from structlog import get_logger
 
 from ...domain import CameraConfig, StreamConfig

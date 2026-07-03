@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from structlog import get_logger
 
 if TYPE_CHECKING:
-    import asyncpg  # type: ignore[import-untyped]
+    import asyncpg
 
 from ...domain import CameraTopologyEdge, CoPresenceLink
 

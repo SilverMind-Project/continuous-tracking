@@ -222,8 +222,7 @@ class KeyframeReadModelService:
         bboxes = await self._repos.get_bbox_annotations_for_keyframes(keyframe_ids)
 
         ph_ids = sorted(
-            {b.ph_id for b in bboxes if b.ph_id}
-            | {k.ph_id for k in keyframes if k.ph_id}
+            {b.ph_id for b in bboxes if b.ph_id} | {k.ph_id for k in keyframes if k.ph_id}
         )
         page_max_time = max(k.captured_at for k in keyframes)
         # Decisions are persisted only at identity change points, so a held PH's
@@ -286,9 +285,7 @@ def _compose_cards(
             groups[fid] = group
         group.keyframe_ids.append(kf.keyframe_id)
         group.triggers.append(
-            KeyframeTrigger(
-                keyframe_id=kf.keyframe_id, ph_id=kf.ph_id, tag_reason=kf.tag_reason
-            )
+            KeyframeTrigger(keyframe_id=kf.keyframe_id, ph_id=kf.ph_id, tag_reason=kf.tag_reason)
         )
 
     bboxes_by_keyframe: dict[str, list[BboxAnnotation]] = {}
@@ -320,10 +317,7 @@ def _compose_cards(
                 seen.add(key)
                 deduped.append(b)
 
-        views = [
-            _bbox_view(b, group.captured_at, decisions, ranges, pending)
-            for b in deduped
-        ]
+        views = [_bbox_view(b, group.captured_at, decisions, ranges, pending) for b in deduped]
         frame_w = next((b.frame_width for b in deduped if b.frame_width), 0)
         frame_h = next((b.frame_height for b in deduped if b.frame_height), 0)
         unknown = sum(1 for v in views if not v.effective_identity_id)
@@ -366,15 +360,11 @@ def _bbox_view(
     pending: set[str],
 ) -> BboxIdentityView:
     decision = (
-        _latest_decision_at_or_before(decisions.get(b.ph_id, []), captured_at)
-        if b.ph_id
-        else None
+        _latest_decision_at_or_before(decisions.get(b.ph_id, []), captured_at) if b.ph_id else None
     )
     inferred = decision.inferred_identity_id if decision else b.identity_id
 
-    eff_id, eff_authority, revision_id = _effective_identity(
-        ranges.get(b.ph_id, []), captured_at
-    )
+    eff_id, eff_authority, revision_id = _effective_identity(ranges.get(b.ph_id, []), captured_at)
     if eff_id is None and revision_id is None:
         # No covering revision range: effective identity is raw inference.
         effective_identity_id = inferred
@@ -385,9 +375,7 @@ def _bbox_view(
 
     # Operator authority presents as ``Verified`` (no fabricated confidence).
     calibrated = (
-        None
-        if authority == "operator"
-        else (decision.top_probability if decision else None)
+        None if authority == "operator" else (decision.top_probability if decision else None)
     )
     conflict_kind = decision.conflict_kind if decision else None
     return BboxIdentityView(

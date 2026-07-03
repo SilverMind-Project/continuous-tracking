@@ -240,9 +240,7 @@ async def test_postgres_matches_inmemory_composition(db_pool: Any) -> None:
         correction_repo=cm,
         gallery_repo=gm,
     )
-    mem_card = (
-        await KeyframeReadModelService(mem_bundle).list_physical_frames()
-    ).frames[0]
+    mem_card = (await KeyframeReadModelService(mem_bundle).list_physical_frames()).frames[0]
 
     # Parity on the load-bearing per-bbox provenance and counts.
     def _norm(card: Any) -> str:

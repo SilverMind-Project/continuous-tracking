@@ -293,9 +293,7 @@ async def compensate_correction(
     return _result_response(result)
 
 
-@router.get(
-    "/internal/corrections/jobs/{revision_id}", response_model=JobStatusResponse
-)
+@router.get("/internal/corrections/jobs/{revision_id}", response_model=JobStatusResponse)
 async def get_job_status(
     revision_id: str,
     ctx: _CorrectionContext = Depends(get_context),
