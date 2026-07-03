@@ -131,9 +131,11 @@ func (x *FrameReady) GetSampleFps() float32 {
 	return 0
 }
 
-// FrameResponse is published back to Redis Streams by the
-// tracking-orchestrator after processing. The rtsp-ingress may use this
-// for acknowledgment and metrics.
+// Deprecated: no producer since 2026-06; retained for wire compatibility.
+// The tracking.responses Redis stream carried per-frame pipeline outcomes
+// (TD-006). Failure observability moved to the cts_frames_failed_total
+// Prometheus counter. Existing deployments may DEL the stream key after
+// upgrading; cognitive-companion's drain subscriber will then idle harmlessly.
 type FrameResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Correlates to the FrameReady frame_index + camera_id.

@@ -119,6 +119,63 @@ func (DwellEventType) EnumDescriptor() ([]byte, []int) {
 	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{1}
 }
 
+// Indicates whether a SceneSample frames an isolated person,
+// a crowd, an interaction, or an empty scene.
+type SceneSampleKind int32
+
+const (
+	SceneSampleKind_SCENE_SAMPLE_KIND_UNSPECIFIED     SceneSampleKind = 0
+	SceneSampleKind_SCENE_SAMPLE_KIND_ISOLATED_PERSON SceneSampleKind = 1
+	SceneSampleKind_SCENE_SAMPLE_KIND_INTERACTION     SceneSampleKind = 2
+	SceneSampleKind_SCENE_SAMPLE_KIND_CROWD           SceneSampleKind = 3
+	SceneSampleKind_SCENE_SAMPLE_KIND_EMPTY           SceneSampleKind = 4
+)
+
+// Enum value maps for SceneSampleKind.
+var (
+	SceneSampleKind_name = map[int32]string{
+		0: "SCENE_SAMPLE_KIND_UNSPECIFIED",
+		1: "SCENE_SAMPLE_KIND_ISOLATED_PERSON",
+		2: "SCENE_SAMPLE_KIND_INTERACTION",
+		3: "SCENE_SAMPLE_KIND_CROWD",
+		4: "SCENE_SAMPLE_KIND_EMPTY",
+	}
+	SceneSampleKind_value = map[string]int32{
+		"SCENE_SAMPLE_KIND_UNSPECIFIED":     0,
+		"SCENE_SAMPLE_KIND_ISOLATED_PERSON": 1,
+		"SCENE_SAMPLE_KIND_INTERACTION":     2,
+		"SCENE_SAMPLE_KIND_CROWD":           3,
+		"SCENE_SAMPLE_KIND_EMPTY":           4,
+	}
+)
+
+func (x SceneSampleKind) Enum() *SceneSampleKind {
+	p := new(SceneSampleKind)
+	*p = x
+	return p
+}
+
+func (x SceneSampleKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SceneSampleKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_continuoustracking_v1_tracking_proto_enumTypes[2].Descriptor()
+}
+
+func (SceneSampleKind) Type() protoreflect.EnumType {
+	return &file_continuoustracking_v1_tracking_proto_enumTypes[2]
+}
+
+func (x SceneSampleKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SceneSampleKind.Descriptor instead.
+func (SceneSampleKind) EnumDescriptor() ([]byte, []int) {
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{2}
+}
+
 // TrackingEvent is the core message produced by the tracking-orchestrator
 // after processing a frame. It carries the Bayesian identity posterior,
 // spatial coordinates, and temporal metadata.
@@ -813,9 +870,39 @@ type IdentityRevision struct {
 	Reason string `protobuf:"bytes,10,opt,name=reason,proto3" json:"reason,omitempty"`
 	// N0: evidence_json extended with actor, rewritten_rows, observation_count,
 	// and evidence_sources in addition to the legacy posterior fields.
-	EvidenceJson  string `protobuf:"bytes,11,opt,name=evidence_json,json=evidenceJson,proto3" json:"evidence_json,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	EvidenceJson string `protobuf:"bytes,11,opt,name=evidence_json,json=evidenceJson,proto3" json:"evidence_json,omitempty"`
+	// Explicit inferred identity from the resolver.
+	InferredIdentityId string `protobuf:"bytes,12,opt,name=inferred_identity_id,json=inferredIdentityId,proto3" json:"inferred_identity_id,omitempty"`
+	// Effective identity after applying overrides and authority rules.
+	EffectiveIdentityId string `protobuf:"bytes,13,opt,name=effective_identity_id,json=effectiveIdentityId,proto3" json:"effective_identity_id,omitempty"`
+	// Authority level (e.g. "face", "reid", "operator").
+	Authority string `protobuf:"bytes,14,opt,name=authority,proto3" json:"authority,omitempty"`
+	// Component or user that produced the decision.
+	DecisionSource string `protobuf:"bytes,15,opt,name=decision_source,json=decisionSource,proto3" json:"decision_source,omitempty"`
+	// The durable UUID for this specific decision.
+	DecisionId string `protobuf:"bytes,16,opt,name=decision_id,json=decisionId,proto3" json:"decision_id,omitempty"`
+	// Description of any conflict (e.g. duplicate active identity).
+	Conflict string `protobuf:"bytes,17,opt,name=conflict,proto3" json:"conflict,omitempty"`
+	// Operator/inferred revision kind: operator_correction | operator_unknown |
+	// operator_frame_correction | operator_handoff | operator_compensation |
+	// inferred. Empty for legacy automatic revisions.
+	RevisionKind string `protobuf:"bytes,18,opt,name=revision_kind,json=revisionKind,proto3" json:"revision_kind,omitempty"`
+	// Effective range this revision applies to (operator authority is bounded to
+	// these observation timestamps). Zero when the revision is not range-scoped.
+	RangeStartUnixNs uint64 `protobuf:"fixed64,19,opt,name=range_start_unix_ns,json=rangeStartUnixNs,proto3" json:"range_start_unix_ns,omitempty"`
+	RangeEndUnixNs   uint64 `protobuf:"fixed64,20,opt,name=range_end_unix_ns,json=rangeEndUnixNs,proto3" json:"range_end_unix_ns,omitempty"`
+	// Authority of the effective range: "operator" or "inferred".
+	RangeAuthority string `protobuf:"bytes,21,opt,name=range_authority,json=rangeAuthority,proto3" json:"range_authority,omitempty"`
+	// Stable IDs for the revision-range projection model.
+	RevisionRangeId string `protobuf:"bytes,22,opt,name=revision_range_id,json=revisionRangeId,proto3" json:"revision_range_id,omitempty"`
+	CorrectionId    string `protobuf:"bytes,23,opt,name=correction_id,json=correctionId,proto3" json:"correction_id,omitempty"`
+	// Projections that must acknowledge this revision_id before the correction
+	// job is complete (e.g. "cts_internal", "cc").
+	RequiredProjections []string `protobuf:"bytes,24,rep,name=required_projections,json=requiredProjections,proto3" json:"required_projections,omitempty"`
+	// Schema version of the revision-range payload for forward compatibility.
+	RevisionSchemaVersion string `protobuf:"bytes,25,opt,name=revision_schema_version,json=revisionSchemaVersion,proto3" json:"revision_schema_version,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *IdentityRevision) Reset() {
@@ -918,6 +1005,104 @@ func (x *IdentityRevision) GetEvidenceJson() string {
 	return ""
 }
 
+func (x *IdentityRevision) GetInferredIdentityId() string {
+	if x != nil {
+		return x.InferredIdentityId
+	}
+	return ""
+}
+
+func (x *IdentityRevision) GetEffectiveIdentityId() string {
+	if x != nil {
+		return x.EffectiveIdentityId
+	}
+	return ""
+}
+
+func (x *IdentityRevision) GetAuthority() string {
+	if x != nil {
+		return x.Authority
+	}
+	return ""
+}
+
+func (x *IdentityRevision) GetDecisionSource() string {
+	if x != nil {
+		return x.DecisionSource
+	}
+	return ""
+}
+
+func (x *IdentityRevision) GetDecisionId() string {
+	if x != nil {
+		return x.DecisionId
+	}
+	return ""
+}
+
+func (x *IdentityRevision) GetConflict() string {
+	if x != nil {
+		return x.Conflict
+	}
+	return ""
+}
+
+func (x *IdentityRevision) GetRevisionKind() string {
+	if x != nil {
+		return x.RevisionKind
+	}
+	return ""
+}
+
+func (x *IdentityRevision) GetRangeStartUnixNs() uint64 {
+	if x != nil {
+		return x.RangeStartUnixNs
+	}
+	return 0
+}
+
+func (x *IdentityRevision) GetRangeEndUnixNs() uint64 {
+	if x != nil {
+		return x.RangeEndUnixNs
+	}
+	return 0
+}
+
+func (x *IdentityRevision) GetRangeAuthority() string {
+	if x != nil {
+		return x.RangeAuthority
+	}
+	return ""
+}
+
+func (x *IdentityRevision) GetRevisionRangeId() string {
+	if x != nil {
+		return x.RevisionRangeId
+	}
+	return ""
+}
+
+func (x *IdentityRevision) GetCorrectionId() string {
+	if x != nil {
+		return x.CorrectionId
+	}
+	return ""
+}
+
+func (x *IdentityRevision) GetRequiredProjections() []string {
+	if x != nil {
+		return x.RequiredProjections
+	}
+	return nil
+}
+
+func (x *IdentityRevision) GetRevisionSchemaVersion() string {
+	if x != nil {
+		return x.RevisionSchemaVersion
+	}
+	return ""
+}
+
 // IdentitySnapshot is a lightweight per-PH identity state for live
 // display.  Unlike IdentityRevision, it is not a standalone stream message —
 // it only appears as a sub-message of TrackingEvent.
@@ -943,9 +1128,27 @@ type IdentitySnapshot struct {
 	// Exponential moving average of crop-quality scores for this PH (U1/U2).
 	// Range [0, 1]; 0.0 means no quality data yet.  Consumed by CC to populate
 	// PersonLocationEnvelope.quality without client-side inference (design rule D5).
-	MeanQuality   float32 `protobuf:"fixed32,8,opt,name=mean_quality,json=meanQuality,proto3" json:"mean_quality,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	MeanQuality float32 `protobuf:"fixed32,8,opt,name=mean_quality,json=meanQuality,proto3" json:"mean_quality,omitempty"`
+	// Explicit inferred identity from the resolver.
+	InferredIdentityId string `protobuf:"bytes,9,opt,name=inferred_identity_id,json=inferredIdentityId,proto3" json:"inferred_identity_id,omitempty"`
+	// Effective identity after applying overrides and authority rules.
+	EffectiveIdentityId string `protobuf:"bytes,10,opt,name=effective_identity_id,json=effectiveIdentityId,proto3" json:"effective_identity_id,omitempty"`
+	// Authority level (e.g. "face", "reid", "operator").
+	Authority string `protobuf:"bytes,11,opt,name=authority,proto3" json:"authority,omitempty"`
+	// Component or user that produced the decision.
+	DecisionSource string `protobuf:"bytes,12,opt,name=decision_source,json=decisionSource,proto3" json:"decision_source,omitempty"`
+	// The durable UUID for this specific decision.
+	DecisionId string `protobuf:"bytes,13,opt,name=decision_id,json=decisionId,proto3" json:"decision_id,omitempty"`
+	// Description of any conflict.
+	Conflict string `protobuf:"bytes,14,opt,name=conflict,proto3" json:"conflict,omitempty"`
+	// Timestamp of the last independent authoritative evidence.
+	LastIndependentEvidenceAtUnixNs uint64 `protobuf:"fixed64,15,opt,name=last_independent_evidence_at_unix_ns,json=lastIndependentEvidenceAtUnixNs,proto3" json:"last_independent_evidence_at_unix_ns,omitempty"`
+	// Hash of the configuration used for the resolver.
+	ConfigHash string `protobuf:"bytes,16,opt,name=config_hash,json=configHash,proto3" json:"config_hash,omitempty"`
+	// Version of the model set used for ReID/Face/etc.
+	ModelSetVersion string `protobuf:"bytes,17,opt,name=model_set_version,json=modelSetVersion,proto3" json:"model_set_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *IdentitySnapshot) Reset() {
@@ -1032,6 +1235,69 @@ func (x *IdentitySnapshot) GetMeanQuality() float32 {
 		return x.MeanQuality
 	}
 	return 0
+}
+
+func (x *IdentitySnapshot) GetInferredIdentityId() string {
+	if x != nil {
+		return x.InferredIdentityId
+	}
+	return ""
+}
+
+func (x *IdentitySnapshot) GetEffectiveIdentityId() string {
+	if x != nil {
+		return x.EffectiveIdentityId
+	}
+	return ""
+}
+
+func (x *IdentitySnapshot) GetAuthority() string {
+	if x != nil {
+		return x.Authority
+	}
+	return ""
+}
+
+func (x *IdentitySnapshot) GetDecisionSource() string {
+	if x != nil {
+		return x.DecisionSource
+	}
+	return ""
+}
+
+func (x *IdentitySnapshot) GetDecisionId() string {
+	if x != nil {
+		return x.DecisionId
+	}
+	return ""
+}
+
+func (x *IdentitySnapshot) GetConflict() string {
+	if x != nil {
+		return x.Conflict
+	}
+	return ""
+}
+
+func (x *IdentitySnapshot) GetLastIndependentEvidenceAtUnixNs() uint64 {
+	if x != nil {
+		return x.LastIndependentEvidenceAtUnixNs
+	}
+	return 0
+}
+
+func (x *IdentitySnapshot) GetConfigHash() string {
+	if x != nil {
+		return x.ConfigHash
+	}
+	return ""
+}
+
+func (x *IdentitySnapshot) GetModelSetVersion() string {
+	if x != nil {
+		return x.ModelSetVersion
+	}
+	return ""
 }
 
 // IdentityCandidate is one candidate identity with its posterior probability.
@@ -1275,6 +1541,143 @@ func (x *DwellEvent) GetDurationS() int32 {
 	return 0
 }
 
+// CCIdentityAssertion represents an identity assertion generated by Cognitive Companion.
+// This replaces the old legacy text-based payload on the cc.identity_assertions stream.
+type CCIdentityAssertion struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The identity assigned by CC.
+	PersonId string `protobuf:"bytes,1,opt,name=person_id,json=personId,proto3" json:"person_id,omitempty"`
+	// The camera from which this assertion originates.
+	CameraId string `protobuf:"bytes,2,opt,name=camera_id,json=cameraId,proto3" json:"camera_id,omitempty"`
+	// When the frame was captured.
+	CapturedAtUnixNs uint64 `protobuf:"fixed64,3,opt,name=captured_at_unix_ns,json=capturedAtUnixNs,proto3" json:"captured_at_unix_ns,omitempty"`
+	// Estimated physical floor position (X) in meters.
+	FloorXM float32 `protobuf:"fixed32,4,opt,name=floor_x_m,json=floorXM,proto3" json:"floor_x_m,omitempty"`
+	// Estimated physical floor position (Y) in meters.
+	FloorYM float32 `protobuf:"fixed32,5,opt,name=floor_y_m,json=floorYM,proto3" json:"floor_y_m,omitempty"`
+	// Raw cosine similarity from the face ID service.
+	RawSimilarity float32 `protobuf:"fixed32,6,opt,name=raw_similarity,json=rawSimilarity,proto3" json:"raw_similarity,omitempty"`
+	// Calibrated confidence, if calibration is enabled.
+	CalibratedConfidence *float32 `protobuf:"fixed32,7,opt,name=calibrated_confidence,json=calibratedConfidence,proto3,oneof" json:"calibrated_confidence,omitempty"`
+	// Status of the calibration ("calibrated", "uncalibrated", "extrapolated").
+	CalibrationStatus string `protobuf:"bytes,8,opt,name=calibration_status,json=calibrationStatus,proto3" json:"calibration_status,omitempty"`
+	// The component that generated this assertion (e.g., "cc-arcface").
+	Source string `protobuf:"bytes,9,opt,name=source,proto3" json:"source,omitempty"`
+	// Which model version was used.
+	ModelVersion string `protobuf:"bytes,10,opt,name=model_version,json=modelVersion,proto3" json:"model_version,omitempty"`
+	// Which preprocessing version was used.
+	PreprocessingVersion string `protobuf:"bytes,11,opt,name=preprocessing_version,json=preprocessingVersion,proto3" json:"preprocessing_version,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *CCIdentityAssertion) Reset() {
+	*x = CCIdentityAssertion{}
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CCIdentityAssertion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CCIdentityAssertion) ProtoMessage() {}
+
+func (x *CCIdentityAssertion) ProtoReflect() protoreflect.Message {
+	mi := &file_continuoustracking_v1_tracking_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CCIdentityAssertion.ProtoReflect.Descriptor instead.
+func (*CCIdentityAssertion) Descriptor() ([]byte, []int) {
+	return file_continuoustracking_v1_tracking_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *CCIdentityAssertion) GetPersonId() string {
+	if x != nil {
+		return x.PersonId
+	}
+	return ""
+}
+
+func (x *CCIdentityAssertion) GetCameraId() string {
+	if x != nil {
+		return x.CameraId
+	}
+	return ""
+}
+
+func (x *CCIdentityAssertion) GetCapturedAtUnixNs() uint64 {
+	if x != nil {
+		return x.CapturedAtUnixNs
+	}
+	return 0
+}
+
+func (x *CCIdentityAssertion) GetFloorXM() float32 {
+	if x != nil {
+		return x.FloorXM
+	}
+	return 0
+}
+
+func (x *CCIdentityAssertion) GetFloorYM() float32 {
+	if x != nil {
+		return x.FloorYM
+	}
+	return 0
+}
+
+func (x *CCIdentityAssertion) GetRawSimilarity() float32 {
+	if x != nil {
+		return x.RawSimilarity
+	}
+	return 0
+}
+
+func (x *CCIdentityAssertion) GetCalibratedConfidence() float32 {
+	if x != nil && x.CalibratedConfidence != nil {
+		return *x.CalibratedConfidence
+	}
+	return 0
+}
+
+func (x *CCIdentityAssertion) GetCalibrationStatus() string {
+	if x != nil {
+		return x.CalibrationStatus
+	}
+	return ""
+}
+
+func (x *CCIdentityAssertion) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *CCIdentityAssertion) GetModelVersion() string {
+	if x != nil {
+		return x.ModelVersion
+	}
+	return ""
+}
+
+func (x *CCIdentityAssertion) GetPreprocessingVersion() string {
+	if x != nil {
+		return x.PreprocessingVersion
+	}
+	return ""
+}
+
 var File_continuoustracking_v1_tracking_proto protoreflect.FileDescriptor
 
 const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
@@ -1338,7 +1741,7 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\x04y_mm\x18\x02 \x01(\x03R\x03yMm\x12\x1e\n" +
 	"\n" +
 	"calibrated\x18\x03 \x01(\bR\n" +
-	"calibrated\"\xb7\x03\n" +
+	"calibrated\"\x85\b\n" +
 	"\x10IdentityRevision\x12\x13\n" +
 	"\x05ph_id\x18\x01 \x01(\tR\x04phId\x12H\n" +
 	"\n" +
@@ -1353,7 +1756,22 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\x0fnew_identity_id\x18\t \x01(\tR\rnewIdentityId\x12\x16\n" +
 	"\x06reason\x18\n" +
 	" \x01(\tR\x06reason\x12#\n" +
-	"\revidence_json\x18\v \x01(\tR\fevidenceJsonJ\x04\b\a\x10\b\"\xd8\x02\n" +
+	"\revidence_json\x18\v \x01(\tR\fevidenceJson\x120\n" +
+	"\x14inferred_identity_id\x18\f \x01(\tR\x12inferredIdentityId\x122\n" +
+	"\x15effective_identity_id\x18\r \x01(\tR\x13effectiveIdentityId\x12\x1c\n" +
+	"\tauthority\x18\x0e \x01(\tR\tauthority\x12'\n" +
+	"\x0fdecision_source\x18\x0f \x01(\tR\x0edecisionSource\x12\x1f\n" +
+	"\vdecision_id\x18\x10 \x01(\tR\n" +
+	"decisionId\x12\x1a\n" +
+	"\bconflict\x18\x11 \x01(\tR\bconflict\x12#\n" +
+	"\rrevision_kind\x18\x12 \x01(\tR\frevisionKind\x12-\n" +
+	"\x13range_start_unix_ns\x18\x13 \x01(\x06R\x10rangeStartUnixNs\x12)\n" +
+	"\x11range_end_unix_ns\x18\x14 \x01(\x06R\x0erangeEndUnixNs\x12'\n" +
+	"\x0frange_authority\x18\x15 \x01(\tR\x0erangeAuthority\x12*\n" +
+	"\x11revision_range_id\x18\x16 \x01(\tR\x0frevisionRangeId\x12#\n" +
+	"\rcorrection_id\x18\x17 \x01(\tR\fcorrectionId\x121\n" +
+	"\x14required_projections\x18\x18 \x03(\tR\x13requiredProjections\x126\n" +
+	"\x17revision_schema_version\x18\x19 \x01(\tR\x15revisionSchemaVersionJ\x04\b\a\x10\b\"\xde\x05\n" +
 	"\x10IdentitySnapshot\x12\x13\n" +
 	"\x05ph_id\x18\x01 \x01(\tR\x04phId\x12\x1f\n" +
 	"\videntity_id\x18\x02 \x01(\tR\n" +
@@ -1363,7 +1781,19 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\x11posterior_entropy\x18\x05 \x01(\x02R\x10posteriorEntropy\x120\n" +
 	"\x14direct_face_evidence\x18\x06 \x01(\bR\x12directFaceEvidence\x12#\n" +
 	"\revidence_json\x18\a \x01(\tR\fevidenceJson\x12!\n" +
-	"\fmean_quality\x18\b \x01(\x02R\vmeanQualityR\x0fglobal_track_id\"y\n" +
+	"\fmean_quality\x18\b \x01(\x02R\vmeanQuality\x120\n" +
+	"\x14inferred_identity_id\x18\t \x01(\tR\x12inferredIdentityId\x122\n" +
+	"\x15effective_identity_id\x18\n" +
+	" \x01(\tR\x13effectiveIdentityId\x12\x1c\n" +
+	"\tauthority\x18\v \x01(\tR\tauthority\x12'\n" +
+	"\x0fdecision_source\x18\f \x01(\tR\x0edecisionSource\x12\x1f\n" +
+	"\vdecision_id\x18\r \x01(\tR\n" +
+	"decisionId\x12\x1a\n" +
+	"\bconflict\x18\x0e \x01(\tR\bconflict\x12M\n" +
+	"$last_independent_evidence_at_unix_ns\x18\x0f \x01(\x06R\x1flastIndependentEvidenceAtUnixNs\x12\x1f\n" +
+	"\vconfig_hash\x18\x10 \x01(\tR\n" +
+	"configHash\x12*\n" +
+	"\x11model_set_version\x18\x11 \x01(\tR\x0fmodelSetVersionR\x0fglobal_track_id\"y\n" +
 	"\x11IdentityCandidate\x12\x1f\n" +
 	"\videntity_id\x18\x01 \x01(\tR\n" +
 	"identityId\x12!\n" +
@@ -1387,7 +1817,21 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\troom_name\x18\x04 \x01(\tR\broomName\x12+\n" +
 	"\x12event_time_unix_ns\x18\x05 \x01(\x06R\x0feventTimeUnixNs\x12\x1d\n" +
 	"\n" +
-	"duration_s\x18\x06 \x01(\x05R\tdurationS*\x7f\n" +
+	"duration_s\x18\x06 \x01(\x05R\tdurationS\"\xd2\x03\n" +
+	"\x13CCIdentityAssertion\x12\x1b\n" +
+	"\tperson_id\x18\x01 \x01(\tR\bpersonId\x12\x1b\n" +
+	"\tcamera_id\x18\x02 \x01(\tR\bcameraId\x12-\n" +
+	"\x13captured_at_unix_ns\x18\x03 \x01(\x06R\x10capturedAtUnixNs\x12\x1a\n" +
+	"\tfloor_x_m\x18\x04 \x01(\x02R\afloorXM\x12\x1a\n" +
+	"\tfloor_y_m\x18\x05 \x01(\x02R\afloorYM\x12%\n" +
+	"\x0eraw_similarity\x18\x06 \x01(\x02R\rrawSimilarity\x128\n" +
+	"\x15calibrated_confidence\x18\a \x01(\x02H\x00R\x14calibratedConfidence\x88\x01\x01\x12-\n" +
+	"\x12calibration_status\x18\b \x01(\tR\x11calibrationStatus\x12\x16\n" +
+	"\x06source\x18\t \x01(\tR\x06source\x12#\n" +
+	"\rmodel_version\x18\n" +
+	" \x01(\tR\fmodelVersion\x123\n" +
+	"\x15preprocessing_version\x18\v \x01(\tR\x14preprocessingVersionB\x18\n" +
+	"\x16_calibrated_confidence*\x7f\n" +
 	"\x11PresenceEventType\x12#\n" +
 	"\x1fPRESENCE_EVENT_TYPE_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cPRESENCE_EVENT_TYPE_APPEARED\x10\x01\x12#\n" +
@@ -1395,7 +1839,13 @@ const file_continuoustracking_v1_tracking_proto_rawDesc = "" +
 	"\x0eDwellEventType\x12 \n" +
 	"\x1cDWELL_EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18DWELL_EVENT_TYPE_STARTED\x10\x01\x12\x1a\n" +
-	"\x16DWELL_EVENT_TYPE_ENDED\x10\x02BOZMgithub.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
+	"\x16DWELL_EVENT_TYPE_ENDED\x10\x02*\xb8\x01\n" +
+	"\x0fSceneSampleKind\x12!\n" +
+	"\x1dSCENE_SAMPLE_KIND_UNSPECIFIED\x10\x00\x12%\n" +
+	"!SCENE_SAMPLE_KIND_ISOLATED_PERSON\x10\x01\x12!\n" +
+	"\x1dSCENE_SAMPLE_KIND_INTERACTION\x10\x02\x12\x1b\n" +
+	"\x17SCENE_SAMPLE_KIND_CROWD\x10\x03\x12\x1b\n" +
+	"\x17SCENE_SAMPLE_KIND_EMPTY\x10\x04BOZMgithub.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1b\x06proto3"
 
 var (
 	file_continuoustracking_v1_tracking_proto_rawDescOnce sync.Once
@@ -1409,36 +1859,38 @@ func file_continuoustracking_v1_tracking_proto_rawDescGZIP() []byte {
 	return file_continuoustracking_v1_tracking_proto_rawDescData
 }
 
-var file_continuoustracking_v1_tracking_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_continuoustracking_v1_tracking_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_continuoustracking_v1_tracking_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_continuoustracking_v1_tracking_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_continuoustracking_v1_tracking_proto_goTypes = []any{
-	(PresenceEventType)(0),    // 0: continuoustracking.v1.PresenceEventType
-	(DwellEventType)(0),       // 1: continuoustracking.v1.DwellEventType
-	(*TrackingEvent)(nil),     // 2: continuoustracking.v1.TrackingEvent
-	(*FrameRef)(nil),          // 3: continuoustracking.v1.FrameRef
-	(*Detection)(nil),         // 4: continuoustracking.v1.Detection
-	(*PoseKeypoint)(nil),      // 5: continuoustracking.v1.PoseKeypoint
-	(*TrailPoint)(nil),        // 6: continuoustracking.v1.TrailPoint
-	(*PosteriorEvidence)(nil), // 7: continuoustracking.v1.PosteriorEvidence
-	(*BoundingBox)(nil),       // 8: continuoustracking.v1.BoundingBox
-	(*FloorPoint)(nil),        // 9: continuoustracking.v1.FloorPoint
-	(*IdentityRevision)(nil),  // 10: continuoustracking.v1.IdentityRevision
-	(*IdentitySnapshot)(nil),  // 11: continuoustracking.v1.IdentitySnapshot
-	(*IdentityCandidate)(nil), // 12: continuoustracking.v1.IdentityCandidate
-	(*PresenceEvent)(nil),     // 13: continuoustracking.v1.PresenceEvent
-	(*DwellEvent)(nil),        // 14: continuoustracking.v1.DwellEvent
+	(PresenceEventType)(0),      // 0: continuoustracking.v1.PresenceEventType
+	(DwellEventType)(0),         // 1: continuoustracking.v1.DwellEventType
+	(SceneSampleKind)(0),        // 2: continuoustracking.v1.SceneSampleKind
+	(*TrackingEvent)(nil),       // 3: continuoustracking.v1.TrackingEvent
+	(*FrameRef)(nil),            // 4: continuoustracking.v1.FrameRef
+	(*Detection)(nil),           // 5: continuoustracking.v1.Detection
+	(*PoseKeypoint)(nil),        // 6: continuoustracking.v1.PoseKeypoint
+	(*TrailPoint)(nil),          // 7: continuoustracking.v1.TrailPoint
+	(*PosteriorEvidence)(nil),   // 8: continuoustracking.v1.PosteriorEvidence
+	(*BoundingBox)(nil),         // 9: continuoustracking.v1.BoundingBox
+	(*FloorPoint)(nil),          // 10: continuoustracking.v1.FloorPoint
+	(*IdentityRevision)(nil),    // 11: continuoustracking.v1.IdentityRevision
+	(*IdentitySnapshot)(nil),    // 12: continuoustracking.v1.IdentitySnapshot
+	(*IdentityCandidate)(nil),   // 13: continuoustracking.v1.IdentityCandidate
+	(*PresenceEvent)(nil),       // 14: continuoustracking.v1.PresenceEvent
+	(*DwellEvent)(nil),          // 15: continuoustracking.v1.DwellEvent
+	(*CCIdentityAssertion)(nil), // 16: continuoustracking.v1.CCIdentityAssertion
 }
 var file_continuoustracking_v1_tracking_proto_depIdxs = []int32{
-	3,  // 0: continuoustracking.v1.TrackingEvent.frame_ref:type_name -> continuoustracking.v1.FrameRef
-	4,  // 1: continuoustracking.v1.TrackingEvent.detections:type_name -> continuoustracking.v1.Detection
-	10, // 2: continuoustracking.v1.TrackingEvent.identity_revisions:type_name -> continuoustracking.v1.IdentityRevision
-	11, // 3: continuoustracking.v1.TrackingEvent.identity_snapshots:type_name -> continuoustracking.v1.IdentitySnapshot
-	8,  // 4: continuoustracking.v1.Detection.bbox:type_name -> continuoustracking.v1.BoundingBox
-	9,  // 5: continuoustracking.v1.Detection.floor_point:type_name -> continuoustracking.v1.FloorPoint
-	5,  // 6: continuoustracking.v1.Detection.pose_keypoints:type_name -> continuoustracking.v1.PoseKeypoint
-	6,  // 7: continuoustracking.v1.Detection.trail:type_name -> continuoustracking.v1.TrailPoint
-	7,  // 8: continuoustracking.v1.Detection.evidence:type_name -> continuoustracking.v1.PosteriorEvidence
-	12, // 9: continuoustracking.v1.IdentityRevision.candidates:type_name -> continuoustracking.v1.IdentityCandidate
+	4,  // 0: continuoustracking.v1.TrackingEvent.frame_ref:type_name -> continuoustracking.v1.FrameRef
+	5,  // 1: continuoustracking.v1.TrackingEvent.detections:type_name -> continuoustracking.v1.Detection
+	11, // 2: continuoustracking.v1.TrackingEvent.identity_revisions:type_name -> continuoustracking.v1.IdentityRevision
+	12, // 3: continuoustracking.v1.TrackingEvent.identity_snapshots:type_name -> continuoustracking.v1.IdentitySnapshot
+	9,  // 4: continuoustracking.v1.Detection.bbox:type_name -> continuoustracking.v1.BoundingBox
+	10, // 5: continuoustracking.v1.Detection.floor_point:type_name -> continuoustracking.v1.FloorPoint
+	6,  // 6: continuoustracking.v1.Detection.pose_keypoints:type_name -> continuoustracking.v1.PoseKeypoint
+	7,  // 7: continuoustracking.v1.Detection.trail:type_name -> continuoustracking.v1.TrailPoint
+	8,  // 8: continuoustracking.v1.Detection.evidence:type_name -> continuoustracking.v1.PosteriorEvidence
+	13, // 9: continuoustracking.v1.IdentityRevision.candidates:type_name -> continuoustracking.v1.IdentityCandidate
 	0,  // 10: continuoustracking.v1.PresenceEvent.event_type:type_name -> continuoustracking.v1.PresenceEventType
 	1,  // 11: continuoustracking.v1.DwellEvent.event_type:type_name -> continuoustracking.v1.DwellEventType
 	12, // [12:12] is the sub-list for method output_type
@@ -1453,13 +1905,14 @@ func file_continuoustracking_v1_tracking_proto_init() {
 	if File_continuoustracking_v1_tracking_proto != nil {
 		return
 	}
+	file_continuoustracking_v1_tracking_proto_msgTypes[13].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_continuoustracking_v1_tracking_proto_rawDesc), len(file_continuoustracking_v1_tracking_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   13,
+			NumEnums:      3,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
