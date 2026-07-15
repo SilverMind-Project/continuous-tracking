@@ -19,7 +19,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.domain import FaceAnchor, GlobalTrack, Identity, PosteriorDist
-from app.pipeline.frame_pipeline import FrameProcessingPipeline, PipelineConfig
+from app.pipeline.frame_pipeline import (
+    FrameProcessingPipeline,
+    PipelineConfig,
+    PipelineDependencies,
+)
+from app.storage.base import InMemoryIdentityDecisionRepository
 from app.storage.gallery import InMemoryGalleryRepository
 from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 
@@ -212,3 +217,39 @@ class TestPipelineRouteSmoke:
             pipeline = FrameProcessingPipeline(PipelineConfig(allow_skeleton=True))
             await pipeline.initialize()
             assert pipeline is not None
+
+
+class TestProvenanceStageOrdering:
+    """M02: provenance_persist must precede publish on every execution route."""
+
+    @pytest.mark.asyncio
+    async def test_provenance_persist_precedes_publish_on_all_routes(self) -> None:
+        with _mock_redis_deps():
+            pipeline = FrameProcessingPipeline(PipelineConfig(allow_skeleton=True))
+            deps = PipelineDependencies(
+                identity_provenance_repo=InMemoryIdentityDecisionRepository()
+            )
+            await pipeline.initialize(deps)
+
+            assert pipeline._stage_runner is not None
+            assert pipeline._post_detect_runner is not None
+            assert pipeline._pre_world_runner is not None
+            assert pipeline._post_world_runner is not None
+            assert pipeline._world_tracking_stage is not None
+
+            direct_names = [s.name for s in pipeline._stage_runner._stages]
+            per_camera_batch_names = [s.name for s in pipeline._post_detect_runner._stages]
+            cross_camera_batch_names = (
+                [s.name for s in pipeline._pre_world_runner._stages]
+                + [pipeline._world_tracking_stage.name]
+                + [s.name for s in pipeline._post_world_runner._stages]
+            )
+
+            for route_name, names in (
+                ("direct", direct_names),
+                ("per_camera_batch", per_camera_batch_names),
+                ("cross_camera_batch", cross_camera_batch_names),
+            ):
+                assert "provenance_persist" in names, route_name
+                assert "publish" in names, route_name
+                assert names.index("provenance_persist") < names.index("publish"), route_name

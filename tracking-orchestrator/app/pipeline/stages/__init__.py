@@ -11,6 +11,7 @@ from .keyframes import KeyframeStage
 from .posture_stage import PostureStage
 from .posture_trails import TrailsStage
 from .privacy import PrivacyStage
+from .provenance import ProvenancePersistStage
 from .publish import PublishStage
 from .revisions import RevisionsStage
 from .spatial_projection import SpatialProjectionStage
@@ -30,6 +31,7 @@ __all__ = [
     "KeyframeStage",
     "PostureStage",
     "PrivacyStage",
+    "ProvenancePersistStage",
     "PublishStage",
     "RevisionsStage",
     "SpatialProjectionStage",

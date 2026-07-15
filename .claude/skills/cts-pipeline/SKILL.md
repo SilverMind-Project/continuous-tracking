@@ -75,7 +75,8 @@ The list is configuration-dependent. A conditional stage must name its enabling 
 | 13 | `KeyframeStage` | `keyframes.py` | Always | Periodic + identity-change keyframe sampling to `tagged_keyframes` and `scene.samples` stream |
 | 14 | `RevisionsStage` | `revisions.py` | Always | Publishes `IdentityRevision` protos and triggers retroactive cross-table rewriting |
 | 15 | `TrailsStage` | `posture_trails.py` | Always | Maintains per-PH foot-point ring buffer published in `TrackingEvent` |
-| 16 | `PublishStage` | `publish.py` | Always | Assembles and publishes `TrackingEvent` proto to `tracking.events` Redis stream |
+| 16 | `ProvenancePersistStage` | `provenance.py` | `identity_provenance_repo` configured | Durably persists every `revises_previous` identity decision, unconditionally (no throttle) |
+| 17 | `PublishStage` | `publish.py` | Always | Assembles and publishes `TrackingEvent` proto to `tracking.events` Redis stream |
 
 ## FrameContext: shared state between stages
 
@@ -104,9 +105,11 @@ A stage that is computationally expensive but optional (e.g., pose estimation wi
 
 **After `WorldTrackingStage` and before `TrajectoryStage`:** stages that enrich detections with PH-level data. Current example: `DetectionBackfillStage`, `ClosePHStage`, `PostureStage`.
 
-**After `TrajectoryStage`:** stages that sample or publish; they read final per-PH trajectory state. Current examples: `KeyframeStage`, `RevisionsStage`, `TrailsStage`, `PublishStage`.
+**After `TrajectoryStage`:** stages that sample or publish; they read final per-PH trajectory state. Current examples: `KeyframeStage`, `RevisionsStage`, `TrailsStage`, `ProvenancePersistStage`, `PublishStage`.
 
 Adding a stage to the wrong position causes the stage to read stale context. When in doubt, check which `FrameContext` fields your stage reads and confirm they are set by a prior stage.
+
+**Durability writes never live in a throttled or lossy stage.** A stage that rate-limits its output (e.g. `PublishStage`'s per-camera `live_publish_max_hz` cap) must contain only presentation-path work; anything that must happen exactly once per tracker round — provenance, audit rows, any row a caregiver-facing read model joins against — gets its own stage ahead of the throttle. `ProvenancePersistStage` runs immediately before `PublishStage` on all three execution routes for exactly this reason: identity-decision persistence is change-gated (`revises_previous` only) but must never additionally be throttle-gated, or a decision landing on a rate-limited frame is silently lost (see `codebase-hardening-m02-provenance-persistence-decoupling.md`).
 
 ## Cross-camera dedup: how it works and where not to touch it
 

@@ -45,6 +45,7 @@ from ..pipeline.stages import (
     KeyframeStage,
     PostureStage,
     PrivacyStage,
+    ProvenancePersistStage,
     PublishStage,
     RevisionsStage,
     SpatialProjectionStage,
@@ -342,6 +343,7 @@ class FrameProcessingPipeline:
         self._world_tracking_stage: WorldTrackingStage | None = None
         self._fetch_stage: FetchStage | None = None
         self._detect_stage: DetectStage | None = None
+        self._provenance_persist_stage: ProvenancePersistStage | None = None
         self._live_config = LiveConfigHolder(
             camera_room_map=CameraRoomMap(),
             room_polygon_map=RoomPolygonMap(),
@@ -614,6 +616,11 @@ class FrameProcessingPipeline:
                 motion_energy_tracker=self._motion_energy_tracker,
             )
 
+        if self._identity_provenance_repo is not None:
+            self._provenance_persist_stage = ProvenancePersistStage(
+                identity_provenance_repo=self._identity_provenance_repo
+            )
+
         post_world_stages = [
             DetectionBackfillStage(),
             ClosePHStage(
@@ -655,11 +662,15 @@ class FrameProcessingPipeline:
                 trail_by_tracklet=self._trail_by_ph,
                 trail_maxlen=self._TRAIL_MAXLEN,
             ),
+            *(
+                [self._provenance_persist_stage]
+                if self._provenance_persist_stage is not None
+                else []
+            ),
             PublishStage(
                 transport=self._transport,
                 live_config=self._live_config,
                 live_publish_max_hz=self._config.live_publish_max_hz,
-                identity_provenance_repo=self._identity_provenance_repo,
             ),
         ]
 
@@ -720,6 +731,9 @@ class FrameProcessingPipeline:
         if self._frame_tasks:
             await asyncio.gather(*self._frame_tasks, return_exceptions=True)
             self._frame_tasks.clear()
+
+        if self._provenance_persist_stage is not None:
+            await self._provenance_persist_stage.aclose()
 
         # Close all open dwells in the trajectory writer to prevent unbounded
         # per-track state from accumulating across restarts.
