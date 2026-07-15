@@ -18,7 +18,7 @@ from app.domain import (
 )
 from app.observability import metrics as metrics_pkg
 from app.observability.metrics import Metrics, build_metrics
-from app.storage.base import InMemoryGalleryRepository
+from app.storage.base import VERIFIED_ONLY, InMemoryGalleryRepository
 from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 
 
@@ -89,6 +89,9 @@ async def _duplicate_identity_resolver(
         await gallery.upsert_identity(
             Identity(identity_id=identity_id, display_name=identity_id, enrolled_at=now)
         )
+    # state="operator_verified" so list_gallery_entries_for_tracklets's
+    # verified-only default (M03) still surfaces these as the resolver's
+    # query-building entries.
     for tracklet_id in ("t-held", "t-new"):
         await gallery.upsert_gallery_entry(
             GalleryEmbedding(
@@ -98,6 +101,7 @@ async def _duplicate_identity_resolver(
                 seen_at=now,
                 origin_tracklet_id=tracklet_id,
                 face_confirmed=True,
+                state="operator_verified",
             )
         )
     return IdentityResolver(
@@ -134,8 +138,12 @@ class _ControlledGallery(InMemoryGalleryRepository):
         limit: int = 10,
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
+        states: frozenset[str] | None = VERIFIED_ONLY,
     ) -> list[tuple[GalleryEmbedding, float]]:
-        del embedding, limit, camera_id, max_age_seconds
+        # This fake returns its pre-scripted matches unconditionally: the tests
+        # using it exercise coherence/propagation scoring, not gallery
+        # governance, so it deliberately does not apply `states`.
+        del embedding, limit, camera_id, max_age_seconds, states
         now = datetime.now(UTC)
         return [
             (
@@ -170,6 +178,9 @@ async def _coherence_resolver(
             Identity(identity_id=identity_id, display_name=identity_id, enrolled_at=now)
         )
     second_embedding = [1.0, 0.0] if coherent else [0.0, 1.0]
+    # state="operator_verified" so list_gallery_entries_for_tracklets's
+    # verified-only default (M03) still surfaces these query-building entries;
+    # the actual vote comes from _ControlledGallery's overridden search_similar.
     for idx, embedding in enumerate(([1.0, 0.0], second_embedding)):
         await gallery.upsert_gallery_entry(
             GalleryEmbedding(
@@ -180,6 +191,7 @@ async def _coherence_resolver(
                 quality=0.9,
                 origin_tracklet_id="t1",
                 face_confirmed=False,
+                state="operator_verified",
             )
         )
     return IdentityResolver(gallery_repo=gallery, config=config)
@@ -439,6 +451,8 @@ async def _propagation_resolver(
         await gallery.upsert_identity(
             Identity(identity_id=identity_id, display_name=identity_id, enrolled_at=now)
         )
+    # state="operator_verified" so gallery_similarity's verified-only default
+    # (M03) can see both tracklets' entries when computing propagation similarity.
     await gallery.upsert_gallery_entry(
         GalleryEmbedding(
             gallery_entry_id="src",
@@ -447,6 +461,7 @@ async def _propagation_resolver(
             seen_at=now,
             origin_tracklet_id="t-src",
             camera_id="cam-a",
+            state="operator_verified",
         )
     )
     await gallery.upsert_gallery_entry(
@@ -457,6 +472,7 @@ async def _propagation_resolver(
             seen_at=now,
             origin_tracklet_id="t-dst",
             camera_id="cam-b",
+            state="operator_verified",
         )
     )
     return IdentityResolver(

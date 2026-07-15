@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime, timedelta
+from typing import Final
 
 from ..domain import GalleryEmbedding, Identity, ReviewCandidate, ReviewEvent
 
@@ -18,6 +19,12 @@ class ReviewConflictError(Exception):
 
 
 _REVIEW_ACTIONS = frozenset({"approve", "reject", "relabel"})
+
+# Governance-safe default for every state-sensitive gallery read: only rows an
+# operator has verified vote or are administratively visible. `states=None`
+# means "no filter" and is reserved for administrative/service callers, each
+# of which must carry a one-line justification comment at the call site.
+VERIFIED_ONLY: Final[frozenset[str]] = frozenset({"operator_verified"})
 
 
 class GalleryRepository(ABC):
@@ -45,9 +52,18 @@ class GalleryRepository(ABC):
 
     @abstractmethod
     async def list_gallery_entries(
-        self, identity_id: str | None = None, active_only: bool = True
+        self,
+        identity_id: str | None = None,
+        active_only: bool = True,
+        states: frozenset[str] | None = VERIFIED_ONLY,
     ) -> list[GalleryEmbedding]:
-        """List gallery embeddings."""
+        """List gallery embeddings.
+
+        ``states`` restricts by lifecycle state; the default excludes
+        pending/rejected rows. ``states=None`` means no state filter and is
+        reserved for administrative/service callers, each of which must carry
+        a one-line justification comment at the call site.
+        """
 
     @abstractmethod
     async def search_similar(
@@ -56,6 +72,7 @@ class GalleryRepository(ABC):
         limit: int = 10,
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
+        states: frozenset[str] | None = VERIFIED_ONLY,
     ) -> list[tuple[GalleryEmbedding, float]]:
         """Nearest-neighbor search over gallery embeddings.
 
@@ -68,6 +85,10 @@ class GalleryRepository(ABC):
             limit: maximum number of results.
             camera_id: if provided, filter to gallery entries from this camera.
             max_age_seconds: if provided, filter to entries newer than now - max_age_seconds.
+            states: lifecycle-state filter; the default excludes pending/rejected
+                rows so unverified vectors never vote. ``states=None`` means no
+                filter and is reserved for administrative/service callers, each
+                of which must carry a one-line justification comment.
         """
 
     @abstractmethod
@@ -75,26 +96,16 @@ class GalleryRepository(ABC):
         self,
         tracklet_ids: set[str],
         limit: int = 20,
-        allowed_states: set[str] | None = None,
+        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
         model_versions: set[str] | None = None,
     ) -> list[GalleryEmbedding]:
         """List gallery entries whose origin_tracklet_id is in *tracklet_ids*.
 
         Used by the identity resolver to build a real query embedding from
-        a GlobalTrack's existing gallery entries.
-        """
-
-    @abstractmethod
-    async def update_identity_for_tracklets(
-        self,
-        tracklet_ids: set[str],
-        identity_id: str,
-    ) -> int:
-        """Backfill identity_id on all gallery entries for the given tracklets.
-
-        Called after the identity resolver commits an identity so that
-        future ReID gallery searches can use these entries as identity
-        evidence.  Returns the number of rows updated.
+        a GlobalTrack's existing gallery entries. ``allowed_states`` defaults
+        to verified-only; ``allowed_states=None`` means no filter and is
+        reserved for administrative/service callers, each of which must carry
+        a one-line justification comment at the call site.
         """
 
     @abstractmethod
@@ -103,7 +114,7 @@ class GalleryRepository(ABC):
         tracklet_ids_a: set[str],
         tracklet_ids_b: set[str],
         limit: int = 20,
-        allowed_states: set[str] | None = None,
+        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
         model_versions: set[str] | None = None,
     ) -> float:
         """Mean cosine similarity between two groups of gallery embeddings.
@@ -112,6 +123,10 @@ class GalleryRepository(ABC):
         cosine similarity. Returns 0.0 when both groups have no gallery
         entries, and 0.5 when only one group has entries (conservative
         fallback that allows geometry to carry cross-camera pairs).
+        ``allowed_states`` defaults to verified-only (delegates to
+        ``list_gallery_entries_for_tracklets``); ``allowed_states=None`` means
+        no filter and is reserved for administrative/service callers, each of
+        which must carry a one-line justification comment at the call site.
         """
 
     async def phs_with_pending_reid(self, ph_ids: list[str]) -> set[str]:
@@ -424,7 +439,10 @@ class InMemoryGalleryRepository(GalleryRepository):
         return updated
 
     async def list_gallery_entries(
-        self, identity_id: str | None = None, active_only: bool = True
+        self,
+        identity_id: str | None = None,
+        active_only: bool = True,
+        states: frozenset[str] | None = VERIFIED_ONLY,
     ) -> list[GalleryEmbedding]:
         entries = list(self._entries.values())
         if identity_id is not None:
@@ -438,6 +456,8 @@ class InMemoryGalleryRepository(GalleryRepository):
                 for entry in entries
                 if entry.identity_id in active_ids or entry.identity_id == ""
             ]
+        if states is not None:
+            entries = [entry for entry in entries if entry.state in states]
         return entries
 
     async def search_similar(
@@ -446,13 +466,16 @@ class InMemoryGalleryRepository(GalleryRepository):
         limit: int = 10,
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
+        states: frozenset[str] | None = VERIFIED_ONLY,
     ) -> list[tuple[GalleryEmbedding, float]]:
-        entries = await self.list_gallery_entries()
+        entries = await self.list_gallery_entries(states=None)
         if camera_id is not None:
             entries = [e for e in entries if e.camera_id == camera_id]
         if max_age_seconds is not None:
             cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
             entries = [e for e in entries if e.seen_at >= cutoff]
+        if states is not None:
+            entries = [e for e in entries if e.state in states]
         scored = [(entry, _entry_cosine_sim(embedding, entry.embedding)) for entry in entries]
         scored.sort(key=lambda item: item[1], reverse=True)
         return scored[:limit]
@@ -461,15 +484,12 @@ class InMemoryGalleryRepository(GalleryRepository):
         self,
         tracklet_ids: set[str],
         limit: int = 20,
-        allowed_states: set[str] | None = None,
+        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
         model_versions: set[str] | None = None,
     ) -> list[GalleryEmbedding]:
         if not tracklet_ids:
             return []
 
-        # Filter by allowed_states when the caller passes it (gallery_cache
-        # passes {"operator_verified"}); otherwise leave entries unfiltered to
-        # preserve existing test behaviour.
         if allowed_states is not None:
             entries = [
                 entry
@@ -485,34 +505,12 @@ class InMemoryGalleryRepository(GalleryRepository):
         entries.sort(key=lambda e: e.seen_at, reverse=True)
         return entries[:limit]
 
-    async def update_identity_for_tracklets(
-        self,
-        tracklet_ids: set[str],
-        identity_id: str,
-    ) -> int:
-        updated = 0
-        for entry_id, entry in self._entries.items():
-            if entry.origin_tracklet_id in tracklet_ids and not entry.identity_id:
-                self._entries[entry_id] = GalleryEmbedding(
-                    gallery_entry_id=entry.gallery_entry_id,
-                    identity_id=identity_id,
-                    embedding=entry.embedding,
-                    seen_at=entry.seen_at,
-                    quality=entry.quality,
-                    origin_tracklet_id=entry.origin_tracklet_id,
-                    face_confirmed=entry.face_confirmed,
-                    camera_id=entry.camera_id,
-                    orientation=entry.orientation,
-                )
-                updated += 1
-        return updated
-
     async def gallery_similarity(
         self,
         tracklet_ids_a: set[str],
         tracklet_ids_b: set[str],
         limit: int = 20,
-        allowed_states: set[str] | None = None,
+        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
         model_versions: set[str] | None = None,
     ) -> float:
         entries_a = await self.list_gallery_entries_for_tracklets(

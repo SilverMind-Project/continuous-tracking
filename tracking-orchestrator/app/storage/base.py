@@ -30,7 +30,7 @@ from .gait import (
     InMemoryGaitBoutRepository,
     InMemoryGaitDailyRepository,
 )
-from .gallery import GalleryRepository, InMemoryGalleryRepository
+from .gallery import VERIFIED_ONLY, GalleryRepository, InMemoryGalleryRepository
 from .misc import (
     ActivityRepository,
     AssignmentRepository,
@@ -1009,6 +1009,7 @@ class InMemoryCoPresenceRepository:
 # ---------------------------------------------------------------------------
 
 __all__ = [
+    "VERIFIED_ONLY",
     "ActivityRepository",
     "AssignmentRepository",
     "BboxAnnotationRepository",

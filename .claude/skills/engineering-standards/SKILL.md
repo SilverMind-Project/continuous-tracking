@@ -98,6 +98,25 @@ grep -n "PostgresXRepository" tracking-orchestrator/app/main.py  # repeat for ea
 
 Any missing counterpart requires a written justification comment at the wiring site.
 
+### Repository state/version filters must match across the triplet
+
+Any filter baked into a Postgres query (state, active, version) must appear identically in
+the InMemory peer and in the Protocol signature as an explicit parameter with a shared
+default constant. A filter that exists in only one implementation is a parity defect even if
+all tests pass. New filtered reads require a parity matrix test.
+
+**RIGHT:** `app/storage/gallery.py`'s `VERIFIED_ONLY` constant is the shared default for
+`list_gallery_entries`, `search_similar`, `list_gallery_entries_for_tracklets`, and
+`gallery_similarity` across the Protocol, `InMemoryGalleryRepository`, and
+`PostgresGalleryRepository`; `tests/storage/test_gallery_state_parity.py` (InMemory, fast gate)
+and `tests/integration/test_gallery_state_parity_postgres.py` (Postgres, `make ci`) prove both
+implementations return identical entry-ID sets for every state-filter value (M03).
+
+**WRONG:** a Postgres SQL constant hard-codes `state = 'operator_verified'` while the InMemory
+peer applies no state filter at all -- unit tests seeded with the default lifecycle state then
+"prove" behavior (a pending/rejected row voting) that production, filtered by the SQL, can never
+produce.
+
 ### Go: interface contracts in `internal/`
 
 Each subsystem in `rtsp-ingress/internal/` exports an interface, not a concrete struct. Tests inject a fake; production wires the real implementation.

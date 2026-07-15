@@ -426,6 +426,7 @@ class TestIdentityResolver:
                 embedding=[0.9] * 768,
                 seen_at=datetime.now(UTC),
                 origin_tracklet_id="t1",
+                state="operator_verified",
             )
         )
 
@@ -461,6 +462,7 @@ class TestIdentityResolver:
                 embedding=[0.9] * 768,
                 seen_at=datetime.now(UTC),
                 origin_tracklet_id="t1",
+                state="operator_verified",
             )
         )
 
@@ -621,7 +623,8 @@ class TestIdentityResolver:
         for ident in identities:
             await gallery.upsert_identity(ident)
 
-        # person_0's front-facing gallery entry
+        # person_0's front-facing gallery entry. state="operator_verified" so
+        # it is visible to search_similar's default verified-only vote (M03).
         gallery_emb = _unit(0)
         await gallery.upsert_gallery_entry(
             GalleryEmbedding(
@@ -632,11 +635,14 @@ class TestIdentityResolver:
                 quality=0.9,
                 origin_tracklet_id="t_old",
                 face_confirmed=True,
+                state="operator_verified",
             )
         )
 
         # Back-facing query: cos_sim ≈ 0.7 to gallery_emb — below commit threshold
-        # when combined with prior smoothing across 6 identities.
+        # when combined with prior smoothing across 6 identities. This row feeds
+        # the resolver's query-building read (list_gallery_entries_for_tracklets),
+        # which also defaults to verified-only (M03), so it needs the same state.
         import math
 
         back_query = [0.0] * dim
@@ -651,6 +657,7 @@ class TestIdentityResolver:
                 quality=0.9,
                 origin_tracklet_id="t_current",
                 face_confirmed=False,
+                state="operator_verified",
             )
         )
 
@@ -773,6 +780,9 @@ class TestGalleryBoost:
         gallery = InMemoryGalleryRepository()
 
         # Alice has 3 front-facing gallery entries (face-confirmed).
+        # state="operator_verified" throughout: these entries are searched via
+        # search_similar / list_gallery_entries_for_tracklets, both verified-only
+        # by default (M03).
         for i in range(3):
             await gallery.upsert_gallery_entry(
                 GalleryEmbedding(
@@ -783,6 +793,7 @@ class TestGalleryBoost:
                     quality=0.9,
                     origin_tracklet_id="t_alice_old",
                     face_confirmed=True,
+                    state="operator_verified",
                 )
             )
 
@@ -798,6 +809,7 @@ class TestGalleryBoost:
                 quality=0.9,
                 origin_tracklet_id="t_bob",
                 face_confirmed=True,
+                state="operator_verified",
             )
         )
         await gallery.upsert_gallery_entry(
@@ -809,6 +821,7 @@ class TestGalleryBoost:
                 quality=0.9,
                 origin_tracklet_id="t_carol",
                 face_confirmed=True,
+                state="operator_verified",
             )
         )
 
@@ -823,6 +836,7 @@ class TestGalleryBoost:
                 quality=0.9,
                 origin_tracklet_id="t2",
                 face_confirmed=False,
+                state="operator_verified",
             )
         )
 
@@ -879,6 +893,8 @@ class TestGalleryBoost:
         for ident in identities:
             await gallery.upsert_identity(ident)
 
+        # state="operator_verified": both entries must be visible to the
+        # resolver's verified-only default (M03) for the ambiguity to arise.
         for person in ("alice", "bob"):
             await gallery.upsert_gallery_entry(
                 GalleryEmbedding(
@@ -889,6 +905,7 @@ class TestGalleryBoost:
                     quality=0.9,
                     origin_tracklet_id=f"t_{person}",
                     face_confirmed=True,
+                    state="operator_verified",
                 )
             )
 
@@ -901,6 +918,7 @@ class TestGalleryBoost:
                 quality=0.9,
                 origin_tracklet_id="t_new",
                 face_confirmed=False,
+                state="operator_verified",
             )
         )
 
@@ -1204,7 +1222,8 @@ class TestCrossGtFacePropagation:
         for ident in identities:
             await gallery_repo.upsert_identity(ident)
 
-        # GT-A tracklet gallery: embedding [1, 0, 0, ...]
+        # GT-A tracklet gallery: embedding [1, 0, 0, ...]. state="operator_verified"
+        # so gallery_similarity's verified-only default (M03) can see both rows.
         base_emb = [1.0] + [0.0] * 767
         await gallery_repo.upsert_gallery_entry(
             GalleryEmbedding(
@@ -1213,6 +1232,7 @@ class TestCrossGtFacePropagation:
                 embedding=base_emb,
                 seen_at=datetime.now(UTC),
                 origin_tracklet_id="t-a",
+                state="operator_verified",
             )
         )
         # GT-B tracklet gallery: very similar embedding (cosine sim ≈ 0.964 with GT-A)
@@ -1224,6 +1244,7 @@ class TestCrossGtFacePropagation:
                 embedding=similar_emb,
                 seen_at=datetime.now(UTC),
                 origin_tracklet_id="t-b",
+                state="operator_verified",
             )
         )
 
@@ -1268,7 +1289,8 @@ class TestCrossGtFacePropagation:
         for ident in identities:
             await gallery_repo.upsert_identity(ident)
 
-        # GT-A: embedding in one direction.
+        # GT-A: embedding in one direction. state="operator_verified" so
+        # gallery_similarity's verified-only default (M03) can see both rows.
         await gallery_repo.upsert_gallery_entry(
             GalleryEmbedding(
                 gallery_entry_id="ge-a",
@@ -1276,6 +1298,7 @@ class TestCrossGtFacePropagation:
                 embedding=[1.0] + [0.0] * 767,
                 seen_at=datetime.now(UTC),
                 origin_tracklet_id="t-a",
+                state="operator_verified",
             )
         )
         # GT-B: embedding in orthogonal direction → gallery cosine sim with GT-A ≈ 0.
@@ -1287,6 +1310,7 @@ class TestCrossGtFacePropagation:
                 embedding=dissimilar_emb,
                 seen_at=datetime.now(UTC),
                 origin_tracklet_id="t-b",
+                state="operator_verified",
             )
         )
 

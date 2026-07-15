@@ -60,5 +60,8 @@ async def test_recognized_face_must_match_gallery_seed_identity() -> None:
     seeded = await repo.list_gallery_entries(
         identity_id=data["resolved_identity_id"],
         active_only=False,
+        # Diagnostic read of the raw seed write (_seed_multiview_gallery leaves
+        # entries pending_review by default -- F4/M04), not a resolver vote.
+        states=None,
     )
     assert seeded == []

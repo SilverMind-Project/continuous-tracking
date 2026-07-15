@@ -63,7 +63,11 @@ async def _make_tracker(
 
 
 async def _seed_grandma_body(gallery: InMemoryGalleryRepository) -> None:
-    """Pre-seed grandma's gallery with FRONT+BACK body prototypes."""
+    """Pre-seed grandma's gallery with FRONT+BACK body prototypes.
+
+    state="operator_verified" so the resolver's multiview search_similar
+    query (verified-only by default, M03) can see these prototypes.
+    """
     for i, orient in enumerate((OrientationBin.FRONT, OrientationBin.BACK)):
         await gallery.upsert_gallery_entry(
             GalleryEmbedding(
@@ -75,6 +79,7 @@ async def _seed_grandma_body(gallery: InMemoryGalleryRepository) -> None:
                 face_confirmed=True,
                 camera_id="cam01",
                 orientation=int(orient),
+                state="operator_verified",
             )
         )
 
@@ -155,7 +160,13 @@ async def test_recognized_face_seeds_gallery_with_committed_identity() -> None:
     # The PH committed to grandma this frame.
     assert any(d.identity_id == "grandma" for d in result.identity_decisions)
 
-    entries = await gallery.list_gallery_entries(identity_id="grandma", active_only=False)
+    entries = await gallery.list_gallery_entries(
+        identity_id="grandma",
+        active_only=False,
+        # Diagnostic read of the raw seed write (_seed_multiview_gallery leaves
+        # entries pending_review by default -- F4/M04), not a resolver vote.
+        states=None,
+    )
     assert len(entries) == 1
     assert entries[0].orientation == int(OrientationBin.FRONT)
     assert entries[0].face_confirmed is True
@@ -176,7 +187,13 @@ async def test_candidate_face_does_not_seed_gallery() -> None:
     )
     await tracker.step(observations=[obs], now=BASE_TIME, face_anchors=[obs.face_anchor])
 
-    entries = await gallery.list_gallery_entries(identity_id="grandma", active_only=False)
+    entries = await gallery.list_gallery_entries(
+        identity_id="grandma",
+        active_only=False,
+        # Diagnostic read of the raw seed write (_seed_multiview_gallery leaves
+        # entries pending_review by default -- F4/M04), not a resolver vote.
+        states=None,
+    )
     assert entries == []
 
 
@@ -238,6 +255,8 @@ async def test_multiview_back_view_retrieval_commits_via_max_over_views() -> Non
 
     tracker, gallery = await _make_tracker(multiview=True)
     # Seed both a FRONT and a (distinct) BACK prototype for grandma.
+    # state="operator_verified" so search_similar's verified-only default
+    # (M03) can see them.
     await gallery.upsert_gallery_entry(
         GalleryEmbedding(
             gallery_entry_id="gf",
@@ -248,6 +267,7 @@ async def test_multiview_back_view_retrieval_commits_via_max_over_views() -> Non
             face_confirmed=True,
             camera_id="cam01",
             orientation=int(OrientationBin.FRONT),
+            state="operator_verified",
         )
     )
     await gallery.upsert_gallery_entry(
@@ -260,6 +280,7 @@ async def test_multiview_back_view_retrieval_commits_via_max_over_views() -> Non
             face_confirmed=True,
             camera_id="cam01",
             orientation=int(OrientationBin.BACK),
+            state="operator_verified",
         )
     )
 
@@ -288,5 +309,11 @@ async def test_unknown_orientation_does_not_seed_gallery() -> None:
     )
     await tracker.step(observations=[obs], now=BASE_TIME, face_anchors=[obs.face_anchor])
 
-    entries = await gallery.list_gallery_entries(identity_id="grandma", active_only=False)
+    entries = await gallery.list_gallery_entries(
+        identity_id="grandma",
+        active_only=False,
+        # Diagnostic read of the raw seed write (_seed_multiview_gallery leaves
+        # entries pending_review by default -- F4/M04), not a resolver vote.
+        states=None,
+    )
     assert entries == []

@@ -93,6 +93,7 @@ async def test_search_similar(gallery_repo: InMemoryGalleryRepository) -> None:
             identity_id="i1",
             embedding=[1.0] * 768,
             seen_at=NOW,
+            state="operator_verified",
         )
     )
     await gallery_repo.upsert_gallery_entry(
@@ -101,6 +102,7 @@ async def test_search_similar(gallery_repo: InMemoryGalleryRepository) -> None:
             identity_id="i2",
             embedding=[-1.0] * 768,
             seen_at=NOW,
+            state="operator_verified",
         )
     )
     results = await gallery_repo.search_similar([1.0] * 768, limit=2)

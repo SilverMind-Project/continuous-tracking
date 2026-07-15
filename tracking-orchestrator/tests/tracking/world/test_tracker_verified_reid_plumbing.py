@@ -97,9 +97,19 @@ def _tracker(gallery: InMemoryGalleryRepository, cfg: WorldTrackerConfig) -> Wor
 
 
 async def test_only_operator_verified_entries_vote() -> None:
-    """A pending_review gallery match must not contribute a verified-ReID id."""
-    amma = _unit(1)
-    grandma = _unit(2)
+    """A pending_review gallery match must not contribute a verified-ReID id.
+
+    ``search_similar`` now filters state before ranking/limiting (matching
+    Postgres's always-on ``rg.state = 'operator_verified'`` predicate), so
+    with grandma's own entry pending, her query embedding must be genuinely
+    dissimilar to amma's verified entry -- otherwise amma would surface as a
+    coincidental top-1 regardless of the state gate. Orthogonal basis vectors
+    (not random unit vectors, which have nonzero expected cosine similarity in
+    low dimensions) guarantee that.
+    """
+    dim = 8
+    amma = [1.0] + [0.0] * (dim - 1)
+    grandma = [0.0, 1.0] + [0.0] * (dim - 2)
     gallery = InMemoryGalleryRepository()
     await _add_entry(gallery, "g1", "amma", amma, "operator_verified")
     await _add_entry(gallery, "g2", "grandma", grandma, "pending_review")

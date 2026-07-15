@@ -85,7 +85,8 @@ async def gallery_with_alice_back() -> InMemoryGalleryRepository:
             enrolled_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
     )
-    # Add alice back entries.
+    # Add alice back entries. state="operator_verified" so search_similar's
+    # verified-only default (M03) can see them.
     for i in range(5):
         await repo.upsert_gallery_entry(
             GalleryEmbedding(
@@ -96,6 +97,7 @@ async def gallery_with_alice_back() -> InMemoryGalleryRepository:
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.BACK,
+                state="operator_verified",
             )
         )
     # Add bob front entries.
@@ -109,6 +111,7 @@ async def gallery_with_alice_back() -> InMemoryGalleryRepository:
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.FRONT,
+                state="operator_verified",
             )
         )
     return repo

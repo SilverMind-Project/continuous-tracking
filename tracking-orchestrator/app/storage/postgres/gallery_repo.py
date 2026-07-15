@@ -9,13 +9,10 @@ import json
 from datetime import datetime
 
 import asyncpg
-from structlog import get_logger
 
 from ...domain import GalleryEmbedding, Identity, ReviewCandidate, ReviewEvent
 from ..base import GalleryRepository
-from ..gallery import ReviewConflictError, ReviewNotFoundError
-
-logger = get_logger(__name__)
+from ..gallery import VERIFIED_ONLY, ReviewConflictError, ReviewNotFoundError
 
 # Columns the M09 review queue projects from reid_gallery.
 _REVIEW_COLUMNS = """
@@ -92,7 +89,10 @@ _SQL_LIST_GALLERY_ENTRIES = """
     INNER JOIN continuous_tracking.identities i ON rg.identity_id = i.identity_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
       AND ($2 IS TRUE OR i.is_active = TRUE)
-      AND rg.state = 'operator_verified'
+      AND (
+          $3::continuous_tracking.gallery_entry_state[] IS NULL
+          OR rg.state = ANY($3::continuous_tracking.gallery_entry_state[])
+      )
     ORDER BY rg.seen_at DESC
     LIMIT 100
 """
@@ -112,7 +112,10 @@ _SQL_SEARCH_SIMILAR = """
                WHERE identity_id = rg.identity_id
            ))
       AND ($4::integer IS NULL OR rg.seen_at > now() - ($5::integer || 'seconds')::interval)
-      AND rg.state = 'operator_verified'
+      AND (
+          $7::continuous_tracking.gallery_entry_state[] IS NULL
+          OR rg.state = ANY($7::continuous_tracking.gallery_entry_state[])
+      )
     ORDER BY rg.embedding <=> $3::vector
     LIMIT $6
 """
@@ -123,16 +126,12 @@ _SQL_LIST_GALLERY_FOR_TRACKLETS = """
            rg.source_episode_id, rg.camera_id
     FROM continuous_tracking.reid_gallery rg
     WHERE rg.origin_tracklet_id = ANY($1::uuid[])
-      AND rg.state = 'operator_verified'
+      AND (
+          $3::continuous_tracking.gallery_entry_state[] IS NULL
+          OR rg.state = ANY($3::continuous_tracking.gallery_entry_state[])
+      )
     ORDER BY rg.seen_at DESC
     LIMIT $2
-"""
-
-_SQL_UPDATE_IDENTITY_FOR_TRACKLETS = """
-    UPDATE continuous_tracking.reid_gallery
-    SET identity_id = $2, updated_at = now()
-    WHERE origin_tracklet_id = ANY($1::uuid[])
-      AND (identity_id = '' OR identity_id IS NULL)
 """
 
 
@@ -246,13 +245,17 @@ class PostgresGalleryRepository(GalleryRepository):
         return {row["ph_id"] for row in rows if row["ph_id"]}
 
     async def list_gallery_entries(
-        self, identity_id: str | None = None, active_only: bool = True
+        self,
+        identity_id: str | None = None,
+        active_only: bool = True,
+        states: frozenset[str] | None = VERIFIED_ONLY,
     ) -> list[GalleryEmbedding]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 _SQL_LIST_GALLERY_ENTRIES,
                 identity_id,
                 active_only,
+                sorted(states) if states is not None else None,
             )
         return [
             GalleryEmbedding(
@@ -279,6 +282,7 @@ class PostgresGalleryRepository(GalleryRepository):
         limit: int = 10,
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
+        states: frozenset[str] | None = VERIFIED_ONLY,
     ) -> list[tuple[GalleryEmbedding, float]]:
         embedding_str = _embedding_to_pgvector(embedding)
         async with self._pool.acquire() as conn:
@@ -290,6 +294,7 @@ class PostgresGalleryRepository(GalleryRepository):
                 max_age_seconds,  # $4: IS NULL check
                 max_age_seconds,  # $5: interval seconds value
                 limit,  # $6: LIMIT
+                sorted(states) if states is not None else None,  # $7: state filter
             )
         return [
             (
@@ -317,12 +322,11 @@ class PostgresGalleryRepository(GalleryRepository):
         self,
         tracklet_ids: set[str],
         limit: int = 20,
-        allowed_states: set[str] | None = None,
+        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
         model_versions: set[str] | None = None,
     ) -> list[GalleryEmbedding]:
-        # The SQL already hard-restricts to operator_verified rows, matching the
-        # resolver's default {"operator_verified"} state set, so the extra
-        # state/version parameters are accepted for protocol parity.
+        # model_versions is accepted for protocol parity; no production caller
+        # partitions by model version yet (tracked separately from state filtering).
         if not tracklet_ids:
             return []
         async with self._pool.acquire() as conn:
@@ -330,6 +334,7 @@ class PostgresGalleryRepository(GalleryRepository):
                 _SQL_LIST_GALLERY_FOR_TRACKLETS,
                 list(tracklet_ids),
                 limit,
+                sorted(allowed_states) if allowed_states is not None else None,
             )
         return [
             GalleryEmbedding(
@@ -345,36 +350,12 @@ class PostgresGalleryRepository(GalleryRepository):
             for row in rows
         ]
 
-    async def update_identity_for_tracklets(
-        self,
-        tracklet_ids: set[str],
-        identity_id: str,
-    ) -> int:
-        """Backfill identity_id on gallery entries for the given tracklets."""
-        if not tracklet_ids or not identity_id:
-            return 0
-        async with self._pool.acquire() as conn:
-            result = await conn.execute(
-                _SQL_UPDATE_IDENTITY_FOR_TRACKLETS,
-                list(tracklet_ids),
-                identity_id,
-            )
-        updated = int(result.split()[-1]) if result else 0
-        if updated:
-            logger.debug(
-                "gallery_identity_backfilled",
-                tracklet_count=len(tracklet_ids),
-                updated_rows=updated,
-                identity_id=identity_id,
-            )
-        return updated
-
     async def gallery_similarity(
         self,
         tracklet_ids_a: set[str],
         tracklet_ids_b: set[str],
         limit: int = 20,
-        allowed_states: set[str] | None = None,
+        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
         model_versions: set[str] | None = None,
     ) -> float:
         entries_a = await self.list_gallery_entries_for_tracklets(

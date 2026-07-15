@@ -325,14 +325,15 @@ class WorldTracker:
         """Resolve each observation's verified-ReID identity from the gallery.
 
         Only ``operator_verified`` gallery entries vote (program architecture
-        decision 6), so a candidate or rejected vector can never contribute a
-        verified-ReID identity here even if a repository's ``search_similar``
-        does not itself restrict state. Returns a list aligned to
-        *observations*; an entry is ``None`` when there is no embedding, no
-        gallery repository, or no operator_verified match clears
-        ``reid_disagreement_min_similarity``. The caller only invokes this when
-        ``enable_reid_disagreement_cost`` is true, so it adds no per-frame
-        gallery queries while the flag is off.
+        decision 6): ``search_similar``'s default state filter now guarantees
+        this at the repository boundary (M03), and the explicit
+        ``entry.state == "operator_verified"`` check below remains as a
+        paged-invariant backstop in case a future caller widens the state
+        filter. Returns a list aligned to *observations*; an entry is ``None``
+        when there is no embedding, no gallery repository, or no
+        operator_verified match clears ``reid_disagreement_min_similarity``.
+        The caller only invokes this when ``enable_reid_disagreement_cost`` is
+        true, so it adds no per-frame gallery queries while the flag is off.
         """
         if self._gallery_repo is None:
             return [None] * len(observations)
