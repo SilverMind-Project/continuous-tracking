@@ -6,13 +6,14 @@ Handles identities, gallery embeddings, and ANN search via pgvector HNSW.
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime
 
 import asyncpg
 
-from ...domain import GalleryEmbedding, Identity, ReviewCandidate, ReviewEvent
+from ...domain import GalleryEmbedding, Identity, NewReviewCandidate, ReviewCandidate, ReviewEvent
 from ..base import GalleryRepository
-from ..gallery import VERIFIED_ONLY, ReviewConflictError, ReviewNotFoundError
+from ..gallery import PENDING_AND_VERIFIED, VERIFIED_ONLY, ReviewConflictError, ReviewNotFoundError
 
 # Columns the M09 review queue projects from reid_gallery.
 _REVIEW_COLUMNS = """
@@ -118,6 +119,33 @@ _SQL_SEARCH_SIMILAR = """
       )
     ORDER BY rg.embedding <=> $3::vector
     LIMIT $6
+"""
+
+_SQL_INSERT_REVIEW_CANDIDATE = """
+    INSERT INTO continuous_tracking.reid_gallery
+        (id, identity_id, proposed_identity_id, embedding, quality, state,
+         model_version, preprocessing_version, dimension, crop_width, crop_height,
+         source_frame_key, crop_key, frame_hash, crop_hash, ph_id, observation_id,
+         keyframe_id, camera_id, capture_time, confidence, is_truncated, is_occluded,
+         candidate_reason, source_episode_id, created_actor, origin_tracklet_id,
+         orientation, seen_at)
+    VALUES ($1, $2, $3, $4::vector, $5, 'pending_review',
+            $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16,
+            $17, $18, $19, $20, $21, $22,
+            $23, $24, $25, $26,
+            $27, $28)
+    ON CONFLICT (id) DO NOTHING
+"""
+
+_SQL_COUNT_GALLERY_ENTRIES = """
+    SELECT count(*) FROM continuous_tracking.reid_gallery
+    WHERE identity_id = $1
+      AND orientation = $2
+      AND (
+          $3::continuous_tracking.gallery_entry_state[] IS NULL
+          OR state = ANY($3::continuous_tracking.gallery_entry_state[])
+      )
 """
 
 _SQL_LIST_GALLERY_FOR_TRACKLETS = """
@@ -228,6 +256,58 @@ class PostgresGalleryRepository(GalleryRepository):
                 str(row["source_episode_id"]) if row.get("source_episode_id") else None
             ),
         )
+
+    async def create_review_candidate(self, candidate: NewReviewCandidate) -> str:
+        embedding_str = _embedding_to_pgvector(candidate.embedding)
+        origin_tracklet_id = candidate.origin_tracklet_id if candidate.origin_tracklet_id else None
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                _SQL_INSERT_REVIEW_CANDIDATE,
+                candidate.candidate_id,
+                candidate.identity_id,
+                candidate.identity_id,  # proposed_identity_id: same value at creation
+                embedding_str,
+                candidate.quality,
+                candidate.model_version,
+                candidate.preprocessing_version,
+                candidate.dimensions[0] * candidate.dimensions[1],
+                candidate.dimensions[0],
+                candidate.dimensions[1],
+                candidate.source_frame_key,
+                candidate.crop_key,
+                candidate.frame_hash,
+                candidate.crop_hash,
+                uuid.UUID(candidate.ph_id) if candidate.ph_id else None,
+                uuid.UUID(candidate.observation_id) if candidate.observation_id else None,
+                uuid.UUID(candidate.keyframe_id) if candidate.keyframe_id else None,
+                candidate.camera_id,
+                candidate.capture_time,
+                candidate.confidence,
+                candidate.is_truncated,
+                candidate.is_occluded,
+                candidate.candidate_reason,
+                uuid.UUID(candidate.source_episode_id) if candidate.source_episode_id else None,
+                candidate.created_actor,
+                origin_tracklet_id,
+                candidate.orientation,
+                candidate.capture_time,  # seen_at: same value as capture_time at creation
+            )
+        return candidate.candidate_id
+
+    async def count_gallery_entries(
+        self,
+        identity_id: str,
+        orientation: int,
+        states: frozenset[str] | None = PENDING_AND_VERIFIED,
+    ) -> int:
+        async with self._pool.acquire() as conn:
+            count = await conn.fetchval(
+                _SQL_COUNT_GALLERY_ENTRIES,
+                identity_id,
+                orientation,
+                sorted(states) if states is not None else None,
+            )
+        return int(count or 0)
 
     async def phs_with_pending_reid(self, ph_ids: list[str]) -> set[str]:
         if not ph_ids:

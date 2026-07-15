@@ -782,6 +782,12 @@ class GalleryEmbedding:
     orientation: int = OrientationBin.UNKNOWN  # OrientationBin stored as SMALLINT
     state: str = "pending_review"
     source_episode_id: str | None = None
+    # PH the row was created against. Postgres stores this in its own `ph_id`
+    # column (distinct from `origin_tracklet_id`, which carries the real
+    # persisted observation id). InMemory has no second dict keyed by ph_id,
+    # so this field lets `phs_with_pending_reid` match the same way Postgres
+    # does for rows created by ReIDCandidateStage (M04).
+    ph_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -830,6 +836,42 @@ class ReviewCandidate:
     review_reason: str | None
     review_note: str | None
     audit_version: int
+
+
+@dataclass(frozen=True)
+class NewReviewCandidate:
+    """Request to create one governed ``reid_gallery`` review-queue row (M04).
+
+    The only field a caller does not supply is ``state``: creation always
+    lands ``pending_review``. ``candidate_id`` is caller-supplied (not
+    server-generated) so a MinIO-then-DB write can retry idempotently on the
+    same id after a partial failure.
+    """
+
+    candidate_id: str
+    identity_id: str
+    embedding: list[float]
+    quality: float
+    orientation: int
+    camera_id: str
+    capture_time: datetime
+    ph_id: str
+    observation_id: str
+    origin_tracklet_id: str
+    keyframe_id: str | None
+    crop_key: str | None
+    source_frame_key: str | None
+    crop_hash: str | None
+    frame_hash: str | None
+    dimensions: tuple[int, int]
+    is_truncated: bool
+    is_occluded: bool
+    candidate_reason: str
+    source_episode_id: str | None
+    created_actor: str
+    model_version: str
+    preprocessing_version: str
+    confidence: float
 
 
 @dataclass(frozen=True)

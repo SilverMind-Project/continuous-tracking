@@ -114,6 +114,12 @@ class FrameContext:
     world_snapshots: list[WorldFrameSnapshot] = field(default_factory=list)
     # Producer: WorldTrackingStage. Consumer: DetectionBackfillStage.
     det_to_ph: dict[str, str] = field(default_factory=dict)
+    # Real repository-assigned WorldObservation ids (not detection ids).
+    # Producer: WorldTrackingStage. Consumer: ReIDCandidateStage (M04), which
+    # needs these for GalleryRepository.create_review_candidate's
+    # origin_tracklet_id -- the id the resolver's gallery query later matches
+    # against PersonHypothesis.observation_ids.
+    det_to_observation_id: dict[str, str] = field(default_factory=dict)
     # Producer: WorldTrackingStage. Consumers: ClosePHStage.
     active_ph_ids: set[str] = field(default_factory=set)
     # Producer: WorldTrackingStage. Consumers: ClosePHStage, TrajectoryStage.

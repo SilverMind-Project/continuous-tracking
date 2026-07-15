@@ -1,10 +1,10 @@
-"""Multi-view gallery seeding through WorldTracker.step.
+"""Multi-view gallery resolver query behavior through WorldTracker.step.
 
-Locks the ordering fix: seeding runs AFTER identity resolution (step 9) using
-the COMMITTED identity, so the frame on which a face first commits actually
-seeds the gallery. The previous code seeded inside step 4 with the
-pre-resolution identity (None on the commit frame), so the gallery never
-seeded in practice.
+Gallery *seeding* (candidate creation) moved to ReIDCandidateStage (M04) --
+see tests/pipeline/stages/test_reid_candidate_stage.py. This module keeps the
+resolver-query regression tests, which pre-seed operator_verified entries
+directly and exercise how the tracker's identity resolution consumes them;
+they never called the deleted ``WorldTracker._seed_multiview_gallery``.
 
 Pure unit test: all-InMemory repos, no Postgres, no Triton.
 """
@@ -17,7 +17,6 @@ import pytest
 
 from app.domain import (
     BoundingBox,
-    FaceAnchor,
     FloorPoint,
     GalleryEmbedding,
     Identity,
@@ -34,7 +33,6 @@ from app.tracking.world.config import WorldTrackerConfig
 from app.tracking.world.tracker import WorldTracker
 
 BASE_TIME = datetime(2026, 6, 2, 9, 0, 0, tzinfo=UTC)
-_EMB = tuple(0.05 * (i % 7) for i in range(768))
 # Two orthogonal body embeddings (cosine 0): a populated gallery for one must
 # never resolve onto the other via the always-on baseline ReID query.
 _GRANDMA_BODY = tuple(1.0 if i < 384 else 0.0 for i in range(768))
@@ -103,98 +101,6 @@ def _body_obs(
         orientation=OrientationBin.FRONT,
         orientation_confidence=0.9,
     )
-
-
-def _observation(
-    *,
-    detection_id: str,
-    recognition_state: str,
-    confidence: float,
-    orientation: OrientationBin,
-    orientation_confidence: float,
-) -> WorldObservation:
-    face = FaceAnchor(
-        person_id="grandma",
-        confidence=confidence,
-        quality=0.9,
-        detection_id=detection_id,
-        camera_id="cam01",
-        captured_at=BASE_TIME,
-        recognition_state=recognition_state,
-        similarity=confidence,
-        yaw_deg=5.0,
-    )
-    return WorldObservation(
-        camera_id="cam01",
-        frame_index=0,
-        captured_at=BASE_TIME,
-        floor_point=FloorPoint(x_mm=1000.0, y_mm=1000.0, calibrated=True),
-        bbox=BoundingBox(x_min=0.4, y_min=0.3, x_max=0.5, y_max=0.7),
-        embedding=_EMB,
-        detection_confidence=0.9,
-        height_estimate_m=1.65,
-        face_anchor=face,
-        detection_id=detection_id,
-        quality=0.8,
-        orientation=orientation,
-        orientation_confidence=orientation_confidence,
-    )
-
-
-@pytest.mark.asyncio
-async def test_recognized_face_seeds_gallery_with_committed_identity() -> None:
-    """A recognized face that commits grandma seeds a gallery entry tagged with
-    the observation orientation, even though identity commits in step 9 after
-    the (former) step-4 seeding point."""
-    tracker, gallery = await _make_tracker()
-
-    obs = _observation(
-        detection_id="d1",
-        recognition_state="recognized",
-        confidence=0.95,
-        orientation=OrientationBin.FRONT,
-        orientation_confidence=0.9,
-    )
-    result = await tracker.step(observations=[obs], now=BASE_TIME, face_anchors=[obs.face_anchor])
-
-    # The PH committed to grandma this frame.
-    assert any(d.identity_id == "grandma" for d in result.identity_decisions)
-
-    entries = await gallery.list_gallery_entries(
-        identity_id="grandma",
-        active_only=False,
-        # Diagnostic read of the raw seed write (_seed_multiview_gallery leaves
-        # entries pending_review by default -- F4/M04), not a resolver vote.
-        states=None,
-    )
-    assert len(entries) == 1
-    assert entries[0].orientation == int(OrientationBin.FRONT)
-    assert entries[0].face_confirmed is True
-
-
-@pytest.mark.asyncio
-async def test_candidate_face_does_not_seed_gallery() -> None:
-    """A grey-zone candidate face must never seed the shared gallery (poisoning
-    guard): seeding requires recognition_state == 'recognized'."""
-    tracker, gallery = await _make_tracker()
-
-    obs = _observation(
-        detection_id="d1",
-        recognition_state="candidate",
-        confidence=0.33,
-        orientation=OrientationBin.FRONT,
-        orientation_confidence=0.9,
-    )
-    await tracker.step(observations=[obs], now=BASE_TIME, face_anchors=[obs.face_anchor])
-
-    entries = await gallery.list_gallery_entries(
-        identity_id="grandma",
-        active_only=False,
-        # Diagnostic read of the raw seed write (_seed_multiview_gallery leaves
-        # entries pending_review by default -- F4/M04), not a resolver vote.
-        states=None,
-    )
-    assert entries == []
 
 
 @pytest.mark.asyncio
@@ -292,28 +198,3 @@ async def test_multiview_back_view_retrieval_commits_via_max_over_views() -> Non
             committed = True
 
     assert committed, "back-facing body matching grandma's BACK prototype must commit grandma"
-
-
-@pytest.mark.asyncio
-async def test_unknown_orientation_does_not_seed_gallery() -> None:
-    """Even a recognized face does not seed when the orientation is UNKNOWN:
-    an untagged prototype is useless for the max-over-views query."""
-    tracker, gallery = await _make_tracker()
-
-    obs = _observation(
-        detection_id="d1",
-        recognition_state="recognized",
-        confidence=0.95,
-        orientation=OrientationBin.UNKNOWN,
-        orientation_confidence=0.9,
-    )
-    await tracker.step(observations=[obs], now=BASE_TIME, face_anchors=[obs.face_anchor])
-
-    entries = await gallery.list_gallery_entries(
-        identity_id="grandma",
-        active_only=False,
-        # Diagnostic read of the raw seed write (_seed_multiview_gallery leaves
-        # entries pending_review by default -- F4/M04), not a resolver vote.
-        states=None,
-    )
-    assert entries == []

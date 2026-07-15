@@ -26,6 +26,21 @@ class FrameImageFetcher(Protocol):
         """Return an RGB uint8 image for the object key."""
 
 
+class CropStorageProtocol(Protocol):
+    """Uploads and deletes ReID candidate crop objects (M04)."""
+
+    async def put_bytes(
+        self,
+        minio_key: str,
+        data: bytes,
+        content_type: str = "image/jpeg",
+    ) -> None:
+        """Upload raw bytes under *minio_key*."""
+
+    async def delete_object(self, minio_key: str) -> None:
+        """Delete the object at *minio_key*."""
+
+
 class ReidEmbedderProtocol(Protocol):
     """Appearance embedding boundary used by the pipeline."""
 

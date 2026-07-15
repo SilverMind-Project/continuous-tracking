@@ -202,6 +202,10 @@ class Metrics:
     identity_duplicate_active_breach_total: Counter  # >1 active PH holds one identity post-commit
     identity_prior_only_evidence_advance_total: Counter  # prior-only advanced evidence time
 
+    # ---- M04 governed candidate creation ----
+    reid_candidate_rejected_total: Counter  # label: reason (bounded, typed set)
+    reid_candidate_created_total: Counter
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -717,6 +721,15 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Invariant breach: a prior-only maintenance decision advanced "
             "independent identity evidence time to the current frame. Must stay "
             "zero; any increment pages.",
+        ),
+        reid_candidate_rejected_total=_counter(
+            "cts_reid_candidate_rejected_total",
+            "Detections that failed the governed ReID candidate eligibility gate.",
+            ["reason"],
+        ),
+        reid_candidate_created_total=_counter(
+            "cts_reid_candidate_created_total",
+            "Governed pending_review ReID gallery candidates created by ReIDCandidateStage.",
         ),
     )
 

@@ -126,6 +126,13 @@ Every ReID entry has one explicit state: `pending_review`, `operator_verified`, 
 Only `operator_verified` entries vote in identity resolution. Pending and rejected entries never
 vote, including through caches, fallback queries, or compatibility code.
 
+The only pipeline write into `reid_gallery` is `ReIDCandidateStage` →
+`GalleryRepository.create_review_candidate`, always `state='pending_review'`, always with
+crop + frame provenance and `origin_tracklet_id`/`ph_id`. A face-derived candidate requires
+the recognized ArcFace identity to equal the committed identity, with calibrated confidence
+at or above the authority threshold. Caps count pending + verified rows. Review mutations go
+through `apply_review_action`/`compensate_review` only — never raw SQL, never `_pool`.
+
 Candidate creation requires:
 
 - finite L2-normalized embedding;

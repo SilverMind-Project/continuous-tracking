@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
-from ..domain import GalleryEmbedding, Identity, ReviewCandidate, ReviewEvent
+from ..domain import GalleryEmbedding, Identity, NewReviewCandidate, ReviewCandidate, ReviewEvent
 
 
 class ReviewNotFoundError(Exception):
@@ -25,6 +25,11 @@ _REVIEW_ACTIONS = frozenset({"approve", "reject", "relabel"})
 # means "no filter" and is reserved for administrative/service callers, each
 # of which must carry a one-line justification comment at the call site.
 VERIFIED_ONLY: Final[frozenset[str]] = frozenset({"operator_verified"})
+
+# Default state set for the per-(identity, orientation) creation cap (M04, F4):
+# pending rows must count against the cap or the review queue floods, so the
+# cap counts both governance-visible states, never rejected.
+PENDING_AND_VERIFIED: Final[frozenset[str]] = frozenset({"pending_review", "operator_verified"})
 
 
 class GalleryRepository(ABC):
@@ -49,6 +54,33 @@ class GalleryRepository(ABC):
     @abstractmethod
     async def get_gallery_entry(self, gallery_entry_id: str) -> GalleryEmbedding | None:
         """Retrieve a gallery embedding row by ID."""
+
+    @abstractmethod
+    async def create_review_candidate(self, candidate: NewReviewCandidate) -> str:
+        """Create one governed ``pending_review`` gallery row (M04).
+
+        The only pipeline write path into the gallery. ``candidate_id`` is
+        caller-supplied and creation is idempotent on it (a retry after a
+        partial MinIO/DB failure returns the same id without duplicating the
+        row). Exposes the new row to both the lean voting read path
+        (:meth:`list_gallery_entries` and friends) and the M09 review queue
+        (:meth:`list_review_candidates`) — implementations must not create two
+        divergent rows for one candidate.
+        """
+
+    @abstractmethod
+    async def count_gallery_entries(
+        self,
+        identity_id: str,
+        orientation: int,
+        states: frozenset[str] | None = PENDING_AND_VERIFIED,
+    ) -> int:
+        """Count gallery rows for *(identity_id, orientation)* used by the creation cap.
+
+        Defaults to counting ``pending_review`` and ``operator_verified``
+        rows (never ``rejected``) so a flood of unreviewed candidates still
+        engages the per-(identity, orientation) cap.
+        """
 
     @abstractmethod
     async def list_gallery_entries(
@@ -261,13 +293,101 @@ class InMemoryGalleryRepository(GalleryRepository):
     async def get_gallery_entry(self, gallery_entry_id: str) -> GalleryEmbedding | None:
         return self._entries.get(gallery_entry_id)
 
+    async def create_review_candidate(self, candidate: NewReviewCandidate) -> str:
+        # Idempotent on candidate_id: a retry after a partial MinIO/DB failure
+        # must not duplicate the row (M04 recoverable-creation requirement).
+        if candidate.candidate_id in self._candidates:
+            return candidate.candidate_id
+
+        now = datetime.now(UTC)
+        self._candidates[candidate.candidate_id] = ReviewCandidate(
+            candidate_id=candidate.candidate_id,
+            identity_id=candidate.identity_id,
+            proposed_identity_id=candidate.identity_id,
+            effective_identity_id=None,
+            state="pending_review",
+            label_source=None,
+            candidate_reason=candidate.candidate_reason,
+            model_version=candidate.model_version,
+            preprocessing_version=candidate.preprocessing_version,
+            dimension=candidate.dimensions[0] * candidate.dimensions[1],
+            crop_key=candidate.crop_key,
+            source_frame_key=candidate.source_frame_key,
+            crop_hash=candidate.crop_hash,
+            frame_hash=candidate.frame_hash,
+            bbox=None,
+            crop_width=candidate.dimensions[0],
+            crop_height=candidate.dimensions[1],
+            ph_id=candidate.ph_id,
+            observation_id=candidate.observation_id,
+            keyframe_id=candidate.keyframe_id,
+            camera_id=candidate.camera_id,
+            capture_time=candidate.capture_time,
+            confidence=candidate.confidence,
+            orientation=candidate.orientation,
+            quality=candidate.quality,
+            is_truncated=candidate.is_truncated,
+            is_occluded=candidate.is_occluded,
+            source_episode_id=candidate.source_episode_id,
+            created_actor=candidate.created_actor,
+            created_at=now,
+            seen_at=candidate.capture_time,
+            reviewed_actor=None,
+            reviewed_time=None,
+            review_reason=None,
+            review_note=None,
+            audit_version=1,
+        )
+        self._events.setdefault(candidate.candidate_id, [])
+        # Mirror the same row into the lean voting dict so
+        # list_gallery_entries/search_similar/list_gallery_entries_for_tracklets
+        # see it once state transitions to operator_verified — Postgres exposes
+        # one row to both readers; InMemory must match that single-row semantics.
+        self._entries[candidate.candidate_id] = GalleryEmbedding(
+            gallery_entry_id=candidate.candidate_id,
+            identity_id=candidate.identity_id,
+            embedding=candidate.embedding,
+            seen_at=candidate.capture_time,
+            quality=candidate.quality,
+            origin_tracklet_id=candidate.origin_tracklet_id,
+            # face_confirmed is a legacy authority boolean nothing reads
+            # (M04 rationale); leave it at the domain default rather than
+            # asserting authority through a deprecated field a second time.
+            camera_id=candidate.camera_id,
+            orientation=candidate.orientation,
+            state="pending_review",
+            source_episode_id=candidate.source_episode_id,
+            ph_id=candidate.ph_id,
+        )
+        return candidate.candidate_id
+
+    async def count_gallery_entries(
+        self,
+        identity_id: str,
+        orientation: int,
+        states: frozenset[str] | None = PENDING_AND_VERIFIED,
+    ) -> int:
+        return sum(
+            1
+            for entry in self._entries.values()
+            if entry.identity_id == identity_id
+            and entry.orientation == orientation
+            and (states is None or entry.state in states)
+        )
+
     async def phs_with_pending_reid(self, ph_ids: list[str]) -> set[str]:
         wanted = set(ph_ids)
-        return {
-            entry.origin_tracklet_id
-            for entry in self._entries.values()
-            if entry.state == "pending_review" and entry.origin_tracklet_id in wanted
-        }
+        matches: set[str] = set()
+        for entry in self._entries.values():
+            if entry.state != "pending_review":
+                continue
+            # Prefer the dedicated ph_id (matches Postgres, which stores it in
+            # its own column); fall back to origin_tracklet_id for rows seeded
+            # by older test/production paths that only set that field.
+            key = entry.ph_id or entry.origin_tracklet_id
+            if key in wanted:
+                matches.add(key)
+        return matches
 
     # -- M09 ReID review queue ------------------------------------------------
 
@@ -380,6 +500,7 @@ class InMemoryGalleryRepository(GalleryRepository):
             )
 
         self._candidates[candidate_id] = updated
+        self._mirror_entry_state(candidate_id, updated)
         self._events.setdefault(candidate_id, []).append(
             ReviewEvent(
                 event_id=f"evt-{candidate_id}-{updated.audit_version}",
@@ -394,6 +515,30 @@ class InMemoryGalleryRepository(GalleryRepository):
             )
         )
         return updated
+
+    def _mirror_entry_state(self, candidate_id: str, updated: ReviewCandidate) -> None:
+        """Keep the lean voting row's state in sync with a review transition.
+
+        Postgres has one ``reid_gallery`` row serving both readers, so a
+        state change is atomically visible to both. InMemory splits the row
+        across two dicts (:attr:`_entries` for voting, :attr:`_candidates`
+        for the M09 audit trail); without this, approving a candidate would
+        never make it eligible to vote in InMemory tests.
+        """
+        from dataclasses import replace
+
+        entry = self._entries.get(candidate_id)
+        if entry is None:
+            return
+        self._entries[candidate_id] = replace(
+            entry,
+            state=updated.state,
+            identity_id=updated.identity_id if updated.identity_id else entry.identity_id,
+            # Rejection deletes the vector (governance rule); voided here too
+            # so a rejected row can never contribute to a similarity query,
+            # even one that bypasses the state filter.
+            embedding=[] if updated.state == "rejected" else entry.embedding,
+        )
 
     async def compensate_review(
         self,
@@ -423,6 +568,7 @@ class InMemoryGalleryRepository(GalleryRepository):
             audit_version=current.audit_version + 1,
         )
         self._candidates[candidate_id] = updated
+        self._mirror_entry_state(candidate_id, updated)
         self._events.setdefault(candidate_id, []).append(
             ReviewEvent(
                 event_id=f"evt-{candidate_id}-{updated.audit_version}",

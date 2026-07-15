@@ -13,6 +13,7 @@ from .posture_trails import TrailsStage
 from .privacy import PrivacyStage
 from .provenance import ProvenancePersistStage
 from .publish import PublishStage
+from .reid_candidates import ReIDCandidateStage
 from .revisions import RevisionsStage
 from .spatial_projection import SpatialProjectionStage
 from .trajectory import ClosePHStage, TrajectoryStage
@@ -33,6 +34,7 @@ __all__ = [
     "PrivacyStage",
     "ProvenancePersistStage",
     "PublishStage",
+    "ReIDCandidateStage",
     "RevisionsStage",
     "SpatialProjectionStage",
     "StageRunner",

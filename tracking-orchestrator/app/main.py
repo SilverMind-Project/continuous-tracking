@@ -75,6 +75,7 @@ from .storage.postgres.ph_repo import PostgresPHRepository
 from .storage.postgres.settings_repo import PostgresSettingsRepository
 from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
+from .tracking.identity.candidate_eligibility import CandidatePolicy
 from .tracking.identity_resolver import ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
 from .trajectory.dementia_signals import SignalConfig
@@ -250,6 +251,21 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         frontality_min_factor=r.as_float("frontality_min_factor"),
         enable_multiview_gallery=r.as_bool("enable_multiview_gallery"),
         seed_orientation_min_confidence=r.as_float("seed_orientation_min_confidence"),
+    )
+
+
+def _build_candidate_policy(s: Settings) -> CandidatePolicy:
+    """Build CandidatePolicy from required settings.yaml keys (M04)."""
+    rc = s.section("reid_candidates")
+    return CandidatePolicy(
+        enabled=rc.as_bool("enabled"),
+        require_calibrated_face=rc.as_bool("require_calibrated_face"),
+        calibrated_confidence_min=rc.as_float("calibrated_confidence_min"),
+        seed_orientation_min_confidence=rc.as_float("seed_orientation_min_confidence"),
+        min_quality=rc.as_float("min_quality"),
+        max_per_identity_orientation=rc.as_int("max_per_identity_orientation"),
+        model_version=s.as_str("triton.reid_model"),
+        preprocessing_version=rc.as_str("preprocessing_version"),
     )
 
 

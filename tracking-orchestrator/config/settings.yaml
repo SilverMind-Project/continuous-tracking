@@ -370,6 +370,22 @@ resolver:
   enable_multiview_gallery: true
   seed_orientation_min_confidence: 0.5
 
+# Governed ReID gallery candidate creation (M04). The only pipeline write
+# path into reid_gallery: ReIDCandidateStage -> create_review_candidate,
+# always pending_review, always with crop/frame provenance. require_calibrated_face
+# defaults true: without a deployed calibration artifact this fails closed
+# (no automatic candidates) rather than seeding on raw ArcFace similarity.
+reid_candidates:
+  enabled: true
+  require_calibrated_face: true
+  calibrated_confidence_min: 0.80
+  seed_orientation_min_confidence: 0.5
+  min_quality: 0.35
+  max_per_identity_orientation: 10
+  # model_version is read separately from triton.reid_model (the live Triton
+  # model identifier); this key only covers the crop preprocessing pipeline.
+  preprocessing_version: "v1"
+
 # Keyframe sampler
 sampler:
   keyframe_min_interval_s: 30.0

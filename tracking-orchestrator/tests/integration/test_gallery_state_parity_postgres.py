@@ -12,10 +12,13 @@ Marked @pytest.mark.integration; CI selects this marker against a testcontainer
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
+from app.domain import NewReviewCandidate
+from app.storage.gallery import PENDING_AND_VERIFIED
 from app.storage.postgres.gallery_repo import PostgresGalleryRepository
 from tests.storage._gallery_parity_fixtures import (
     ALICE,
@@ -98,3 +101,99 @@ async def test_gallery_similarity_default_excludes_pending(db_pool: Any) -> None
         {alice_verified.origin_tracklet_id}, {bob_pending.origin_tracklet_id}
     )
     assert sim == 0.5
+
+
+def _candidate(candidate_id: str, *, identity_id: str, orientation: int) -> NewReviewCandidate:
+    return NewReviewCandidate(
+        candidate_id=candidate_id,
+        identity_id=identity_id,
+        embedding=[0.1] * 768,
+        quality=0.9,
+        orientation=orientation,
+        camera_id="cam01",
+        capture_time=datetime.now(UTC),
+        ph_id="00000000-0000-0000-0000-000000000301",
+        observation_id="00000000-0000-0000-0000-000000000302",
+        origin_tracklet_id="00000000-0000-0000-0000-000000000302",
+        keyframe_id=None,
+        crop_key=f"reid-candidates/v1/{candidate_id}.jpg",
+        source_frame_key=None,
+        crop_hash="deadbeef",
+        frame_hash=None,
+        dimensions=(128, 256),
+        is_truncated=False,
+        is_occluded=False,
+        candidate_reason="face_derived",
+        source_episode_id="00000000-0000-0000-0000-000000000301",
+        created_actor="pipeline",
+        model_version="reid-solider",
+        preprocessing_version="v1",
+        confidence=0.9,
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_review_candidate_round_trips_and_is_idempotent(db_pool: Any) -> None:
+    repo = PostgresGalleryRepository(db_pool)
+    await repo.upsert_identity(make_identities()[0])
+    identity_id = make_identities()[0].identity_id
+    candidate = _candidate(
+        "11111111-2222-3333-4444-555555555601", identity_id=identity_id, orientation=0
+    )
+
+    first_id = await repo.create_review_candidate(candidate)
+    second_id = await repo.create_review_candidate(candidate)  # retry, same id
+
+    assert first_id == second_id == candidate.candidate_id
+    row = await repo.get_review_candidate(candidate.candidate_id)
+    assert row is not None
+    assert row.state == "pending_review"
+    assert row.ph_id == "00000000-0000-0000-0000-000000000301"
+    assert row.observation_id == "00000000-0000-0000-0000-000000000302"
+    assert row.crop_hash == "deadbeef"
+    assert row.model_version == "reid-solider"
+
+    entries = await repo.list_gallery_entries(identity_id=identity_id, states=None)
+    matching = [e for e in entries if str(e.gallery_entry_id) == candidate.candidate_id]
+    assert len(matching) == 1  # one row exposed to both readers, no duplicate on retry
+
+    # F5 closure: once verified, the resolver's real query path
+    # (list_gallery_entries_for_tracklets, keyed by origin_tracklet_id ==
+    # PersonHypothesis.observation_ids) must see the row. Pending must not.
+    obs_ids = {candidate.origin_tracklet_id}
+    assert await repo.list_gallery_entries_for_tracklets(obs_ids) == []
+    await repo.apply_review_action(
+        candidate.candidate_id, action="approve", actor="operator", base_audit_version=1
+    )
+    verified_hits = await repo.list_gallery_entries_for_tracklets(obs_ids)
+    assert {str(e.gallery_entry_id) for e in verified_hits} == {candidate.candidate_id}
+
+
+@pytest.mark.asyncio
+async def test_count_gallery_entries_defaults_to_pending_and_verified(db_pool: Any) -> None:
+    repo = PostgresGalleryRepository(db_pool)
+    await repo.upsert_identity(make_identities()[0])
+    identity_id = make_identities()[0].identity_id
+
+    await repo.create_review_candidate(
+        _candidate("11111111-2222-3333-4444-555555555602", identity_id=identity_id, orientation=1)
+    )
+    verified = _candidate(
+        "11111111-2222-3333-4444-555555555603", identity_id=identity_id, orientation=1
+    )
+    await repo.create_review_candidate(verified)
+    await repo.apply_review_action(
+        verified.candidate_id, action="approve", actor="operator", base_audit_version=1
+    )
+    rejected = _candidate(
+        "11111111-2222-3333-4444-555555555604", identity_id=identity_id, orientation=1
+    )
+    await repo.create_review_candidate(rejected)
+    await repo.apply_review_action(
+        rejected.candidate_id, action="reject", actor="operator", base_audit_version=1
+    )
+
+    count = await repo.count_gallery_entries(identity_id, 1)
+    assert count == 2  # pending + verified, never rejected
+    assert count == await repo.count_gallery_entries(identity_id, 1, states=PENDING_AND_VERIFIED)
+    assert await repo.count_gallery_entries(identity_id, 1, states=None) == 3

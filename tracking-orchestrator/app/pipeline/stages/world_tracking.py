@@ -479,3 +479,4 @@ class WorldTrackingStage(FrameStage):
         # Store snapshots on the context for downstream stages.
         ctx.world_snapshots = list(result.snapshots)
         ctx.det_to_ph = dict(result.det_to_ph)
+        ctx.det_to_observation_id = dict(result.det_to_observation_id)

@@ -47,6 +47,7 @@ from ..pipeline.stages import (
     PrivacyStage,
     ProvenancePersistStage,
     PublishStage,
+    ReIDCandidateStage,
     RevisionsStage,
     SpatialProjectionStage,
     StageRunner,
@@ -98,6 +99,7 @@ from ..storage.base import (
     WorldObservationRepositoryProtocol,
 )
 from ..tracking.floor_projector import FloorProjector
+from ..tracking.identity.candidate_eligibility import CandidatePolicy
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
 from ..tracking.world.config import WorldTrackerConfig
@@ -246,6 +248,9 @@ class PipelineConfig:
 
     # --- Adaptive ReID cadence ---
     adaptive_reid: AdaptiveReidConfig = field(default_factory=AdaptiveReidConfig)
+
+    # --- Governed ReID gallery candidate creation (M04) ---
+    reid_candidates: CandidatePolicy = field(default_factory=CandidatePolicy)
 
     # --- Gait daily aggregation ---
     gait_aggregate_interval_s: int = 3600
@@ -666,6 +671,14 @@ class FrameProcessingPipeline:
                 [self._provenance_persist_stage]
                 if self._provenance_persist_stage is not None
                 else []
+            ),
+            # crop_storage: FrameImageFetcher only declares fetch_rgb, but the
+            # concrete MinioFrameFetcher main.py injects also has put_bytes/delete_object
+            # (CropStorageProtocol) -- same cross-protocol looseness as detect_stage above.
+            ReIDCandidateStage(
+                gallery_repo=self._gallery_repo,
+                crop_storage=self._frame_fetcher,  # type: ignore[arg-type]
+                policy=self._config.reid_candidates,
             ),
             PublishStage(
                 transport=self._transport,

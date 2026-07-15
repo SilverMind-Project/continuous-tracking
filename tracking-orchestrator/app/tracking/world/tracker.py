@@ -28,7 +28,6 @@ from ...domain import (
     IdentityDecision,
     IdentityResolvableEntity,
     IdentityRevision,
-    OrientationBin,
     OverlapGroup,
     PersonHypothesis,
     PHContinuationCandidate,
@@ -162,6 +161,12 @@ class WorldTrackerResult:
     identity_decisions: list[IdentityDecision] = field(default_factory=list)
     revisions: list[IdentityRevision] = field(default_factory=list)
     det_to_ph: dict[str, str] = field(default_factory=dict)
+    # Real repository-assigned WorldObservation ids, keyed by source detection
+    # id. ReIDCandidateStage (M04) needs these -- not detection_id -- for
+    # origin_tracklet_id, because the resolver's list_gallery_entries_for_tracklets
+    # query matches against PersonHypothesis.observation_ids, which are these
+    # same repository-assigned ids, not detection ids.
+    det_to_observation_id: dict[str, str] = field(default_factory=dict)
     revived_ph_ids: frozenset[str] = frozenset()
 
 
@@ -387,6 +392,7 @@ class WorldTracker:
         continuations: list[PHContinuationCandidate] = []
         identity_decisions: list[IdentityDecision] = []
         det_to_ph: dict[str, str] = {}
+        det_to_observation_id: dict[str, str] = {}
 
         # 1. Load active PHs and predict forward.
         active_phs = await self._ph_repo.list_open()
@@ -503,12 +509,6 @@ class WorldTracker:
         ph_confidence_meta: dict[
             str, tuple[int, bool]
         ] = {}  # ph_id -> (contributing_camera_count, footpoint_reliable)
-        # Representative observation per PH updated this frame. Consumed after
-        # identity resolution (step 9) to seed the multi-view gallery with the
-        # COMMITTED identity. Seeding inside step 4 used the pre-resolution
-        # identity, which is None on the very frame a face first commits, so in
-        # practice the gallery never seeded.
-        seed_obs_by_ph: dict[str, WorldObservation] = {}
 
         # Build a lookup from detection_id to the original (pre-dedup) observation.
         obs_by_det_id = {obs.detection_id: obs for obs in raw_observations if obs.detection_id}
@@ -632,11 +632,9 @@ class WorldTracker:
             # both cameras' raw rows land on the PH (U1 requirement).
             for src_det_id in src_ids:
                 src_obs = obs_by_det_id.get(src_det_id, obs)
-                await self._obs_repo.save(src_obs, ph_id=ph.ph_id)
-
-            # Defer multi-view gallery seeding until after identity resolution
-            # (step 9) so the committed identity is known. Capture the obs here.
-            seed_obs_by_ph[ph.ph_id] = obs
+                saved_obs_id = await self._obs_repo.save(src_obs, ph_id=ph.ph_id)
+                if src_det_id:
+                    det_to_observation_id[src_det_id] = saved_obs_id
 
         # 5. Spawn new PHs for unmatched observations (or revive recently-closed).
         # Hoist shared queries outside the per-observation loop to avoid N DB
@@ -871,14 +869,14 @@ class WorldTracker:
             )
             ph_floor_calibrated[new_ph.ph_id] = obs.floor_point.calibrated
             ph_confidence_meta[new_ph.ph_id] = (len(spawn_src_ids), obs.footpoint_reliable)
-            # Defer gallery seeding to after identity resolution (step 9).
-            seed_obs_by_ph[new_ph.ph_id] = obs
             # Save the PH first so the FK constraint on world_observations is satisfied.
             await self._ph_repo.save(new_ph)
             # Persist all source observations for this PH.
             for src_det_id in spawn_src_ids:
                 src_obs = obs_by_det_id.get(src_det_id, obs)
-                await self._obs_repo.save(src_obs, ph_id=new_ph.ph_id)
+                saved_obs_id = await self._obs_repo.save(src_obs, ph_id=new_ph.ph_id)
+                if src_det_id:
+                    det_to_observation_id[src_det_id] = saved_obs_id
             for src_det_id in spawn_src_ids:
                 if src_det_id:
                     det_to_ph[src_det_id] = new_ph.ph_id
@@ -1118,18 +1116,10 @@ class WorldTracker:
             if pid in open_ph_ids
         }
 
-        # Seed the multi-view gallery AFTER identity resolution so a face that
-        # commits (or is held) this frame seeds with its committed identity.
-        # _seed_multiview_gallery still requires a recognized face anchor on the
-        # observation, so only face-confirmed frames seed (no poisoning).
-        if self._gallery_repo is not None and self._identity_resolver is not None:
-            for ph_id, seed_obs in seed_obs_by_ph.items():
-                resolved = identity_by_ph.get(ph_id, {})
-                raw_identity = resolved.get("identity_id")
-                seed_identity = _sanitize_identity_id(
-                    str(raw_identity) if raw_identity is not None else None
-                )
-                await self._seed_multiview_gallery(seed_identity, seed_obs)
+        # Gallery candidate creation moved to ReIDCandidateStage (M04): the
+        # tracker has no image bytes, and creation needs crop provenance
+        # (source_frame_key/crop_key/hashes) that only the pipeline stage has.
+        # See app/pipeline/stages/reid_candidates.py.
 
         # Detect co-presence links for overlapping cameras sharing an identity.
         if self._copresence_repo is not None and self._overlap_groups:
@@ -1215,6 +1205,7 @@ class WorldTracker:
             identity_decisions=identity_decisions,
             revisions=revisions,
             det_to_ph=det_to_ph,
+            det_to_observation_id=det_to_observation_id,
             revived_ph_ids=frozenset(revived_ph_ids),
         )
 
@@ -1360,109 +1351,6 @@ class WorldTracker:
                         ph_id_b=bid,
                         identity_id=ph_a.current_identity_id,
                     )
-
-    async def _seed_multiview_gallery(
-        self,
-        identity_id: str | None,
-        obs: WorldObservation,
-    ) -> None:
-        """Seed an identity's gallery with an orientation-tagged entry.
-
-        ``identity_id`` is the PH's committed identity AFTER identity resolution
-        (the caller passes the resolved, sanitized id, not the stale
-        pre-resolution one). Only seeds when:
-        - ``identity_id`` is a committed (non-UNKNOWN) identity.
-        - The observation has a face anchor with recognition_state=="recognized".
-        - Observation quality and orientation confidence clear their thresholds.
-        - The per-(identity, orientation) cap is not yet reached.
-
-        Gallery entries seeded from non-frontal frames enable the resolver's
-        max-over-views query to re-identify a person who turned around.
-        """
-        from ...domain import GalleryEmbedding
-
-        if self._gallery_repo is None:
-            return
-
-        if not identity_id:
-            return
-
-        face_anchor = obs.face_anchor
-        if face_anchor is None or face_anchor.recognition_state != "recognized":
-            return
-
-        # Gate on orientation confidence (from resolver config).
-        seed_min_conf = 0.5
-        if self._identity_resolver is not None:
-            seed_min_conf = self._identity_resolver._config.seed_orientation_min_confidence
-        if obs.orientation_confidence < seed_min_conf:
-            return
-
-        # Do not seed UNKNOWN orientation.
-        if obs.orientation == OrientationBin.UNKNOWN:
-            return
-
-        if not obs.embedding:
-            return
-
-        # Check per-(identity, orientation) cap.
-        orientation_val = int(obs.orientation)
-        try:
-            existing = await self._gallery_repo.list_gallery_entries(
-                identity_id=identity_id,
-                active_only=False,
-            )
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "multiview_gallery_seed_list_failed",
-                identity_id=identity_id,
-                exc_info=True,
-            )
-            return
-
-        count_for_orientation = sum(1 for e in existing if e.orientation == orientation_val)
-        _max_per_orientation = 10
-        if count_for_orientation >= _max_per_orientation:
-            logger.debug(
-                "multiview_gallery_seed_capped",
-                identity_id=identity_id,
-                orientation=orientation_val,
-                count=count_for_orientation,
-                cap=_max_per_orientation,
-            )
-            return
-
-        # Write the gallery entry.
-        import uuid as _uuid
-
-        entry = GalleryEmbedding(
-            gallery_entry_id=str(_uuid.uuid4()),
-            identity_id=identity_id,
-            embedding=obs.embedding,
-            seen_at=obs.captured_at,
-            quality=obs.quality,
-            face_confirmed=True,
-            camera_id=obs.camera_id,
-            orientation=orientation_val,
-        )
-        try:
-            await self._gallery_repo.upsert_gallery_entry(entry)
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "multiview_gallery_seed_failed",
-                identity_id=identity_id,
-                orientation=orientation_val,
-                exc_info=True,
-            )
-            return
-
-        logger.debug(
-            "multiview_gallery_seeded",
-            identity_id=identity_id,
-            orientation=orientation_val,
-            orientation_name=obs.orientation.name,
-            quality=round(obs.quality, 3),
-        )
 
 
 # ---------------------------------------------------------------------------
