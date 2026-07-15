@@ -614,6 +614,14 @@ Key metrics: frames consumed, events/revisions/signals published, posterior entr
 
 OpenTelemetry tracing across Redis Streams is deferred until a collector target exists.
 
+### Shadow computations must be sample-gated
+
+Shadow computations (running an alternative configuration purely to compare outcomes) must
+be gated by an explicit sample-rate config defaulting to 0.0 (off), written as
+`rate > 0.0 and random.random() < rate`. An always-on shadow that issues I/O (gallery, DB)
+is a performance defect. Route all shadow comparisons through one helper so the gate cannot
+be forgotten.
+
 ---
 
 ## Image Preprocessing

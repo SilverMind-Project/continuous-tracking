@@ -250,6 +250,7 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         frontality_zero_yaw_deg=r.as_float("frontality_zero_yaw_deg"),
         frontality_min_factor=r.as_float("frontality_min_factor"),
         enable_multiview_gallery=r.as_bool("enable_multiview_gallery"),
+        multiview_shadow_sample_rate=r.as_float("multiview_shadow_sample_rate"),
         seed_orientation_min_confidence=r.as_float("seed_orientation_min_confidence"),
     )
 

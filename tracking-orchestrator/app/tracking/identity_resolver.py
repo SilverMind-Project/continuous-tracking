@@ -263,6 +263,12 @@ class ResolverConfig:
     # coherence boost would change.
     coherence_shadow_sample_rate: float = 0.0
 
+    # Fraction of frames where the multiview-gallery shadow comparison runs
+    # (only evaluated when enable_multiview_gallery is False and the entity
+    # has view prototypes).  0.0 = disabled (no shadow query).  Set > 0 to
+    # measure what flipping enable_multiview_gallery off would change.
+    multiview_shadow_sample_rate: float = 0.0
+
     # Minimum face anchor confidence to drive a commit via the posterior path.
     face_commit_min_confidence: float = 0.70
 
@@ -427,90 +433,71 @@ class IdentityResolver:
                 reid_likelihood=reid_likelihood,
             )
 
-            # shadow multiview gallery query.
-            if not self._config.enable_multiview_gallery and entity.view_prototypes:
-                multiview_reid = await self._from_gallery(entity, enable_multiview=True)
-                if multiview_reid.distribution != reid_likelihood.distribution:
-                    multiview_posterior = self._combine(
-                        prior, face_likelihood, multiview_reid, height_likelihood
-                    )
-                    live_eval_mv = self._evaluate_commit(
-                        entity,
-                        posterior,
-                        face_likelihood,
-                        reid_likelihood,
-                        captured_at,
-                        entity_quality,
-                        contradicted=False,
-                        enable_sticky_maintenance=self._config.enable_sticky_maintenance,
-                        enforce_quality_gate=self._config.enable_quality_gate,
-                        enforce_flip_debounce=self._config.enable_flip_debounce,
-                        evidence_identity_ids=commit_evidence_ids,
-                    )
-                    mv_eval = self._evaluate_commit(
-                        entity,
-                        multiview_posterior,
-                        face_likelihood,
-                        multiview_reid,
-                        captured_at,
-                        entity_quality,
-                        contradicted=False,
-                        enable_sticky_maintenance=self._config.enable_sticky_maintenance,
-                        enforce_quality_gate=self._config.enable_quality_gate,
-                        enforce_flip_debounce=self._config.enable_flip_debounce,
-                        evidence_identity_ids=commit_evidence_ids,
-                    )
-                    if live_eval_mv.new_id != mv_eval.new_id:
-                        metrics.metrics.identity_shadow_mismatch_total.labels(
-                            feature="multiview_gallery"
-                        ).inc()
+            # Shared "live" evaluation for both shadow comparisons below, computed
+            # once instead of once per shadow block (was pure waste — same
+            # posterior/face/reid/evidence inputs each time). contradicted=False
+            # matches the shadows' existing semantics: they measure what an
+            # alternative gallery config would change relative to a plain
+            # evaluation, not the real commit's contradiction handling.
+            shadow_live_eval = self._evaluate_commit(
+                entity,
+                posterior,
+                face_likelihood,
+                reid_likelihood,
+                captured_at,
+                entity_quality,
+                contradicted=False,
+                enable_sticky_maintenance=self._config.enable_sticky_maintenance,
+                enforce_quality_gate=self._config.enable_quality_gate,
+                enforce_flip_debounce=self._config.enable_flip_debounce,
+                evidence_identity_ids=commit_evidence_ids,
+            )
 
-            if not self._config.enable_embedding_coherence_boost and (
-                # sample only a fraction of frames for the shadow comparison.
-                # Default 0.0 means no shadow query; set a non-zero rate to
-                # evaluate the coherence boost.  This avoids doubling gallery
-                # query load every frame in production.
-                self._config.coherence_shadow_sample_rate <= 0.0
-                or random.random() < self._config.coherence_shadow_sample_rate
+            # Shadow multiview gallery query — sampled, never on by default (F6
+            # symmetry): an always-on shadow doubles gallery load for a
+            # measurement nobody asked for.
+            multiview_rate = self._config.multiview_shadow_sample_rate
+            if (
+                not self._config.enable_multiview_gallery
+                and entity.view_prototypes
+                and multiview_rate > 0.0
+                and random.random() < multiview_rate
             ):
-                boosted_reid = await self._from_gallery(entity, enable_coherence_boost=True)
-                if boosted_reid.distribution != reid_likelihood.distribution:
-                    boosted_posterior = self._combine(
-                        prior,
-                        face_likelihood,
-                        boosted_reid,
-                        height_likelihood,
-                    )
-                    live_eval = self._evaluate_commit(
-                        entity,
-                        posterior,
-                        face_likelihood,
-                        reid_likelihood,
-                        captured_at,
-                        entity_quality,
-                        contradicted=False,
-                        enable_sticky_maintenance=self._config.enable_sticky_maintenance,
-                        enforce_quality_gate=self._config.enable_quality_gate,
-                        enforce_flip_debounce=self._config.enable_flip_debounce,
-                        evidence_identity_ids=commit_evidence_ids,
-                    )
-                    boosted_eval = self._evaluate_commit(
-                        entity,
-                        boosted_posterior,
-                        face_likelihood,
-                        boosted_reid,
-                        captured_at,
-                        entity_quality,
-                        contradicted=False,
-                        enable_sticky_maintenance=self._config.enable_sticky_maintenance,
-                        enforce_quality_gate=self._config.enable_quality_gate,
-                        enforce_flip_debounce=self._config.enable_flip_debounce,
-                        evidence_identity_ids=commit_evidence_ids,
-                    )
-                    if live_eval.new_id != boosted_eval.new_id:
-                        metrics.metrics.identity_shadow_mismatch_total.labels(
-                            feature="coherence_boost"
-                        ).inc()
+                await self._shadow_gallery_compare(
+                    entity,
+                    prior,
+                    face_likelihood,
+                    height_likelihood,
+                    reid_likelihood,
+                    shadow_live_eval,
+                    captured_at,
+                    entity_quality,
+                    commit_evidence_ids,
+                    feature="multiview_gallery",
+                    enable_multiview=True,
+                )
+
+            # Shadow coherence-boost gallery query — sampled. Default rate 0.0
+            # means no shadow query (F6 fix: the prior condition inverted this).
+            coherence_rate = self._config.coherence_shadow_sample_rate
+            if (
+                not self._config.enable_embedding_coherence_boost
+                and coherence_rate > 0.0
+                and random.random() < coherence_rate
+            ):
+                await self._shadow_gallery_compare(
+                    entity,
+                    prior,
+                    face_likelihood,
+                    height_likelihood,
+                    reid_likelihood,
+                    shadow_live_eval,
+                    captured_at,
+                    entity_quality,
+                    commit_evidence_ids,
+                    feature="coherence_boost",
+                    enable_coherence_boost=True,
+                )
 
             # Build identity evidence ledger for this entity.
             evidence_items = self._build_evidence_ledger(
@@ -1531,6 +1518,61 @@ class IdentityResolver:
         )
 
     # ------------------------------------------------------------------
+    # Shadow comparisons
+    # ------------------------------------------------------------------
+
+    def _shadow_mismatch(
+        self,
+        feature: str,
+        live_new_id: str | None,
+        shadow_eval: CommitEvaluation,
+    ) -> None:
+        """Increment the shadow-mismatch metric when a shadow evaluation disagrees."""
+        if live_new_id != shadow_eval.new_id:
+            metrics.metrics.identity_shadow_mismatch_total.labels(feature=feature).inc()
+
+    async def _shadow_gallery_compare(
+        self,
+        entity: IdentityResolvableEntity,
+        prior: PosteriorDist,
+        face_likelihood: PosteriorDist,
+        height_likelihood: PosteriorDist,
+        reid_likelihood: PosteriorDist,
+        live_eval: CommitEvaluation,
+        captured_at: datetime,
+        entity_quality: float,
+        evidence_identity_ids: frozenset[str],
+        *,
+        feature: str,
+        **from_gallery_kwargs: bool,
+    ) -> None:
+        """Evaluate an alternative gallery-query configuration purely for measurement.
+
+        Owns the query -> distribution-diff short-circuit -> combine -> evaluate
+        -> ``_shadow_mismatch`` sequence shared by the multiview and coherence-boost
+        shadows. Callers must gate invocation with an explicit sample rate — this
+        method always issues the gallery query it is called for.
+        """
+        shadow_reid = await self._from_gallery(entity, **from_gallery_kwargs)
+        if shadow_reid.distribution == reid_likelihood.distribution:
+            return
+        shadow_posterior = self._combine(prior, face_likelihood, shadow_reid, height_likelihood)
+        shadow_eval = self._evaluate_commit(
+            entity,
+            shadow_posterior,
+            face_likelihood,
+            shadow_reid,
+            captured_at,
+            entity_quality,
+            contradicted=False,
+            enable_sticky_maintenance=self._config.enable_sticky_maintenance,
+            enforce_quality_gate=self._config.enable_quality_gate,
+            enforce_flip_debounce=self._config.enable_flip_debounce,
+            evidence_identity_ids=evidence_identity_ids,
+        )
+        self._shadow_mismatch(feature, live_eval.new_id, shadow_eval)
+
+    # ------------------------------------------------------------------
     # Commit rule
     # ------------------------------------------------------------------
 
@@ -1575,7 +1617,6 @@ class IdentityResolver:
                 prev_id=prev_id,
             )
             metrics.metrics.identity_commits_total.labels(source="arcface_conflict").inc()
-            import uuid
 
             return IdentityDecision(
                 ph_id=entity.entity_id,
@@ -1603,7 +1644,6 @@ class IdentityResolver:
                 revises=revises,
             )
             metrics.metrics.identity_commits_total.labels(source="arcface_authority").inc()
-            import uuid
 
             return IdentityDecision(
                 ph_id=entity.entity_id,
@@ -1665,10 +1705,7 @@ class IdentityResolver:
                 enforce_flip_debounce=self._config.enable_flip_debounce,
                 evidence_identity_ids=evidence_identity_ids,
             )
-            if live_eval.new_id != sticky_shadow_eval.new_id:
-                metrics.metrics.identity_shadow_mismatch_total.labels(
-                    feature="sticky_maintenance"
-                ).inc()
+            self._shadow_mismatch("sticky_maintenance", live_eval.new_id, sticky_shadow_eval)
 
         if not self._config.enable_flip_debounce:
             debounced_eval = self._evaluate_commit(
@@ -1684,8 +1721,7 @@ class IdentityResolver:
                 enforce_flip_debounce=True,
                 evidence_identity_ids=evidence_identity_ids,
             )
-            if live_eval.new_id != debounced_eval.new_id:
-                metrics.metrics.identity_shadow_mismatch_total.labels(feature="flip_debounce").inc()
+            self._shadow_mismatch("flip_debounce", live_eval.new_id, debounced_eval)
 
         if (
             prev_id is not None
@@ -1721,17 +1757,20 @@ class IdentityResolver:
                     f"(p={top_prob:.3f}, margin={margin:.3f})"
                 )
 
+        # Label prior-held decisions as temporal_prior, not face/reid. Computed
+        # once and shared by the commit metric below and decision_source on the
+        # returned IdentityDecision (previously duplicated in both places).
+        if not live_eval.has_evidence:
+            commit_source = "temporal_prior"
+        elif top_id in face_likelihood.distribution:
+            commit_source = "face"
+        else:
+            commit_source = "reid"
+
         metrics.metrics.posterior_entropy.observe(posterior.entropy())
         if prev_id is not None and new_id is not None and new_id != prev_id:
             metrics.metrics.identity_flips_total.inc()
         if new_id is not None and revises:
-            # Fix: label prior-held decisions as temporal_prior, not face/reid.
-            if not live_eval.has_evidence:
-                commit_source = "temporal_prior"
-            elif top_id in face_likelihood.distribution:
-                commit_source = "face"
-            else:
-                commit_source = "reid"
             metrics.metrics.identity_commits_total.labels(source=commit_source).inc()
 
         if new_id is None:
@@ -1759,16 +1798,6 @@ class IdentityResolver:
                 age_s=round((captured_at - entity.last_seen_at).total_seconds(), 1),
             )
 
-        import uuid
-
-        commit_src = "temporal_prior"
-        if not live_eval.has_evidence:
-            commit_src = "temporal_prior"
-        elif top_id in face_likelihood.distribution:
-            commit_src = "face"
-        else:
-            commit_src = "reid"
-
         ev_ts = entity.last_independent_identity_evidence_at
         ev_ts_ns = int(ev_ts.timestamp() * 1e9) if ev_ts else 0
 
@@ -1783,7 +1812,7 @@ class IdentityResolver:
             decision_id=str(uuid.uuid4()),
             inferred_identity_id=top_id if top_id != "UNKNOWN" else "",
             effective_identity_id=new_id or "",
-            decision_source=commit_src,
+            decision_source=commit_source,
             last_independent_evidence_at_unix_ns=ev_ts_ns,
         )
 

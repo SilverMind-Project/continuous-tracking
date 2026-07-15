@@ -368,6 +368,10 @@ resolver:
   # back-view retrieval commits via max-over-views; orthogonal stranger stays
   # UNKNOWN. Benefit ramps as the gallery accumulates non-front prototypes.
   enable_multiview_gallery: true
+  # Fraction of frames where the multiview-gallery shadow comparison runs
+  # while enable_multiview_gallery is false (measurement only). 0.0 = disabled;
+  # an always-on shadow doubles gallery load for a measurement nobody sampled.
+  multiview_shadow_sample_rate: 0.0
   seed_orientation_min_confidence: 0.5
 
 # Governed ReID gallery candidate creation (M04). The only pipeline write

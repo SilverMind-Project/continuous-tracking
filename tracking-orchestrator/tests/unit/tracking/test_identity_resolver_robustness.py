@@ -371,6 +371,8 @@ async def test_coherence_boost_shadow_counts_when_decision_would_change(
     resolver = await _coherence_resolver(
         ResolverConfig(
             enable_embedding_coherence_boost=False,
+            # Explicit sample rate: default 0.0 means no shadow query (M05 fix).
+            coherence_shadow_sample_rate=1.0,
             identified_entry_boost_min_sim=0.99,
             commit_prob=0.64,
             commit_prob_dense=0.64,
