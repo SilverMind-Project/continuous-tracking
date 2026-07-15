@@ -54,6 +54,7 @@ from ..observability import metrics
 from ..storage.base import GalleryRepository
 from .identity.commit_policy import (
     CommitEvaluation,
+    collect_evidence_identity_ids,
     compute_contradiction,
 )
 from .identity.commit_policy import (
@@ -408,6 +409,24 @@ class IdentityResolver:
             posterior = self._combine(prior, face_likelihood, reid_likelihood, height_likelihood)
             entity_quality = (ph_qualities or {}).get(entity.entity_id, 1.0)
 
+            # Identities with real (non-smoothed) face/ReID support this frame,
+            # for commit eligibility. Built once and reused across the live
+            # evaluation and every shadow evaluation below so shadows compare
+            # like against like (same evidence set, different posterior/reid).
+            # Uses augmented (post-propagation) anchors/evidence, matching
+            # today's _from_face_anchors input, to preserve the existing
+            # propagated-anchor commit path. Candidate anchors count here
+            # (commit semantics); the independent-evidence clock gate further
+            # below uses a stricter, pre-propagation, recognized-only set.
+            entity_obs_ids = frozenset(entity.observation_ids)
+            commit_evidence_ids = collect_evidence_identity_ids(
+                entity_obs_ids=entity_obs_ids,
+                entity_id=entity.entity_id,
+                face_anchors=augmented_anchors,
+                face_evidence=augmented_evidence,
+                reid_likelihood=reid_likelihood,
+            )
+
             # shadow multiview gallery query.
             if not self._config.enable_multiview_gallery and entity.view_prototypes:
                 multiview_reid = await self._from_gallery(entity, enable_multiview=True)
@@ -426,6 +445,7 @@ class IdentityResolver:
                         enable_sticky_maintenance=self._config.enable_sticky_maintenance,
                         enforce_quality_gate=self._config.enable_quality_gate,
                         enforce_flip_debounce=self._config.enable_flip_debounce,
+                        evidence_identity_ids=commit_evidence_ids,
                     )
                     mv_eval = self._evaluate_commit(
                         entity,
@@ -438,6 +458,7 @@ class IdentityResolver:
                         enable_sticky_maintenance=self._config.enable_sticky_maintenance,
                         enforce_quality_gate=self._config.enable_quality_gate,
                         enforce_flip_debounce=self._config.enable_flip_debounce,
+                        evidence_identity_ids=commit_evidence_ids,
                     )
                     if live_eval_mv.new_id != mv_eval.new_id:
                         metrics.metrics.identity_shadow_mismatch_total.labels(
@@ -471,6 +492,7 @@ class IdentityResolver:
                         enable_sticky_maintenance=self._config.enable_sticky_maintenance,
                         enforce_quality_gate=self._config.enable_quality_gate,
                         enforce_flip_debounce=self._config.enable_flip_debounce,
+                        evidence_identity_ids=commit_evidence_ids,
                     )
                     boosted_eval = self._evaluate_commit(
                         entity,
@@ -483,6 +505,7 @@ class IdentityResolver:
                         enable_sticky_maintenance=self._config.enable_sticky_maintenance,
                         enforce_quality_gate=self._config.enable_quality_gate,
                         enforce_flip_debounce=self._config.enable_flip_debounce,
+                        evidence_identity_ids=commit_evidence_ids,
                     )
                     if live_eval.new_id != boosted_eval.new_id:
                         metrics.metrics.identity_shadow_mismatch_total.labels(
@@ -509,6 +532,7 @@ class IdentityResolver:
                 best_face_conf,
                 entity_quality=entity_quality,
                 arcface_authority=arcface_authority,
+                evidence_identity_ids=commit_evidence_ids,
             )
             # Attach evidence summary.
             ep = EvidencePosterior(
@@ -524,10 +548,21 @@ class IdentityResolver:
                     for s in {ev.source for ev in evidence_items}
                 },
             )
-            # Clock refresh only for qualifying independent evidence (direct face + ReID).
-            # Propagated face (association_hint) and height do not advance the evidence clock.
-            has_qualifying_evidence = any(
-                ev.source in ("direct_face", "reid") for ev in evidence_items
+            # Clock refresh only for evidence that names the *decided* identity,
+            # not for mere presence of evidence in the frame (F1). Uses the
+            # original anchors/evidence (pre-propagation) and excludes candidate
+            # anchors: a grey-zone face is corroboration, not independent
+            # evidence for advancing the 30 s authority clock.
+            clock_identity_ids = collect_evidence_identity_ids(
+                entity_obs_ids=entity_obs_ids,
+                entity_id=entity.entity_id,
+                face_anchors=new_face_anchors,
+                face_evidence=face_evidence or [],
+                reid_likelihood=reid_likelihood,
+                recognized_only=True,
+            )
+            has_qualifying_evidence = (
+                decision.identity_id is not None and decision.identity_id in clock_identity_ids
             )
             # Use the *original* anchors/evidence (pre-propagation) so the
             # duplicate-guard bypass only trusts a PH's own direct face — a
@@ -1510,6 +1545,7 @@ class IdentityResolver:
         entity_quality: float = 1.0,
         *,
         arcface_authority: str | None = None,
+        evidence_identity_ids: frozenset[str] = frozenset(),
     ) -> IdentityDecision:
         """Apply the commit rule to produce an identity decision.
 
@@ -1521,6 +1557,12 @@ class IdentityResolver:
 
         When no authoritative anchor exists (default in production until M10
         supplies calibrated_confidence), the normal Bayesian posterior path runs.
+
+        The ArcFace-authority pre-emption below sets ``evidence_backed=True``
+        unconditionally — correct by construction, because
+        ``_check_arcface_authority`` already requires a calibrated, recognized,
+        entity-matched anchor for that exact identity, which *is* identity-matched
+        evidence. It does not consult ``evidence_identity_ids``.
         """
         (top_id, top_prob), margin = posterior.top_with_margin()
 
@@ -1601,6 +1643,7 @@ class IdentityResolver:
             enable_sticky_maintenance=self._config.enable_sticky_maintenance,
             enforce_quality_gate=self._config.enable_quality_gate,
             enforce_flip_debounce=self._config.enable_flip_debounce,
+            evidence_identity_ids=evidence_identity_ids,
         )
 
         new_id = live_eval.new_id
@@ -1620,6 +1663,7 @@ class IdentityResolver:
                 enable_sticky_maintenance=True,
                 enforce_quality_gate=self._config.enable_quality_gate,
                 enforce_flip_debounce=self._config.enable_flip_debounce,
+                evidence_identity_ids=evidence_identity_ids,
             )
             if live_eval.new_id != sticky_shadow_eval.new_id:
                 metrics.metrics.identity_shadow_mismatch_total.labels(
@@ -1638,6 +1682,7 @@ class IdentityResolver:
                 enable_sticky_maintenance=self._config.enable_sticky_maintenance,
                 enforce_quality_gate=self._config.enable_quality_gate,
                 enforce_flip_debounce=True,
+                evidence_identity_ids=evidence_identity_ids,
             )
             if live_eval.new_id != debounced_eval.new_id:
                 metrics.metrics.identity_shadow_mismatch_total.labels(feature="flip_debounce").inc()
@@ -1777,6 +1822,7 @@ class IdentityResolver:
         enable_sticky_maintenance: bool = False,
         enforce_quality_gate: bool,
         enforce_flip_debounce: bool,
+        evidence_identity_ids: frozenset[str] = frozenset(),
     ) -> _CommitEvaluation:
         """Evaluate the commit rule — thin delegator to the canonical pure function."""
         return _evaluate_commit_pure(
@@ -1791,6 +1837,7 @@ class IdentityResolver:
             enable_sticky_maintenance=enable_sticky_maintenance,
             enforce_quality_gate=enforce_quality_gate,
             enforce_flip_debounce=enforce_flip_debounce,
+            evidence_identity_ids=evidence_identity_ids,
         )
 
     # ------------------------------------------------------------------

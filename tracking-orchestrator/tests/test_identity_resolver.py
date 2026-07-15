@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -1034,6 +1034,153 @@ class TestEvidenceClock:
 
         # No evidence clock → maintenance window is not open → identity demoted.
         assert outcome.decisions[0].identity_id is None
+
+
+class TestF1EvidenceClockIdentityMatch:
+    """F1 regression: the evidence clock must never be treated as refreshed
+    by evidence for a *different* identity, or by mere distribution presence
+    (M01, ``codebase-hardening-m01-evidence-clock-integrity.md``).
+
+    ``decision.evidence_backed`` is exactly what routes the PH repository
+    call in ``WorldTracker._resolve_identities``: True -> ``evidence_backed_commit``
+    (clock advances to ``captured_at``), False -> ``prior_only_update`` (clock
+    untouched). Asserting ``evidence_backed`` here is equivalent to asserting
+    ``evidence_backed_commit`` is/isn't invoked, without needing a PH repo.
+    """
+
+    @staticmethod
+    async def _resolver(
+        config: ResolverConfig,
+    ) -> tuple[IdentityResolver, InMemoryGalleryRepository]:
+        identities = [_make_identity("amma"), _make_identity("grandma")]
+        gallery = InMemoryGalleryRepository()
+        for ident in identities:
+            await gallery.upsert_identity(ident)
+        resolver = IdentityResolver(gallery_repo=gallery, identities=identities, config=config)
+        return resolver, gallery
+
+    @staticmethod
+    def _held_gt(t0: datetime, evidence_at: datetime) -> GlobalTrack:
+        return GlobalTrack(
+            global_track_id="ph-1",
+            camera_ids=["cam_a"],
+            tracklet_ids=["t1"],
+            started_at=t0,
+            last_seen_at=t0,
+            current_identity_id="amma",
+            current_identity_committed_at=t0,
+            last_independent_identity_evidence_at=evidence_at,
+            state="active",
+        )
+
+    @pytest.mark.asyncio
+    async def test_foreign_evidence_never_renews_clock_and_window_expires(self) -> None:
+        """PH holds 'amma'; every frame for 30s only carries a weak,
+        non-contradicting 'grandma' recognized face. The clock (T0) must
+        never be renewed, so at T0+31s the maintenance window has expired
+        and the identity clears to Unknown -- the grandma/amma swap failure
+        class this milestone closes.
+        """
+        t0 = datetime.now(UTC)
+        config = ResolverConfig(
+            prior_maintenance_max_age_s=30.0,
+            enable_sticky_maintenance=False,
+            contradiction_face_confidence=0.70,
+        )
+        resolver, _ = await self._resolver(config)
+        foreign_anchor = _make_face_anchor("grandma", confidence=0.3)
+
+        for offset_s in (5, 15, 25, 29):
+            captured_at = t0 + timedelta(seconds=offset_s)
+            outcome = await resolver.resolve(
+                hypotheses=[self._held_gt(t0, t0)],
+                new_face_anchors=[foreign_anchor],
+                captured_at=captured_at,
+            )
+            decision = outcome.decisions[0]
+            assert decision.identity_id == "amma", f"offset={offset_s}s"
+            # Foreign evidence must never back the held identity: this is
+            # exactly the condition that prevents evidence_backed_commit and
+            # routes to prior_only_update instead, so the clock stays at T0.
+            assert not decision.evidence_backed, f"offset={offset_s}s"
+            assert not decision.revises_previous, f"offset={offset_s}s"
+
+        # Clock was never renewed (still T0) -> at T0+31s the 30s window has
+        # expired and the identity must clear to Unknown.
+        captured_at = t0 + timedelta(seconds=31)
+        outcome = await resolver.resolve(
+            hypotheses=[self._held_gt(t0, t0)],
+            new_face_anchors=[foreign_anchor],
+            captured_at=captured_at,
+        )
+        decision = outcome.decisions[0]
+        assert decision.identity_id is None
+        assert decision.revises_previous
+        assert not decision.evidence_backed
+
+    @pytest.mark.asyncio
+    async def test_own_face_evidence_still_renews_clock(self) -> None:
+        """Contrast case: genuine own-identity evidence must still back the
+        commit and keep renewing the clock, holding the identity well past
+        what would have been the original 30 s deadline had the clock not
+        renewed."""
+        t0 = datetime.now(UTC)
+        config = ResolverConfig(prior_maintenance_max_age_s=30.0, enable_sticky_maintenance=False)
+        resolver, _ = await self._resolver(config)
+        own_anchor = _make_face_anchor("amma", confidence=0.9)
+
+        captured_at_1 = t0 + timedelta(seconds=5)
+        outcome_1 = await resolver.resolve(
+            hypotheses=[self._held_gt(t0, t0)],
+            new_face_anchors=[own_anchor],
+            captured_at=captured_at_1,
+        )
+        decision_1 = outcome_1.decisions[0]
+        assert decision_1.identity_id == "amma"
+        assert decision_1.evidence_backed  # own evidence renews the clock
+
+        # Simulate the repository applying evidence_backed_commit: the clock
+        # is now captured_at_1, not T0. 34 s after T0 (which would be outside
+        # the original 30 s window) but only 29 s after the renewed clock.
+        renewed_clock = captured_at_1
+        captured_at_2 = t0 + timedelta(seconds=34)
+        outcome_2 = await resolver.resolve(
+            hypotheses=[self._held_gt(t0, renewed_clock)],
+            new_face_anchors=[own_anchor],
+            captured_at=captured_at_2,
+        )
+        decision_2 = outcome_2.decisions[0]
+        assert decision_2.identity_id == "amma"
+        assert decision_2.evidence_backed
+
+    @pytest.mark.asyncio
+    async def test_sticky_maintenance_hold_not_backed_by_others_evidence(self) -> None:
+        """Sticky-maintenance sub-case: the posterior argmax flips away from
+        the held identity (to 'grandma') on weak, non-contradicting evidence.
+        Sticky maintenance holds 'amma', but the hold must not be marked
+        evidence_backed on the strength of grandma's evidence."""
+        t0 = datetime.now(UTC)
+        config = ResolverConfig(
+            prior_maintenance_max_age_s=30.0,
+            enable_sticky_maintenance=True,
+            contradiction_face_confidence=0.70,
+        )
+        resolver, _ = await self._resolver(config)
+        # Strong enough to flip the posterior argmax to grandma but below
+        # both the face-based (0.70) and posterior-based (prob>=0.80)
+        # contradiction thresholds, so sticky maintenance re-opens the window.
+        anchor = _make_face_anchor("grandma", confidence=0.59)
+
+        captured_at = t0 + timedelta(seconds=10)
+        outcome = await resolver.resolve(
+            hypotheses=[self._held_gt(t0, t0)],
+            new_face_anchors=[anchor],
+            captured_at=captured_at,
+        )
+        decision = outcome.decisions[0]
+        assert decision.identity_id == "amma"
+        assert not decision.revises_previous
+        assert not decision.evidence_backed
 
 
 class TestCrossGtFacePropagation:

@@ -307,6 +307,7 @@ def test_flip_debounce_blocks_quick_reversal(fresh_metrics: Metrics) -> None:
         face,
         PosteriorDist({}),
         now,
+        evidence_identity_ids=frozenset({"bob"}),
     )
 
     assert decision.identity_id == "alice"
@@ -323,6 +324,7 @@ def test_flip_debounce_blocks_quick_reversal(fresh_metrics: Metrics) -> None:
         face,
         PosteriorDist({}),
         now,
+        evidence_identity_ids=frozenset({"bob"}),
     )
 
     assert allowed.identity_id == "bob"
@@ -342,6 +344,7 @@ def test_flip_debounce_allows_first_commit(fresh_metrics: Metrics) -> None:
         PosteriorDist({"alice": 1.0}),
         PosteriorDist({}),
         datetime.now(UTC),
+        evidence_identity_ids=frozenset({"alice"}),
     )
 
     assert isinstance(decision, IdentityDecision)
@@ -614,6 +617,7 @@ def test_sticky_maintenance_overturned_by_face_contradiction(
         reid,
         now,
         best_face_confidence=0.85,  # above contradiction threshold
+        evidence_identity_ids=frozenset({"bob"}),
     )
     # The strong face contradiction should overturn the held identity.
     assert decision.identity_id == "bob"

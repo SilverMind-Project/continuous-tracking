@@ -10,12 +10,14 @@ backward compatibility with existing imports.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from structlog import get_logger
 
-from ...domain import IdentityResolvableEntity, PosteriorDist
+from ...domain import FaceAnchor, IdentityResolvableEntity, PosteriorDist
+from ...inference.evidence import FaceEvidence
 from .policy import CommitPolicy
 
 logger = get_logger(__name__)
@@ -24,6 +26,7 @@ __all__ = [
     "CommitDecision",
     "CommitEvaluation",
     "CommitPolicy",
+    "collect_evidence_identity_ids",
     "compute_contradiction",
     "evaluate_commit",
 ]
@@ -115,6 +118,67 @@ def compute_contradiction(
 
 
 # ---------------------------------------------------------------------------
+# Evidence-identity set (identity-matched evidence, not mere presence)
+# ---------------------------------------------------------------------------
+
+
+def collect_evidence_identity_ids(
+    *,
+    entity_obs_ids: frozenset[str],
+    entity_id: str,
+    face_anchors: Sequence[FaceAnchor],
+    face_evidence: Sequence[FaceEvidence],
+    reid_likelihood: PosteriorDist,
+    recognized_only: bool = False,
+) -> frozenset[str]:
+    """Return identity IDs with real (non-smoothed) face or ReID support this frame.
+
+    Mirrors the anchor-matching predicate used by
+    ``IdentityResolver._from_face_anchors``. Smoothing mass spread across
+    every enrolled identity never qualifies here — only anchors/votes
+    actually tied to this entity do.
+
+    - A matched *recognized* face anchor qualifies unless its typed evidence
+      record says ``source == "propagated"`` (propagated evidence must never
+      advance the clock or, once ``recognized_only``, be treated as identity
+      evidence at all).
+    - A matched *candidate* (grey-zone) face anchor qualifies only when
+      ``recognized_only`` is False — candidate faces corroborate posterior
+      commits today but must not advance the independent-evidence clock.
+    - The ReID argmax qualifies when the distribution is non-empty, the
+      argmax is not ``"UNKNOWN"``, and its score is > 0.3 (the same floor
+      ``_build_evidence_ledger`` already uses).
+    """
+    ev_by_detection: dict[str, FaceEvidence] = {
+        fe.detection_id: fe for fe in face_evidence if fe.detection_id
+    }
+
+    ids: set[str] = set()
+    for fa in face_anchors:
+        matched = (
+            fa.tracklet_id in entity_obs_ids
+            or fa.tracklet_id == entity_id
+            or fa.detection_id in entity_obs_ids
+        )
+        if not matched or not fa.person_id or fa.person_id == "unknown":
+            continue
+        if fa.recognition_state == "recognized":
+            ev = ev_by_detection.get(fa.detection_id)
+            if ev is not None and ev.source == "propagated":
+                continue
+            ids.add(fa.person_id)
+        elif fa.recognition_state == "candidate" and not recognized_only:
+            ids.add(fa.person_id)
+
+    if reid_likelihood.distribution:
+        top_id, top_score = max(reid_likelihood.distribution.items(), key=lambda kv: kv[1])
+        if top_id != "UNKNOWN" and top_score > 0.3:
+            ids.add(top_id)
+
+    return frozenset(ids)
+
+
+# ---------------------------------------------------------------------------
 # Canonical commit evaluation
 # ---------------------------------------------------------------------------
 
@@ -132,6 +196,7 @@ def evaluate_commit(
     enable_sticky_maintenance: bool,
     enforce_quality_gate: bool,
     enforce_flip_debounce: bool,
+    evidence_identity_ids: frozenset[str] = frozenset(),
 ) -> CommitEvaluation:
     """Evaluate the commit rule without mutating state or emitting metrics.
 
@@ -159,12 +224,16 @@ def evaluate_commit(
             contradiction exists.
         enforce_quality_gate: Block new commits below ``min_quality_to_commit``.
         enforce_flip_debounce: Block rapid flips that don't clear dense thresholds.
+        evidence_identity_ids: Identities with real (non-smoothed) face or ReID
+            support this frame, from ``collect_evidence_identity_ids``. Presence
+            of *any* evidence in the frame is not sufficient — only evidence
+            naming ``top_id`` counts.
 
     Returns:
         ``CommitEvaluation`` with all fields needed to build ``IdentityDecision``.
     """
     (top_id, top_prob), margin = posterior.top_with_margin()
-    has_evidence = top_id in face_likelihood.distribution or top_id in reid_likelihood.distribution
+    has_evidence = top_id in evidence_identity_ids
 
     prev_id = entity.current_identity_id
     identity_unchanged = top_id == prev_id and prev_id is not None

@@ -57,6 +57,7 @@ def _call_evaluate(
     *,
     config: CommitPolicy | None = None,
     contradicted: bool = False,
+    evidence_identity_ids: frozenset[str] = frozenset(),
 ) -> CommitEvaluation:
     return evaluate_commit(
         entity=entity,
@@ -70,6 +71,7 @@ def _call_evaluate(
         enable_sticky_maintenance=False,
         enforce_quality_gate=False,
         enforce_flip_debounce=False,
+        evidence_identity_ids=evidence_identity_ids,
     )
 
 
@@ -205,23 +207,35 @@ class TestCommitPolicy:
         face_likelihood = PosteriorDist({"alice": 1.0})
         reid_likelihood = PosteriorDist({"UNKNOWN": 1.0})
 
-        result = _call_evaluate(entity, posterior, face_likelihood, reid_likelihood)
+        result = _call_evaluate(
+            entity,
+            posterior,
+            face_likelihood,
+            reid_likelihood,
+            evidence_identity_ids=frozenset({"alice"}),
+        )
 
         assert result.new_id == "alice"
         assert result.evidence_backed
         assert result.has_evidence
 
     def test_reid_evidence_commits(self) -> None:
-        """ReID evidence in the likelihood marks has_evidence when it tops the posterior."""
+        """ReID evidence naming the top identity marks has_evidence."""
         entity = _make_gt(ph_id="gt-1", current_identity_id=None)
         posterior = PosteriorDist({"alice": 0.80, "UNKNOWN": 0.20})
         face_likelihood = PosteriorDist({"UNKNOWN": 1.0})
         reid_likelihood = PosteriorDist({"alice": 0.85, "UNKNOWN": 0.15})
 
-        result = _call_evaluate(entity, posterior, face_likelihood, reid_likelihood)
+        result = _call_evaluate(
+            entity,
+            posterior,
+            face_likelihood,
+            reid_likelihood,
+            evidence_identity_ids=frozenset({"alice"}),
+        )
 
         assert result.new_id == "alice"
-        assert result.has_evidence  # alice is in reid_likelihood
+        assert result.has_evidence  # alice is a real (identity-matched) evidence entry
 
     def test_association_hint_not_has_evidence(self) -> None:
         """When top posterior identity is not in face or reid likelihood, has_evidence is False."""
@@ -301,6 +315,7 @@ class TestCommitPolicy:
             enable_sticky_maintenance=False,
             enforce_quality_gate=True,
             enforce_flip_debounce=False,
+            evidence_identity_ids=frozenset({"alice"}),
         )
 
         assert result.new_id is None
@@ -325,6 +340,7 @@ class TestCommitPolicy:
             enable_sticky_maintenance=False,
             enforce_quality_gate=False,
             enforce_flip_debounce=False,
+            evidence_identity_ids=frozenset({"alice"}),
         )
 
         assert result.new_id == "alice"  # shadow only, not blocked

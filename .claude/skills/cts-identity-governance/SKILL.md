@@ -72,6 +72,11 @@ When material evidence conflicts and the hierarchy does not resolve it, the effe
 - Verified ReID may refresh it only after independently clearing PH confidence, margin, quality,
   and conflict gates.
 - A conflict immediately yields `Unknown`; sticky maintenance cannot hide it.
+- The evidence clock advances only on identity-matched independent evidence: a direct
+  recognized ArcFace anchor whose `person_id` equals the committed identity, or a ReID vote
+  whose argmax equals the committed identity. Presence of *any* evidence in the frame is never
+  sufficient; smoothing mass in a likelihood distribution is not evidence. Gate with an explicit
+  `evidence_identity_ids` set, never with `id in distribution`.
 
 Persist `last_independent_identity_evidence_at` separately from identity update timestamps.
 Repository APIs must make it impossible for an ordinary held decision to overwrite this field.
