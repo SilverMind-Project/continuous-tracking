@@ -505,12 +505,21 @@ world_tracker:
   covariance_symmetry_tol_m2: 0.000001
   covariance_psd_tol_m2: -0.000000001
 
-  # ---- Typed authoritative identity evidence (M03 task 5) ----
+  # ---- Typed authoritative identity evidence (M03 task 5; plumbed M12) ----
   # Verified-ReID disagreement is a configurable strong cost, never a hard gate.
-  # The verified-ReID identity input is plumbed by M05; until then no id reaches
-  # association, so this is inert. Default false for that dependency.
+  # M12 wired the per-observation verified-ReID identity input: when this flag
+  # is true, WorldTracker resolves each observation's identity from the
+  # operator_verified gallery before association and passes it in, so a body
+  # whose verified-ReID identity disagrees with a PH's committed identity pays
+  # reid_disagreement_cost. Left false pending the release-gated two-person
+  # golden-replay acceptance (see identity-integrity-rollout). Flipping it
+  # turns on the pre-association gallery lookup, so flip only after acceptance.
   enable_reid_disagreement_cost: false
   reid_disagreement_cost: 0.6
+  # Minimum gallery cosine similarity for accepting a top operator_verified hit
+  # as an observation's verified-ReID identity. Consulted only when the flag
+  # above is true.
+  reid_disagreement_min_similarity: 0.5
 
   # ---- PH-local appearance contamination guard (M03 tasks 7-9) ----
   # One bad association must not immediately pollute a PH's appearance state.

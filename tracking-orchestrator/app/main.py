@@ -316,6 +316,7 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         # Typed authoritative identity evidence (M03 task 5)
         enable_reid_disagreement_cost=wt.as_bool("enable_reid_disagreement_cost"),
         reid_disagreement_cost=wt.as_float("reid_disagreement_cost"),
+        reid_disagreement_min_similarity=wt.as_float("reid_disagreement_min_similarity"),
         # PH-local appearance contamination guard (M03 tasks 7-9)
         enable_appearance_outlier_rejection=wt.as_bool("enable_appearance_outlier_rejection"),
         appearance_min_quality=wt.as_float("appearance_min_quality"),

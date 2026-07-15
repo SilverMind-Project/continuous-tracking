@@ -1,0 +1,63 @@
+# Identity-integrity page-now alert rules (Milestone 12).
+#
+# These four conditions are invariants of the identity authority model. Each
+# expression watches a counter whose value must stay zero (or, for projection
+# failures, below the retry objective). Any firing is an authority-safety defect
+# and pages immediately (for: 0m). Load this file into Prometheus via
+# rule_files in prometheus.yml. The dashboard-only series (unknown rate,
+# conflict distribution, review-queue age, resolver authority mix) are tracked
+# on dashboards without paging thresholds until a representative baseline exists.
+groups:
+  - name: identity_integrity_page_now
+    rules:
+      - alert: IdentityDuplicateAuthoritativeAfterCommit
+        expr: increase(cts_identity_duplicate_active_breach_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          domain: identity_integrity
+        annotations:
+          summary: A household identity is held by more than one active PH after commit.
+          description: >-
+            The duplicate-active-identity guard let two PHs hold one identity.
+            Inspect the offending PH/decision IDs in the structured logs
+            (identity_duplicate_active_blocks and resolver commit lines).
+
+      - alert: RejectedVectorParticipatedInVote
+        expr: increase(cts_reid_rejected_vector_vote_attempts_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          domain: identity_integrity
+        annotations:
+          summary: A non operator_verified gallery vector reached the resolver vote.
+          description: >-
+            Only operator_verified gallery entries may vote. A pending or
+            rejected vector reaching the vote indicates a gallery query
+            regression; check the gallery state filter in the resolver path.
+
+      - alert: PriorOnlyAdvancedEvidenceTime
+        expr: increase(cts_identity_prior_only_evidence_advance_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          domain: identity_integrity
+        annotations:
+          summary: A prior-only decision advanced independent identity evidence time.
+          description: >-
+            Temporal-prior maintenance must never refresh evidence time, or a
+            stale identity can renew itself indefinitely. A prior-only decision
+            stamped evidence time to the current frame.
+
+      - alert: CorrectionProjectionFailuresBeyondRetry
+        expr: increase(cts_correction_projection_failures_total[15m]) > 3
+        for: 0m
+        labels:
+          severity: critical
+          domain: identity_integrity
+        annotations:
+          summary: Identity-correction projections are failing beyond the retry objective.
+          description: >-
+            Required CC projection acks or applies are failing repeatedly, so
+            operator corrections are not reaching effective labels. Check the CC
+            identity_revision_subscriber and the orchestrator revision-job state.

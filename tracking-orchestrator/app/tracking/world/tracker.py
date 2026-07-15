@@ -319,6 +319,40 @@ class WorldTracker:
         """
         return self._last_open_phs
 
+    async def _resolve_verified_reid_identities(
+        self, observations: list[WorldObservation]
+    ) -> list[str | None]:
+        """Resolve each observation's verified-ReID identity from the gallery.
+
+        Only ``operator_verified`` gallery entries vote (program architecture
+        decision 6), so a candidate or rejected vector can never contribute a
+        verified-ReID identity here even if a repository's ``search_similar``
+        does not itself restrict state. Returns a list aligned to
+        *observations*; an entry is ``None`` when there is no embedding, no
+        gallery repository, or no operator_verified match clears
+        ``reid_disagreement_min_similarity``. The caller only invokes this when
+        ``enable_reid_disagreement_cost`` is true, so it adds no per-frame
+        gallery queries while the flag is off.
+        """
+        if self._gallery_repo is None:
+            return [None] * len(observations)
+        cfg = self._config
+        resolved: list[str | None] = []
+        for obs in observations:
+            identity: str | None = None
+            if obs.embedding:
+                hits = await self._gallery_repo.search_similar(obs.embedding, limit=1)
+                if hits:
+                    entry, similarity = hits[0]
+                    if (
+                        entry.state == "operator_verified"
+                        and entry.identity_id
+                        and similarity >= cfg.reid_disagreement_min_similarity
+                    ):
+                        identity = entry.identity_id
+            resolved.append(identity)
+        return resolved
+
     async def step(
         self,
         observations: list[WorldObservation],
@@ -388,6 +422,15 @@ class WorldTracker:
         obs_vecs = _unpack_observations(observations)
         ph_vecs = _unpack_ph_vectors(active_phs)
 
+        # M12: resolve each observation's verified-ReID identity from the
+        # governed (operator_verified) gallery so association can charge a
+        # disagreement cost (M03 cost path). Gated on the flag: while it is
+        # off this adds zero per-frame gallery queries and the input stays
+        # None, leaving association behaviour unchanged.
+        obs_verified_reid_ids: list[str | None] | None = None
+        if cfg.enable_reid_disagreement_cost:
+            obs_verified_reid_ids = await self._resolve_verified_reid_identities(observations)
+
         # 3. Associate.
         assignment = associate(
             ph_states=predicted_states,
@@ -403,6 +446,7 @@ class WorldTracker:
             obs_calibrated=obs_vecs.calibrated,
             ph_view_prototypes=ph_vecs.view_prototypes,
             obs_covs=obs_vecs.covs,
+            obs_verified_reid_identity_ids=obs_verified_reid_ids,
         )
 
         # M03: record association integrity diagnostics from the PRIMARY pass
@@ -1609,6 +1653,17 @@ async def _resolve_identities(
                     identity_id=decision.identity_id,
                     committed_at=now,
                 )
+                # Prior-only maintenance must never advance independent identity
+                # evidence time; prior_only_update upholds that. Count for the
+                # prior-refresh dashboard/alert.
+                _metrics.metrics.identity_prior_only_updates_total.inc()
+                # Page-now invariant: a prior-only decision carries the OLD
+                # evidence timestamp, strictly before this frame. If it equals or
+                # exceeds `now`, evidence time was advanced by a prior-only path.
+                now_ns = int(now.timestamp() * 1e9)
+                ev_ns = decision.last_independent_evidence_at_unix_ns
+                if ev_ns and ev_ns >= now_ns:
+                    _metrics.metrics.identity_prior_only_evidence_advance_total.inc()
         elif decision.revises_previous and decision.previous_identity_id is not None:
             await ph_repo.clear_to_unknown(
                 ph_id=decision.ph_id,

@@ -608,7 +608,35 @@ class IdentityResolver:
                 ).inc(len(blocked))
             return [item.decision for item in pending]
 
-        return [self._block_decision(item, blocked) for item in pending]
+        if blocked:
+            metrics.metrics.identity_duplicate_active_blocks_total.inc(len(blocked))
+        final = [self._block_decision(item, blocked) for item in pending]
+        self._assert_no_duplicate_active(final, open_ph_identities)
+        return final
+
+    @staticmethod
+    def _assert_no_duplicate_active(
+        final: list[IdentityDecision],
+        open_ph_identities: Mapping[str, str],
+    ) -> None:
+        """Page-now invariant: at most one active PH may hold a household identity.
+
+        Runs after the guard so it catches a guard escape (e.g. two PHs each with
+        strong direct face for the same identity, which the holder rule does not
+        block). Counts each identity held by more than one active PH; the value
+        must stay zero.
+        """
+        holders: dict[str, set[str]] = defaultdict(set)
+        for decision in final:
+            if decision.identity_id is not None:
+                holders[decision.identity_id].add(decision.ph_id)
+        batch_ph_ids = {d.ph_id for d in final}
+        for ph_id, identity_id in open_ph_identities.items():
+            if ph_id not in batch_ph_ids:
+                holders[identity_id].add(ph_id)
+        breaches = sum(1 for phs in holders.values() if len(phs) > 1)
+        if breaches:
+            metrics.metrics.identity_duplicate_active_breach_total.inc(breaches)
 
     def _duplicate_active_blocks(
         self,
@@ -1256,6 +1284,13 @@ class IdentityResolver:
             tuple[str | None, str, str, int], tuple[GalleryEmbedding, float, float]
         ] = {}
         for entry, sim in similar:
+            # Governance invariant: only operator_verified entries may vote. The
+            # gallery SQL enforces this; this counter is the observability backstop
+            # that pages if a non-verified vector ever reaches the vote (e.g. a
+            # future query regression). Keep it detection-only so it cannot mask a
+            # breach by silently changing scores.
+            if entry.state != "operator_verified":
+                metrics.metrics.reid_rejected_vector_vote_attempts_total.inc()
             logit = self._logistic(sim)
             # Verified multiplier default 2.0 before aggregation
             multiplier = 2.0 if entry.state == "operator_verified" else 1.0

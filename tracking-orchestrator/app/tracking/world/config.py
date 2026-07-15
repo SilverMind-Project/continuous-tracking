@@ -101,6 +101,11 @@ class WorldTrackerConfig:
     # a "ship dark" robustness toggle.
     enable_reid_disagreement_cost: bool = False
     reid_disagreement_cost: float = 0.6  # added to pair cost on verified disagreement
+    # Minimum gallery cosine similarity for treating a top operator_verified
+    # gallery hit as an observation's verified-ReID identity (M12 plumbing).
+    # Only consulted when enable_reid_disagreement_cost is true, so the
+    # per-observation gallery lookup adds zero cost while the flag is off.
+    reid_disagreement_min_similarity: float = 0.5
 
     # ---- PH lifecycle ----
     ph_close_grace_s: float = 5.0

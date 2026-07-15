@@ -192,6 +192,16 @@ class Metrics:
     cts_reid_executed_total: Counter
     cts_reid_skipped_total: Counter
 
+    # ---- M12 identity-integrity observability ----
+    # Bounded labels only; PH/decision/identity IDs go to structlog, never here.
+    identity_duplicate_active_blocks_total: Counter  # enforced duplicate / tie-clear blocks
+    reid_rejected_vector_vote_attempts_total: Counter  # invariant=0; alert if >0
+    identity_prior_only_updates_total: Counter  # temporal-prior maintenance updates
+    # The two breach counters below are page-now invariants: each is a runtime
+    # assertion whose value must stay zero. Any increment is a defect.
+    identity_duplicate_active_breach_total: Counter  # >1 active PH holds one identity post-commit
+    identity_prior_only_evidence_advance_total: Counter  # prior-only advanced evidence time
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -679,6 +689,34 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_reid_skipped_total",
             "Frames where adaptive policy skipped ReID (or would have skipped in shadow mode).",
             ["reason"],
+        ),
+        # ---- M12 identity-integrity observability ----
+        identity_duplicate_active_blocks_total=_counter(
+            "cts_identity_duplicate_active_blocks_total",
+            "New identity assignments demoted to UNKNOWN by the enforced "
+            "duplicate-active-identity guard (occupied holder or tie-clear).",
+        ),
+        reid_rejected_vector_vote_attempts_total=_counter(
+            "cts_reid_rejected_vector_vote_attempts_total",
+            "Gallery vectors that reached the resolver vote without "
+            "operator_verified state. Invariant is zero; any increment is a "
+            "governance breach and pages.",
+        ),
+        identity_prior_only_updates_total=_counter(
+            "cts_identity_prior_only_updates_total",
+            "Temporal-prior maintenance updates applied (prior-only, never "
+            "advancing independent identity evidence time).",
+        ),
+        identity_duplicate_active_breach_total=_counter(
+            "cts_identity_duplicate_active_breach_total",
+            "Post-commit invariant breach: a household identity is held by more "
+            "than one active PH. Must stay zero; any increment pages.",
+        ),
+        identity_prior_only_evidence_advance_total=_counter(
+            "cts_identity_prior_only_evidence_advance_total",
+            "Invariant breach: a prior-only maintenance decision advanced "
+            "independent identity evidence time to the current frame. Must stay "
+            "zero; any increment pages.",
         ),
     )
 
