@@ -476,6 +476,30 @@ RTSP ingest: go2rtc sidecar
 | TD-009 | Low | ReID crop invariant: `_crop_detection()` in `frame_pipeline.py` must always be called before `ReidEmbedder.embed_batch()`. Any refactor that moves or merges these calls must preserve this ordering or the gallery distances become meaningless. |
 | TD-010 | Low | Floor-region visibility fix (Track G): harvest a floor-region polygon from `FloorPlaneFitter` inliers and return it on `/internal/calibration/auto`; CC then projects that boundary (not the image border) for the visibility polygon. Reuses Depth Anything v2 (no new model); non-blocking. Plan: `../cognitive-companion/guided-companion-trackG-floor-geometry.md`. |
 
+### Hardening program (2026-07), resolved
+
+None of the entries above overlap this program; recorded separately so future agents find the
+rationale trail without re-deriving it from the findings program. Full evidence and implementation
+notes live in the referenced `codebase-hardening-*.md` files at the repo root's parent
+(`/home/sriram/code/nanai/`).
+
+| Finding | Severity | Description | Resolved in |
+| --- | --- | --- | --- |
+| F1 | P0 | Evidence clock renewed from foreign evidence (`id in distribution` instead of identity match) | `codebase-hardening-m01-evidence-clock-integrity.md` |
+| F2 | P0 | Provenance decisions dropped/never persisted on frames carrying `revises_previous` decisions | `codebase-hardening-m02-provenance-persistence-decoupling.md` |
+| F3 | P0 | Gallery seed identity-mismatch: tracker wrote gallery rows without checking face identity equals PH identity | `codebase-hardening-m04-governed-candidate-creation.md` |
+| F4 | P1 | Seed cap broken in production (Postgres filtered by `operator_verified`; InMemory applied no filter) | `codebase-hardening-m03-gallery-storage-parity.md`, `codebase-hardening-m04-governed-candidate-creation.md` |
+| F5 | P1 | Seeded entries invisible to the resolver's tracklet-keyed query path (`origin_tracklet_id` never written) | `codebase-hardening-m04-governed-candidate-creation.md` |
+| F6 | P1 | Coherence shadow gate inverted; ran the expensive shadow gallery query every frame at the "off" default | `codebase-hardening-m05-resolver-shadow-cost-and-dedup.md` |
+| F7 | P1 | CC `IdentityRewriter` rewrote a PH's entire location history, ignoring the correction range/revision horizon | `codebase-hardening-m06-cc-revision-scoping.md` |
+| F8 | P1 | Signal supersession reused the old `signal_id` on the replacement row instead of re-deriving it | `codebase-hardening-m06-cc-revision-scoping.md` |
+| F9 | P1 | `authority` field carried an identity id instead of an authority-ladder rung (`IdentityAuthority`) | `codebase-hardening-m07-authority-vocabulary.md` |
+| F10 | P2 | Frozen-reconstruction hazard: `PersonHypothesis` fields hand-copied at 10+ sites instead of `dataclasses.replace` | `codebase-hardening-m08-tracker-frozen-reconstruction-refactor.md` |
+| F11 | P2 | Dead code/config: unused repo method, additive-combiner module, M01 scaffolding modules, `min_quality_to_face_lock` | `codebase-hardening-m09-dead-code-and-test-cleanup.md` |
+| F12 | P2 | Meaningless/brittle tests (SQL-substring mocks, dead-combiner tests, the F3 xfail) | `codebase-hardening-m04-governed-candidate-creation.md`, `codebase-hardening-m09-dead-code-and-test-cleanup.md` |
+| F13 | P2 | `ReIDCandidateService` reached into `gallery_repo._pool` directly, bypassing the repository layer | `codebase-hardening-m04-governed-candidate-creation.md` |
+| F14 | P2 | Public docs asserted candidate-creation behavior not yet true of the deployed code | `codebase-hardening-m10-skills-and-docs-truth-up.md` |
+
 ---
 
 ## Working in This Repository
