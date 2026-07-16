@@ -18,6 +18,7 @@ from ...domain import (
     IdentityEvidenceItem,
     IdentityProvenanceDecision,
 )
+from ..base import validate_identity_authority
 
 
 class PostgresIdentityDecisionRepository:
@@ -25,6 +26,7 @@ class PostgresIdentityDecisionRepository:
         self._pool = pool
 
     async def save(self, decision: IdentityProvenanceDecision) -> None:
+        validate_identity_authority(decision.authority)
         # Use a transaction to ensure atomic writes
         async with self._pool.acquire() as conn, conn.transaction():
             await conn.execute(

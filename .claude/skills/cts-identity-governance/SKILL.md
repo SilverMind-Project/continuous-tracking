@@ -180,6 +180,14 @@ Required API vocabulary is `inferred_identity_id`, `effective_identity_id`, `aut
 `decision_source`, and `revision_id`. `person_id` may exist only as a documented compatibility
 alias during migration.
 
+`IdentityDecision.authority` is the authority-ladder rung, always a member of
+`IdentityAuthority` (`app/tracking/identity/types.py`); the producer emits
+`operator | direct_face | posterior | temporal_prior | none`, with `reid_gallery` reserved
+for a future governed-gallery rung and `unknown`/`height_proxy` legacy-read-only. It never
+contains an identity id.
+`decision_source` states which evidence led; the two are not interchangeable. Repositories
+reject decisions with out-of-vocabulary authority.
+
 Operator corrections:
 
 - use observation boundaries, not arbitrary timestamps;

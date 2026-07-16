@@ -19,6 +19,7 @@ from ..domain import (
     PersonHypothesis,
     WorldObservation,
 )
+from ..tracking.identity.types import IdentityAuthority
 from .annotations import BboxAnnotationRepository, InMemoryBboxAnnotationRepository
 from .corrections import (
     IdentityCorrectionRepositoryProtocol,
@@ -204,6 +205,26 @@ class WorldObservationRepositoryProtocol(Protocol):
 
     async def save(self, observation: WorldObservation, ph_id: str) -> str: ...
     async def list_by_ph(self, ph_id: str, limit: int = 50) -> list[WorldObservation]: ...
+
+
+# Bounded authority vocabulary (F9/M07). Every repository that persists an
+# ``IdentityProvenanceDecision`` must reject an out-of-vocabulary ``authority``
+# at the boundary — a CHECK constraint substitute since no migration is in
+# scope. Shared by InMemory and Postgres so validation cannot drift.
+_VALID_IDENTITY_AUTHORITIES = frozenset(a.value for a in IdentityAuthority)
+
+
+def validate_identity_authority(authority: str) -> None:
+    """Raise ``ValueError`` if ``authority`` is not an ``IdentityAuthority`` member.
+
+    Called by every ``IdentityDecisionRepositoryProtocol.save`` implementation.
+    Never contains an identity id — that was the F9 defect.
+    """
+    if authority not in _VALID_IDENTITY_AUTHORITIES:
+        raise ValueError(
+            f"identity decision authority {authority!r} is not a member of the bounded "
+            "IdentityAuthority vocabulary"
+        )
 
 
 class IdentityDecisionRepositoryProtocol(Protocol):
@@ -849,6 +870,7 @@ class InMemoryIdentityDecisionRepository:
         self._lock = asyncio.Lock()
 
     async def save(self, decision: IdentityProvenanceDecision) -> None:
+        validate_identity_authority(decision.authority)
         async with self._lock:
             self._decisions[decision.decision_id] = decision
 

@@ -63,6 +63,7 @@ from .identity.commit_policy import (
 from .identity.evidence import IdentityEvidence
 from .identity.policy import CommitPolicy as _CommitPolicy
 from .identity.posterior import EvidencePosterior, combine_posteriors
+from .identity.types import IdentityAuthority
 
 logger = get_logger(__name__)
 
@@ -778,6 +779,7 @@ class IdentityResolver:
                 f"(direct_face_confidence={item.direct_face_confidence:.3f})"
             ),
             evidence_backed=False,
+            authority=str(IdentityAuthority.NONE),
         )
 
     # ------------------------------------------------------------------
@@ -1629,7 +1631,7 @@ class IdentityResolver:
                 decision_id=str(uuid.uuid4()),
                 inferred_identity_id="",
                 effective_identity_id="",
-                authority="",
+                authority=str(IdentityAuthority.NONE),
                 decision_source="arcface_authority_conflict",
                 conflict="AUTHORITY_CONFLICT",
             )
@@ -1656,7 +1658,7 @@ class IdentityResolver:
                 decision_id=str(uuid.uuid4()),
                 inferred_identity_id=top_id if top_id != "UNKNOWN" else "",
                 effective_identity_id=arcface_authority,
-                authority=arcface_authority,
+                authority=str(IdentityAuthority.DIRECT_FACE),
                 decision_source="arcface_authority",
             )
 
@@ -1801,6 +1803,15 @@ class IdentityResolver:
         ev_ts = entity.last_independent_identity_evidence_at
         ev_ts_ns = int(ev_ts.timestamp() * 1e9) if ev_ts else 0
 
+        # Authority ladder rung for this commit (F9/M07): distinct from
+        # commit_source, which states *which evidence led* the posterior.
+        if new_id is None:
+            authority = IdentityAuthority.NONE
+        elif live_eval.within_maintenance_window and not live_eval.evidence_backed:
+            authority = IdentityAuthority.TEMPORAL_PRIOR
+        else:
+            authority = IdentityAuthority.POSTERIOR
+
         return IdentityDecision(
             ph_id=entity.entity_id,
             identity_id=new_id,
@@ -1812,6 +1823,7 @@ class IdentityResolver:
             decision_id=str(uuid.uuid4()),
             inferred_identity_id=top_id if top_id != "UNKNOWN" else "",
             effective_identity_id=new_id or "",
+            authority=str(authority),
             decision_source=commit_source,
             last_independent_evidence_at_unix_ns=ev_ts_ns,
         )

@@ -59,7 +59,7 @@ def _decision(
         decision_id=f"{ph_id}-decision",
         inferred_identity_id="amma",
         effective_identity_id="amma",
-        authority="arcface_authority",
+        authority="direct_face",
         decision_source="face",
     )
 
@@ -83,7 +83,7 @@ async def test_revising_decision_is_persisted() -> None:
     assert total == 1
     prov = saved[0]
     assert prov.inferred_identity_id == "amma"
-    assert prov.authority == "arcface_authority"
+    assert prov.authority == "direct_face"
     assert prov.decision_source == "face"
     assert prov.captured_at == _T0
 

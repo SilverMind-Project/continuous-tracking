@@ -13,12 +13,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from structlog import get_logger
 
 from ...domain import FaceAnchor, IdentityResolvableEntity, PosteriorDist
-from ...inference.evidence import FaceEvidence
 from .policy import CommitPolicy
+
+if TYPE_CHECKING:
+    from ...inference.evidence import FaceEvidence
 
 logger = get_logger(__name__)
 

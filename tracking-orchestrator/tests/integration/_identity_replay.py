@@ -50,8 +50,9 @@ class DecisionRow:
     Mirrors the identity-bearing fields of ``WorldFrameSnapshot`` so a runner can
     populate it from a live ``WorldTracker.step`` result or from a synthetic
     fixture. ``inferred_identity_id`` is ``""`` for Unknown. ``authority`` is the
-    identity id only on a qualifying direct-ArcFace commit (else ``""``), exactly
-    as the resolver writes it.
+    resolver's bounded ``IdentityAuthority`` vocabulary value (M07/F9) --
+    ``"direct_face"`` on a qualifying direct-ArcFace commit, never an identity
+    id -- exactly as the resolver writes it.
     """
 
     ph_id: str
@@ -141,7 +142,7 @@ async def build_records(
                 if (range_auth == "inferred" and eff_id is not None)
                 else row.inferred_identity_id
             )
-            if row.authority and row.decision_source == ARCFACE_AUTHORITY_SOURCE:
+            if row.authority == "direct_face":
                 authority = AUTH_ARCFACE
             elif effective:
                 authority = AUTH_INFERRED

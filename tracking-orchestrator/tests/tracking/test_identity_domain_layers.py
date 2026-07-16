@@ -124,6 +124,8 @@ class TestIdentityAuthorityEnum:
             "reid_gallery",
             "direct_face",
             "operator",
+            "posterior",
+            "none",
         }
         actual = {a.value for a in IdentityAuthority}
         assert actual == expected
@@ -132,6 +134,8 @@ class TestIdentityAuthorityEnum:
         assert IdentityAuthority.OPERATOR == "operator"
         assert IdentityAuthority.DIRECT_FACE == "direct_face"
         assert IdentityAuthority.UNKNOWN == "unknown"
+        assert IdentityAuthority.POSTERIOR == "posterior"
+        assert IdentityAuthority.NONE == "none"
 
 
 class TestIdentityConflictEnum:

@@ -41,9 +41,19 @@ from ..storage.annotations import BboxAnnotationRepository
 from ..storage.base import IdentityDecisionRepositoryProtocol, KeyframeRepository
 from ..storage.corrections import IdentityCorrectionRepositoryProtocol
 from ..storage.gallery import GalleryRepository
+from ..tracking.identity.types import IdentityAuthority
 
 # Stable namespace for deriving ``physical_frame_id`` from the source tuple.
 _PHYSICAL_FRAME_NS = uuid.UUID("6f3d2c1a-0b4e-5a6f-9c8d-1e2f3a4b5c6d")
+
+# Bounded authority vocabulary (F9/M07). A stored row outside this set
+# (empty string, or a pre-M07 identity id on the ArcFace-authority path)
+# composes to ``none`` at read time — display tolerance only, never persisted.
+_KNOWN_AUTHORITIES = frozenset(a.value for a in IdentityAuthority)
+
+
+def _normalize_authority(authority: str) -> str:
+    return authority if authority in _KNOWN_AUTHORITIES else IdentityAuthority.NONE.value
 
 
 def physical_frame_id(camera_id: str, minio_key: str, captured_at: datetime) -> str:
@@ -368,10 +378,17 @@ def _bbox_view(
     if eff_id is None and revision_id is None:
         # No covering revision range: effective identity is raw inference.
         effective_identity_id = inferred
-        authority = decision.authority if decision else "none"
+        authority = _normalize_authority(
+            decision.authority if decision else IdentityAuthority.NONE.value
+        )
     else:
         effective_identity_id = eff_id
-        authority = eff_authority or (decision.authority if decision else "none")
+        # eff_authority is a RevisionAuthority ("operator" | "inferred") -- a distinct
+        # vocabulary from the decision's IdentityAuthority (F9). Pass it through verbatim;
+        # the read-time tolerance below applies only to the decision-authority fallback.
+        authority = eff_authority or _normalize_authority(
+            decision.authority if decision else IdentityAuthority.NONE.value
+        )
 
     # Operator authority presents as ``Verified`` (no fabricated confidence).
     calibrated = (

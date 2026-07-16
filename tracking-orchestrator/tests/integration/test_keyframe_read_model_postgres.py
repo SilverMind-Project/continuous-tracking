@@ -121,7 +121,7 @@ async def test_postgres_matches_inmemory_composition(db_pool: Any) -> None:
                 (decision_id, ph_id, captured_at, authority, decision_source,
                  inferred_identity_id, effective_identity_id, top_probability,
                  resolver_version, diagnostics)
-            VALUES ($1::uuid, $2::uuid, $3, 'arcface_authority', 'face',
+            VALUES ($1::uuid, $2::uuid, $3, 'direct_face', 'face',
                     'amma', 'amma', 0.8, 'r1', '{}'::jsonb)
             """,
             dec_alpha,
@@ -204,7 +204,7 @@ async def test_postgres_matches_inmemory_composition(db_pool: Any) -> None:
             decision_id=dec_alpha,
             ph_id=ph_alpha,
             captured_at=_T0,
-            authority="arcface_authority",
+            authority="direct_face",
             decision_source="face",
             diagnostics={},
             inferred_identity_id="amma",

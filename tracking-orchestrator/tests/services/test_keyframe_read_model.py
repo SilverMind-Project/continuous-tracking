@@ -190,7 +190,7 @@ async def test_operator_correction_shows_effective_keeps_inferred() -> None:
             decision_id=str(uuid.uuid4()),
             ph_id="ph-alpha",
             captured_at=_T0,
-            authority="arcface_authority",
+            authority="direct_face",
             decision_source="face",
             diagnostics={},
             inferred_identity_id="amma",
@@ -272,7 +272,7 @@ async def test_decision_join_is_per_frame_not_page_max() -> None:
                 decision_id=str(uuid.uuid4()),
                 ph_id="ph-alpha",
                 captured_at=captured,
-                authority="arcface_authority",
+                authority="direct_face",
                 decision_source="face",
                 diagnostics={},
                 inferred_identity_id=inferred,
@@ -286,6 +286,98 @@ async def test_decision_join_is_per_frame_not_page_max() -> None:
     by_time = {f.captured_at: f for f in frames}
     assert by_time[t1].bboxes[0].inferred_identity_id == "amma"
     assert by_time[t2].bboxes[0].inferred_identity_id == "bob"
+
+
+async def test_direct_face_authority_renders_on_the_card() -> None:
+    """A decision with the bounded authority value renders that value unchanged."""
+    keyframe_repo = InMemoryKeyframeRepository()
+    bbox_repo = InMemoryBboxAnnotationRepository()
+    decision_repo = InMemoryIdentityDecisionRepository()
+    kf = _keyframe("ph-alpha")
+    await _persist(keyframe_repo, bbox_repo, kf, [_bbox(kf.keyframe_id, "ph-alpha", "amma", 10)])
+    await decision_repo.save(
+        IdentityProvenanceDecision(
+            decision_id=str(uuid.uuid4()),
+            ph_id="ph-alpha",
+            captured_at=_T0,
+            authority="direct_face",
+            decision_source="arcface_authority",
+            diagnostics={},
+            inferred_identity_id="amma",
+            effective_identity_id="amma",
+            top_probability=0.9,
+        )
+    )
+
+    svc = _service(keyframe_repo=keyframe_repo, bbox_repo=bbox_repo, decision_repo=decision_repo)
+    card = (await svc.list_physical_frames()).frames[0]
+
+    assert card.bboxes[0].authority == "direct_face"
+
+
+async def test_inferred_range_authority_passes_through_unmangled() -> None:
+    """``IdentityRevisionRange.authority`` is a distinct ``RevisionAuthority`` vocabulary
+    (``operator`` | ``inferred``) from the decision's ``IdentityAuthority`` (F9). The
+    read-time tolerance that composes an out-of-vocabulary decision authority to
+    ``none`` must not also swallow a legitimate ``"inferred"`` range authority.
+    """
+    keyframe_repo = InMemoryKeyframeRepository()
+    bbox_repo = InMemoryBboxAnnotationRepository()
+    correction_repo = InMemoryIdentityCorrectionRepository()
+    kf = _keyframe("ph-alpha")
+    await _persist(keyframe_repo, bbox_repo, kf, [_bbox(kf.keyframe_id, "ph-alpha", "amma", 10)])
+    await correction_repo.save_range(
+        IdentityRevisionRange(
+            range_id=str(uuid.uuid4()),
+            revision_id=str(uuid.uuid4()),
+            ph_id="ph-alpha",
+            authority="inferred",
+            range_start=_T0 - timedelta(minutes=1),
+            range_end=_T0 + timedelta(minutes=1),
+            effective_identity_id="amma",
+        )
+    )
+
+    svc = _service(
+        keyframe_repo=keyframe_repo, bbox_repo=bbox_repo, correction_repo=correction_repo
+    )
+    card = (await svc.list_physical_frames()).frames[0]
+
+    assert card.bboxes[0].authority == "inferred"
+
+
+async def test_legacy_identity_shaped_authority_composes_to_none() -> None:
+    """A pre-M07 row that stored an identity id in ``authority`` (the F9 defect)
+    must never display that identity id in the authority slot.
+
+    Repository-boundary validation (M07 task 5) blocks *new* writes of an
+    out-of-vocabulary authority, but it cannot rewrite rows written before this
+    milestone landed -- this seeds the repository's internal store directly to
+    simulate exactly that legacy row without going through the now-guarded
+    ``save()`` path.
+    """
+    keyframe_repo = InMemoryKeyframeRepository()
+    bbox_repo = InMemoryBboxAnnotationRepository()
+    decision_repo = InMemoryIdentityDecisionRepository()
+    kf = _keyframe("ph-alpha")
+    await _persist(keyframe_repo, bbox_repo, kf, [_bbox(kf.keyframe_id, "ph-alpha", "amma", 10)])
+    legacy_decision = IdentityProvenanceDecision(
+        decision_id=str(uuid.uuid4()),
+        ph_id="ph-alpha",
+        captured_at=_T0,
+        authority="amma",  # pre-M07: the ArcFace-authority path wrote the identity id.
+        decision_source="arcface_authority",
+        diagnostics={},
+        inferred_identity_id="amma",
+        effective_identity_id="amma",
+        top_probability=0.9,
+    )
+    decision_repo._decisions[legacy_decision.decision_id] = legacy_decision  # bypass save() guard
+
+    svc = _service(keyframe_repo=keyframe_repo, bbox_repo=bbox_repo, decision_repo=decision_repo)
+    card = (await svc.list_physical_frames()).frames[0]
+
+    assert card.bboxes[0].authority == "none"
 
 
 async def test_stable_pagination_with_identical_timestamps() -> None:

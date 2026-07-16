@@ -37,7 +37,7 @@ def _arcface(ph_id: str, frame: int, identity: str) -> DecisionRow:
         frame_index=frame,
         inferred_identity_id=identity,
         decision_source=ARCFACE_AUTHORITY_SOURCE,
-        authority=identity,
+        authority="direct_face",
         bbox=(0.0, 0.0, 1.0, 2.0),
     )
 
