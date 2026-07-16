@@ -46,7 +46,6 @@ class CommitPolicy:
 
     # --- Face-commit gating -----------------------------------------------
     face_commit_min_confidence: float = 0.70
-    min_quality_to_face_lock: float = 0.45
 
     # --- Quality gate -------------------------------------------------------
     min_quality_to_commit: float = 0.35

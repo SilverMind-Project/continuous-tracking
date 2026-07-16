@@ -17,7 +17,6 @@ from app.tracking.identity.evidence import (
     EvidenceSource,
     IdentityEvidence,
 )
-from app.tracking.identity.posterior import combine_evidence
 
 _NOW = datetime.now(UTC)
 
@@ -125,73 +124,6 @@ class TestIdentityEvidence:
     def test_evidence_source_is_str_subtype(self) -> None:
         assert EvidenceSource.DIRECT_FACE == "direct_face"
         assert isinstance(EvidenceSource.REID, str)
-
-
-# ---------------------------------------------------------------------------
-# Posterior combiner tests (additive combine_evidence path)
-# ---------------------------------------------------------------------------
-
-
-class TestPosteriorCombiner:
-    def test_direct_face_beats_reid(self) -> None:
-        """Direct face evidence should dominate ReID in the posterior."""
-        evidence = [
-            IdentityEvidence.direct_face("alice", 0.95, "tl-1", _NOW),
-            IdentityEvidence.reid("bob", 0.75),
-        ]
-        ep = combine_evidence(evidence, known_identities={"alice", "bob"})
-
-        assert ep.top_identity == "alice"
-        assert ep.distribution["alice"] > ep.distribution["bob"]
-        assert ep.face_evidence_present
-        assert ep.reid_evidence_present
-
-    def test_reid_only_commits_when_strong(self) -> None:
-        """ReID alone can create an identity when strong enough."""
-        evidence = [
-            IdentityEvidence.reid("alice", 0.85, quality=1.0),
-        ]
-        ep = combine_evidence(evidence, known_identities={"alice", "bob"})
-
-        assert ep.top_identity == "alice"
-        assert ep.reid_evidence_present
-
-    def test_temporal_prior_cannot_create_identity(self) -> None:
-        """Temporal prior alone should not create an identity."""
-        evidence = [
-            IdentityEvidence.temporal_prior("alice", 0.8),
-        ]
-        ep = combine_evidence(evidence, known_identities={"alice"})
-
-        # UNKNOWN should dominate when only prior is present.
-        assert ep.distribution.get("UNKNOWN", 0) > 0
-
-    def test_temporal_prior_maintains_identity(self) -> None:
-        """Temporal prior with previous identity maintains it in posterior."""
-        evidence: list[IdentityEvidence] = []
-        ep = combine_evidence(
-            evidence,
-            known_identities={"alice"},
-            previous_identity_id="alice",
-        )
-
-        # Prior gives some mass to the previous identity.
-        assert ep.distribution.get("alice", 0) > 0
-
-    def test_association_hint_cannot_advance_evidence_clock(self) -> None:
-        """Association hints must not advance the identity evidence clock."""
-        ev = IdentityEvidence.association_hint("alice", 0.95, "tl-1", _NOW)
-        assert not ev.can_advance_evidence_clock
-
-    def test_entropy_is_computed(self) -> None:
-        """Posterior must have non-zero entropy with mixed evidence."""
-        evidence = [
-            IdentityEvidence.direct_face("alice", 0.7, "tl-1", _NOW),
-            IdentityEvidence.reid("bob", 0.6),
-        ]
-        ep = combine_evidence(evidence, known_identities={"alice", "bob"})
-        assert ep.entropy > 0
-        assert ep.margin > 0
 
 
 # ---------------------------------------------------------------------------

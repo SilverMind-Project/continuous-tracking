@@ -142,9 +142,6 @@ class ResolverConfig:
     # allowing ordinary no-pose detections to commit.
     min_quality_to_commit: float = 0.35
 
-    # Retained for CommitPolicy parity; face-lock mechanism removed in M02.
-    min_quality_to_face_lock: float = 0.45
-
     # Quality gate — now enabled by default in M02.
     enable_quality_gate: bool = True
 
@@ -1839,7 +1836,6 @@ class IdentityResolver:
             prior_maintenance_max_age_s=c.prior_maintenance_max_age_s,
             arcface_authority_calibrated_confidence=c.arcface_authority_calibrated_confidence,
             face_commit_min_confidence=c.face_commit_min_confidence,
-            min_quality_to_face_lock=c.min_quality_to_face_lock,
             min_quality_to_commit=c.min_quality_to_commit,
             enable_quality_gate=c.enable_quality_gate,
             flip_debounce_window_s=c.flip_debounce_window_s,

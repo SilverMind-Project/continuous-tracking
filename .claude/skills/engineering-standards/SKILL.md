@@ -229,10 +229,11 @@ Algorithms live in pure functions that take inputs and return outputs. They neve
 
 ```python
 # RIGHT -- pure, testable without any fixture
-def combine_evidence(
-    evidence_list: list[IdentityEvidence],
-    known_identities: set[str],
-) -> EvidencePosterior:
+def combine_posteriors(
+    prior: PosteriorDist,
+    face: PosteriorDist,
+    reid: PosteriorDist,
+) -> PosteriorDist:
     ...
 
 # WRONG -- reads self._config, self._identities, calls self._gallery_repo
@@ -496,6 +497,14 @@ and identity-contamination guardrails in `app/pipeline/reid_policy.py` and
 `tests/integration/test_adaptive_reid_replay_equivalence.py`.
 
 **WRONG:** merge a default-on behavior flag with no replay proof, then leave it permanently true.
+
+### Deletion discipline
+
+Code that exists only to be re-exported or only to be tested is dead; delete it in the same
+milestone that orphans it. A milestone that removes a mechanism must remove its config keys,
+reader plumbing, and dataclass fields in the same change ("removed" with surviving plumbing is a
+recording defect). The `app.tracking.identity` export surface is pinned by
+`tests/test_no_dead_exports.py`.
 
 ---
 

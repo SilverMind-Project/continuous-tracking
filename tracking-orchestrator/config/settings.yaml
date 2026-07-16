@@ -312,7 +312,6 @@ resolver:
   face_weight_multiplier: 3.0
   prior_maintenance_max_age_s: 30.0
   min_quality_to_commit: 0.35
-  min_quality_to_face_lock: 0.45
   enable_quality_gate: true
   flip_debounce_window_s: 10.0
   enable_flip_debounce: true

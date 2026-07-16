@@ -11,7 +11,7 @@ backward compatibility with existing imports.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 __all__ = [
-    "CommitDecision",
     "CommitEvaluation",
     "CommitPolicy",
     "collect_evidence_identity_ids",
@@ -56,22 +55,6 @@ class CommitEvaluation:
     effective_commit_margin: float
     quality_gate_blocked: bool
     flip_debounce_blocked: bool
-
-
-@dataclass(frozen=True)
-class CommitDecision:
-    """Higher-level commit result (additive-path compat, kept for reference).
-
-    Not returned by the canonical ``evaluate_commit``. Kept so external code
-    that depended on ``CommitDecision`` continues to import cleanly; callers
-    should migrate to ``CommitEvaluation``.
-    """
-
-    identity_id: str | None
-    reason: str
-    evidence_backed: bool
-    evidence_summary: dict[str, int] = field(default_factory=dict)
-    metadata: dict[str, object] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

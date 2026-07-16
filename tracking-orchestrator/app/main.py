@@ -216,7 +216,6 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         propagated_face_weight_multiplier=r.as_float("propagated_face_weight_multiplier"),
         height_weight_multiplier=r.as_float("height_weight_multiplier"),
         min_quality_to_commit=r.as_float("min_quality_to_commit"),
-        min_quality_to_face_lock=r.as_float("min_quality_to_face_lock"),
         enable_quality_gate=r.as_bool("enable_quality_gate"),
         commit_prob_dense=r.as_float("commit_prob_dense"),
         commit_margin_dense=r.as_float("commit_margin_dense"),

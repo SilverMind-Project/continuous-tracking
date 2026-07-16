@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.tracking.identity.evidence import EvidenceSource, IdentityEvidence
-from app.tracking.identity.types import IdentityAuthority, IdentityConflict
+from app.tracking.identity.types import IdentityAuthority
 
 _NOW = datetime.now(UTC)
 
@@ -39,9 +39,6 @@ IDENTITY_POLICY_MODULES = [
     "app.tracking.identity.commit_policy",
     "app.tracking.identity.policy",
     "app.tracking.identity.types",
-    "app.tracking.identity.conflicts",
-    "app.tracking.identity.provenance",
-    "app.tracking.identity.protocols",
 ]
 
 
@@ -136,11 +133,3 @@ class TestIdentityAuthorityEnum:
         assert IdentityAuthority.UNKNOWN == "unknown"
         assert IdentityAuthority.POSTERIOR == "posterior"
         assert IdentityAuthority.NONE == "none"
-
-
-class TestIdentityConflictEnum:
-    def test_conflict_wire_values_stable(self) -> None:
-        assert IdentityConflict.NONE == "none"
-        assert IdentityConflict.QUALITY_GATE == "quality_gate_blocked"
-        assert IdentityConflict.FLIP_DEBOUNCE == "flip_debounce_blocked"
-        assert IdentityConflict.DUPLICATE_ACTIVE == "duplicate_active"
