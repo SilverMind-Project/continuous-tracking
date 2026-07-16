@@ -195,6 +195,16 @@ detection = replace(detection, tracklet_id="tl-1", global_track_id="gt-1")
 
 `FrozenInstanceError` is a correctness guard. Use `dataclasses.replace()` to create new instances with updated fields. Never use `object.__setattr__` to bypass the freeze -- if you need mutability, the type should not be frozen.
 
+Never re-construct a frozen domain object field-by-field to change a subset. Use
+`dataclasses.replace(obj, **changed)` listing only the changed fields. Each mutation site's
+changed-field set must be covered by the field-carryover test
+(`tests/unit/tracking/world/test_ph_field_carryover.py` for `PersonHypothesis`); adding a
+dataclass field requires classifying it there. Hand-copying every field caused the M02 incident
+(F1: five sites silently dropped `last_independent_identity_evidence_at`) and the M08 refactor
+(F10) that eliminated the remaining sites in `tracker.py` and `storage/base.py`: a new field with
+a default is silently reset to its default at every reconstruction site the author forgets, and
+the failure mode is a wiped identity mid-track, not a test failure.
+
 ### Class-level constants outside the dataclass
 
 `set`, `dict`, and `list` defaults on frozen dataclass fields raise `ValueError: mutable default` at class definition time. Move class-level constants to module scope.

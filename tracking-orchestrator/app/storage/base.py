@@ -499,26 +499,10 @@ class InMemoryPHRepository:
                 )
             previous = ph.current_identity_id
             now = datetime.now(UTC)
-            self._phs[ph_id] = PersonHypothesis(
-                ph_id=ph.ph_id,
-                state_mean=ph.state_mean,
-                state_cov=ph.state_cov,
-                born_at=ph.born_at,
-                last_seen_at=ph.last_seen_at,
-                last_seen_camera=ph.last_seen_camera,
-                observation_count=ph.observation_count,
+            self._phs[ph_id] = dataclasses.replace(
+                ph,
                 current_identity_id=new_identity_id,
                 current_identity_committed_at=now,
-                last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
-                gallery_mean=ph.gallery_mean,
-                height_estimate_m=ph.height_estimate_m,
-                active_cameras=ph.active_cameras,
-                closed_at=ph.closed_at,
-                last_floor_speed_m_s=ph.last_floor_speed_m_s,
-                last_posture=ph.last_posture,
-                metadata=ph.metadata,
-                mean_quality=ph.mean_quality,
-                view_prototypes=ph.view_prototypes,
             )
         revision = IdentityRevision(
             revision_id=str(uuid.uuid4()),
@@ -561,26 +545,10 @@ class InMemoryPHRepository:
             src_obs = self._observations.pop(source_ph_id, [])
             self._observations.setdefault(target_ph_id, []).extend(src_obs)
             now = datetime.now(UTC)
-            self._phs[source_ph_id] = PersonHypothesis(
-                ph_id=source.ph_id,
-                state_mean=source.state_mean,
-                state_cov=source.state_cov,
-                born_at=source.born_at,
-                last_seen_at=source.last_seen_at,
-                last_seen_camera=source.last_seen_camera,
-                observation_count=source.observation_count,
-                current_identity_id=source.current_identity_id,
-                current_identity_committed_at=source.current_identity_committed_at,
-                last_independent_identity_evidence_at=source.last_independent_identity_evidence_at,
-                gallery_mean=source.gallery_mean,
-                height_estimate_m=source.height_estimate_m,
-                active_cameras=source.active_cameras,
+            self._phs[source_ph_id] = dataclasses.replace(
+                source,
                 closed_at=now,
-                last_floor_speed_m_s=source.last_floor_speed_m_s,
-                last_posture=source.last_posture,
                 metadata={**source.metadata, "merged_into_ph_id": target_ph_id},
-                mean_quality=source.mean_quality,
-                view_prototypes=source.view_prototypes,
             )
             self._merges[source_ph_id] = target_ph_id
         revision = IdentityRevision(
@@ -660,47 +628,19 @@ class InMemoryPHRepository:
             later_obs = obs_list[split_idx:]
             new_ph_id = str(uuid.uuid4())
             now = datetime.now(UTC)
-            self._phs[ph_id] = PersonHypothesis(
-                ph_id=ph.ph_id,
-                state_mean=ph.state_mean,
-                state_cov=ph.state_cov,
-                born_at=ph.born_at,
+            self._phs[ph_id] = dataclasses.replace(
+                ph,
                 last_seen_at=earlier_obs[-1].captured_at if earlier_obs else ph.last_seen_at,
-                last_seen_camera=ph.last_seen_camera,
                 observation_count=len(earlier_obs),
-                current_identity_id=ph.current_identity_id,
-                current_identity_committed_at=ph.current_identity_committed_at,
-                last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
-                gallery_mean=ph.gallery_mean,
-                height_estimate_m=ph.height_estimate_m,
-                active_cameras=ph.active_cameras,
                 closed_at=now,
-                last_floor_speed_m_s=ph.last_floor_speed_m_s,
-                last_posture=ph.last_posture,
-                metadata=ph.metadata,
-                mean_quality=ph.mean_quality,
-                view_prototypes=ph.view_prototypes,
             )
-            later_ph = PersonHypothesis(
+            later_ph = dataclasses.replace(
+                ph,
                 ph_id=new_ph_id,
-                state_mean=ph.state_mean,
-                state_cov=ph.state_cov,
                 born_at=later_obs[0].captured_at,
                 last_seen_at=later_obs[-1].captured_at,
-                last_seen_camera=ph.last_seen_camera,
                 observation_count=len(later_obs),
-                current_identity_id=ph.current_identity_id,
-                current_identity_committed_at=ph.current_identity_committed_at,
-                last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
-                gallery_mean=ph.gallery_mean,
-                height_estimate_m=ph.height_estimate_m,
-                active_cameras=ph.active_cameras,
                 closed_at=None,
-                last_floor_speed_m_s=ph.last_floor_speed_m_s,
-                last_posture=ph.last_posture,
-                metadata=ph.metadata,
-                mean_quality=ph.mean_quality,
-                view_prototypes=ph.view_prototypes,
             )
             self._phs[new_ph_id] = later_ph
             self._observations[ph_id] = earlier_obs
@@ -737,26 +677,10 @@ class InMemoryPHRepository:
                 if ph is None:
                     raise ValueError(f"PH not found: {ph_id}")
                 previous = ph.current_identity_id
-                self._phs[ph_id] = PersonHypothesis(
-                    ph_id=ph.ph_id,
-                    state_mean=ph.state_mean,
-                    state_cov=ph.state_cov,
-                    born_at=ph.born_at,
-                    last_seen_at=ph.last_seen_at,
-                    last_seen_camera=ph.last_seen_camera,
-                    observation_count=ph.observation_count,
+                self._phs[ph_id] = dataclasses.replace(
+                    ph,
                     current_identity_id=new_identity_id,
                     current_identity_committed_at=now,
-                    last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
-                    gallery_mean=ph.gallery_mean,
-                    height_estimate_m=ph.height_estimate_m,
-                    active_cameras=ph.active_cameras,
-                    closed_at=ph.closed_at,
-                    last_floor_speed_m_s=ph.last_floor_speed_m_s,
-                    last_posture=ph.last_posture,
-                    metadata=ph.metadata,
-                    mean_quality=ph.mean_quality,
-                    view_prototypes=ph.view_prototypes,
                 )
                 revision = IdentityRevision(
                     revision_id=str(uuid.uuid4()),

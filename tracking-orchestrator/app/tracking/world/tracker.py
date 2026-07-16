@@ -584,8 +584,8 @@ class WorldTracker:
             )
             self._update_primary_camera(ph.ph_id, _best_primary_camera(src_ids, obs_by_det_id, obs))
 
-            updated = PersonHypothesis(
-                ph_id=ph.ph_id,
+            updated = replace(
+                ph,
                 state_mean=(
                     float(new_state.mean[0]),
                     float(new_state.mean[1]),
@@ -593,13 +593,9 @@ class WorldTracker:
                     float(new_state.mean[3]),
                 ),
                 state_cov=tuple(float(v) for v in new_state.covariance.flatten()),
-                born_at=ph.born_at,
                 last_seen_at=obs.captured_at,
                 last_seen_camera=obs.camera_id,
                 observation_count=ph.observation_count + 1,
-                current_identity_id=ph.current_identity_id,
-                current_identity_committed_at=ph.current_identity_committed_at,
-                last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
                 gallery_mean=new_gallery_mean,
                 height_estimate_m=new_height,
                 active_cameras=ph.active_cameras | cluster_cameras,
@@ -759,8 +755,8 @@ class WorldTracker:
                     new_gallery_mean = closed.gallery_mean
                     new_prototypes_rev = closed.view_prototypes
                     _record_appearance_rejection(m, closed.ph_id, obs, revival_decision)
-                new_ph = PersonHypothesis(
-                    ph_id=closed.ph_id,
+                new_ph = replace(
+                    closed,
                     state_mean=(
                         float(ks.mean[0]),
                         float(ks.mean[1]),
@@ -768,21 +764,14 @@ class WorldTracker:
                         float(ks.mean[3]),
                     ),
                     state_cov=tuple(float(v) for v in ks.covariance.flatten()),
-                    born_at=closed.born_at,
                     last_seen_at=obs.captured_at,
                     last_seen_camera=obs.camera_id,
                     observation_count=closed.observation_count + 1,
-                    current_identity_id=closed.current_identity_id,
-                    current_identity_committed_at=closed.current_identity_committed_at,
-                    last_independent_identity_evidence_at=closed.last_independent_identity_evidence_at,
                     gallery_mean=new_gallery_mean,
-                    height_estimate_m=closed.height_estimate_m,
                     active_cameras=closed.active_cameras | spawn_cameras,
                     closed_at=None,  # reopen
                     last_floor_speed_m_s=0.0,
-                    last_posture=closed.last_posture,
                     metadata=_metadata_with_room(closed.metadata, room_id, room_name),
-                    mean_quality=closed.mean_quality,
                     view_prototypes=new_prototypes_rev,
                 )
                 revived_ph_ids.add(closed.ph_id)
@@ -999,8 +988,8 @@ class WorldTracker:
                     )
                     # Kalman + last_seen_at update only; do NOT touch observation_count,
                     # gallery_mean, view_prototypes, or mean_quality.
-                    recovered = PersonHypothesis(
-                        ph_id=ph.ph_id,
+                    recovered = replace(
+                        ph,
                         state_mean=(
                             float(new_state.mean[0]),
                             float(new_state.mean[1]),
@@ -1008,15 +997,8 @@ class WorldTracker:
                             float(new_state.mean[3]),
                         ),
                         state_cov=tuple(float(v) for v in new_state.covariance.flatten()),
-                        born_at=ph.born_at,
                         last_seen_at=obs.captured_at,
                         last_seen_camera=obs.camera_id,
-                        observation_count=ph.observation_count,
-                        current_identity_id=ph.current_identity_id,
-                        current_identity_committed_at=ph.current_identity_committed_at,
-                        last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
-                        gallery_mean=ph.gallery_mean,
-                        height_estimate_m=ph.height_estimate_m,
                         active_cameras=ph.active_cameras | frozenset([obs.camera_id]),
                         last_floor_speed_m_s=speed_m_s(
                             (
@@ -1026,10 +1008,6 @@ class WorldTracker:
                                 float(new_state.mean[3]),
                             )
                         ),
-                        mean_quality=ph.mean_quality,
-                        view_prototypes=ph.view_prototypes,
-                        metadata=ph.metadata,
-                        last_posture=ph.last_posture,
                     )
                     updated_phs.append(recovered)
                     lb_matched_ph_indices.add(ph_idx)
@@ -1376,31 +1354,11 @@ def _advance_unmatched_ph(
         _metrics.metrics.world_tracker_ph_closed_total.inc()
         _metrics.metrics.ph_lifetime_seconds.observe((now - ph.born_at).total_seconds())
         _metrics.metrics.ph_observations_at_close.observe(ph.observation_count)
-        return PersonHypothesis(
-            ph_id=ph.ph_id,
-            state_mean=ph.state_mean,
-            state_cov=ph.state_cov,
-            born_at=ph.born_at,
-            last_seen_at=ph.last_seen_at,
-            last_seen_camera=ph.last_seen_camera,
-            observation_count=ph.observation_count,
-            current_identity_id=ph.current_identity_id,
-            current_identity_committed_at=ph.current_identity_committed_at,
-            last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
-            gallery_mean=ph.gallery_mean,
-            height_estimate_m=ph.height_estimate_m,
-            active_cameras=ph.active_cameras,
-            closed_at=now,
-            last_floor_speed_m_s=ph.last_floor_speed_m_s,
-            last_posture=ph.last_posture,
-            metadata=ph.metadata,
-            mean_quality=ph.mean_quality,
-            view_prototypes=ph.view_prototypes,
-        )
+        return replace(ph, closed_at=now)
     # Keep open but unobserved; advance state to Kalman prediction.
     ks = predicted_ks
-    return PersonHypothesis(
-        ph_id=ph.ph_id,
+    return replace(
+        ph,
         state_mean=(
             float(ks.mean[0]),
             float(ks.mean[1]),
@@ -1408,22 +1366,6 @@ def _advance_unmatched_ph(
             float(ks.mean[3]),
         ),
         state_cov=tuple(float(v) for v in ks.covariance.flatten()),
-        born_at=ph.born_at,
-        last_seen_at=ph.last_seen_at,
-        last_seen_camera=ph.last_seen_camera,
-        observation_count=ph.observation_count,
-        current_identity_id=ph.current_identity_id,
-        current_identity_committed_at=ph.current_identity_committed_at,
-        last_independent_identity_evidence_at=ph.last_independent_identity_evidence_at,
-        gallery_mean=ph.gallery_mean,
-        height_estimate_m=ph.height_estimate_m,
-        active_cameras=ph.active_cameras,
-        closed_at=None,
-        last_floor_speed_m_s=ph.last_floor_speed_m_s,
-        last_posture=ph.last_posture,
-        metadata=ph.metadata,
-        mean_quality=ph.mean_quality,
-        view_prototypes=ph.view_prototypes,
     )
 
 
