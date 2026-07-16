@@ -195,6 +195,12 @@ The automatic revision horizon remains bounded. Explicit operator corrections ma
 and complete asynchronously. CTS is the source of truth; a correction job completes only after
 required projections acknowledge the same revision ID.
 
+`resolver.revision_horizon_s` (`identity_resolver.py`, default 600.0) has a mirror on the
+cognitive-companion side: `cts.revision_horizon_s` on `IdentityRewriter`, which bounds automatic
+(range-less) revision supersession of `PersonLocationHistory` and `cts_dementia_signals` rows
+(M06). Change both together; a value drift lets CC rewrite more or less history than the resolver
+actually promises.
+
 ## Required tests
 
 Every identity change must include focused tests for applicable categories:

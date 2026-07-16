@@ -315,7 +315,7 @@ These rules come from bugs caught during implementation and are non-negotiable.
 
 **Never mutate frozen dataclasses.** `@dataclass(frozen=True)` raises `FrozenInstanceError` on `instance.attr = value`. For transport metadata (e.g., Redis message IDs) alongside frozen domain objects, maintain a side-channel `dict[int, T]` keyed by `id(obj)`.
 
-**Stable signal IDs.** Dementia signals use `uuid.uuid5(NAMESPACE_URL, "{identity_id}\x00{signal_kind}\x00{window_start}\x00{window_end}")` so the same detection window always maps to the same UUID. This makes the `ON CONFLICT` upsert idempotent on retry.
+**Stable signal IDs.** Dementia signals use `uuid.uuid5(NAMESPACE_DNS, "{identity_id}\x00{signal_kind}\x00{window_start}\x00{window_end}")` so the same detection window always maps to the same UUID. This makes the `ON CONFLICT` upsert idempotent on retry. (Corrected 2026-07-15: this previously read `NAMESPACE_URL`, which does not match `_SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")` in `app/trajectory/dementia_signals.py` and `app/services/identity_rewriter.py` -- that constant is `uuid.NAMESPACE_DNS`.) cognitive-companion's M06 `IdentityRewriter` replicates this derivation in `backend/services/cts/signal_store.py::derive_signal_id`, pinned by a cross-repo golden-vector test on both sides -- change both together if this derivation ever changes.
 
 ### SQL correctness
 

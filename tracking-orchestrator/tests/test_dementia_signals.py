@@ -19,7 +19,12 @@ from app.storage.base import (
     InMemoryTrajectoryRepository,
 )
 from app.storage.gait import InMemoryGaitDailyRepository
-from app.trajectory.dementia_signals import DementiaSignalWorker, SignalConfig, SignalHysteresis
+from app.trajectory.dementia_signals import (
+    DementiaSignalWorker,
+    SignalConfig,
+    SignalHysteresis,
+    _stable_signal_id,
+)
 from app.trajectory.gait import GaitDailyRecord
 from app.trajectory.stats import robust_z as _robust_z
 
@@ -1727,3 +1732,23 @@ class TestGaitSlowingDetector:
         await _seed_active_point(traj_repo)
         signals = await worker.run_once(now=_GAIT_NOW)
         assert not any(s.signal_kind == "gait_slowing" for s in signals)
+
+
+class TestStableSignalIdVector:
+    """Golden-vector parity with CC's ``derive_signal_id`` (M06, F8).
+
+    The CC-side ``backend/services/cts/signal_store.py::derive_signal_id``
+    replicates this derivation byte-for-byte. The identical assertion (same
+    inputs, same expected UUID) exists in CC's
+    ``backend/tests/services/test_signal_store.py`` so the two
+    implementations cannot drift silently.
+    """
+
+    def test_golden_vector(self) -> None:
+        result = _stable_signal_id(
+            "amma",
+            "pacing",
+            datetime(2026, 7, 1, 10, 0, 0, tzinfo=UTC),
+            datetime(2026, 7, 1, 10, 30, 0, tzinfo=UTC),
+        )
+        assert result == "9c66218f-54ac-5ee4-bf71-4c3d6e1f4a24"
