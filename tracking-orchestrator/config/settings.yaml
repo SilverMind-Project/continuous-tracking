@@ -336,6 +336,13 @@ resolver:
   commit_margin_dense: 0.20
   identified_entry_boost_min_sim: 0.65
   identified_entry_min_likelihood: 0.80
+  # Gallery vote scoring (M01): one scorer applies these to every gallery
+  # query path (multiview, single-query fallback, shadow). Numeric defaults
+  # unchanged from the pre-M01 hardcoded values; M03 changes the half-life
+  # default to 2.0 once the hard vote-age cutoff lands.
+  gallery_verified_trust_multiplier: 2.0
+  gallery_auto_verified_trust_multiplier: 1.5
+  gallery_recency_half_life_days: 7.0
   # The embedding_coherence_* keys only take effect when
   # enable_embedding_coherence_boost is true.
   enable_embedding_coherence_boost: false

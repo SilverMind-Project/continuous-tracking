@@ -162,13 +162,28 @@ promotes its embedding. Failed quality gates cannot be overridden.
 Preserve the existing PH k-NN posterior and commit thresholds unless a replay-backed milestone
 explicitly changes them.
 
-- Apply a configurable trust multiplier to verified hits before identity aggregation; initial
-  value is 2.0. Do not alter cosine similarity.
-- Apply configurable exponential recency decay with an initial seven-day half-life and no floor.
+`app/tracking/identity/gallery_scoring.py` is the only permitted gallery vote scoring
+implementation (identity-continuity M01). Its `score_hits` -> `cap_votes` -> `aggregate_mean` /
+`aggregate_max_over_views` pipeline is the single scorer for every gallery query path: the
+per-orientation multiview query, the single-query fallback, and the shadow comparison. A new
+gallery query path must call `score_hits`/`cap_votes`/an existing aggregate function; inline
+scoring in the resolver (recomputing the logistic curve, trust multiplier, or recency decay by
+hand instead of delegating) is a defect.
+
+- Apply a configurable trust multiplier to verified hits before identity aggregation
+  (`resolver.gallery_verified_trust_multiplier`, default 2.0) and to auto_verified hits
+  (`resolver.gallery_auto_verified_trust_multiplier`, default 1.5). Do not alter cosine
+  similarity.
+- Apply configurable exponential recency decay (`resolver.gallery_recency_half_life_days`,
+  default 7.0) with no floor.
 - Cap or cluster near-duplicate votes by source episode, camera, and orientation.
 - Partition embeddings by model/preprocessing version and query only compatible entries.
-- Persist the top contributing entry IDs, similarities, trust multipliers, recency factors, and
-  aggregate result in decision provenance.
+- The schema for per-hit decision provenance (`IdentityDecisionGalleryHit`) exists end to end
+  (domain type, Postgres table, repository read/write) but no gallery query path populates it
+  today; `IdentityProvenanceDecision.gallery_hits` is always empty (verified 2026-07-20, M01).
+  `ScoredHit` already carries every field `IdentityDecisionGalleryHit` needs; wiring population
+  through `resolve()` into `ProvenancePersistStage` is separate, deferred work, not part of the
+  shared scorer.
 
 ## Evidence and revision persistence
 

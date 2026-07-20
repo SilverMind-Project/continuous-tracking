@@ -140,7 +140,15 @@ class _FakePH:
 @pytest.fixture
 async def gallery() -> _CountingGalleryRepo:
     """Gallery with alice front entries (single-query path) and back entries
-    (multiview path), so both shadow comparisons have real work to do."""
+    (multiview path), so both shadow comparisons have real work to do.
+
+    ``seen_at`` must be relative to real wall-clock time (``datetime.now(UTC)``),
+    not a hardcoded calendar date: M01 makes the multiview shadow apply the
+    same recency decay as the live single-query path, so a fixed past date
+    silently drifts stale as the real clock advances and spuriously trips the
+    shadow-mismatch counter this file asserts on (found while implementing
+    M01; the pre-M01 multiview path ignored ``seen_at`` entirely, so this
+    never surfaced before)."""
     repo = _CountingGalleryRepo()
     await repo.upsert_identity(
         Identity(
@@ -160,7 +168,7 @@ async def gallery() -> _CountingGalleryRepo:
                 gallery_entry_id=f"alice-front-{i}",
                 identity_id=_ALICE_ID,
                 embedding=_FRONT_EMB,
-                seen_at=datetime(2026, 6, 1, tzinfo=UTC),
+                seen_at=datetime.now(UTC),
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.FRONT,
@@ -174,7 +182,7 @@ async def gallery() -> _CountingGalleryRepo:
                 gallery_entry_id=f"alice-back-{i}",
                 identity_id=_ALICE_ID,
                 embedding=_BACK_EMB,
-                seen_at=datetime(2026, 6, 1, tzinfo=UTC),
+                seen_at=datetime.now(UTC),
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.BACK,
@@ -192,7 +200,7 @@ async def gallery() -> _CountingGalleryRepo:
                 gallery_entry_id=f"bob-back-{i}",
                 identity_id=_BOB_ID,
                 embedding=_BOB_BACK_EMB,
-                seen_at=datetime(2026, 6, 1, tzinfo=UTC),
+                seen_at=datetime.now(UTC),
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.BACK,

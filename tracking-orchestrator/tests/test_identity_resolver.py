@@ -446,6 +446,41 @@ class TestIdentityResolver:
         assert len(outcome.decisions) == 1
         assert outcome.decisions[0].identity_id == "alice"
 
+    def test_score_gallery_hits_boost_applies_before_weighting(self) -> None:
+        """M01 regression: the identified-entry boost on the fallback path now
+        applies to the logit before trust/recency weighting, not to the
+        already-weighted value (pins the behavior change called out in the
+        M01 PR description).
+
+        A mid-similarity verified hit (raw logit 0.5 at sim 0.70, which
+        clears the 0.65 boost gate) would NOT have boosted under the pre-M01
+        code: the old weighted value (0.5 * 2.0 trust * 1.0 recency = 1.0)
+        already exceeded identified_entry_min_likelihood (0.80), so the old
+        post-weighting check (`weighted_logit < 0.80`) never fired and the
+        entry voted at 1.0. Post-M01, the check runs on the raw logit
+        (0.5 < 0.80) and does fire, floor-raising the logit to 0.80 before
+        weighting: 0.80 * 2.0 * 1.0 = 1.6.
+        """
+        identities = [_make_identity("alice", "Alice")]
+        gallery_repo = InMemoryGalleryRepository()
+        resolver = _make_resolver(identities=identities, gallery_repo=gallery_repo)
+
+        entry = GalleryEmbedding(
+            gallery_entry_id="alice-mid-sim",
+            identity_id="alice",
+            embedding=[0.5] * 8,
+            seen_at=datetime.now(UTC),
+            state="operator_verified",
+        )
+
+        posterior = resolver._score_gallery_hits([(entry, 0.70)])
+
+        # boosted weighted_logit=1.6 for alice; boost triggers the non-match
+        # floor spread, giving UNKNOWN = (1 - 0.80) / 1 = 0.2. Normalized:
+        # alice = 1.6 / 1.8, UNKNOWN = 0.2 / 1.8.
+        assert posterior.distribution["alice"] == pytest.approx(1.6 / 1.8, abs=1e-9)
+        assert posterior.distribution["UNKNOWN"] == pytest.approx(0.2 / 1.8, abs=1e-9)
+
     @pytest.mark.asyncio
     async def test_resolve_gallery_enrolled_without_constructor_identities(self) -> None:
         """Regression: new track should commit via ReID even when known_identities=[]

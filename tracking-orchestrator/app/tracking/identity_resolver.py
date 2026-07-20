@@ -61,6 +61,13 @@ from .identity.commit_policy import (
     evaluate_commit as _evaluate_commit_pure,
 )
 from .identity.evidence import IdentityEvidence
+from .identity.gallery_scoring import (
+    GalleryScoringConfig,
+    aggregate_max_over_views,
+    aggregate_mean,
+    cap_votes,
+    score_hits,
+)
 from .identity.policy import CommitPolicy as _CommitPolicy
 from .identity.posterior import EvidencePosterior, combine_posteriors
 from .identity.types import IdentityAuthority
@@ -235,6 +242,18 @@ class ResolverConfig:
     # commit_prob.  The floor ensures the posterior crosses commit_prob
     # even when only alice's entries appear in the top-k results.
     identified_entry_min_likelihood: float = 0.80
+
+    # --- Gallery vote scoring (M01: unified across every gallery query path) ---
+    # Trust multiplier for operator_verified gallery entries before aggregation.
+    gallery_verified_trust_multiplier: float = 2.0
+
+    # Trust multiplier for auto_verified gallery entries (state introduced in
+    # M02; harmless today since no row can be in that state yet).
+    gallery_auto_verified_trust_multiplier: float = 1.5
+
+    # Exponential recency half-life in days, no floor. M03 changes the
+    # default to 2.0 once the hard vote-age cutoff (M03) is in place.
+    gallery_recency_half_life_days: float = 7.0
 
     # --- Embedding coherence (sticky ReID) ---
     # When enabled, if a GlobalTrack's last N gallery entries are all
@@ -1234,48 +1253,23 @@ class IdentityResolver:
             )
             return PosteriorDist({})
 
-        # Map hits to per-identity scores using logistic curve.
-        likelihood: dict[str, list[float]] = defaultdict(list)
-        boosted = False
-        for entry, sim in all_hits:
-            logit = self._logistic(sim)
-            if (
-                entry.identity_id is not None
-                and sim >= self._config.identified_entry_boost_min_sim
-                and logit < self._config.identified_entry_min_likelihood
-            ):
-                logit = self._config.identified_entry_min_likelihood
-                boosted = True
-            key = entry.identity_id if entry.identity_id else "UNKNOWN"
-            likelihood[key].append(logit)
-
-        # MAX over views per identity (not mean).
-        avg: dict[str, float] = {}
-        for key, scores in likelihood.items():
-            avg[key] = max(scores)  # max-over-views is the core fix
+        cfg = self._gallery_scoring_config()
+        scored = score_hits(
+            all_hits,
+            now=datetime.now(UTC),
+            cfg=cfg,
+            logistic=self._logistic,
+            on_nonvoting_state=self._on_nonvoting_gallery_vote,
+        )
+        capped = cap_votes(scored)
+        avg = aggregate_max_over_views(
+            capped,
+            identities=self._identities.keys(),
+            cfg=cfg,
+        )
 
         if not avg:
             return PosteriorDist({})
-
-        if boosted:
-            non_match_floor = (1.0 - self._config.identified_entry_min_likelihood) / max(
-                len(self._identities), 1
-            )
-            for iid in self._identities:
-                if iid not in avg:
-                    avg[iid] = non_match_floor
-            if "UNKNOWN" not in avg:
-                avg["UNKNOWN"] = non_match_floor
-
-        # Single-identity normalization guard. Without residual UNKNOWN mass a
-        # weak best match still normalizes to the only/nearest enrolled identity,
-        # so a stranger whose body does not match anyone commits as that identity
-        # (the clinical identity-leak this resolver must never produce). Hold the
-        # complement of the best identity match strength on UNKNOWN: weak matches
-        # resolve to UNKNOWN while strong matches (logit near 1) still commit.
-        identity_logits = [v for k, v in avg.items() if k != "UNKNOWN"]
-        if identity_logits:
-            avg["UNKNOWN"] = max(avg.get("UNKNOWN", 0.0), 1.0 - max(identity_logits))
 
         top_reid = max(avg.items(), key=lambda x: x[1])
         logger.debug(
@@ -1290,84 +1284,47 @@ class IdentityResolver:
 
         return PosteriorDist(avg)
 
+    def _gallery_scoring_config(self) -> GalleryScoringConfig:
+        """Build the pure scorer's config from the live ResolverConfig."""
+        return GalleryScoringConfig(
+            verified_trust_multiplier=self._config.gallery_verified_trust_multiplier,
+            auto_verified_trust_multiplier=self._config.gallery_auto_verified_trust_multiplier,
+            recency_half_life_days=self._config.gallery_recency_half_life_days,
+            identified_entry_boost_min_sim=self._config.identified_entry_boost_min_sim,
+            identified_entry_min_likelihood=self._config.identified_entry_min_likelihood,
+        )
+
+    @staticmethod
+    def _on_nonvoting_gallery_vote() -> None:
+        """Backstop counter: a non-operator_verified/auto_verified row reached scoring.
+
+        Governance invariant: only operator_verified and auto_verified entries
+        may vote. The gallery SQL enforces this; this counter is the
+        observability backstop that pages if a non-verified vector ever
+        reaches the vote (e.g. a future query regression). Keep it
+        detection-only so it cannot mask a breach by silently changing scores.
+        """
+        metrics.metrics.reid_rejected_vector_vote_attempts_total.inc()
+
     def _score_gallery_hits(
         self,
         similar: list[tuple[GalleryEmbedding, float]],
         coherence_active: bool = False,
     ) -> PosteriorDist:
         """Score gallery search hits into a PosteriorDist with trust-aware scoring."""
-        now = datetime.now(UTC)
-
-        # Apply source-episode/camera/orientation vote caps: group by
-        # (identity_id, source_episode_id, camera_id, orientation) and take the
-        # strongest vote per group.
-        best_hit_per_group: dict[
-            tuple[str | None, str, str, int], tuple[GalleryEmbedding, float, float]
-        ] = {}
-        for entry, sim in similar:
-            # Governance invariant: only operator_verified entries may vote. The
-            # gallery SQL enforces this; this counter is the observability backstop
-            # that pages if a non-verified vector ever reaches the vote (e.g. a
-            # future query regression). Keep it detection-only so it cannot mask a
-            # breach by silently changing scores.
-            if entry.state != "operator_verified":
-                metrics.metrics.reid_rejected_vector_vote_attempts_total.inc()
-            logit = self._logistic(sim)
-            # Verified multiplier default 2.0 before aggregation
-            multiplier = 2.0 if entry.state == "operator_verified" else 1.0
-
-            # Seven-day exponential half-life, no floor
-            # Ensure naive datetimes are treated as UTC if needed, but they should be aware.
-            seen_at = entry.seen_at if entry.seen_at.tzinfo else entry.seen_at.replace(tzinfo=UTC)
-            age_days = (now - seen_at).total_seconds() / 86400.0
-            recency = 2.0 ** (-age_days / 7.0) if age_days >= 0 else 1.0
-
-            weighted_logit = logit * multiplier * recency
-
-            group_key = (
-                entry.identity_id,
-                entry.source_episode_id or "",
-                entry.camera_id or "",
-                entry.orientation,
-            )
-
-            if (
-                group_key not in best_hit_per_group
-                or best_hit_per_group[group_key][2] < weighted_logit
-            ):
-                best_hit_per_group[group_key] = (entry, sim, weighted_logit)
-
-        likelihood: dict[str, list[float]] = defaultdict(list)
-        boosted = False
-
-        for entry, sim, weighted_logit in best_hit_per_group.values():
-            if (
-                entry.identity_id is not None
-                and sim >= self._config.identified_entry_boost_min_sim
-                and weighted_logit < self._config.identified_entry_min_likelihood
-            ):
-                weighted_logit = self._config.identified_entry_min_likelihood
-                boosted = True
-            key = entry.identity_id if entry.identity_id else "UNKNOWN"
-            likelihood[key].append(weighted_logit)
-
-        # Average scores per identity.
-        avg: dict[str, float] = {}
-        for key, scores in likelihood.items():
-            avg[key] = sum(scores) / len(scores)
+        cfg = self._gallery_scoring_config()
+        scored = score_hits(
+            similar,
+            now=datetime.now(UTC),
+            cfg=cfg,
+            logistic=self._logistic,
+            on_nonvoting_state=self._on_nonvoting_gallery_vote,
+        )
+        capped = cap_votes(scored)
+        avg = aggregate_mean(capped, identities=self._identities.keys(), cfg=cfg)
 
         if not avg:
             return PosteriorDist({})
-
-        if boosted:
-            non_match_floor = (1.0 - self._config.identified_entry_min_likelihood) / max(
-                len(self._identities), 1
-            )
-            for iid in self._identities:
-                if iid not in avg:
-                    avg[iid] = non_match_floor
-            if "UNKNOWN" not in avg:
-                avg["UNKNOWN"] = non_match_floor
 
         coherence_boosted_identity: str | None = None
         if coherence_active and avg:
@@ -1384,7 +1341,7 @@ class IdentityResolver:
             top_score=round(top_reid[1], 4),
             candidate_count=len(avg),
             gallery_entries_searched=len(similar),
-            face_entry_boosted=boosted,
+            face_entry_boosted=any(hit.boosted for hit in capped),
             coherence_boosted=coherence_boosted_identity,
         )
 

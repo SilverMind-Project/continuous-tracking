@@ -16,11 +16,17 @@ _EXPECTED_ALL = (
     "CommitPolicy",
     "EvidencePosterior",
     "EvidenceSource",
+    "GalleryScoringConfig",
     "IdentityAuthority",
     "IdentityEvidence",
+    "ScoredHit",
+    "aggregate_max_over_views",
+    "aggregate_mean",
+    "cap_votes",
     "combine_posteriors",
     "compute_contradiction",
     "evaluate_commit",
+    "score_hits",
 )
 
 

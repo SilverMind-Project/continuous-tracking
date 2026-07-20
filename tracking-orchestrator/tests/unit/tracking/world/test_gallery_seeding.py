@@ -33,6 +33,13 @@ from app.tracking.world.config import WorldTrackerConfig
 from app.tracking.world.tracker import WorldTracker
 
 BASE_TIME = datetime(2026, 6, 2, 9, 0, 0, tzinfo=UTC)
+# BASE_TIME drives the tracker's simulated clock (WorldTracker.step(now=...))
+# only. Gallery entry `seen_at` values must use real datetime.now(UTC)
+# instead: the resolver's recency decay (M01) compares seen_at against real
+# wall-clock time, not the tracker's simulated `now`, so a gallery entry
+# dated BASE_TIME drifts stale as the real clock advances and its vote
+# weight silently collapses toward zero (found while implementing M01; the
+# pre-M01 multiview path ignored seen_at entirely, so this never surfaced).
 # Two orthogonal body embeddings (cosine 0): a populated gallery for one must
 # never resolve onto the other via the always-on baseline ReID query.
 _GRANDMA_BODY = tuple(1.0 if i < 384 else 0.0 for i in range(768))
@@ -72,7 +79,7 @@ async def _seed_grandma_body(gallery: InMemoryGalleryRepository) -> None:
                 gallery_entry_id=f"g{i}",
                 identity_id="grandma",
                 embedding=_GRANDMA_BODY,
-                seen_at=BASE_TIME,
+                seen_at=datetime.now(UTC),
                 quality=0.9,
                 face_confirmed=True,
                 camera_id="cam01",
@@ -168,7 +175,7 @@ async def test_multiview_back_view_retrieval_commits_via_max_over_views() -> Non
             gallery_entry_id="gf",
             identity_id="grandma",
             embedding=grandma_front,
-            seen_at=BASE_TIME,
+            seen_at=datetime.now(UTC),
             quality=0.9,
             face_confirmed=True,
             camera_id="cam01",
@@ -181,7 +188,7 @@ async def test_multiview_back_view_retrieval_commits_via_max_over_views() -> Non
             gallery_entry_id="gb",
             identity_id="grandma",
             embedding=grandma_back,
-            seen_at=BASE_TIME,
+            seen_at=datetime.now(UTC),
             quality=0.9,
             face_confirmed=True,
             camera_id="cam01",

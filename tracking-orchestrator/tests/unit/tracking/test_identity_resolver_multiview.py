@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
@@ -14,6 +14,9 @@ from app.domain import (
     ViewPrototype,
 )
 from app.storage.gallery import InMemoryGalleryRepository
+from app.tracking import identity_resolver as identity_resolver_module
+from app.tracking.identity.gallery_scoring import ScoredHit
+from app.tracking.identity.gallery_scoring import score_hits as _real_score_hits
 from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 
 
@@ -69,7 +72,15 @@ class _FakePH:
 
 @pytest.fixture
 async def gallery_with_alice_back() -> InMemoryGalleryRepository:
-    """Gallery where alice has back-facing entries and bob has front-facing entries."""
+    """Gallery where alice has back-facing entries and bob has front-facing entries.
+
+    ``seen_at`` must be relative to real wall-clock time (``datetime.now(UTC)``),
+    not a hardcoded calendar date: M01 makes the multiview path apply the same
+    recency decay as the fallback path, so a fixed past date silently drifts
+    stale as the real clock advances and eventually crushes alice's vote
+    weight toward zero (found while implementing M01; the pre-M01 multiview
+    path ignored ``seen_at`` entirely, so this never surfaced before).
+    """
     repo = InMemoryGalleryRepository()
     await repo.upsert_identity(
         Identity(
@@ -93,7 +104,7 @@ async def gallery_with_alice_back() -> InMemoryGalleryRepository:
                 gallery_entry_id=f"alice-back-{i}",
                 identity_id=_ALICE_ID,
                 embedding=_BACK_EMB,
-                seen_at=datetime(2026, 6, 1, tzinfo=UTC),
+                seen_at=datetime.now(UTC),
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.BACK,
@@ -107,7 +118,7 @@ async def gallery_with_alice_back() -> InMemoryGalleryRepository:
                 gallery_entry_id=f"bob-front-{i}",
                 identity_id=_BOB_ID,
                 embedding=_FRONT_EMB,
-                seen_at=datetime(2026, 6, 1, tzinfo=UTC),
+                seen_at=datetime.now(UTC),
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.FRONT,
@@ -225,3 +236,198 @@ async def test_multiview_shadow_does_not_crash(
 
     # The shadow comparison should have run without crashing.
     assert len(outcome.decisions) == 1
+
+
+@pytest.mark.asyncio
+async def test_multiview_applies_trust_and_recency() -> None:
+    """V1 regression: recency decay must reduce an old verified hit's vote
+    weight on the multiview path.
+
+    Fails on pre-M01 code, which scored the multiview path inline with no
+    trust or recency at all: fresh_prob would equal old_prob exactly there,
+    since entry age never entered the computation.
+    """
+
+    async def _top_prob_for_age(age_days: int) -> float:
+        now_ref = datetime.now(UTC)
+        repo = InMemoryGalleryRepository()
+        await repo.upsert_identity(
+            Identity(
+                identity_id=_ALICE_ID,
+                display_name="Alice",
+                enrolled_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
+        await repo.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id="alice-back-0",
+                identity_id=_ALICE_ID,
+                embedding=_BACK_EMB,
+                seen_at=now_ref - timedelta(days=age_days),
+                quality=0.8,
+                face_confirmed=True,
+                orientation=OrientationBin.BACK,
+                state="operator_verified",
+            )
+        )
+        config = ResolverConfig(commit_prob=0.65, enable_multiview_gallery=True)
+        resolver = IdentityResolver(gallery_repo=repo, config=config)
+        back_proto = ViewPrototype(
+            orientation=OrientationBin.BACK, embedding=tuple(_BACK_EMB), count=5
+        )
+        ph = _FakePH(
+            entity_id="ph-1",
+            obs_ids=["obs-1"],
+            camera_ids=["cam-1"],
+            view_prototypes=(back_proto,),
+        )
+        outcome = await resolver.resolve(hypotheses=[ph], new_face_anchors=[], captured_at=now_ref)
+        _, top_prob = outcome.decisions[0].posterior.top_identity()
+        return top_prob
+
+    fresh_prob = await _top_prob_for_age(0)
+    old_prob = await _top_prob_for_age(14)  # two half-lives at the default 7-day half-life
+
+    assert fresh_prob > old_prob
+
+
+@pytest.mark.asyncio
+async def test_multiview_vote_caps_same_episode() -> None:
+    """Ten near-duplicate crops from one episode must vote once, not ten times."""
+    now = datetime.now(UTC)
+
+    def _make_entry(entry_id: str) -> GalleryEmbedding:
+        return GalleryEmbedding(
+            gallery_entry_id=entry_id,
+            identity_id=_ALICE_ID,
+            embedding=_BACK_EMB,
+            seen_at=now,
+            quality=0.8,
+            face_confirmed=True,
+            orientation=OrientationBin.BACK,
+            state="operator_verified",
+            source_episode_id="ep-shared",
+            camera_id="cam-1",
+        )
+
+    config = ResolverConfig(commit_prob=0.65, enable_multiview_gallery=True)
+    back_proto = ViewPrototype(orientation=OrientationBin.BACK, embedding=tuple(_BACK_EMB), count=5)
+    ph = _FakePH(
+        entity_id="ph-1", obs_ids=["obs-1"], camera_ids=["cam-1"], view_prototypes=(back_proto,)
+    )
+
+    ten_dupes_repo = InMemoryGalleryRepository()
+    await ten_dupes_repo.upsert_identity(
+        Identity(
+            identity_id=_ALICE_ID,
+            display_name="Alice",
+            enrolled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    for i in range(10):
+        await ten_dupes_repo.upsert_gallery_entry(_make_entry(f"alice-back-dup-{i}"))
+    ten_dupes_resolver = IdentityResolver(gallery_repo=ten_dupes_repo, config=config)
+    ten_dupes_posterior = await ten_dupes_resolver._from_gallery_multiview(ph, (back_proto,))
+
+    single_repo = InMemoryGalleryRepository()
+    await single_repo.upsert_identity(
+        Identity(
+            identity_id=_ALICE_ID,
+            display_name="Alice",
+            enrolled_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    await single_repo.upsert_gallery_entry(_make_entry("alice-back-single"))
+    single_resolver = IdentityResolver(gallery_repo=single_repo, config=config)
+    single_posterior = await single_resolver._from_gallery_multiview(ph, (back_proto,))
+
+    # All ten duplicates land in the same (identity, episode, camera,
+    # orientation) group, so the capped result must equal a single vote --
+    # not be amplified by count.
+    assert ten_dupes_posterior.distribution[_ALICE_ID] == pytest.approx(
+        single_posterior.distribution[_ALICE_ID]
+    )
+
+
+@pytest.mark.asyncio
+async def test_backstop_counter_increments_on_multiview_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-voting-state row that reaches the multiview scorer (e.g. via a
+    future query-filter regression) must increment the observability
+    backstop counter, exactly like it already does on the fallback path.
+    """
+    from app.observability.metrics import metrics as global_metrics
+
+    repo = InMemoryGalleryRepository()
+    pending_entry = GalleryEmbedding(
+        gallery_entry_id="alice-pending",
+        identity_id=_ALICE_ID,
+        embedding=_BACK_EMB,
+        seen_at=datetime.now(UTC),
+        state="pending_review",
+        orientation=OrientationBin.BACK,
+    )
+
+    async def _fake_search_similar(
+        *, embedding: list[float], limit: int = 20
+    ) -> list[tuple[GalleryEmbedding, float]]:
+        return [(pending_entry, 0.9)]
+
+    monkeypatch.setattr(repo, "search_similar", _fake_search_similar)
+
+    config = ResolverConfig(commit_prob=0.65, enable_multiview_gallery=True)
+    resolver = IdentityResolver(gallery_repo=repo, config=config)
+    back_proto = ViewPrototype(orientation=OrientationBin.BACK, embedding=tuple(_BACK_EMB), count=5)
+    ph = _FakePH(
+        entity_id="ph-1", obs_ids=["obs-1"], camera_ids=["cam-1"], view_prototypes=(back_proto,)
+    )
+
+    counter = global_metrics.reid_rejected_vector_vote_attempts_total
+    before = counter._value.get()
+
+    await resolver._from_gallery_multiview(ph, (back_proto,))
+
+    assert counter._value.get() == before + 1
+
+
+@pytest.mark.asyncio
+async def test_shadow_path_uses_unified_scorer(
+    monkeypatch: pytest.MonkeyPatch,
+    gallery_with_alice_back: InMemoryGalleryRepository,
+) -> None:
+    """The multiview shadow comparison (live config off, sampled at 1.0)
+    must route through the same shared scorer as the live paths, not a
+    third inline implementation.
+    """
+    config = ResolverConfig(
+        commit_prob=0.65,
+        enable_multiview_gallery=False,
+        multiview_shadow_sample_rate=1.0,
+    )
+    resolver = IdentityResolver(gallery_repo=gallery_with_alice_back, config=config)
+
+    back_proto = ViewPrototype(orientation=OrientationBin.BACK, embedding=tuple(_BACK_EMB), count=5)
+    ph = _FakePH(
+        entity_id="ph-1", obs_ids=["obs-1"], camera_ids=["cam-1"], view_prototypes=(back_proto,)
+    )
+
+    calls: list[list[ScoredHit]] = []
+
+    def _spy(*args: object, **kwargs: object) -> list[ScoredHit]:
+        result = _real_score_hits(*args, **kwargs)  # type: ignore[arg-type]
+        calls.append(result)
+        return result
+
+    monkeypatch.setattr(identity_resolver_module, "score_hits", _spy)
+
+    outcome = await resolver.resolve(
+        hypotheses=[ph],
+        new_face_anchors=[],
+        captured_at=datetime(2026, 6, 1, 12, 0, 1, tzinfo=UTC),
+    )
+
+    assert len(outcome.decisions) == 1
+    # The shadow comparison (multiview, forced on by sample_rate=1.0) must
+    # have exercised the shared scorer at least once.
+    assert len(calls) >= 1
