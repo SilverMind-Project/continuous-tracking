@@ -110,9 +110,7 @@ from ..trajectory.motion_energy import MotionEnergyTracker
 from ..trajectory.posture import GlobalPostureTracker
 from ..trajectory.posture_strategy import PostureStrategy
 from ..trajectory.trajectory_writer import TrajectoryWriter
-from ..transport.dwell_publisher import DwellPublisher
 from ..transport.ph_continuation_publisher import PHContinuationPublisher
-from ..transport.presence_publisher import PresencePublisher
 from ..transport.redis_streams import (
     FrameReady,
     RedisStreamsTransport,
@@ -288,8 +286,6 @@ class FrameProcessingPipeline:
         self._identity_resolver: IdentityResolver | None = None
         self._revision_publisher: RevisionPublisher | None = None
         self._ph_continuation_publisher: PHContinuationPublisher | None = None
-        self._presence_publisher: PresencePublisher | None = None
-        self._dwell_publisher: DwellPublisher | None = None
         self._identity_provenance_repo: IdentityDecisionRepositoryProtocol | None = None
         # World tracker
         self._world_tracker: WorldTracker | None = None
@@ -427,18 +423,6 @@ class FrameProcessingPipeline:
             redis_url=self._config.transport.redis_url,
         )
         await self._ph_continuation_publisher.connect()
-
-        # Presence and dwell publishers for CC load decoupling.
-        self._presence_publisher = PresencePublisher(
-            redis_url=self._config.transport.redis_url,
-            stream=self._config.transport.presence_stream,
-        )
-        await self._presence_publisher.connect()
-        self._dwell_publisher = DwellPublisher(
-            redis_url=self._config.transport.redis_url,
-            stream=self._config.transport.dwell_stream,
-        )
-        await self._dwell_publisher.connect()
 
         self._world_tracker = WorldTracker(
             ph_repo=self._ph_repo,
@@ -633,8 +617,6 @@ class FrameProcessingPipeline:
                 motion_energy_tracker=self._motion_energy_tracker,
                 posture_tracker=self._posture_tracker,
                 prev_active_ph_ids=self._prev_active_ph_ids,
-                presence_publisher=self._presence_publisher,
-                dwell_publisher=self._dwell_publisher,
                 fall_detection_stage=self._fall_detection_stage,
                 gait_segmenter=self._gait_segmenter,
                 gait_bout_repo=self._gait_bout_repo,
@@ -767,12 +749,6 @@ class FrameProcessingPipeline:
 
         if self._ph_continuation_publisher:
             await self._ph_continuation_publisher.disconnect()
-
-        if self._presence_publisher:
-            await self._presence_publisher.disconnect()
-
-        if self._dwell_publisher:
-            await self._dwell_publisher.disconnect()
 
         if self._face_id_client:
             await self._face_id_client.disconnect()

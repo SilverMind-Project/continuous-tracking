@@ -98,16 +98,6 @@ class PublishStage(FrameStage):
                 "second_probability": 0.0,
                 "posterior_entropy": snap.posterior_entropy,
                 "direct_face_evidence": snap.direct_face_evidence,
-                "evidence_json": snap.evidence_json,
-                "inferred_identity_id": snap.inferred_identity_id,
-                "effective_identity_id": snap.effective_identity_id,
-                "authority": snap.authority,
-                "decision_source": snap.decision_source,
-                "decision_id": snap.decision_id,
-                "conflict": snap.conflict,
-                "last_independent_evidence_at_unix_ns": snap.last_independent_evidence_at_unix_ns,
-                "config_hash": snap.config_hash,
-                "model_set_version": snap.model_set_version,
                 "mean_quality": snap.mean_quality,
             }
             identity_snapshots.append(id_snap)
@@ -133,18 +123,7 @@ class PublishStage(FrameStage):
                             if decision.evidence
                             else False
                         ),
-                        "evidence_json": decision.evidence_json,
-                        "inferred_identity_id": decision.inferred_identity_id,
-                        "effective_identity_id": decision.effective_identity_id,
-                        "authority": decision.authority,
-                        "decision_source": decision.decision_source,
-                        "decision_id": decision.decision_id,
-                        "conflict": decision.conflict,
-                        "last_independent_evidence_at_unix_ns": (
-                            decision.last_independent_evidence_at_unix_ns
-                        ),
-                        "config_hash": decision.config_hash,
-                        "model_set_version": decision.model_set_version,
+                        "mean_quality": 0.0,
                     }
                 )
 
@@ -180,7 +159,6 @@ class PublishStage(FrameStage):
             detections=ctx.domain_detections if ctx.raw_detections else None,
             minio_key=ctx.frame.minio_key,
             room_name=room_name or "",
-            identities=identities or None,
             frame_width=ctx.effective_width,
             frame_height=ctx.effective_height,
             capture_time_unix_ns=ctx.frame.capture_time_unix_ns,

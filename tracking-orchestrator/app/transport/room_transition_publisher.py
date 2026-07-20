@@ -33,8 +33,6 @@ class RoomTransitionPublisher(BasePublisher):
             b"direction": event.direction.encode(),
             b"inside_room_id": event.inside_room_id.encode(),
             b"outside_room_id": event.outside_room_id.encode(),
-            b"floor_x_m": str(event.floor_x_m).encode(),
-            b"floor_y_m": str(event.floor_y_m).encode(),
             b"event_time": event.event_time.isoformat().encode(),
         }
         if identity_id:

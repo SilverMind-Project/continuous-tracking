@@ -1309,15 +1309,14 @@ class PersonActivity:
 # ---------------------------------------------------------------------------
 
 DementiaSignalKind = Literal[
+    # Pinned to cts_contracts.DementiaSignalKind. Do not add kinds here
+    # unless they are also added to the wire contract.
     "pacing",
     "bathroom_dwell_anomaly",
     "sundowning_index",
     "nighttime_movement",
     "stillness_anomaly",
     "absence",
-    "inferred_dwell_exceeded",
-    "presumed_location_unknown",
-    "identity_disagreement",
     "fall_suspected",
     "gait_slowing",
     "agitation_index",

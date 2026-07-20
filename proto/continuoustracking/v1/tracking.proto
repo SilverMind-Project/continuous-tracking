@@ -314,6 +314,7 @@ message IdentityCandidate {
 // or disappears from the home.  One event per state transition; never
 // emitted per frame.
 message PresenceEvent {
+  option deprecated = true; // Retired in M37 (TD-006 pattern).
   // Person Hypothesis ID of the person whose presence changed.
   string ph_id = 1;
 
@@ -331,6 +332,7 @@ message PresenceEvent {
 }
 
 enum PresenceEventType {
+  option deprecated = true; // Retired in M37 (TD-006 pattern).
   PRESENCE_EVENT_TYPE_UNSPECIFIED = 0;
   PRESENCE_EVENT_TYPE_APPEARED = 1;
   PRESENCE_EVENT_TYPE_DISAPPEARED = 2;
@@ -340,6 +342,7 @@ enum PresenceEventType {
 // or ends (person enters or leaves a room).  One event per threshold
 // crossing; never emitted per frame.
 message DwellEvent {
+  option deprecated = true; // Retired in M37 (TD-006 pattern).
   // Person Hypothesis ID.
   string ph_id = 1;
 
@@ -360,6 +363,7 @@ message DwellEvent {
 }
 
 enum DwellEventType {
+  option deprecated = true; // Retired in M37 (TD-006 pattern).
   DWELL_EVENT_TYPE_UNSPECIFIED = 0;
   DWELL_EVENT_TYPE_STARTED = 1;
   DWELL_EVENT_TYPE_ENDED = 2;

@@ -64,8 +64,6 @@ class TransportConfig:
     revisions_stream: str = "tracking.revisions"
     signals_stream: str = "tracking.signals"
     scene_samples_stream: str = "scene.samples"
-    presence_stream: str = "tracking.presence"
-    dwell_stream: str = "tracking.dwell"
 
 
 # Re-export proto FrameReady so callers use the wire type directly without
@@ -219,7 +217,6 @@ class RedisStreamsTransport:
         detections: list[Detection] | None = None,
         minio_key: str = "",
         room_name: str = "",
-        identities: dict[str, tuple[str, float]] | None = None,
         frame_width: int = 0,
         frame_height: int = 0,
         capture_time_unix_ns: int = 0,
@@ -239,9 +236,6 @@ class RedisStreamsTransport:
             detections: per-person detections to embed in the proto.
             minio_key: MinIO key of the frame for downstream review.
             room_name: resolved room name for the camera.
-            identities: mapping ``ph_id -> (identity_id, confidence)``
-                for detections that resolved to a committed identity. Each
-                entry becomes an ``IdentityRevision`` sub-message.
             frame_width: source frame pixel width.
             frame_height: source frame pixel height.
             capture_time_unix_ns: source frame capture timestamp in unix ns.
@@ -263,7 +257,6 @@ class RedisStreamsTransport:
             minio_key=minio_key,
             room_name=room_name,
             detections=detections or [],
-            identities=identities or {},
             frame_width=frame_width,
             frame_height=frame_height,
             capture_time_unix_ns=capture_time_unix_ns,
@@ -322,7 +315,6 @@ def _build_tracking_event_pb(
     minio_key: str,
     room_name: str,
     detections: list[Detection],
-    identities: dict[str, tuple[str, float]],
     frame_width: int = 0,
     frame_height: int = 0,
     capture_time_unix_ns: int = 0,
@@ -399,16 +391,6 @@ def _build_tracking_event_pb(
             d.evidence.top2_prob = top2_prob
             d.evidence.face_anchor_used = face_anchor_used
 
-    # per-detection identity revisions use ph_id.
-    for ph_id, (identity_id, confidence) in identities.items():
-        if not ph_id or not identity_id:
-            continue
-        revision = event.identity_revisions.add(
-            ph_id=ph_id,
-            map_identity_id=identity_id,
-        )
-        revision.candidates.add(identity_id=identity_id, probability=float(confidence))
-
     # Identity snapshots (field 8) — canonical per-frame identity display.
     if identity_snapshots:
         for snap in identity_snapshots:
@@ -419,7 +401,6 @@ def _build_tracking_event_pb(
             s.second_probability = float(snap.get("second_probability", 0.0) or 0.0)  # type: ignore[arg-type]
             s.posterior_entropy = float(snap.get("posterior_entropy", 0.0) or 0.0)  # type: ignore[arg-type]
             s.direct_face_evidence = bool(snap.get("direct_face_evidence", False))
-            s.evidence_json = str(snap.get("evidence_json", ""))
             s.mean_quality = float(snap.get("mean_quality", 0.0) or 0.0)  # type: ignore[arg-type]
 
     return event

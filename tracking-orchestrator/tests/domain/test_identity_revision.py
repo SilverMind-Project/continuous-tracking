@@ -109,13 +109,12 @@ def test_identity_evidence_defaults() -> None:
     assert evidence.evidence_sources == []
 
 
-def test_dementia_signal_kind_includes_m4_kinds() -> None:
+def test_dementia_signal_kind_matches_contracts() -> None:
     from typing import get_args
+    import cts_contracts
 
     from app.domain import DementiaSignalKind  # type: ignore[attr-defined]
 
-    # These must be valid values for the Literal type at runtime
-    kinds = set(get_args(DementiaSignalKind))
-    assert "inferred_dwell_exceeded" in kinds
-    assert "presumed_location_unknown" in kinds
-    assert "identity_disagreement" in kinds
+    assert set(get_args(DementiaSignalKind)) == {
+        str(k) for k in cts_contracts.DementiaSignalKind
+    }

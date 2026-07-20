@@ -131,7 +131,7 @@ The normative wire format is one raw protobuf value per stream entry. The comple
 compatibility table is in
 `../../../docs/identity-integrity-contract-matrix.md`.
 
-The current `cc.identity_assertions` producer and consumer are a known exception: they exchange
+The `cc.identity_assertions` producer (live as of M38) and consumer are a known exception: they exchange
 individual text fields rather than one protobuf payload. M00 records this defect but does not alter
 the live path. Its fix requires a coordinated producer/consumer cutover because dual-codec stream
 shims are prohibited.

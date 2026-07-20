@@ -12,9 +12,6 @@ Surface:
   compensating revision (never deletes the original).
 * ``POST /internal/projection-acks`` -- downstream projection acknowledgement
   (CC posts here after applying a revision); completes the revision job.
-* ``POST /internal/corrections`` -- **deprecated** whole-PH compatibility adapter
-  that proposes the current segment and applies it. Removed once the CC admin UI
-  (M08) calls the explicit ``/apply`` API. See ``docs/api/reference.md``.
 """
 
 from __future__ import annotations
@@ -155,24 +152,6 @@ class JobStatusResponse(BaseModel):
     row_counts: dict[str, int]
     attempts: int
     last_error: str | None
-
-
-# Legacy whole-PH correction (deprecated).
-class CorrectionRequest(BaseModel):
-    ph_id: str = Field(..., min_length=1, max_length=128)
-    new_identity_id: str | None = Field(default=None, max_length=128)
-    actor: str = Field(..., min_length=1, max_length=128)
-    reason: str = Field(default="manual", max_length=512)
-    display_name: str | None = Field(default=None, max_length=128)
-    evidence: dict[str, Any] = Field(default_factory=dict)
-
-
-class CorrectionResponse(BaseModel):
-    revision_id: str
-    ph_id: str
-    previous_identity_id: str | None
-    new_identity_id: str | None
-    applied_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -333,44 +312,6 @@ async def record_projection_ack(
         )
     )
     return ProjectionAckResponse(revision_id=body.revision_id, completed=completed)
-
-
-@router.post("/internal/corrections", response_model=CorrectionResponse, deprecated=True)
-async def apply_correction_legacy(
-    body: CorrectionRequest,
-    response: Response,
-    ctx: _CorrectionContext = Depends(get_context),
-) -> CorrectionResponse:
-    """Deprecated whole-PH correction adapter.
-
-    Proposes the current segment and applies it through the service so legacy
-    callers keep working until the explicit ``/apply`` API is adopted (M08).
-    """
-    response.headers["Deprecation"] = "true"
-    response.headers["Link"] = '</internal/corrections/apply>; rel="successor-version"'
-    service = _require_service(ctx)
-    try:
-        proposal = await service.propose_segment(body.ph_id)
-        result = await service.apply_correction(
-            ph_id=body.ph_id,
-            actor=body.actor,
-            reason_code="other",
-            observation_start=proposal.start.captured_at,
-            observation_end=proposal.end.captured_at,
-            base_ph_version=proposal.ph_version,
-            target_identity_id=body.new_identity_id,
-            set_unknown=body.new_identity_id is None,
-            note=body.reason,
-        )
-    except CorrectionError as exc:
-        _raise_for_correction_error(exc)
-    return CorrectionResponse(
-        revision_id=result.revision_id,
-        ph_id=result.ph_id,
-        previous_identity_id=result.previous_identity_id,
-        new_identity_id=result.new_identity_id,
-        applied_at=datetime.now().astimezone().isoformat(),
-    )
 
 
 def _result_response(result: Any) -> CorrectionResultResponse:
