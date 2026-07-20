@@ -30,7 +30,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
 from structlog import get_logger
@@ -51,7 +51,7 @@ from ..domain import (
 )
 from ..inference.evidence import FaceEvidence
 from ..observability import metrics
-from ..storage.base import GalleryRepository
+from ..storage.base import VOTING_STATES, GalleryRepository
 from .identity.commit_policy import (
     CommitEvaluation,
     collect_evidence_identity_ids,
@@ -76,6 +76,13 @@ logger = get_logger(__name__)
 
 
 _CommitEvaluation = CommitEvaluation
+
+
+class _GallerySearchKwargs(TypedDict):
+    """Kwargs shape returned by ``IdentityResolver._gallery_search_kwargs``."""
+
+    max_age_seconds: int | None
+    states: frozenset[str] | None
 
 
 @dataclass(frozen=True)
@@ -252,9 +259,18 @@ class ResolverConfig:
     # directly at candidate creation, below operator_verified's full trust.
     gallery_auto_verified_trust_multiplier: float = 1.5
 
-    # Exponential recency half-life in days, no floor. M03 changes the
-    # default to 2.0 once the hard vote-age cutoff (M03) is in place.
-    gallery_recency_half_life_days: float = 7.0
+    # Exponential recency half-life in days, no floor. Default 2.0
+    # (identity-continuity M03, decision D2; shortened from the original 7.0).
+    gallery_recency_half_life_days: float = 2.0
+
+    # Hard vote-age cutoff in seconds: gallery entries older than this
+    # contribute zero vote weight on every path (identity-continuity M03,
+    # decision D4). None means no cutoff (rollback state; production default
+    # is 43200s/12h via settings.yaml). SOLIDER-REID embeddings are
+    # clothing-dominated, so a stale entry describes yesterday's outfit; the
+    # cutoff encodes the wardrobe-change step function that recency decay
+    # alone cannot.
+    gallery_vote_max_age_s: float | None = None
 
     # --- Embedding coherence (sticky ReID) ---
     # When enabled, if a GlobalTrack's last N gallery entries are all
@@ -1181,6 +1197,7 @@ class IdentityResolver:
             similar = await self._gallery_repo.search_similar(
                 embedding=query,
                 limit=20,
+                **self._gallery_search_kwargs(),
             )
         except Exception:  # noqa: BLE001
             logger.warning(
@@ -1190,6 +1207,8 @@ class IdentityResolver:
                 exc_info=True,
             )
             return PosteriorDist({})
+
+        metrics.metrics.reid_gallery_hits_total.labels(path="fallback").inc(len(similar))
 
         if not similar:
             logger.debug(
@@ -1233,6 +1252,7 @@ class IdentityResolver:
                 similar = await self._gallery_repo.search_similar(
                     embedding=query_emb,
                     limit=20,
+                    **self._gallery_search_kwargs(),
                 )
             except Exception:  # noqa: BLE001
                 logger.warning(
@@ -1243,6 +1263,7 @@ class IdentityResolver:
                 )
                 continue
 
+            metrics.metrics.reid_gallery_hits_total.labels(path="multiview").inc(len(similar))
             all_hits.extend(similar)
 
         if not all_hits:
@@ -1294,6 +1315,20 @@ class IdentityResolver:
             identified_entry_boost_min_sim=self._config.identified_entry_boost_min_sim,
             identified_entry_min_likelihood=self._config.identified_entry_min_likelihood,
         )
+
+    def _gallery_search_kwargs(self) -> _GallerySearchKwargs:
+        """Kwargs every vote-path ``search_similar`` call must pass (M03).
+
+        Centralizes the hard vote-age cutoff and the voting-states filter so
+        a future call site cannot forget either. ``gallery_vote_max_age_s``
+        is ``None`` when the cutoff is disabled (rollback state); truncating
+        to ``int`` matches the repository signature (whole seconds).
+        """
+        cutoff = self._config.gallery_vote_max_age_s
+        return {
+            "max_age_seconds": int(cutoff) if cutoff is not None else None,
+            "states": VOTING_STATES,
+        }
 
     @staticmethod
     def _on_nonvoting_gallery_vote() -> None:
@@ -1373,7 +1408,11 @@ class IdentityResolver:
         embs = np.array([e.embedding for e in recent], dtype=np.float32)
         query = np.mean(embs, axis=0).tolist()
         try:
-            similar = await self._gallery_repo.search_similar(embedding=query, limit=20)
+            similar = await self._gallery_repo.search_similar(
+                embedding=query,
+                limit=20,
+                **self._gallery_search_kwargs(),
+            )
         except Exception:  # noqa: BLE001
             logger.warning(
                 "reid_cross_camera_assist_search_failed",
@@ -1381,6 +1420,8 @@ class IdentityResolver:
                 exc_info=True,
             )
             return False
+
+        metrics.metrics.reid_gallery_hits_total.labels(path="shadow").inc(len(similar))
 
         for entry, _sim in similar:
             if entry.identity_id != identity_id:

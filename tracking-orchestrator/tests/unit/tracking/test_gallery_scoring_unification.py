@@ -109,7 +109,11 @@ async def test_multiview_and_fallback_paths_score_identical_hits_identically(
     repo = InMemoryGalleryRepository()
 
     async def _fake_search_similar(
-        *, embedding: list[float], limit: int = 20
+        *,
+        embedding: list[float],
+        limit: int = 20,
+        max_age_seconds: int | None = None,
+        states: frozenset[str] | None = None,
     ) -> list[tuple[GalleryEmbedding, float]]:
         return hits
 

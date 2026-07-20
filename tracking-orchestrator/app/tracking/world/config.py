@@ -106,6 +106,13 @@ class WorldTrackerConfig:
     # Only consulted when enable_reid_disagreement_cost is true, so the
     # per-observation gallery lookup adds zero cost while the flag is off.
     reid_disagreement_min_similarity: float = 0.5
+    # Hard vote-age cutoff for the disagreement probe's gallery lookup, in
+    # seconds (identity-continuity M03, decision D4). None means no cutoff.
+    # Production default is 43200s/12h via settings.yaml, mirroring
+    # resolver.gallery_vote_max_age_s so the probe sees the same corpus the
+    # resolver votes with even though the flag above is off in production
+    # today; enabling it later inherits correct temporal behavior for free.
+    reid_disagreement_max_age_s: float | None = None
 
     # ---- PH lifecycle ----
     ph_close_grace_s: float = 5.0

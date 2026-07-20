@@ -138,7 +138,10 @@ class GalleryRepository(ABC):
             embedding: query embedding vector.
             limit: maximum number of results.
             camera_id: if provided, filter to gallery entries from this camera.
-            max_age_seconds: if provided, filter to entries newer than now - max_age_seconds.
+            max_age_seconds: if provided, filter to entries with
+                seen_at > now - max_age_seconds (strict; an entry exactly at
+                the cutoff age is excluded, pinned identically on both the
+                InMemory and Postgres peers).
             states: lifecycle-state filter; the default excludes pending/rejected
                 rows so unverified vectors never vote (operator_verified and
                 auto_verified both vote, at their configured trust
@@ -682,8 +685,11 @@ class InMemoryGalleryRepository(GalleryRepository):
         if camera_id is not None:
             entries = [e for e in entries if e.camera_id == camera_id]
         if max_age_seconds is not None:
+            # Strict `>` matches the Postgres peer's `seen_at > now() - interval`
+            # (identity-continuity M03): an entry exactly at the cutoff age is
+            # excluded on both peers.
             cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
-            entries = [e for e in entries if e.seen_at >= cutoff]
+            entries = [e for e in entries if e.seen_at > cutoff]
         if states is not None:
             entries = [e for e in entries if e.state in states]
         scored = [(entry, _entry_cosine_sim(embedding, entry.embedding)) for entry in entries]

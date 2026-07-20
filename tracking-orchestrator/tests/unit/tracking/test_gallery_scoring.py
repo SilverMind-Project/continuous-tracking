@@ -130,6 +130,38 @@ def test_recency_half_life_config() -> None:
     assert by_id["naive"].recency_factor == pytest.approx(1.0)
 
 
+def test_recency_half_life_2_0_arithmetic() -> None:
+    """M03 (decision D2): production half-life shortens 7.0 -> 2.0 days.
+
+    recency_factor = 2 ** (-age_days / half_life_days), so with
+    half_life_days=2.0: a 2-day-old entry (one full half-life) weights
+    exactly 0.5; a 1-day-old entry (half a half-life) weights
+    2 ** (-0.5) ~= 0.7071; a 12h-old entry (quarter of a half-life) weights
+    2 ** (-0.25) ~= 0.8409.
+    """
+    cfg = GalleryScoringConfig(recency_half_life_days=2.0)
+    two_days_ago = _NOW.replace(day=18)
+    one_day_ago = _NOW.replace(day=19)
+    twelve_hours_ago = _NOW.replace(hour=0)
+
+    scored = score_hits(
+        [
+            (_entry(entry_id="two-days", seen_at=two_days_ago), 0.5),
+            (_entry(entry_id="one-day", seen_at=one_day_ago), 0.5),
+            (_entry(entry_id="twelve-hours", seen_at=twelve_hours_ago), 0.5),
+        ],
+        now=_NOW,
+        cfg=cfg,
+        logistic=_identity_logistic,
+        on_nonvoting_state=lambda: None,
+    )
+    by_id = {hit.entry.gallery_entry_id: hit for hit in scored}
+
+    assert by_id["two-days"].recency_factor == pytest.approx(0.5)
+    assert by_id["one-day"].recency_factor == pytest.approx(math.sqrt(0.5))
+    assert by_id["twelve-hours"].recency_factor == pytest.approx(2.0 ** (-0.25))
+
+
 def test_cap_votes_keeps_strongest_per_group() -> None:
     cfg = GalleryScoringConfig()
     hits = [

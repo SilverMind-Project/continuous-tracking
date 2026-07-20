@@ -12,6 +12,7 @@ behind a divergent fixture.
 from __future__ import annotations
 
 import inspect
+from datetime import UTC, datetime
 
 import pytest
 
@@ -32,6 +33,7 @@ from tests.storage._gallery_parity_fixtures import (
     expected_ids,
     make_entries,
     make_identities,
+    max_age_entries,
     query_embedding,
 )
 
@@ -82,6 +84,59 @@ class TestSearchSimilarParity:
         hits = await repo.search_similar(query_embedding(), limit=10)
         got = {entry.gallery_entry_id for entry, _sim in hits}
         assert got == expected_ids(states=VOTING_STATES)
+
+
+class TestSearchSimilarMaxAgeParity:
+    """M03: hard vote-age cutoff boundary matrix (InMemory half).
+
+    The Postgres twin lives in
+    ``tests/integration/test_gallery_state_parity_postgres.py``. Both peers
+    must agree that an entry at or older than the cutoff age is excluded
+    (strict ``>``, matching ``PostgresGalleryRepository``'s
+    ``seen_at > now() - interval`` predicate); the ``near_cutoff`` entry
+    (11h59m59s) brackets the 12h line to within about a second instead of
+    leaving a wide untested band. Neither peer's `search_similar` takes an
+    injectable "now", so no wall-clock test can pin the exact
+    age-equals-cutoff tie to the microsecond -- see ``max_age_entries``'s
+    docstring.
+    """
+
+    @pytest.mark.asyncio
+    async def test_max_age_seconds_boundary(self) -> None:
+        repo = InMemoryGalleryRepository()
+        for identity in make_identities():
+            await repo.upsert_identity(identity)
+        now = datetime.now(UTC)
+        fresh, near_cutoff, boundary, stale = max_age_entries(now)
+        for entry in (fresh, near_cutoff, boundary, stale):
+            await repo.upsert_gallery_entry(entry)
+
+        hits = await repo.search_similar(query_embedding(), limit=10, max_age_seconds=12 * 3600)
+
+        got = {entry.gallery_entry_id for entry, _sim in hits}
+        assert got == {fresh.gallery_entry_id, near_cutoff.gallery_entry_id}, (
+            "11h and 11h59m59s kept; 12h boundary and 13h stale both excluded"
+        )
+
+    @pytest.mark.asyncio
+    async def test_none_disables_the_cutoff(self) -> None:
+        repo = InMemoryGalleryRepository()
+        for identity in make_identities():
+            await repo.upsert_identity(identity)
+        now = datetime.now(UTC)
+        fresh, near_cutoff, boundary, stale = max_age_entries(now)
+        for entry in (fresh, near_cutoff, boundary, stale):
+            await repo.upsert_gallery_entry(entry)
+
+        hits = await repo.search_similar(query_embedding(), limit=10, max_age_seconds=None)
+
+        got = {entry.gallery_entry_id for entry, _sim in hits}
+        assert got == {
+            fresh.gallery_entry_id,
+            near_cutoff.gallery_entry_id,
+            boundary.gallery_entry_id,
+            stale.gallery_entry_id,
+        }
 
 
 class TestListGalleryEntriesForTrackletsParity:

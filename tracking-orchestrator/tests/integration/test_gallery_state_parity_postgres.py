@@ -27,6 +27,7 @@ from tests.storage._gallery_parity_fixtures import (
     expected_ids,
     make_entries,
     make_identities,
+    max_age_entries,
     query_embedding,
 )
 
@@ -69,6 +70,47 @@ async def test_search_similar_state_filter(db_pool: Any, states: frozenset[str] 
     hits = await repo.search_similar(query_embedding(), limit=10, states=states)
     got = {str(entry.gallery_entry_id) for entry, _sim in hits}
     assert got == expected_ids(states=states)
+
+
+@pytest.mark.asyncio
+async def test_search_similar_max_age_seconds_boundary(db_pool: Any) -> None:
+    """M03: strict `>` excludes an entry at or older than the cutoff age,
+    matching the InMemory peer
+    (``tests/storage/test_gallery_state_parity.py::TestSearchSimilarMaxAgeParity``).
+    """
+    repo = PostgresGalleryRepository(db_pool)
+    for identity in make_identities():
+        await repo.upsert_identity(identity)
+    now = datetime.now(UTC)
+    fresh, near_cutoff, boundary, stale = max_age_entries(now)
+    for entry in (fresh, near_cutoff, boundary, stale):
+        await repo.upsert_gallery_entry(entry)
+
+    hits = await repo.search_similar(query_embedding(), limit=10, max_age_seconds=12 * 3600)
+
+    got = {str(entry.gallery_entry_id) for entry, _sim in hits}
+    assert got == {str(fresh.gallery_entry_id), str(near_cutoff.gallery_entry_id)}
+
+
+@pytest.mark.asyncio
+async def test_search_similar_max_age_seconds_none_disables_cutoff(db_pool: Any) -> None:
+    repo = PostgresGalleryRepository(db_pool)
+    for identity in make_identities():
+        await repo.upsert_identity(identity)
+    now = datetime.now(UTC)
+    fresh, near_cutoff, boundary, stale = max_age_entries(now)
+    for entry in (fresh, near_cutoff, boundary, stale):
+        await repo.upsert_gallery_entry(entry)
+
+    hits = await repo.search_similar(query_embedding(), limit=10, max_age_seconds=None)
+
+    got = {str(entry.gallery_entry_id) for entry, _sim in hits}
+    assert got == {
+        str(fresh.gallery_entry_id),
+        str(near_cutoff.gallery_entry_id),
+        str(boundary.gallery_entry_id),
+        str(stale.gallery_entry_id),
+    }
 
 
 @pytest.mark.asyncio

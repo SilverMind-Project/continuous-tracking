@@ -440,7 +440,11 @@ async def test_backstop_counter_increments_on_multiview_path(
     )
 
     async def _fake_search_similar(
-        *, embedding: list[float], limit: int = 20
+        *,
+        embedding: list[float],
+        limit: int = 20,
+        max_age_seconds: int | None = None,
+        states: frozenset[str] | None = None,
     ) -> list[tuple[GalleryEmbedding, float]]:
         return [(pending_entry, 0.9)]
 

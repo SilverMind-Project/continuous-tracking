@@ -38,6 +38,7 @@ from ...domain import (
 )
 from ...observability import metrics as _metrics
 from ...storage.base import (
+    VOTING_STATES,
     CameraTopologyRepository,
     CoPresenceRepository,
     PHRepositoryProtocol,
@@ -329,29 +330,37 @@ class WorldTracker:
     ) -> list[str | None]:
         """Resolve each observation's verified-ReID identity from the gallery.
 
-        Only ``operator_verified`` gallery entries vote (program architecture
-        decision 6): ``search_similar``'s default state filter now guarantees
-        this at the repository boundary (M03), and the explicit
-        ``entry.state == "operator_verified"`` check below remains as a
-        paged-invariant backstop in case a future caller widens the state
-        filter. Returns a list aligned to *observations*; an entry is ``None``
-        when there is no embedding, no gallery repository, or no
-        operator_verified match clears ``reid_disagreement_min_similarity``.
-        The caller only invokes this when ``enable_reid_disagreement_cost`` is
-        true, so it adds no per-frame gallery queries while the flag is off.
+        ``operator_verified`` and ``auto_verified`` gallery entries vote
+        (``VOTING_STATES``, decision D3): the probe must see the same corpus
+        the resolver votes with, per identity-continuity M03. A hard vote-age
+        cutoff (``reid_disagreement_max_age_s``, mirroring the resolver's
+        ``gallery_vote_max_age_s``) is applied at the repository boundary so a
+        stale clothing match cannot disagree-cost a fresh observation. Returns
+        a list aligned to *observations*; an entry is ``None`` when there is
+        no embedding, no gallery repository, or no voting-state match clears
+        ``reid_disagreement_min_similarity``. The caller only invokes this
+        when ``enable_reid_disagreement_cost`` is true, so it adds no
+        per-frame gallery queries while the flag is off.
         """
         if self._gallery_repo is None:
             return [None] * len(observations)
         cfg = self._config
+        max_age = cfg.reid_disagreement_max_age_s
+        max_age_seconds = int(max_age) if max_age is not None else None
         resolved: list[str | None] = []
         for obs in observations:
             identity: str | None = None
             if obs.embedding:
-                hits = await self._gallery_repo.search_similar(obs.embedding, limit=1)
+                hits = await self._gallery_repo.search_similar(
+                    obs.embedding,
+                    limit=1,
+                    max_age_seconds=max_age_seconds,
+                    states=VOTING_STATES,
+                )
                 if hits:
                     entry, similarity = hits[0]
                     if (
-                        entry.state == "operator_verified"
+                        entry.state in VOTING_STATES
                         and entry.identity_id
                         and similarity >= cfg.reid_disagreement_min_similarity
                     ):

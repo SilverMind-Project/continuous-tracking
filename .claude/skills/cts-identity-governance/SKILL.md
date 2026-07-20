@@ -198,7 +198,7 @@ hand instead of delegating) is a defect.
   (`resolver.gallery_auto_verified_trust_multiplier`, default 1.5). Do not alter cosine
   similarity.
 - Apply configurable exponential recency decay (`resolver.gallery_recency_half_life_days`,
-  default 7.0) with no floor.
+  default 2.0 as of identity-continuity M03, shortened from the original 7.0) with no floor.
 - Cap or cluster near-duplicate votes by source episode, camera, and orientation.
 - Partition embeddings by model/preprocessing version and query only compatible entries.
 - The schema for per-hit decision provenance (`IdentityDecisionGalleryHit`) exists end to end
@@ -207,6 +207,32 @@ hand instead of delegating) is a defect.
   `ScoredHit` already carries every field `IdentityDecisionGalleryHit` needs; wiring population
   through `resolve()` into `ProvenancePersistStage` is separate, deferred work, not part of the
   shared scorer.
+
+### Hard vote-age cutoff (identity-continuity M03)
+
+`resolver.gallery_vote_max_age_s` (default 43200s/12h; `None`/absent/zero disables it) is a hard
+filter enforced one level below the shared scorer, at `GalleryRepository.search_similar` itself:
+gallery entries older than the cutoff never reach `score_hits` at all, on any path. SOLIDER-REID
+embeddings are clothing-dominated and clothing validity is a step function at wardrobe change, not
+a smooth decay; the cutoff encodes the step, and `gallery_recency_half_life_days` handles staleness
+inside the window.
+
+`IdentityResolver._gallery_search_kwargs()` is the single helper that builds the cutoff plus the
+`VOTING_STATES` filter for every `search_similar` call. A new resolver gallery query path must call
+it (`**self._gallery_search_kwargs()`); recomputing `max_age_seconds`/`states` by hand at a new call
+site is a defect, exactly like inline scoring above. The tracker's verified-ReID disagreement probe
+(`WorldTracker._resolve_verified_reid_identities`) mirrors this with its own
+`world_tracker.reid_disagreement_max_age_s`, so a future flip of `enable_reid_disagreement_cost`
+inherits correct temporal behavior without further changes.
+
+One read is deliberately exempt: `list_gallery_entries_for_tracklets`, called from the single-query
+fallback's corpus-building step to build a PH's own query embedding from its recent gallery entries,
+does not take the cutoff. That read describes the PH's own track, not a candidate vote.
+
+The cutoff has a production precondition: it depends on `auto_verified` rows accumulating from
+same-day, calibrated face matches (M02). A 12-hour cutoff with no same-day population starves the
+resolver's ReID vote every morning (V4) -- M02 must be landed and enabled in production, with
+`auto_verified` rows observably accumulating on ordinary days, before relying on the M03 defaults.
 
 ## Evidence and revision persistence
 

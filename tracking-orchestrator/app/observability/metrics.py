@@ -206,6 +206,11 @@ class Metrics:
     reid_candidate_rejected_total: Counter  # label: reason (bounded, typed set)
     reid_candidate_created_total: Counter  # label: state (pending_review|auto_verified, M02)
 
+    # ---- M03 temporal vote window ----
+    # Vote volume per query path. Compare against candidate-creation volume to
+    # see the vote corpus collapse if gallery_vote_max_age_s starves ReID.
+    reid_gallery_hits_total: Counter  # label: path (multiview|fallback|shadow)
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -731,6 +736,12 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_reid_candidate_created_total",
             "Governed ReID gallery candidates created by ReIDCandidateStage, by mint state.",
             ["state"],
+        ),
+        reid_gallery_hits_total=_counter(
+            "cts_reid_gallery_hits_total",
+            "Gallery search_similar hits returned per query path, after the M03 vote-age "
+            "cutoff and voting-states filter.",
+            ["path"],
         ),
     )
 

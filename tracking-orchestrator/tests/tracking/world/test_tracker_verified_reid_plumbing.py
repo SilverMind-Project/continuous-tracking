@@ -96,34 +96,86 @@ def _tracker(gallery: InMemoryGalleryRepository, cfg: WorldTrackerConfig) -> Wor
     )
 
 
-async def test_only_operator_verified_entries_vote() -> None:
-    """A pending_review gallery match must not contribute a verified-ReID id.
+async def test_only_voting_state_entries_vote() -> None:
+    """A pending_review gallery match must not contribute a verified-ReID id;
+    an auto_verified match must (identity-continuity M03, decision D3).
 
-    ``search_similar`` now filters state before ranking/limiting (matching
-    Postgres's always-on ``rg.state = 'operator_verified'`` predicate), so
-    with grandma's own entry pending, her query embedding must be genuinely
-    dissimilar to amma's verified entry -- otherwise amma would surface as a
-    coincidental top-1 regardless of the state gate. Orthogonal basis vectors
-    (not random unit vectors, which have nonzero expected cosine similarity in
-    low dimensions) guarantee that.
+    ``search_similar``'s ``states=VOTING_STATES`` argument filters state
+    before ranking/limiting (matching Postgres's ``rg.state = ANY(...)``
+    predicate), so with grandma's own entry pending, her query embedding must
+    be genuinely dissimilar to amma's and chandra's entries -- otherwise one
+    would surface as a coincidental top-1 regardless of the state gate.
+    Orthogonal basis vectors (not random unit vectors, which have nonzero
+    expected cosine similarity in low dimensions) guarantee that.
     """
     dim = 8
     amma = [1.0] + [0.0] * (dim - 1)
     grandma = [0.0, 1.0] + [0.0] * (dim - 2)
+    chandra = [0.0, 0.0, 1.0] + [0.0] * (dim - 3)
     gallery = InMemoryGalleryRepository()
     await _add_entry(gallery, "g1", "amma", amma, "operator_verified")
     await _add_entry(gallery, "g2", "grandma", grandma, "pending_review")
+    await _add_entry(gallery, "g3", "chandra", chandra, "auto_verified")
     tracker = _tracker(gallery, WorldTrackerConfig(enable_reid_disagreement_cost=True))
 
     resolved = await tracker._resolve_verified_reid_identities(
         [
-            _obs("d-amma", amma),  # matches a verified entry
+            _obs("d-amma", amma),  # matches an operator_verified entry
             _obs("d-grandma", grandma),  # matches only a pending entry
+            _obs("d-chandra", chandra),  # matches an auto_verified entry
             _obs("d-none", []),  # no embedding
         ]
     )
 
-    assert resolved == ["amma", None, None]
+    assert resolved == ["amma", None, "chandra", None]
+
+
+async def test_disagreement_probe_uses_cutoff_and_voting_states() -> None:
+    """M03 (decision D4): the probe's gallery lookup honors
+    ``reid_disagreement_max_age_s``, mirroring the resolver's
+    ``gallery_vote_max_age_s`` so the probe sees the same corpus the resolver
+    votes with. A stale clothing match (older than the cutoff) must not
+    contribute a verified-ReID id even though it is otherwise a strong,
+    voting-state match.
+    """
+    amma = _unit(1)
+    gallery = InMemoryGalleryRepository()
+    await gallery.upsert_identity(
+        Identity(identity_id="amma", display_name="amma", enrolled_at=NOW)
+    )
+    stale_entry = GalleryEmbedding(
+        gallery_entry_id="g-stale",
+        identity_id="amma",
+        embedding=amma,
+        seen_at=NOW - timedelta(hours=13),
+        state="operator_verified",
+    )
+    await gallery.upsert_gallery_entry(stale_entry)
+    tracker = _tracker(
+        gallery,
+        WorldTrackerConfig(
+            enable_reid_disagreement_cost=True,
+            reid_disagreement_max_age_s=12 * 3600,
+        ),
+    )
+
+    resolved = await tracker._resolve_verified_reid_identities([_obs("d1", amma)])
+
+    assert resolved == [None]
+
+    # With the cutoff disabled, the same stale entry votes.
+    tracker_no_cutoff = _tracker(
+        gallery,
+        WorldTrackerConfig(
+            enable_reid_disagreement_cost=True,
+            reid_disagreement_max_age_s=None,
+        ),
+    )
+    resolved_no_cutoff = await tracker_no_cutoff._resolve_verified_reid_identities(
+        [_obs("d1", amma)]
+    )
+
+    assert resolved_no_cutoff == ["amma"]
 
 
 async def test_sub_threshold_match_contributes_no_identity() -> None:

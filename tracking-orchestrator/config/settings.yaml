@@ -338,11 +338,25 @@ resolver:
   identified_entry_min_likelihood: 0.80
   # Gallery vote scoring (M01): one scorer applies these to every gallery
   # query path (multiview, single-query fallback, shadow). Numeric defaults
-  # unchanged from the pre-M01 hardcoded values; M03 changes the half-life
-  # default to 2.0 once the hard vote-age cutoff lands.
+  # unchanged from the pre-M01 hardcoded values, except recency half-life
+  # (M03, decision D2: 7.0 -> 2.0 below).
   gallery_verified_trust_multiplier: 2.0
   gallery_auto_verified_trust_multiplier: 1.5
-  gallery_recency_half_life_days: 7.0
+  # Recency half-life shortened from 7 to 2 days (identity-continuity M03,
+  # decision D2): SOLIDER-REID embeddings are clothing-dominated, and
+  # clothing validity is a step function at wardrobe change, not a smooth
+  # 7-day decay. The hard cutoff below encodes the step; this half-life
+  # handles staleness inside the window.
+  gallery_recency_half_life_days: 2.0
+  # Hard vote-age cutoff in seconds (identity-continuity M03, decision D4):
+  # gallery entries older than this contribute zero vote weight on every
+  # path (resolver multiview/fallback/shadow queries and the tracker's
+  # verified-ReID disagreement probe). null/0/absent disables the cutoff
+  # (config-only rollback). Precondition: M02's auto_verified population
+  # must be accumulating in production before this default is relied upon,
+  # or the resolver loses its ReID vote every morning (V4) -- see the M03
+  # milestone doc for the production precondition check.
+  gallery_vote_max_age_s: 43200
   # The embedding_coherence_* keys only take effect when
   # enable_embedding_coherence_boost is true.
   enable_embedding_coherence_boost: false
@@ -552,6 +566,12 @@ world_tracker:
   # as an observation's verified-ReID identity. Consulted only when the flag
   # above is true.
   reid_disagreement_min_similarity: 0.5
+  # Hard vote-age cutoff for the disagreement probe's gallery lookup
+  # (identity-continuity M03, decision D4), mirroring resolver.gallery_vote_max_age_s
+  # so the probe sees the same corpus the resolver votes with. Wired now so
+  # enabling enable_reid_disagreement_cost later inherits correct temporal
+  # behavior; inert while that flag is false. null/0/absent disables the cutoff.
+  reid_disagreement_max_age_s: 43200
 
   # ---- PH-local appearance contamination guard (M03 tasks 7-9) ----
   # One bad association must not immediately pollute a PH's appearance state.

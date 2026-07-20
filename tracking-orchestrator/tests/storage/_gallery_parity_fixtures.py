@@ -13,7 +13,7 @@ IDs are real UUIDs and embeddings are 768-dim because the Postgres half must sat
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.domain import GalleryEmbedding, Identity
 
@@ -100,3 +100,43 @@ def query_embedding() -> list[float]:
     vec = [0.0] * _DIM
     vec[0] = 1.0
     return vec
+
+
+def max_age_entries(
+    now: datetime,
+) -> tuple[GalleryEmbedding, GalleryEmbedding, GalleryEmbedding, GalleryEmbedding]:
+    """Four operator_verified entries bracketing a 12h cutoff (M03 boundary matrix).
+
+    Both peers must use strict `>` (``seen_at > now - max_age_seconds``),
+    matching ``PostgresGalleryRepository``'s ``seen_at > now() - interval``
+    predicate: an entry exactly at (or older than) the cutoff age is
+    excluded. ``search_similar`` reads its own ``max_age_seconds`` cutoff
+    from a fresh ``datetime.now(UTC)`` call at request time (not from *now*
+    here), so entries seeded relative to *now* are always at least as old as
+    intended by the time the query runs -- the ``near_cutoff`` entry (11h59m59s)
+    brackets the 12h line to within about a second instead of leaving a wide
+    untested band between the 11h and 13h entries; it cannot pin the exact
+    tie (age == max_age_seconds to the microsecond), which no wall-clock test
+    can without freezing time.
+    Returns (fresh_11h, near_cutoff_11h59m59s, boundary_12h, stale_13h).
+    """
+    vec = query_embedding()
+
+    def _entry(name: str, age: timedelta) -> GalleryEmbedding:
+        return GalleryEmbedding(
+            gallery_entry_id=_stable_uuid(f"max-age-{name}-entry"),
+            identity_id=ALICE,
+            embedding=vec,
+            seen_at=now - age,
+            quality=0.9,
+            origin_tracklet_id=_stable_uuid(f"max-age-{name}-tracklet"),
+            face_confirmed=True,
+            state="operator_verified",
+        )
+
+    return (
+        _entry("fresh-11h", timedelta(hours=11)),
+        _entry("near-cutoff-11h59m59s", timedelta(hours=11, minutes=59, seconds=59)),
+        _entry("boundary-12h", timedelta(hours=12)),
+        _entry("stale-13h", timedelta(hours=13)),
+    )

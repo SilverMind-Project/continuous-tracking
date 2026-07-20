@@ -229,6 +229,7 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         gallery_verified_trust_multiplier=r.as_float("gallery_verified_trust_multiplier"),
         gallery_auto_verified_trust_multiplier=r.as_float("gallery_auto_verified_trust_multiplier"),
         gallery_recency_half_life_days=r.as_float("gallery_recency_half_life_days"),
+        gallery_vote_max_age_s=_optional_max_age_s(s, "resolver.gallery_vote_max_age_s"),
         enable_embedding_coherence_boost=r.as_bool("enable_embedding_coherence_boost"),
         embedding_coherence_window=r.as_int("embedding_coherence_window"),
         embedding_coherence_min_sim=r.as_float("embedding_coherence_min_sim"),
@@ -335,6 +336,9 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         enable_reid_disagreement_cost=wt.as_bool("enable_reid_disagreement_cost"),
         reid_disagreement_cost=wt.as_float("reid_disagreement_cost"),
         reid_disagreement_min_similarity=wt.as_float("reid_disagreement_min_similarity"),
+        reid_disagreement_max_age_s=_optional_max_age_s(
+            s, "world_tracker.reid_disagreement_max_age_s"
+        ),
         # PH-local appearance contamination guard (M03 tasks 7-9)
         enable_appearance_outlier_rejection=wt.as_bool("enable_appearance_outlier_rejection"),
         appearance_min_quality=wt.as_float("appearance_min_quality"),
@@ -434,6 +438,22 @@ def _optional_str(section: SettingsSection, key: str, default: str = "") -> str:
         return section.as_str(key)
     except SettingNotFoundError:
         return default
+
+
+def _optional_max_age_s(s: Settings, dotted_key: str) -> float | None:
+    """Read a nullable vote-age cutoff in seconds (identity-continuity M03).
+
+    Absent, ``null``, or non-positive all mean "no cutoff" (``None``); this is
+    the explicit None-when-absent-or-zero rule used by
+    ``resolver.gallery_vote_max_age_s`` and
+    ``world_tracker.reid_disagreement_max_age_s`` so the config-only rollback
+    path (delete or zero the key) needs no code change.
+    """
+    raw = s.get(dotted_key)
+    if raw is None:
+        return None
+    value = float(raw)
+    return value if value > 0 else None
 
 
 def _build_face_id_config(
