@@ -188,6 +188,7 @@ class ReIDCandidateStage(FrameStage):
             model_version=self._policy.model_version,
             preprocessing_version=self._policy.preprocessing_version,
             confidence=confidence,
+            state=eligibility.mint_state,
         )
 
         try:
@@ -210,11 +211,12 @@ class ReIDCandidateStage(FrameStage):
                 )
             return
 
-        _metrics.metrics.reid_candidate_created_total.inc()
+        _metrics.metrics.reid_candidate_created_total.labels(state=eligibility.mint_state).inc()
         logger.debug(
             "reid_candidate_created",
             candidate_id=candidate_id,
             identity_id=committed_identity_id,
             ph_id=ph_id,
             orientation=int(orientation),
+            state=eligibility.mint_state,
         )

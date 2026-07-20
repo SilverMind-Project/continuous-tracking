@@ -148,6 +148,7 @@ class EventsResponse(BaseModel):
 
 class CountsResponse(BaseModel):
     pending_review: int
+    auto_verified: int
     operator_verified: int
     rejected: int
 
@@ -171,6 +172,13 @@ class RejectRequest(BaseModel):
     actor: str = Field(..., min_length=1, max_length=128)
     base_audit_version: int
     reason: str = Field(..., min_length=1, max_length=512)
+    note: str | None = Field(default=None, max_length=2048)
+
+
+class DemoteRequest(BaseModel):
+    actor: str = Field(..., min_length=1, max_length=128)
+    base_audit_version: int
+    reason: str | None = Field(default=None, max_length=512)
     note: str | None = Field(default=None, max_length=2048)
 
 
@@ -268,6 +276,7 @@ async def review_counts(ctx: _ReviewContext = Depends(get_context)) -> CountsRes
     counts = await service.counts()
     return CountsResponse(
         pending_review=counts.get("pending_review", 0),
+        auto_verified=counts.get("auto_verified", 0),
         operator_verified=counts.get("operator_verified", 0),
         rejected=counts.get("rejected", 0),
     )
@@ -359,6 +368,31 @@ async def relabel_candidate(
         _raise_not_found(candidate_id, exc)
     except ReviewIneligibleError as exc:
         _raise_ineligible(exc)
+    except ReviewConflictError as exc:
+        _raise_conflict(exc)
+    return _candidate_model(updated)
+
+
+@router.post(
+    "/internal/reid-review/candidates/{candidate_id}/demote",
+    response_model=CandidateModel,
+)
+async def demote_candidate(
+    candidate_id: str,
+    body: DemoteRequest,
+    ctx: _ReviewContext = Depends(get_context),
+) -> CandidateModel:
+    service = _require_service(ctx)
+    try:
+        updated = await service.demote(
+            candidate_id,
+            actor=body.actor,
+            base_audit_version=body.base_audit_version,
+            reason=body.reason,
+            note=body.note,
+        )
+    except ReviewNotFoundError as exc:
+        _raise_not_found(candidate_id, exc)
     except ReviewConflictError as exc:
         _raise_conflict(exc)
     return _candidate_model(updated)

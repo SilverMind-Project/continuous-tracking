@@ -13,7 +13,14 @@ import asyncpg
 
 from ...domain import GalleryEmbedding, Identity, NewReviewCandidate, ReviewCandidate, ReviewEvent
 from ..base import GalleryRepository
-from ..gallery import PENDING_AND_VERIFIED, VERIFIED_ONLY, ReviewConflictError, ReviewNotFoundError
+from ..gallery import (
+    PENDING_AND_VERIFIED,
+    REVIEWABLE_STATES,
+    VERIFIED_ONLY,
+    VOTING_STATES,
+    ReviewConflictError,
+    ReviewNotFoundError,
+)
 
 # Columns the M09 review queue projects from reid_gallery.
 _REVIEW_COLUMNS = """
@@ -129,12 +136,12 @@ _SQL_INSERT_REVIEW_CANDIDATE = """
          keyframe_id, camera_id, capture_time, confidence, is_truncated, is_occluded,
          candidate_reason, source_episode_id, created_actor, origin_tracklet_id,
          orientation, seen_at)
-    VALUES ($1, $2, $3, $4::vector, $5, 'pending_review',
-            $6, $7, $8, $9, $10,
-            $11, $12, $13, $14, $15, $16,
-            $17, $18, $19, $20, $21, $22,
-            $23, $24, $25, $26,
-            $27, $28)
+    VALUES ($1, $2, $3, $4::vector, $5, $6::continuous_tracking.gallery_entry_state,
+            $7, $8, $9, $10, $11,
+            $12, $13, $14, $15, $16, $17,
+            $18, $19, $20, $21, $22, $23,
+            $24, $25, $26, $27,
+            $28, $29)
     ON CONFLICT (id) DO NOTHING
 """
 
@@ -268,6 +275,7 @@ class PostgresGalleryRepository(GalleryRepository):
                 candidate.identity_id,  # proposed_identity_id: same value at creation
                 embedding_str,
                 candidate.quality,
+                candidate.state,
                 candidate.model_version,
                 candidate.preprocessing_version,
                 candidate.dimensions[0] * candidate.dimensions[1],
@@ -362,7 +370,7 @@ class PostgresGalleryRepository(GalleryRepository):
         limit: int = 10,
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
-        states: frozenset[str] | None = VERIFIED_ONLY,
+        states: frozenset[str] | None = VOTING_STATES,
     ) -> list[tuple[GalleryEmbedding, float]]:
         embedding_str = _embedding_to_pgvector(embedding)
         async with self._pool.acquire() as conn:
@@ -402,7 +410,7 @@ class PostgresGalleryRepository(GalleryRepository):
         self,
         tracklet_ids: set[str],
         limit: int = 20,
-        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
+        allowed_states: frozenset[str] | None = VOTING_STATES,
         model_versions: set[str] | None = None,
     ) -> list[GalleryEmbedding]:
         # model_versions is accepted for protocol parity; no production caller
@@ -435,7 +443,7 @@ class PostgresGalleryRepository(GalleryRepository):
         tracklet_ids_a: set[str],
         tracklet_ids_b: set[str],
         limit: int = 20,
-        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
+        allowed_states: frozenset[str] | None = VOTING_STATES,
         model_versions: set[str] | None = None,
     ) -> float:
         entries_a = await self.list_gallery_entries_for_tracklets(
@@ -540,7 +548,12 @@ class PostgresGalleryRepository(GalleryRepository):
                 GROUP BY state
                 """
             )
-        counts = {"pending_review": 0, "operator_verified": 0, "rejected": 0}
+        counts = {
+            "pending_review": 0,
+            "auto_verified": 0,
+            "operator_verified": 0,
+            "rejected": 0,
+        }
         for r in rows:
             counts[str(r["state"])] = int(r["n"])
         return counts
@@ -568,7 +581,12 @@ class PostgresGalleryRepository(GalleryRepository):
             )
             if row is None:
                 raise ReviewNotFoundError(candidate_id)
-            if row["state"] != "pending_review":
+            if action == "demote":
+                if row["state"] != "auto_verified":
+                    raise ReviewConflictError(
+                        f"{candidate_id} is not auto_verified (state={row['state']})"
+                    )
+            elif row["state"] not in REVIEWABLE_STATES:
                 raise ReviewConflictError(f"{candidate_id} already reviewed (state={row['state']})")
             if row["audit_version"] != base_audit_version:
                 raise ReviewConflictError(
@@ -616,6 +634,25 @@ class PostgresGalleryRepository(GalleryRepository):
                     next_version,
                 )
                 new_state = "operator_verified"
+            elif action == "demote":
+                # Un-trust a machine-minted row back to pending_review; the
+                # vector is kept intact (unlike reject).
+                await conn.execute(
+                    """
+                        UPDATE continuous_tracking.reid_gallery
+                        SET state = 'pending_review',
+                            reviewed_actor = $2, reviewed_time = now(),
+                            review_reason = $3, review_note = $4,
+                            audit_version = $5
+                        WHERE id = $1
+                        """,
+                    candidate_id,
+                    actor,
+                    reason,
+                    note,
+                    next_version,
+                )
+                new_state = "pending_review"
             elif action == "approve":
                 await conn.execute(
                     """
@@ -681,16 +718,32 @@ class PostgresGalleryRepository(GalleryRepository):
                 )
             if row["audit_version"] != base_audit_version:
                 raise ReviewConflictError(f"{candidate_id} stale audit_version")
+            # Restore the state the candidate was promoted from, per the most
+            # recent review event, rather than assuming pending_review: undoing
+            # an approve-from-auto_verified must land back on auto_verified,
+            # not silently downgrade a machine-trusted row to pending (M02).
+            last_event = await conn.fetchrow(
+                """
+                    SELECT previous_state
+                    FROM continuous_tracking.gallery_review_events
+                    WHERE entry_id = $1
+                    ORDER BY audit_version DESC
+                    LIMIT 1
+                    """,
+                candidate_id,
+            )
+            restore_state = last_event["previous_state"] if last_event else "pending_review"
             next_version = base_audit_version + 1
             await conn.execute(
                 """
                     UPDATE continuous_tracking.reid_gallery
-                    SET state = 'pending_review', reviewed_actor = $2,
+                    SET state = $2::continuous_tracking.gallery_entry_state, reviewed_actor = $3,
                         reviewed_time = now(), review_reason = 'compensated',
-                        audit_version = $3
+                        audit_version = $4
                     WHERE id = $1
                     """,
                 candidate_id,
+                restore_state,
                 actor,
                 next_version,
             )
@@ -698,9 +751,10 @@ class PostgresGalleryRepository(GalleryRepository):
                 """
                     INSERT INTO continuous_tracking.gallery_review_events
                     (entry_id, previous_state, new_state, actor, reason, note, audit_version)
-                    VALUES ($1, 'operator_verified', 'pending_review', $2, 'compensated', NULL, $3)
+                    VALUES ($1, 'operator_verified', $2, $3, 'compensated', NULL, $4)
                     """,
                 candidate_id,
+                restore_state,
                 actor,
                 next_version,
             )

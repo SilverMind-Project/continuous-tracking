@@ -233,7 +233,60 @@ def test_counts(client_repo):
     repo.seed_review_candidate(_candidate("c2", state="operator_verified"))
     repo.seed_review_candidate(_candidate("c3", state="rejected"))
     counts = client.get("/internal/reid-review/counts").json()
-    assert counts == {"pending_review": 1, "operator_verified": 1, "rejected": 1}
+    assert counts == {
+        "pending_review": 1,
+        "auto_verified": 0,
+        "operator_verified": 1,
+        "rejected": 1,
+    }
+
+
+def test_approve_from_auto_verified_promotes(client_repo):
+    """M02: auto_verified is reviewable, not 'already reviewed'."""
+    client, repo = client_repo
+    repo.seed_review_candidate(_candidate("c1", state="auto_verified"))
+    r = client.post(
+        "/internal/reid-review/candidates/c1/approve",
+        json={"actor": "alice", "base_audit_version": 1},
+    )
+    assert r.status_code == 200
+    assert r.json()["state"] == "operator_verified"
+
+
+def test_demote_returns_auto_verified_to_pending(client_repo):
+    client, repo = client_repo
+    repo.seed_review_candidate(_candidate("c1", state="auto_verified"))
+    r = client.post(
+        "/internal/reid-review/candidates/c1/demote",
+        json={"actor": "alice", "base_audit_version": 1},
+    )
+    assert r.status_code == 200
+    assert r.json()["state"] == "pending_review"
+    events = client.get("/internal/reid-review/candidates/c1/events").json()["events"]
+    assert events[0]["previous_state"] == "auto_verified"
+    assert events[0]["new_state"] == "pending_review"
+
+
+def test_demote_from_pending_review_is_rejected(client_repo):
+    client, repo = client_repo
+    repo.seed_review_candidate(_candidate("c1", state="pending_review"))
+    r = client.post(
+        "/internal/reid-review/candidates/c1/demote",
+        json={"actor": "alice", "base_audit_version": 1},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "reid_review.stale"
+
+
+def test_reject_from_auto_verified(client_repo):
+    client, repo = client_repo
+    repo.seed_review_candidate(_candidate("c1", state="auto_verified"))
+    r = client.post(
+        "/internal/reid-review/candidates/c1/reject",
+        json={"actor": "alice", "base_audit_version": 1, "reason": "wrong_person"},
+    )
+    assert r.status_code == 200
+    assert r.json()["state"] == "rejected"
 
 
 def test_compensate_unverifies(client_repo):

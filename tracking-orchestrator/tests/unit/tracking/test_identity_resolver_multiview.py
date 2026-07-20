@@ -292,6 +292,76 @@ async def test_multiview_applies_trust_and_recency() -> None:
 
 
 @pytest.mark.asyncio
+async def test_auto_verified_votes_at_1_5_no_backstop() -> None:
+    """Identity-continuity M02: an auto_verified gallery row votes at the
+    1.5x trust multiplier (below operator_verified's 2.0x, above a
+    non-voting row's 1.0x) and never trips the non-voting-state backstop
+    counter. M01 built the scorer to expect this state; this is the first
+    test where an auto_verified row actually exists end to end through a
+    real resolver call, not just a pure gallery_scoring.py unit test.
+
+    Uses a partial-similarity (~0.65) gallery embedding rather than an exact
+    match: an exact match drives the logistic curve so close to 1.0 that
+    both trust multipliers saturate the posterior at the same normalized
+    1.0, masking the very difference this test exists to prove.
+    """
+    now_ref = datetime.now(UTC)
+    # cos-similarity to _BACK_EMB is ~0.65: below the logistic midpoint
+    # (reid_decision_sim=0.70) so neither trust multiplier saturates the
+    # weighted logit past 1.0, leaving the UNKNOWN complement (and therefore
+    # the normalized top probability) sensitive to the trust difference.
+    partial_back = np.zeros(768, dtype=np.float32)
+    partial_back[384] = 0.65
+    partial_back[0] = (1.0 - 0.65**2) ** 0.5
+    partial_back_emb = _normalize(partial_back.tolist())
+    metrics_singleton = identity_resolver_module.metrics.metrics
+
+    async def _top_prob_for_state(state: str) -> float:
+        repo = InMemoryGalleryRepository()
+        await repo.upsert_identity(
+            Identity(
+                identity_id=_ALICE_ID,
+                display_name="Alice",
+                enrolled_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
+        await repo.upsert_gallery_entry(
+            GalleryEmbedding(
+                gallery_entry_id=f"alice-back-{state}",
+                identity_id=_ALICE_ID,
+                embedding=partial_back_emb,
+                seen_at=now_ref,
+                quality=0.8,
+                face_confirmed=True,
+                orientation=OrientationBin.BACK,
+                state=state,
+            )
+        )
+        config = ResolverConfig(commit_prob=0.65, enable_multiview_gallery=True)
+        resolver = IdentityResolver(gallery_repo=repo, config=config)
+        before = metrics_singleton.reid_rejected_vector_vote_attempts_total._value.get()
+        back_proto = ViewPrototype(
+            orientation=OrientationBin.BACK, embedding=tuple(_BACK_EMB), count=5
+        )
+        ph = _FakePH(
+            entity_id="ph-1",
+            obs_ids=["obs-1"],
+            camera_ids=["cam-1"],
+            view_prototypes=(back_proto,),
+        )
+        outcome = await resolver.resolve(hypotheses=[ph], new_face_anchors=[], captured_at=now_ref)
+        after = metrics_singleton.reid_rejected_vector_vote_attempts_total._value.get()
+        assert after == before  # backstop never fires for a voting state
+        _, top_prob = outcome.decisions[0].posterior.top_identity()
+        return top_prob
+
+    auto_verified_prob = await _top_prob_for_state("auto_verified")
+    operator_verified_prob = await _top_prob_for_state("operator_verified")
+
+    assert 0.0 < auto_verified_prob < operator_verified_prob
+
+
+@pytest.mark.asyncio
 async def test_multiview_vote_caps_same_episode() -> None:
     """Ten near-duplicate crops from one episode must vote once, not ten times."""
     now = datetime.now(UTC)

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from structlog import get_logger
 
 from ..domain import GalleryEmbedding
-from ..storage.base import VERIFIED_ONLY, GalleryRepository
+from ..storage.base import VOTING_STATES, GalleryRepository
 
 logger = get_logger(__name__)
 
@@ -65,7 +65,7 @@ class GalleryCache:
     ) -> list[GalleryEmbedding]:
         self._check_stale()
         # Use frozen sets to ensure the cache key is immutable and hashable
-        s_states = frozenset(allowed_states) if allowed_states else VERIFIED_ONLY
+        s_states = frozenset(allowed_states) if allowed_states else VOTING_STATES
         s_models = frozenset(model_versions) if model_versions else frozenset()
         key = (frozenset(tracklet_ids), limit, s_states, s_models)
 
@@ -73,7 +73,7 @@ class GalleryCache:
             self._entries_by_tracklets[key] = await self._repo.list_gallery_entries_for_tracklets(
                 tracklet_ids,
                 limit=limit,
-                allowed_states=frozenset(allowed_states) if allowed_states else VERIFIED_ONLY,
+                allowed_states=frozenset(allowed_states) if allowed_states else VOTING_STATES,
                 model_versions=model_versions,
             )
         return self._entries_by_tracklets[key]
@@ -89,7 +89,7 @@ class GalleryCache:
         self._check_stale()
         key_a = frozenset(tracklet_ids_a)
         key_b = frozenset(tracklet_ids_b)
-        s_states = frozenset(allowed_states) if allowed_states else VERIFIED_ONLY
+        s_states = frozenset(allowed_states) if allowed_states else VOTING_STATES
         s_models = frozenset(model_versions) if model_versions else frozenset()
 
         cache_key = (

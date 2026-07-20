@@ -103,7 +103,9 @@ async def test_gallery_similarity_default_excludes_pending(db_pool: Any) -> None
     assert sim == 0.5
 
 
-def _candidate(candidate_id: str, *, identity_id: str, orientation: int) -> NewReviewCandidate:
+def _candidate(
+    candidate_id: str, *, identity_id: str, orientation: int, state: str = "pending_review"
+) -> NewReviewCandidate:
     return NewReviewCandidate(
         candidate_id=candidate_id,
         identity_id=identity_id,
@@ -129,6 +131,7 @@ def _candidate(candidate_id: str, *, identity_id: str, orientation: int) -> NewR
         model_version="reid-solider",
         preprocessing_version="v1",
         confidence=0.9,
+        state=state,
     )
 
 
@@ -197,3 +200,105 @@ async def test_count_gallery_entries_defaults_to_pending_and_verified(db_pool: A
     assert count == 2  # pending + verified, never rejected
     assert count == await repo.count_gallery_entries(identity_id, 1, states=PENDING_AND_VERIFIED)
     assert await repo.count_gallery_entries(identity_id, 1, states=None) == 3
+
+
+@pytest.mark.asyncio
+async def test_auto_verified_created_row_visible_to_both_readers(db_pool: Any) -> None:
+    repo = PostgresGalleryRepository(db_pool)
+    await repo.upsert_identity(make_identities()[0])
+    identity_id = make_identities()[0].identity_id
+    candidate = _candidate(
+        "11111111-2222-3333-4444-555555555610",
+        identity_id=identity_id,
+        orientation=0,
+        state="auto_verified",
+    )
+
+    await repo.create_review_candidate(candidate)
+
+    row = await repo.get_review_candidate(candidate.candidate_id)
+    assert row is not None
+    assert row.state == "auto_verified"
+    entries = await repo.list_gallery_entries(identity_id=identity_id, states=None)
+    matching = [e for e in entries if str(e.gallery_entry_id) == candidate.candidate_id]
+    assert len(matching) == 1
+    assert matching[0].state == "auto_verified"
+
+
+@pytest.mark.asyncio
+async def test_demote_restores_pending_and_keeps_vector(db_pool: Any) -> None:
+    repo = PostgresGalleryRepository(db_pool)
+    await repo.upsert_identity(make_identities()[0])
+    identity_id = make_identities()[0].identity_id
+    candidate = _candidate(
+        "11111111-2222-3333-4444-555555555611",
+        identity_id=identity_id,
+        orientation=0,
+        state="auto_verified",
+    )
+    await repo.create_review_candidate(candidate)
+
+    updated = await repo.apply_review_action(
+        candidate.candidate_id, action="demote", actor="op", base_audit_version=1
+    )
+    assert updated.state == "pending_review"
+
+    entries = await repo.list_gallery_entries(identity_id=identity_id, states=None)
+    matching = next(e for e in entries if str(e.gallery_entry_id) == candidate.candidate_id)
+    assert matching.state == "pending_review"
+    assert len(matching.embedding) > 0  # vector survives, unlike reject
+
+
+@pytest.mark.asyncio
+async def test_reject_from_auto_verified_deletes_vector(db_pool: Any) -> None:
+    repo = PostgresGalleryRepository(db_pool)
+    await repo.upsert_identity(make_identities()[0])
+    identity_id = make_identities()[0].identity_id
+    candidate = _candidate(
+        "11111111-2222-3333-4444-555555555612",
+        identity_id=identity_id,
+        orientation=0,
+        state="auto_verified",
+    )
+    await repo.create_review_candidate(candidate)
+
+    updated = await repo.apply_review_action(
+        candidate.candidate_id,
+        action="reject",
+        actor="op",
+        base_audit_version=1,
+        reason="wrong_person",
+    )
+    assert updated.state == "rejected"
+
+    entries = await repo.list_gallery_entries(identity_id=identity_id, states=None)
+    matching = next(e for e in entries if str(e.gallery_entry_id) == candidate.candidate_id)
+    assert matching.state == "rejected"
+    assert matching.embedding == []
+
+
+@pytest.mark.asyncio
+async def test_compensate_approve_from_auto_verified_restores_auto_verified(db_pool: Any) -> None:
+    """Undo must read the event trail, not assume pending_review."""
+    repo = PostgresGalleryRepository(db_pool)
+    await repo.upsert_identity(make_identities()[0])
+    identity_id = make_identities()[0].identity_id
+    candidate = _candidate(
+        "11111111-2222-3333-4444-555555555613",
+        identity_id=identity_id,
+        orientation=0,
+        state="auto_verified",
+    )
+    await repo.create_review_candidate(candidate)
+    await repo.apply_review_action(
+        candidate.candidate_id, action="approve", actor="op", base_audit_version=1
+    )
+
+    restored = await repo.compensate_review(
+        candidate.candidate_id, actor="op2", base_audit_version=2
+    )
+    assert restored.state == "auto_verified"
+
+    entries = await repo.list_gallery_entries(identity_id=identity_id, states=None)
+    matching = next(e for e in entries if str(e.gallery_entry_id) == candidate.candidate_id)
+    assert matching.state == "auto_verified"

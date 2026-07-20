@@ -26,8 +26,9 @@ class GalleryScoringConfig:
     """Trust, decay, and boost constants for gallery vote scoring."""
 
     verified_trust_multiplier: float = 2.0
-    # Used from M02 onward; harmless today since no gallery entry can be in
-    # the auto_verified state yet (the state does not exist until M02).
+    # Trust multiplier for auto_verified rows: calibrated high-confidence
+    # face matches minted directly at candidate creation (identity-continuity
+    # M02, decision D3), below operator_verified's full trust.
     auto_verified_trust_multiplier: float = 1.5
     recency_half_life_days: float = 7.0
     identified_entry_boost_min_sim: float = 0.65

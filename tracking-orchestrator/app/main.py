@@ -267,6 +267,7 @@ def _build_candidate_policy(s: Settings) -> CandidatePolicy:
         max_per_identity_orientation=rc.as_int("max_per_identity_orientation"),
         model_version=s.as_str("triton.reid_model"),
         preprocessing_version=rc.as_str("preprocessing_version"),
+        auto_verify_min_confidence=rc.as_float("auto_verify_min_confidence"),
     )
 
 

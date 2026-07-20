@@ -122,16 +122,30 @@ PH `gallery_mean` and view prototypes are inferred tracking state, not labeled i
 
 ## ReID gallery lifecycle
 
-Every ReID entry has one explicit state: `pending_review`, `operator_verified`, or `rejected`.
-Only `operator_verified` entries vote in identity resolution. Pending and rejected entries never
-vote, including through caches, fallback queries, or compatibility code.
+Every ReID entry has one explicit state: `pending_review`, `auto_verified`, `operator_verified`, or
+`rejected` (identity-continuity M02 added `auto_verified`). Pending and rejected entries never
+vote, including through caches, fallback queries, or compatibility code; `auto_verified` and
+`operator_verified` vote at their configured trust (`resolver.gallery_auto_verified_trust_multiplier`
+default 1.5, `resolver.gallery_verified_trust_multiplier` default 2.0).
 
 The only pipeline write into `reid_gallery` is `ReIDCandidateStage` →
-`GalleryRepository.create_review_candidate`, always `state='pending_review'`, always with
-crop + frame provenance and `origin_tracklet_id`/`ph_id`. A face-derived candidate requires
-the recognized ArcFace identity to equal the committed identity, with calibrated confidence
-at or above the authority threshold. Caps count pending + verified rows. Review mutations go
-through `apply_review_action`/`compensate_review` only — never raw SQL, never `_pool`.
+`GalleryRepository.create_review_candidate`, always with crop + frame provenance and
+`origin_tracklet_id`/`ph_id`. A face-derived candidate requires the recognized ArcFace identity to
+equal the committed identity, with calibrated confidence at or above the authority threshold. The
+minting state is `pending_review` unless the calibrated confidence also clears
+`reid_candidates.auto_verify_min_confidence` (default 0.90), in which case it mints straight into
+`auto_verified`; raw (uncalibrated) confidence never mints `auto_verified` (fail-closed, same
+posture as the ArcFace authority gate). Caps count `pending_review` + `auto_verified` +
+`operator_verified` rows (`PENDING_AND_VERIFIED` in `app/storage/gallery.py`), never `rejected`.
+Review mutations go through `apply_review_action`/`compensate_review` only, never raw SQL, never
+`_pool`.
+
+`app/storage/gallery.py` exports two vocabulary constants: `VERIFIED_ONLY` (`operator_verified`
+only, the default for the one admin/list surface with no vote-path caller) and `VOTING_STATES`
+(`operator_verified` + `auto_verified`, the default for every read whose result feeds identity
+resolution: `search_similar`, `list_gallery_entries_for_tracklets`, `gallery_similarity`, and the
+`GalleryCache` fallbacks that wrap them). A new gallery read chooses one of these two explicitly;
+never invent a third default.
 
 Candidate creation requires:
 
@@ -146,13 +160,22 @@ Candidate creation requires:
 A high-confidence face-derived candidate additionally requires that direct ArcFace identity equal
 the resolved identity. Never seed under a held PH label when the face names another person.
 
-Review actions are `Approve`, `Reject`, and `Relabel`:
+Review actions are `Approve`, `Reject`, `Relabel`, and `Demote`:
 
-- Approval promotes to `operator_verified`.
-- Relabel records the old proposal and corrected identity, then promotes.
-- Rejection retains immutable audit metadata and an embedding fingerprint but deletes the vector
-  and dedicated crop object.
-- Undo creates a compensating revision; no audit event is mutated or deleted.
+- Approval and relabel act on a row in `pending_review` or `auto_verified` and promote it to
+  `operator_verified` (relabel additionally records the old proposal and corrected identity).
+- Demote acts only on `auto_verified` and returns it to `pending_review`, keeping the vector
+  (unlike reject); it is an operator un-trusting a machine-minted row, not a rejection.
+- Rejection (from `pending_review` or `auto_verified`) retains immutable audit metadata and an
+  embedding fingerprint but deletes the vector and dedicated crop object.
+- Undo (`compensate_review`) restores the state the most recent review event's `previous_state`
+  recorded, not a hardcoded `pending_review`: an undo of approve-from-`auto_verified` restores
+  `auto_verified`, while an undo of approve-from-`pending_review` restores `pending_review`. No
+  audit event is mutated or deleted.
+
+The invariant sentence: pending and rejected entries never vote, including through caches,
+fallback queries, or compatibility code; `auto_verified` and `operator_verified` vote at their
+configured trust.
 
 Identity correction and ReID verification are separate actions. Correcting a bbox never silently
 promotes its embedding. Failed quality gates cannot be overridden.

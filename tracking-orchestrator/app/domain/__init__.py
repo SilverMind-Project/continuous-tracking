@@ -842,10 +842,14 @@ class ReviewCandidate:
 class NewReviewCandidate:
     """Request to create one governed ``reid_gallery`` review-queue row (M04).
 
-    The only field a caller does not supply is ``state``: creation always
-    lands ``pending_review``. ``candidate_id`` is caller-supplied (not
-    server-generated) so a MinIO-then-DB write can retry idempotently on the
-    same id after a partial failure.
+    ``candidate_id`` is caller-supplied (not server-generated) so a
+    MinIO-then-DB write can retry idempotently on the same id after a
+    partial failure. ``state`` is caller-supplied too (M02): most candidates
+    still mint ``pending_review`` (the field's default), but a calibrated
+    high-confidence face match mints ``auto_verified`` directly (see
+    ``CandidateEligibility.mint_state`` in candidate_eligibility.py). Never
+    any other value; the review-queue state machine owns every subsequent
+    transition.
     """
 
     candidate_id: str
@@ -872,6 +876,7 @@ class NewReviewCandidate:
     model_version: str
     preprocessing_version: str
     confidence: float
+    state: str = "pending_review"
 
 
 @dataclass(frozen=True)

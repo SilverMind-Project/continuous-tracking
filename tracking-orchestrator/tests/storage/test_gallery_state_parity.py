@@ -16,7 +16,13 @@ import inspect
 import pytest
 
 from app.domain import NewReviewCandidate
-from app.storage.gallery import PENDING_AND_VERIFIED, VERIFIED_ONLY, InMemoryGalleryRepository
+from app.storage.gallery import (
+    PENDING_AND_VERIFIED,
+    VERIFIED_ONLY,
+    VOTING_STATES,
+    InMemoryGalleryRepository,
+    ReviewConflictError,
+)
 from app.storage.postgres.gallery_repo import PostgresGalleryRepository
 from tests.storage._gallery_parity_fixtures import (
     ALICE,
@@ -70,10 +76,12 @@ class TestSearchSimilarParity:
 
     @pytest.mark.asyncio
     async def test_default_excludes_pending_and_rejected(self) -> None:
+        """M02: the vote-path default is VOTING_STATES (operator_verified plus
+        auto_verified), not VERIFIED_ONLY; pending and rejected still never vote."""
         repo = await _seeded_repo()
         hits = await repo.search_similar(query_embedding(), limit=10)
         got = {entry.gallery_entry_id for entry, _sim in hits}
-        assert got == expected_ids(states=VERIFIED_ONLY)
+        assert got == expected_ids(states=VOTING_STATES)
 
 
 class TestListGalleryEntriesForTrackletsParity:
@@ -88,9 +96,11 @@ class TestListGalleryEntriesForTrackletsParity:
 
     @pytest.mark.asyncio
     async def test_default_excludes_pending_and_rejected(self) -> None:
+        """M02: the vote-path default is VOTING_STATES; pending and rejected
+        still never vote."""
         repo = await _seeded_repo()
         entries = await repo.list_gallery_entries_for_tracklets(ALL_TRACKLET_IDS, limit=20)
-        assert {e.gallery_entry_id for e in entries} == expected_ids(states=VERIFIED_ONLY)
+        assert {e.gallery_entry_id for e in entries} == expected_ids(states=VOTING_STATES)
 
 
 class TestGallerySimilarityDefault:
@@ -133,28 +143,54 @@ class TestSignatureDefaultsGuardAgainstDrift:
 
     def test_pending_and_verified_is_pinned_to_the_literal(self) -> None:
         """Same guard for the M04 creation-cap default: pending rows must
-        count against the cap (F4) but rejected rows never should."""
-        assert frozenset({"pending_review", "operator_verified"}) == PENDING_AND_VERIFIED
+        count against the cap (F4) but rejected rows never should. M02 extends
+        this to auto_verified for the identical reason (F4 applied again)."""
+        assert (
+            frozenset({"pending_review", "operator_verified", "auto_verified"})
+            == PENDING_AND_VERIFIED
+        )
+
+    def test_voting_states_is_pinned_to_the_literal(self) -> None:
+        """M02: the vote-path default must independently be pinned so a silent
+        widening (e.g. to include pending_review) cannot hide behind every
+        other test in this file comparing against the constant itself."""
+        assert frozenset({"operator_verified", "auto_verified"}) == VOTING_STATES
 
     @pytest.mark.parametrize(
         ("repo_cls", "method_name", "param_name"),
         [
             (InMemoryGalleryRepository, "list_gallery_entries", "states"),
-            (InMemoryGalleryRepository, "search_similar", "states"),
-            (InMemoryGalleryRepository, "list_gallery_entries_for_tracklets", "allowed_states"),
-            (InMemoryGalleryRepository, "gallery_similarity", "allowed_states"),
             (PostgresGalleryRepository, "list_gallery_entries", "states"),
-            (PostgresGalleryRepository, "search_similar", "states"),
-            (PostgresGalleryRepository, "list_gallery_entries_for_tracklets", "allowed_states"),
-            (PostgresGalleryRepository, "gallery_similarity", "allowed_states"),
         ],
     )
     def test_default_is_verified_only(
         self, repo_cls: type, method_name: str, param_name: str
     ) -> None:
+        """list_gallery_entries is the one admin/list surface with no vote-path
+        caller; it keeps the narrower VERIFIED_ONLY default (M02 decision)."""
         method = getattr(repo_cls, method_name)
         sig = inspect.signature(method)
         assert sig.parameters[param_name].default == VERIFIED_ONLY
+
+    @pytest.mark.parametrize(
+        ("repo_cls", "method_name", "param_name"),
+        [
+            (InMemoryGalleryRepository, "search_similar", "states"),
+            (InMemoryGalleryRepository, "list_gallery_entries_for_tracklets", "allowed_states"),
+            (InMemoryGalleryRepository, "gallery_similarity", "allowed_states"),
+            (PostgresGalleryRepository, "search_similar", "states"),
+            (PostgresGalleryRepository, "list_gallery_entries_for_tracklets", "allowed_states"),
+            (PostgresGalleryRepository, "gallery_similarity", "allowed_states"),
+        ],
+    )
+    def test_default_is_voting_states(
+        self, repo_cls: type, method_name: str, param_name: str
+    ) -> None:
+        """M02: every read whose result feeds identity resolution defaults to
+        VOTING_STATES (operator_verified plus auto_verified)."""
+        method = getattr(repo_cls, method_name)
+        sig = inspect.signature(method)
+        assert sig.parameters[param_name].default == VOTING_STATES
 
     @pytest.mark.parametrize(
         "repo_cls",
@@ -258,3 +294,117 @@ class TestCreateReviewCandidateAndCountParity:
             identity_id=ALICE, active_only=False, states=VERIFIED_ONLY
         )
         assert {e.gallery_entry_id for e in entries_after} == {"cand-parity-6"}
+
+
+class TestAutoVerifiedLifecycle:
+    """Identity-continuity M02: the fourth gallery state's review-action and
+    compensation transitions (InMemory half; Postgres half lives in
+    tests/integration/test_gallery_state_parity_postgres.py, make ci)."""
+
+    @staticmethod
+    def _candidate(candidate_id: str, *, orientation: int = 0) -> NewReviewCandidate:
+        return NewReviewCandidate(
+            candidate_id=candidate_id,
+            identity_id=ALICE,
+            embedding=[0.1] * 768,
+            quality=0.9,
+            orientation=orientation,
+            camera_id="cam01",
+            capture_time=make_entries()[0].seen_at,
+            ph_id="ph-1",
+            observation_id="obs-1",
+            origin_tracklet_id="obs-1",
+            keyframe_id=None,
+            crop_key=f"reid-candidates/v1/{candidate_id}.jpg",
+            source_frame_key=None,
+            crop_hash="deadbeef",
+            frame_hash=None,
+            dimensions=(128, 256),
+            is_truncated=False,
+            is_occluded=False,
+            candidate_reason="face_derived",
+            source_episode_id="ph-1",
+            created_actor="pipeline",
+            model_version="reid-solider",
+            preprocessing_version="v1",
+            confidence=0.95,
+            state="auto_verified",
+        )
+
+    @pytest.mark.asyncio
+    async def test_created_row_mints_auto_verified_on_both_readers(self) -> None:
+        repo = InMemoryGalleryRepository()
+        await repo.create_review_candidate(self._candidate("auto-1"))
+
+        rows, total = await repo.list_review_candidates(state="auto_verified")
+        assert total == 1
+        assert rows[0].candidate_id == "auto-1"
+        entries = await repo.list_gallery_entries(identity_id=ALICE, active_only=False, states=None)
+        assert entries[0].state == "auto_verified"
+
+    @pytest.mark.asyncio
+    async def test_demote_restores_pending_and_keeps_vector(self) -> None:
+        repo = InMemoryGalleryRepository()
+        await repo.create_review_candidate(self._candidate("auto-2"))
+
+        updated = await repo.apply_review_action(
+            "auto-2", action="demote", actor="op", base_audit_version=1
+        )
+        assert updated.state == "pending_review"
+
+        entries = await repo.list_gallery_entries(identity_id=ALICE, active_only=False, states=None)
+        assert entries[0].state == "pending_review"
+        assert entries[0].embedding == [0.1] * 768  # vector survives, unlike reject
+
+    @pytest.mark.asyncio
+    async def test_demote_rejects_from_non_auto_verified_state(self) -> None:
+        repo = InMemoryGalleryRepository()
+        await repo.create_review_candidate(self._candidate("auto-3"))
+        await repo.apply_review_action("auto-3", action="approve", actor="op", base_audit_version=1)
+
+        with pytest.raises(ReviewConflictError):
+            await repo.apply_review_action(
+                "auto-3", action="demote", actor="op", base_audit_version=2
+            )
+
+    @pytest.mark.asyncio
+    async def test_reject_from_auto_verified_deletes_vector_and_crop_key_retained(self) -> None:
+        repo = InMemoryGalleryRepository()
+        await repo.create_review_candidate(self._candidate("auto-4"))
+
+        updated = await repo.apply_review_action(
+            "auto-4", action="reject", actor="op", base_audit_version=1, reason="wrong_person"
+        )
+        assert updated.state == "rejected"
+        assert updated.crop_key == "reid-candidates/v1/auto-4.jpg"  # fingerprint retained
+
+        entries = await repo.list_gallery_entries(identity_id=ALICE, active_only=False, states=None)
+        assert entries[0].state == "rejected"
+        assert entries[0].embedding == []  # vector deleted
+
+    @pytest.mark.asyncio
+    async def test_approve_from_auto_verified_promotes_to_operator_verified(self) -> None:
+        repo = InMemoryGalleryRepository()
+        await repo.create_review_candidate(self._candidate("auto-5"))
+
+        updated = await repo.apply_review_action(
+            "auto-5", action="approve", actor="op", base_audit_version=1
+        )
+        assert updated.state == "operator_verified"
+        events = await repo.list_review_events("auto-5")
+        assert events[-1].previous_state == "auto_verified"
+        assert events[-1].new_state == "operator_verified"
+
+    @pytest.mark.asyncio
+    async def test_compensate_approve_from_auto_verified_restores_auto_verified(self) -> None:
+        """Undo must read the event trail, not assume pending_review: a
+        candidate approved from auto_verified restores to auto_verified."""
+        repo = InMemoryGalleryRepository()
+        await repo.create_review_candidate(self._candidate("auto-6"))
+        await repo.apply_review_action("auto-6", action="approve", actor="op", base_audit_version=1)
+
+        restored = await repo.compensate_review("auto-6", actor="op2", base_audit_version=2)
+        assert restored.state == "auto_verified"
+
+        entries = await repo.list_gallery_entries(identity_id=ALICE, active_only=False, states=None)
+        assert entries[0].state == "auto_verified"

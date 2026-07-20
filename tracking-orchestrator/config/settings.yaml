@@ -395,6 +395,12 @@ reid_candidates:
   # model_version is read separately from triton.reid_model (the live Triton
   # model identifier); this key only covers the crop preprocessing pipeline.
   preprocessing_version: "v1"
+  # Identity-continuity M02 (decision D3): a candidate whose calibrated
+  # direct-face confidence is at or above this bar mints straight into
+  # auto_verified instead of pending_review, so it votes immediately at a
+  # reduced trust multiplier. Set above 1.0 to disable auto-verify minting
+  # entirely (rollback path) without touching candidate creation itself.
+  auto_verify_min_confidence: 0.90
 
 # Keyframe sampler
 sampler:

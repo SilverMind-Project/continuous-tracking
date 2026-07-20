@@ -129,7 +129,10 @@ class ReIDReviewService:
 
     def eligibility(self, candidate: ReviewCandidate) -> Eligibility:
         reasons: list[str] = []
-        if candidate.state != "pending_review":
+        # Reviewable states are pending_review and auto_verified (M02): an
+        # operator may still approve, relabel, or reject a machine-trusted
+        # row. Only the terminal states are "already reviewed".
+        if candidate.state in ("operator_verified", "rejected"):
             reasons.append(f"already_reviewed:{candidate.state}")
         if candidate.is_truncated:
             reasons.append("truncated")
@@ -214,6 +217,32 @@ class ReIDReviewService:
         )
         await self._delete_crop_object(updated)
         return updated
+
+    async def demote(
+        self,
+        candidate_id: str,
+        *,
+        actor: str,
+        base_audit_version: int,
+        reason: str | None = None,
+        note: str | None = None,
+    ) -> ReviewCandidate:
+        """Un-trust an ``auto_verified`` candidate back to ``pending_review``.
+
+        Does not route through :meth:`_require_eligible`: demoting is itself
+        the "not trusted" verdict, not an approval gated on eligibility. The
+        repository enforces the ``auto_verified``-only precondition and
+        raises :class:`ReviewConflictError` otherwise. Unlike reject, the
+        vector and crop survive; the candidate re-enters the ordinary queue.
+        """
+        return await self._repo.apply_review_action(
+            candidate_id,
+            action="demote",
+            actor=actor,
+            base_audit_version=base_audit_version,
+            reason=reason,
+            note=note,
+        )
 
     async def reject_batch(
         self,

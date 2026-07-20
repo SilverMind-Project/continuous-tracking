@@ -28,6 +28,11 @@ class CandidatePolicy:
     seed_orientation_min_confidence: float = 0.5
     min_quality: float = 0.35
     max_per_identity_orientation: int = 10
+    # Identity-continuity M02, decision D3: a calibrated direct-face
+    # confidence at or above this bar mints the candidate straight into
+    # auto_verified instead of pending_review. Raw (uncalibrated) confidence
+    # never qualifies, matching the ArcFace-authority fail-closed posture.
+    auto_verify_min_confidence: float = 0.90
     # Provenance stamped on every created row. model_version reuses the live
     # Triton ReID model name (settings.yaml `triton.reid_model`) rather than a
     # hardcoded "v1" (the M09 lesson: a wrong static version silently makes
@@ -38,17 +43,20 @@ class CandidatePolicy:
 
 @dataclass(frozen=True)
 class CandidateEligibility:
-    """Result of :func:`evaluate_candidate`. ``reason`` is ``""`` iff eligible."""
+    """Result of :func:`evaluate_candidate`. ``reason`` is ``""`` iff eligible.
+
+    ``mint_state`` is only meaningful when ``eligible`` is True: it is the
+    ``reid_gallery`` lifecycle state the candidate should be created in,
+    either ``"pending_review"`` or ``"auto_verified"`` (M02, decision D3).
+    """
 
     eligible: bool
     reason: str
+    mint_state: str = "pending_review"
 
 
 def _ineligible(reason: str) -> CandidateEligibility:
     return CandidateEligibility(eligible=False, reason=reason)
-
-
-_ELIGIBLE = CandidateEligibility(eligible=True, reason="")
 
 
 def evaluate_candidate(
@@ -102,4 +110,17 @@ def evaluate_candidate(
     if quality < cfg.min_quality:
         return _ineligible("low_quality")
 
-    return _ELIGIBLE
+    # Auto-verify mint rule (M02, D3): only a *calibrated* confidence at or
+    # above the bar mints auto_verified. Raw ArcFace similarity is never
+    # substituted here, even when calibration is unavailable and the
+    # eligibility gate above already fell back to raw confidence -- that
+    # would let an uncalibrated match auto-verify, breaking the fail-closed
+    # posture the ArcFace authority gate depends on.
+    mint_state = "pending_review"
+    if (
+        face_anchor.calibrated_confidence is not None
+        and face_anchor.calibrated_confidence >= cfg.auto_verify_min_confidence
+    ):
+        mint_state = "auto_verified"
+
+    return CandidateEligibility(eligible=True, reason="", mint_state=mint_state)

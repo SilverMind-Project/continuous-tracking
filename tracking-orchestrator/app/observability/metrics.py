@@ -204,7 +204,7 @@ class Metrics:
 
     # ---- M04 governed candidate creation ----
     reid_candidate_rejected_total: Counter  # label: reason (bounded, typed set)
-    reid_candidate_created_total: Counter
+    reid_candidate_created_total: Counter  # label: state (pending_review|auto_verified, M02)
 
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
@@ -729,7 +729,8 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         ),
         reid_candidate_created_total=_counter(
             "cts_reid_candidate_created_total",
-            "Governed pending_review ReID gallery candidates created by ReIDCandidateStage.",
+            "Governed ReID gallery candidates created by ReIDCandidateStage, by mint state.",
+            ["state"],
         ),
     )
 

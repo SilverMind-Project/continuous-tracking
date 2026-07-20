@@ -247,8 +247,9 @@ class ResolverConfig:
     # Trust multiplier for operator_verified gallery entries before aggregation.
     gallery_verified_trust_multiplier: float = 2.0
 
-    # Trust multiplier for auto_verified gallery entries (state introduced in
-    # M02; harmless today since no row can be in that state yet).
+    # Trust multiplier for auto_verified gallery entries (identity-continuity
+    # M02, decision D3): calibrated high-confidence face matches minted
+    # directly at candidate creation, below operator_verified's full trust.
     gallery_auto_verified_trust_multiplier: float = 1.5
 
     # Exponential recency half-life in days, no floor. M03 changes the

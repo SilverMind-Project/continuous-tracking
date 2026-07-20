@@ -25,7 +25,7 @@ BOB = "bob"
 # Every entry carries a non-empty identity_id so the fixture never touches the
 # pre-existing (not-fixed-here) Postgres-only `identity_id != ''` filter in
 # _SQL_SEARCH_SIMILAR that InMemory's search_similar lacks.
-_STATES = ("pending_review", "operator_verified", "rejected")
+_STATES = ("pending_review", "auto_verified", "operator_verified", "rejected")
 _DIM = 768
 _NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "m03-gallery-state-parity")
 
@@ -82,12 +82,16 @@ def expected_ids(*, states: frozenset[str] | None, identity_id: str | None = Non
     return ids
 
 
-# The four `states`/`allowed_states` values the milestone requires the matrix to cover.
+# The `states`/`allowed_states` values the milestone requires the matrix to cover.
+# M02 adds auto_verified as a fourth lifecycle state and VOTING_STATES (the new
+# vote-path default) as a fifth case.
 STATE_FILTER_CASES: tuple[frozenset[str] | None, ...] = (
-    frozenset({"operator_verified"}),  # the default, passed explicitly for clarity
+    frozenset({"operator_verified"}),  # the old VERIFIED_ONLY default
+    frozenset({"operator_verified", "auto_verified"}),  # VOTING_STATES, the M02 default
     None,
     frozenset({"pending_review"}),
     frozenset({"pending_review", "operator_verified"}),
+    frozenset({"auto_verified"}),
 )
 
 

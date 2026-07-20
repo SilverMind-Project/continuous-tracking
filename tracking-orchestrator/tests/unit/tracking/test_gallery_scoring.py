@@ -79,6 +79,28 @@ def test_trust_multiplier_by_state() -> None:
     assert len(calls) == 2
 
 
+def test_auto_verified_votes_at_1_5_no_backstop() -> None:
+    """Identity-continuity M02, decision D3: named per the milestone doc.
+
+    Pure-function isolation of the same fact
+    ``test_trust_multiplier_by_state`` above already proves inline; see
+    ``tests/unit/tracking/test_identity_resolver_multiview.py::test_auto_verified_votes_at_1_5_no_backstop``
+    for the end-to-end resolver-level proof with a real gallery row."""
+    cfg = GalleryScoringConfig()
+    calls: list[None] = []
+
+    scored = score_hits(
+        [(_entry(state="auto_verified"), 0.5)],
+        now=_NOW,
+        cfg=cfg,
+        logistic=_identity_logistic,
+        on_nonvoting_state=lambda: calls.append(None),
+    )
+
+    assert scored[0].trust_multiplier == 1.5
+    assert calls == []
+
+
 def test_recency_half_life_config() -> None:
     cfg = GalleryScoringConfig(recency_half_life_days=7.0)
     one_half_life_ago = _NOW.replace(day=13)  # July 20 -> July 13 = 7 days

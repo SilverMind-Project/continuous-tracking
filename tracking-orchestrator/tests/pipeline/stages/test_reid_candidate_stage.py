@@ -59,7 +59,11 @@ def _ctx(
     *,
     committed_identity_id: str | None = "grandma",
     face_person_id: str = "grandma",
-    calibrated_confidence: float | None = 0.90,
+    # Below the M02 auto_verify_min_confidence default (0.90) but above the
+    # calibrated_confidence_min authority bar (0.80), so this fixture's
+    # default keeps exercising the pending_review mint path. Tests that need
+    # the auto_verified path pass calibrated_confidence=0.90 explicitly.
+    calibrated_confidence: float | None = 0.85,
     orientation: OrientationBin = OrientationBin.FRONT,
     orientation_confidence: float = 0.9,
 ) -> FrameContext:
@@ -133,6 +137,44 @@ async def test_eligible_frame_creates_one_pending_candidate_with_full_provenance
     assert len(entries) == 1
     assert entries[0].origin_tracklet_id == "00000000-0000-0000-0000-0000000000aa"
     assert entries[0].ph_id == "ph-1"
+
+
+async def test_calibrated_090_creates_one_auto_verified_candidate_with_full_provenance() -> None:
+    """M02: a calibrated >= 0.90 direct-face match mints straight into
+    auto_verified, with the same full provenance as a pending candidate, and
+    increments the labeled creation metric under state=auto_verified."""
+    gallery = InMemoryGalleryRepository()
+    storage = _FakeCropStorage()
+    stage = ReIDCandidateStage(
+        gallery_repo=gallery,
+        crop_storage=storage,
+        policy=CandidatePolicy(model_version="reid-solider"),
+    )
+    before = _metrics.metrics.reid_candidate_created_total.labels(
+        state="auto_verified"
+    )._value.get()
+
+    await stage.run(_ctx(calibrated_confidence=0.90))
+
+    rows, total = await gallery.list_review_candidates(state="auto_verified")
+    assert total == 1
+    row = rows[0]
+    assert row.identity_id == "grandma"
+    assert row.state == "auto_verified"
+    assert row.crop_key is not None
+
+    pending_rows, pending_total = await gallery.list_review_candidates(state="pending_review")
+    assert pending_total == 0
+    assert not pending_rows
+
+    entries = await gallery.list_gallery_entries(
+        identity_id="grandma", active_only=False, states=None
+    )
+    assert len(entries) == 1
+    assert entries[0].state == "auto_verified"
+    assert _metrics.metrics.reid_candidate_created_total.labels(
+        state="auto_verified"
+    )._value.get() == pytest.approx(before + 1)
 
 
 async def test_mismatched_face_identity_creates_no_row() -> None:

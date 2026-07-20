@@ -18,18 +18,40 @@ class ReviewConflictError(Exception):
     """The candidate moved under the reviewer (stale audit version or already reviewed)."""
 
 
-_REVIEW_ACTIONS = frozenset({"approve", "reject", "relabel"})
+_REVIEW_ACTIONS = frozenset({"approve", "reject", "relabel", "demote"})
+
+# States apply_review_action's approve/reject/relabel may act on (M02): a
+# pending row awaiting first review, or an auto_verified row an operator is
+# still free to promote, correct, or reject. demote has its own, narrower
+# guard (auto_verified only) enforced at the call site.
+REVIEWABLE_STATES: Final[frozenset[str]] = frozenset({"pending_review", "auto_verified"})
 
 # Governance-safe default for every state-sensitive gallery read: only rows an
 # operator has verified vote or are administratively visible. `states=None`
 # means "no filter" and is reserved for administrative/service callers, each
 # of which must carry a one-line justification comment at the call site.
+# Retained for admin/list surfaces (list_gallery_entries has no vote-path
+# caller); vote-adjacent reads use VOTING_STATES instead (identity-continuity
+# M02, decision D3).
 VERIFIED_ONLY: Final[frozenset[str]] = frozenset({"operator_verified"})
 
-# Default state set for the per-(identity, orientation) creation cap (M04, F4):
-# pending rows must count against the cap or the review queue floods, so the
-# cap counts both governance-visible states, never rejected.
-PENDING_AND_VERIFIED: Final[frozenset[str]] = frozenset({"pending_review", "operator_verified"})
+# Vote-path default (identity-continuity M02, decision D3): both
+# operator_verified and auto_verified rows vote in identity resolution, at
+# their respective configured trust multipliers (see gallery_scoring.py).
+# Every read whose result feeds identity resolution (search_similar, the
+# gallery-similarity/tracklet-query paths that build or compare against a
+# resolver query embedding) defaults to this set. Pending and rejected rows
+# never vote under any default.
+VOTING_STATES: Final[frozenset[str]] = frozenset({"operator_verified", "auto_verified"})
+
+# Default state set for the per-(identity, orientation) creation cap (M04, F4;
+# extended M02). Pending rows must count against the cap or the review queue
+# floods; auto_verified rows must count too or the same-day-face-match
+# population (which is the *dominant* state in practice) grows unbounded past
+# the cap -- the identical F4 lesson applied to the new state. Never rejected.
+PENDING_AND_VERIFIED: Final[frozenset[str]] = frozenset(
+    {"pending_review", "operator_verified", "auto_verified"}
+)
 
 
 class GalleryRepository(ABC):
@@ -104,7 +126,7 @@ class GalleryRepository(ABC):
         limit: int = 10,
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
-        states: frozenset[str] | None = VERIFIED_ONLY,
+        states: frozenset[str] | None = VOTING_STATES,
     ) -> list[tuple[GalleryEmbedding, float]]:
         """Nearest-neighbor search over gallery embeddings.
 
@@ -118,9 +140,11 @@ class GalleryRepository(ABC):
             camera_id: if provided, filter to gallery entries from this camera.
             max_age_seconds: if provided, filter to entries newer than now - max_age_seconds.
             states: lifecycle-state filter; the default excludes pending/rejected
-                rows so unverified vectors never vote. ``states=None`` means no
-                filter and is reserved for administrative/service callers, each
-                of which must carry a one-line justification comment.
+                rows so unverified vectors never vote (operator_verified and
+                auto_verified both vote, at their configured trust
+                multipliers). ``states=None`` means no filter and is reserved
+                for administrative/service callers, each of which must carry
+                a one-line justification comment.
         """
 
     @abstractmethod
@@ -128,16 +152,19 @@ class GalleryRepository(ABC):
         self,
         tracklet_ids: set[str],
         limit: int = 20,
-        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
+        allowed_states: frozenset[str] | None = VOTING_STATES,
         model_versions: set[str] | None = None,
     ) -> list[GalleryEmbedding]:
         """List gallery entries whose origin_tracklet_id is in *tracklet_ids*.
 
         Used by the identity resolver to build a real query embedding from
         a GlobalTrack's existing gallery entries. ``allowed_states`` defaults
-        to verified-only; ``allowed_states=None`` means no filter and is
-        reserved for administrative/service callers, each of which must carry
-        a one-line justification comment at the call site.
+        to the voting states (operator_verified and auto_verified); an
+        entity whose only gallery rows are freshly auto_verified must still
+        be able to build a query embedding from its own history.
+        ``allowed_states=None`` means no filter and is reserved for
+        administrative/service callers, each of which must carry a one-line
+        justification comment at the call site.
         """
 
     @abstractmethod
@@ -146,7 +173,7 @@ class GalleryRepository(ABC):
         tracklet_ids_a: set[str],
         tracklet_ids_b: set[str],
         limit: int = 20,
-        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
+        allowed_states: frozenset[str] | None = VOTING_STATES,
         model_versions: set[str] | None = None,
     ) -> float:
         """Mean cosine similarity between two groups of gallery embeddings.
@@ -155,7 +182,7 @@ class GalleryRepository(ABC):
         cosine similarity. Returns 0.0 when both groups have no gallery
         entries, and 0.5 when only one group has entries (conservative
         fallback that allows geometry to carry cross-camera pairs).
-        ``allowed_states`` defaults to verified-only (delegates to
+        ``allowed_states`` defaults to the voting states (delegates to
         ``list_gallery_entries_for_tracklets``); ``allowed_states=None`` means
         no filter and is reserved for administrative/service callers, each of
         which must carry a one-line justification comment at the call site.
@@ -200,7 +227,10 @@ class GalleryRepository(ABC):
         return []
 
     async def count_review_queue(self) -> dict[str, int]:
-        """Counts by lifecycle state (``pending_review``/``operator_verified``/``rejected``)."""
+        """Counts by lifecycle state (``pending_review``/``auto_verified``/
+
+        ``operator_verified``/``rejected``).
+        """
         return {}
 
     async def apply_review_action(
@@ -214,11 +244,16 @@ class GalleryRepository(ABC):
         note: str | None = None,
         new_identity_id: str | None = None,
     ) -> ReviewCandidate:
-        """Apply approve/reject/relabel under an optimistic ``audit_version`` guard.
+        """Apply approve/reject/relabel/demote under an optimistic ``audit_version`` guard.
 
-        Rejection nulls the embedding and removes the dedicated crop object;
-        audit metadata and fingerprint survive. Raises
-        :class:`ReviewConflictError` when the candidate already moved and
+        Approve, reject, and relabel act on a row in ``pending_review`` or
+        ``auto_verified`` (M02: an operator may still promote, correct, or
+        reject a machine-trusted row). Demote acts only on ``auto_verified``
+        and returns it to ``pending_review`` without touching the vector
+        (an un-trust, not a rejection). Rejection nulls the embedding and
+        removes the dedicated crop object; audit metadata and fingerprint
+        survive. Raises :class:`ReviewConflictError` when the candidate
+        already moved or is in the wrong state for *action*, and
         :class:`ReviewNotFoundError` when it does not exist.
         """
         raise NotImplementedError
@@ -230,10 +265,15 @@ class GalleryRepository(ABC):
         actor: str,
         base_audit_version: int,
     ) -> ReviewCandidate:
-        """Un-verify an ``operator_verified`` candidate back to ``pending_review``.
+        """Un-verify an ``operator_verified`` candidate back to its prior state.
 
-        Records a compensating event and never restores a rejected vector or
-        deletes a prior event.
+        Restores whatever state the most recent review event's
+        ``previous_state`` recorded (``auto_verified`` if this candidate was
+        approved/relabelled from there, otherwise ``pending_review``); never
+        guesses. Records a compensating event and never restores a rejected
+        vector or deletes a prior event. Use :meth:`apply_review_action`'s
+        ``demote`` action, not this method, to un-trust an ``auto_verified``
+        row that was never promoted.
         """
         raise NotImplementedError
 
@@ -305,7 +345,7 @@ class InMemoryGalleryRepository(GalleryRepository):
             identity_id=candidate.identity_id,
             proposed_identity_id=candidate.identity_id,
             effective_identity_id=None,
-            state="pending_review",
+            state=candidate.state,
             label_source=None,
             candidate_reason=candidate.candidate_reason,
             model_version=candidate.model_version,
@@ -355,7 +395,7 @@ class InMemoryGalleryRepository(GalleryRepository):
             # asserting authority through a deprecated field a second time.
             camera_id=candidate.camera_id,
             orientation=candidate.orientation,
-            state="pending_review",
+            state=candidate.state,
             source_episode_id=candidate.source_episode_id,
             ph_id=candidate.ph_id,
         )
@@ -433,6 +473,7 @@ class InMemoryGalleryRepository(GalleryRepository):
     async def count_review_queue(self) -> dict[str, int]:
         counts: dict[str, int] = {
             "pending_review": 0,
+            "auto_verified": 0,
             "operator_verified": 0,
             "rejected": 0,
         }
@@ -456,7 +497,12 @@ class InMemoryGalleryRepository(GalleryRepository):
         current = self._candidates.get(candidate_id)
         if current is None:
             raise ReviewNotFoundError(candidate_id)
-        if current.state != "pending_review":
+        if action == "demote":
+            if current.state != "auto_verified":
+                raise ReviewConflictError(
+                    f"{candidate_id} is not auto_verified (state={current.state})"
+                )
+        elif current.state not in REVIEWABLE_STATES:
             raise ReviewConflictError(f"{candidate_id} already reviewed (state={current.state})")
         if current.audit_version != base_audit_version:
             raise ReviewConflictError(
@@ -482,6 +528,18 @@ class InMemoryGalleryRepository(GalleryRepository):
                 current,
                 state="operator_verified",
                 identity_id=new_identity_id,
+                reviewed_actor=actor,
+                reviewed_time=now,
+                review_reason=reason,
+                review_note=note,
+                audit_version=current.audit_version + 1,
+            )
+        elif action == "demote":
+            # An operator un-trusting a machine-minted row: back to
+            # pending_review, vector kept intact (unlike reject).
+            updated = replace(
+                current,
+                state="pending_review",
                 reviewed_actor=actor,
                 reviewed_time=now,
                 review_reason=reason,
@@ -558,10 +616,16 @@ class InMemoryGalleryRepository(GalleryRepository):
             )
         if current.audit_version != base_audit_version:
             raise ReviewConflictError(f"{candidate_id} stale audit_version")
+        # Restore the state the candidate was promoted from, per the most
+        # recent review event, rather than assuming pending_review: undoing
+        # an approve-from-auto_verified must land back on auto_verified, not
+        # silently downgrade a machine-trusted row to pending (M02).
+        prior_events = self._events.get(candidate_id, [])
+        restore_state = prior_events[-1].previous_state if prior_events else "pending_review"
         now = datetime.now(UTC)
         updated = replace(
             current,
-            state="pending_review",
+            state=restore_state,
             reviewed_actor=actor,
             reviewed_time=now,
             review_reason="compensated",
@@ -574,7 +638,7 @@ class InMemoryGalleryRepository(GalleryRepository):
                 event_id=f"evt-{candidate_id}-{updated.audit_version}",
                 entry_id=candidate_id,
                 previous_state=current.state,
-                new_state="pending_review",
+                new_state=restore_state,
                 actor=actor,
                 reason="compensated",
                 note=None,
@@ -612,7 +676,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         limit: int = 10,
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
-        states: frozenset[str] | None = VERIFIED_ONLY,
+        states: frozenset[str] | None = VOTING_STATES,
     ) -> list[tuple[GalleryEmbedding, float]]:
         entries = await self.list_gallery_entries(states=None)
         if camera_id is not None:
@@ -630,7 +694,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         self,
         tracklet_ids: set[str],
         limit: int = 20,
-        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
+        allowed_states: frozenset[str] | None = VOTING_STATES,
         model_versions: set[str] | None = None,
     ) -> list[GalleryEmbedding]:
         if not tracklet_ids:
@@ -656,7 +720,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         tracklet_ids_a: set[str],
         tracklet_ids_b: set[str],
         limit: int = 20,
-        allowed_states: frozenset[str] | None = VERIFIED_ONLY,
+        allowed_states: frozenset[str] | None = VOTING_STATES,
         model_versions: set[str] | None = None,
     ) -> float:
         entries_a = await self.list_gallery_entries_for_tracklets(
