@@ -69,6 +69,7 @@ def _make_ctx(
 # State tracking lifecycle
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_ph_state_tracked_on_snapshot():
     """A new PH with a snapshot gets its identity and room tracked."""
@@ -80,10 +81,11 @@ async def test_ph_state_tracked_on_snapshot():
     snap = _make_snap("ph-1", identity_id="alice", room_name="kitchen")
     ctx = _make_ctx({"ph-1"}, snapshots=[snap])
     await stage.run(ctx)
-    
+
     assert "ph-1" in stage._seen_ph_ids
     assert stage._last_identity_by_ph.get("ph-1") == "alice"
     assert stage._last_room_by_ph.get("ph-1") == "kitchen"
+
 
 @pytest.mark.asyncio
 async def test_ph_state_cleaned_on_terminate():
@@ -100,8 +102,7 @@ async def test_ph_state_cleaned_on_terminate():
 
     ctx = _make_ctx(set(), snapshots=[])
     await stage.run(ctx)
-    
+
     assert "ph-1" not in stage._seen_ph_ids
     assert "ph-1" not in stage._last_identity_by_ph
     assert "ph-1" not in stage._last_room_by_ph
-

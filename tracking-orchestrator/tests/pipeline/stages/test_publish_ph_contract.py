@@ -83,20 +83,6 @@ async def test_publishes_identity_snapshots_for_known_and_unknown_phs():
     assert "ph-2" in ph_ids
 
 
-@pytest.mark.asyncio
-async def test_identities_built_from_snapshots():
-    transport = MagicMock(spec=RedisStreamsTransport)
-    transport.publish_event = AsyncMock()
-
-    stage = PublishStage(transport=transport, live_config=_live_config())
-    ctx = _make_ctx([_make_snap("ph-1", "alice")])
-    await stage.run(ctx)
-
-    kwargs = transport.publish_event.call_args.kwargs
-    identities = kwargs["identities"]
-    assert "ph-1" in identities
-    assert identities["ph-1"][0] == "alice"
-
 
 @pytest.mark.asyncio
 async def test_wire_uses_ph_id_not_global_track_id():
@@ -119,17 +105,4 @@ async def test_wire_uses_ph_id_not_global_track_id():
         assert snap["ph_id"] == "ph-a"
 
 
-@pytest.mark.asyncio
-async def test_identity_map_keyed_by_ph_id():
-    """T3 (R3): identity map keyed by ph_id, not global_track_id."""
-    transport = MagicMock(spec=RedisStreamsTransport)
-    transport.publish_event = AsyncMock()
 
-    stage = PublishStage(transport=transport, live_config=_live_config())
-    ctx = _make_ctx([_make_snap("ph-b", "bob")])
-    await stage.run(ctx)
-
-    kwargs = transport.publish_event.call_args.kwargs
-    identities = kwargs["identities"]
-    assert "ph-b" in identities
-    assert "global_track_id" not in identities

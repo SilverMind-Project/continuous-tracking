@@ -111,10 +111,9 @@ def test_identity_evidence_defaults() -> None:
 
 def test_dementia_signal_kind_matches_contracts() -> None:
     from typing import get_args
+
     import cts_contracts
 
     from app.domain import DementiaSignalKind  # type: ignore[attr-defined]
 
-    assert set(get_args(DementiaSignalKind)) == {
-        str(k) for k in cts_contracts.DementiaSignalKind
-    }
+    assert set(get_args(DementiaSignalKind)) == {str(k) for k in cts_contracts.DementiaSignalKind}

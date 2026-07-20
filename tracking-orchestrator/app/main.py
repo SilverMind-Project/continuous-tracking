@@ -196,8 +196,6 @@ def _build_transport_config(s: Settings) -> TransportConfig:
         revisions_stream=s.as_str("redis.revisions_stream"),
         signals_stream=s.as_str("redis.signals_stream"),
         scene_samples_stream=s.as_str("redis.scene_samples_stream"),
-        presence_stream=s.as_str("redis.presence_stream"),
-        dwell_stream=s.as_str("redis.dwell_stream"),
     )
 
 

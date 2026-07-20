@@ -247,28 +247,3 @@ def test_job_status_unknown_revision_returns_404(client_and_publisher):
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "correction.job_not_found"
 
-
-def test_legacy_endpoint_marks_deprecated_and_applies(client_and_publisher):
-    client, pub, _ph_repo, _corr = client_and_publisher
-    resp = client.post(
-        "/internal/corrections",
-        json={
-            "ph_id": "gt-1",
-            "new_identity_id": "grandpa",
-            "actor": "caregiver@home",
-            "reason": "manual",
-        },
-    )
-    assert resp.status_code == 200
-    assert resp.headers.get("Deprecation") == "true"
-    assert resp.json()["new_identity_id"] == "grandpa"
-    assert len(pub.published) == 1
-
-
-def test_legacy_unknown_ph_returns_404(client_and_publisher):
-    client, *_ = client_and_publisher
-    resp = client.post(
-        "/internal/corrections",
-        json={"ph_id": "nope", "new_identity_id": "grandpa", "actor": "x"},
-    )
-    assert resp.status_code == 404

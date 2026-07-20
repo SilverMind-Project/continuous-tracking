@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from structlog import get_logger
@@ -40,6 +39,8 @@ class ClosePHStage(FrameStage):
         motion_energy_tracker: MotionEnergyTracker | None = None,
         posture_tracker: GlobalPostureTracker | None = None,
         prev_active_ph_ids: set[str] | None = None,
+        fall_detection_stage: FallDetectionStage | None = None,
+        gait_segmenter: WalkingBoutSegmenter | None = None,
         gait_bout_repo: GaitBoutRepository | None = None,
     ) -> None:
         self._trajectory_writer = trajectory_writer
@@ -58,7 +59,6 @@ class ClosePHStage(FrameStage):
 
     async def run(self, ctx: FrameContext) -> None:
         current_ph_ids = ctx.active_ph_ids
-        event_time_ns = int(ctx.event_time.timestamp() * 1e9)
 
         # Detect new PHs and emit presence-appeared + dwell-started.
         # Only emit when the PH has a WorldFrameSnapshot, which proves it met
@@ -88,11 +88,7 @@ class ClosePHStage(FrameStage):
             if snap.identity_id:
                 self._last_identity_by_ph[ph_id] = snap.identity_id
             # Detect room change
-            if (
-                prev_room
-                and snap.room_name
-                and snap.room_name != prev_room
-            ):
+            if prev_room and snap.room_name and snap.room_name != prev_room:
                 pass  # Room change logic removed in M37
             self._last_room_by_ph[ph_id] = snap.room_name
 
@@ -101,13 +97,9 @@ class ClosePHStage(FrameStage):
 
         # Close tracks first to capture dwell duration, then emit tier-2 events.
         for ph_id in terminated_ph_ids:
-            identity_id = self._last_identity_by_ph.get(ph_id)
-            room_name = self._last_room_by_ph.get(ph_id, "")
-            duration_s = 0
-
             logger.debug("Closing terminated PH", ph_id=ph_id)
             if self._trajectory_writer:
-                duration_s = await self._trajectory_writer.close_track(ph_id, closed_at=close_time)
+                await self._trajectory_writer.close_track(ph_id, closed_at=close_time)
             if self._motion_energy_tracker is not None:
                 self._motion_energy_tracker.evict_track(ph_id)
             if self._posture_tracker is not None:
@@ -116,6 +108,7 @@ class ClosePHStage(FrameStage):
                 self._fall_detection_stage.evict(ph_id)
             if self._gait_segmenter is not None and self._gait_bout_repo is not None:
                 bout = self._gait_segmenter.flush_ph(ph_id, closed_at=close_time)
+                if bout is not None:
                     await self._gait_bout_repo.upsert_bout(bout)
 
         self._prev_active_ph_ids = current_ph_ids

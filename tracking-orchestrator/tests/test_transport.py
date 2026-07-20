@@ -346,7 +346,6 @@ class TestPublishEventProto:
             detections=self._sample_detections(),
             minio_key="frames/cam-1/42.jpg",
             room_name="Kitchen",
-            identities={"gt-1": ("person-grandma", 0.81)},
         )
 
         payload = mock_redis.xadd.call_args[0][1]
@@ -368,7 +367,6 @@ class TestPublishEventProto:
             detections=self._sample_detections(),
             minio_key="frames/cam-1/99.jpg",
             room_name="Bedroom",
-            identities={"gt-1": ("person-grandma", 0.81)},
         )
 
         payload = mock_redis.xadd.call_args[0][1]
@@ -380,9 +378,7 @@ class TestPublishEventProto:
         assert parsed.detections[0].floor_point.x_mm == 1234
         assert parsed.detections[0].floor_point.y_mm == 5678
         assert parsed.detections[0].floor_point.calibrated is True
-        assert len(parsed.identity_revisions) == 1
-        assert parsed.identity_revisions[0].map_identity_id == "person-grandma"
-        assert parsed.identity_revisions[0].candidates[0].probability == pytest.approx(0.81)
+        assert len(parsed.identity_revisions) == 0
 
 
 class TestFrameReadyConsume:
