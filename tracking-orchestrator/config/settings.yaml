@@ -394,6 +394,20 @@ resolver:
   multiview_shadow_sample_rate: 0.0
   seed_orientation_min_confidence: 0.5
 
+  # Unknown-segment backfill (identity-continuity M04). On a qualifying first
+  # calibrated-face commit of a previously Unknown PH, retroactively attribute
+  # the PH's Unknown history to that identity: an inferred revision range plus
+  # a relabel of identity-NULL person_trajectories/room_dwells rows. Staged
+  # rollout: off, then shadow (metrics/logs only, no writes), then enabled.
+  # Depends on the same calibration artifact as M02/M03/M09 (see the
+  # identity-continuity M00 program doc's 2026-07-19 correction): dormant in
+  # production until that artifact is deployed, same as those milestones.
+  enable_unknown_backfill: false
+  backfill_shadow: true
+  # Maximum span (seconds) a backfill may relabel backward from the commit
+  # time, regardless of how much earlier the PH's Unknown history extends.
+  backfill_max_range_s: 14400.0
+
 # Governed ReID gallery candidate creation (M04). The only pipeline write
 # path into reid_gallery: ReIDCandidateStage -> create_review_candidate,
 # always pending_review, always with crop/frame provenance. require_calibrated_face

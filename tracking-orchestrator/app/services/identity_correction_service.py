@@ -121,6 +121,26 @@ class IdentityCorrectionService:
         self._rewriter = rewriter or InMemoryIdentityRewriter()
         self._cfg = config or CorrectionConfig()
 
+    def set_publisher(self, publisher: object | None) -> None:
+        """Wire the revision publisher after construction.
+
+        The composition root (``app/main.py``) constructs this service before
+        ``FrameProcessingPipeline.initialize()`` runs so other pipeline
+        components (notably ``UnknownBackfillService``) can depend on it via
+        normal constructor injection; the real ``RevisionPublisher`` only
+        exists once the pipeline has initialized, so it is wired in here
+        immediately afterward.
+        """
+        self._publisher = publisher
+
+    @property
+    def correction_repo(self) -> IdentityCorrectionRepositoryProtocol:
+        """Expose the underlying repository for callers that need job/ack
+        bookkeeping this service does not itself surface as public API
+        (e.g. ``UnknownBackfillService``, which is not an operator correction
+        but shares the same range/job/ack storage contract)."""
+        return self._corr
+
     # -- version token -------------------------------------------------------
 
     async def _ph_version(self, ph_id: str, observation_count: int) -> int:

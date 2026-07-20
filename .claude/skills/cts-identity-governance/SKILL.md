@@ -273,6 +273,35 @@ cognitive-companion side: `cts.revision_horizon_s` on `IdentityRewriter`, which 
 (M06). Change both together; a value drift lets CC rewrite more or less history than the resolver
 actually promises.
 
+### Unknown-segment backfill (identity-continuity M04)
+
+`UnknownBackfillService` (`app/services/unknown_backfill.py`) is the only automatic process that
+may call `IdentityCorrectionService.record_inferred_range`; no other code path is permitted to
+create an effective range without an operator correction.
+
+Trigger predicate, evaluated per final decision each frame: `previous_identity_id is None` (a
+first commit, not a change or demotion), `identity_id` is a real identity, and `authority ==
+DIRECT_FACE` (the calibrated ArcFace-authority commit path only; posterior commits never
+backfill, since the backfilled label inherits the full trust of the segment).
+
+**The NULL-only invariant is a defect rule.** Backfill only ever fills identity-NULL rows. It must
+never change a non-NULL identity value in any table, even to a value that matches the backfill's
+own target identity. `IdentityRewriter.backfill_null_rows` enforces this with `AND identity_id IS
+NULL` in its SQL, the mirror image of `rewrite()`'s `old_identity_id IS NOT NULL` guard. A rewriter
+change that lets either method touch the other's row set is release-blocking.
+
+Clip order when computing the backfill range (start = PH `born_at`, end = commit time): (1) clip
+forward past the end of the latest earlier decision on the PH naming a different identity; (2)
+clip forward past the end of any overlapping operator range, or skip entirely if an operator range
+covers the live edge (operator authority always outranks the automatic process); (3) cap the
+maximum span (`resolver.backfill_max_range_s`). A range that collapses to empty is skipped, not
+clamped to a minimum.
+
+Staged rollout: `resolver.enable_unknown_backfill` (default false), `resolver.backfill_shadow`
+(default true). Shadow mode computes the range, increments metrics, and logs, with zero database
+or stream writes. Enabled mode records the inferred range, relabels rows, and publishes one
+`IdentityRevision` with `revision_kind=inferred_backfill` and `required_projections=["cc"]`.
+
 ## Required tests
 
 Every identity change must include focused tests for applicable categories:

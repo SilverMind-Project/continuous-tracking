@@ -63,6 +63,27 @@ class IdentityRewriter(ABC):
         *applies_from* / *applies_to* bound the window of rows to rewrite.
         """
 
+    @abstractmethod
+    async def backfill_null_rows(
+        self,
+        revision_id: str,
+        ph_id: str,
+        new_identity_id: str,
+        applies_from: datetime,
+        applies_to: datetime,
+    ) -> None:
+        """Relabel identity-NULL rows in the window to ``new_identity_id``.
+
+        Safety invariant (identity-continuity M04): this method only ever fills
+        NULL identity. It must never touch a row whose ``identity_id`` is already
+        set, even to a different value than ``new_identity_id``. This is the
+        opposite guard from :meth:`rewrite`, which refuses to act when the old
+        identity is NULL; ``backfill_null_rows`` refuses to act when it is not.
+
+        ``dementia_signals`` is intentionally not touched: signals for an Unknown
+        segment were never computed, so there is nothing to relabel there.
+        """
+
 
 class InMemoryIdentityRewriter(IdentityRewriter):
     """No-op rewriter for unit tests."""
@@ -72,6 +93,16 @@ class InMemoryIdentityRewriter(IdentityRewriter):
         revision_id: str,
         ph_id: str,
         old_identity_id: str | None,
+        new_identity_id: str,
+        applies_from: datetime,
+        applies_to: datetime,
+    ) -> None:
+        pass
+
+    async def backfill_null_rows(
+        self,
+        revision_id: str,
+        ph_id: str,
         new_identity_id: str,
         applies_from: datetime,
         applies_to: datetime,
@@ -217,6 +248,53 @@ class PostgresIdentityRewriter(IdentityRewriter):
             if signal_count > 0:
                 _metrics.metrics.revision_rows_rewritten_total.labels(table="dementia_signals").inc(
                     signal_count
+                )
+
+    async def backfill_null_rows(
+        self,
+        revision_id: str,
+        ph_id: str,
+        new_identity_id: str,
+        applies_from: datetime,
+        applies_to: datetime,
+    ) -> None:
+        async with self._pool.acquire() as conn, conn.transaction():
+            traj_rows = await conn.execute(
+                """
+                    UPDATE continuous_tracking.person_trajectories
+                    SET identity_id = $1
+                    WHERE ph_id = $2
+                      AND identity_id IS NULL
+                      AND observed_at BETWEEN $3 AND $4
+                    """,
+                new_identity_id,
+                ph_id,
+                applies_from,
+                applies_to,
+            )
+            traj_count = _parse_rowcount(traj_rows)
+            if traj_count > 0:
+                _metrics.metrics.revision_rows_rewritten_total.labels(
+                    table="person_trajectories"
+                ).inc(traj_count)
+
+            dwell_rows = await conn.execute(
+                """
+                    UPDATE continuous_tracking.room_dwells
+                    SET identity_id = $1
+                    WHERE ph_id = $2
+                      AND identity_id IS NULL
+                      AND entered_at BETWEEN $3 AND $4
+                    """,
+                new_identity_id,
+                ph_id,
+                applies_from,
+                applies_to,
+            )
+            dwell_count = _parse_rowcount(dwell_rows)
+            if dwell_count > 0:
+                _metrics.metrics.revision_rows_rewritten_total.labels(table="room_dwells").inc(
+                    dwell_count
                 )
 
 

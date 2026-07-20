@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 
+from app.domain import IdentityEvidence, IdentityRevision
 from app.proto.continuoustracking.v1 import signals_pb2, tracking_pb2
+from app.transport.revision_publisher import _to_proto
 
 
 class TestIdentitySnapshotRoundTrip:
@@ -77,6 +80,49 @@ class TestIdentitySnapshotRoundTrip:
         assert len(parsed.identity_revisions) == 1
         assert parsed.identity_revisions[0].ph_id == "ph-1"
         assert parsed.identity_revisions[0].map_identity_id == "alice"
+
+    def test_inferred_backfill_revision_round_trip(self) -> None:
+        """M04: an inferred_backfill revision carries its range through the wire.
+
+        Fields 18-25 (revision_kind, range_start/end_unix_ns, range_authority,
+        revision_range_id, correction_id, required_projections,
+        revision_schema_version) must all survive serialize/parse.
+        """
+        range_start = datetime(2026, 7, 20, 8, 0, 0, tzinfo=UTC)
+        range_end = datetime(2026, 7, 20, 11, 0, 0, tzinfo=UTC)
+        revision = IdentityRevision(
+            revision_id="rev-1",
+            ph_id="ph-1",
+            previous_identity_id=None,
+            new_identity_id="alice",
+            actor="system",
+            reason="unknown_backfill",
+            applied_at=range_end,
+            rewritten_rows=0,
+            evidence=IdentityEvidence(evidence_sources=["direct_face"]),
+            revision_kind="inferred_backfill",
+            range_start=range_start,
+            range_end=range_end,
+            range_authority="inferred",
+            revision_range_id="rev-1",
+            required_projections=("cc",),
+            revision_schema_version="1",
+        )
+
+        pb = _to_proto(revision)
+        data = pb.SerializeToString()
+        parsed = tracking_pb2.IdentityRevision.FromString(data)
+
+        assert parsed.ph_id == "ph-1"
+        assert parsed.previous_identity_id == ""
+        assert parsed.new_identity_id == "alice"
+        assert parsed.revision_kind == "inferred_backfill"
+        assert parsed.range_start_unix_ns == int(range_start.timestamp() * 1e9)
+        assert parsed.range_end_unix_ns == int(range_end.timestamp() * 1e9)
+        assert parsed.range_authority == "inferred"
+        assert parsed.revision_range_id == "rev-1"
+        assert list(parsed.required_projections) == ["cc"]
+        assert parsed.revision_schema_version == "1"
 
 
 class TestDetectionFloorPointRoundTrip:

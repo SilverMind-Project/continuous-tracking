@@ -225,6 +225,47 @@ async def test_operator_correction_shows_effective_keeps_inferred() -> None:
     assert box.calibrated_confidence is None  # operator -> Verified, no number
 
 
+async def test_backfilled_range_lights_keyframe_effective_identity() -> None:
+    """Identity-continuity M04/V6: an inferred backfill range over a keyframe
+
+    captured during the Unknown period (no decision names an identity, and
+    the raw bbox carries no identity_id) still lights up the effective
+    identity through the same overlay used by operator ranges. Proves the
+    correction-repo seam (record_inferred_range) end to end without any new
+    read-model code.
+    """
+    keyframe_repo = InMemoryKeyframeRepository()
+    bbox_repo = InMemoryBboxAnnotationRepository()
+    correction_repo = InMemoryIdentityCorrectionRepository()
+    kf = _keyframe("ph-alpha")
+    # No identity on the raw bbox and no decision row: this is what a keyframe
+    # captured during the Unknown period looks like before a backfill lands.
+    await _persist(keyframe_repo, bbox_repo, kf, [_bbox(kf.keyframe_id, "ph-alpha", None, 10)])
+    await correction_repo.save_range(
+        IdentityRevisionRange(
+            range_id=str(uuid.uuid4()),
+            revision_id=str(uuid.uuid4()),
+            ph_id="ph-alpha",
+            authority="inferred",
+            range_start=_T0 - timedelta(hours=3),
+            range_end=_T0 + timedelta(hours=3),
+            effective_identity_id="alice",
+        )
+    )
+
+    svc = _service(
+        keyframe_repo=keyframe_repo,
+        bbox_repo=bbox_repo,
+        correction_repo=correction_repo,
+    )
+    card = (await svc.list_physical_frames()).frames[0]
+    box = card.bboxes[0]
+
+    assert box.inferred_identity_id in (None, "")
+    assert box.effective_identity_id == "alice"
+    assert box.authority == "inferred"
+
+
 async def test_filters_apply_before_pagination_and_keep_context() -> None:
     keyframe_repo = InMemoryKeyframeRepository()
     bbox_repo = InMemoryBboxAnnotationRepository()

@@ -134,9 +134,11 @@ async def build_records(
             # No covering range, or an inferred range. An inferred range only
             # restates inference over a span; it never changes who held
             # authority, so the raw decision still owns it. (record_inferred_range
-            # is currently unwired, so range_auth == "inferred" does not occur in
-            # the live pipeline; this branch handles it defensively so an inferred
-            # range can never mask a direct-ArcFace authority and zero the gate.)
+            # is wired since identity-continuity M04 via UnknownBackfillService,
+            # gated behind resolver.enable_unknown_backfill (default off), so
+            # range_auth == "inferred" can occur once enabled; this branch's
+            # defensive handling ensures an inferred range can never mask a
+            # direct-ArcFace authority and zero the gate.)
             effective = (
                 eff_id
                 if (range_auth == "inferred" and eff_id is not None)

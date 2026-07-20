@@ -226,6 +226,8 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
         room_name: str | None = None,
         after: datetime | None = None,
         limit: int = 100,
+        ph_id: str | None = None,
+        before: datetime | None = None,
     ) -> list[RoomDwell]:
         sql = _SQL_LIST_DWELLS
         args: list[Any] = []
@@ -241,6 +243,14 @@ class PostgresTrajectoryRepository(TrajectoryRepository):
         if after is not None:
             sql += f" AND entered_at >= ${n}"
             args.append(after)
+            n += 1
+        if ph_id is not None:
+            sql += f" AND ph_id = ${n}::uuid"
+            args.append(ph_id)
+            n += 1
+        if before is not None:
+            sql += f" AND entered_at <= ${n}"
+            args.append(before)
             n += 1
         sql += f" ORDER BY entered_at DESC LIMIT ${n}"
         args.append(limit)

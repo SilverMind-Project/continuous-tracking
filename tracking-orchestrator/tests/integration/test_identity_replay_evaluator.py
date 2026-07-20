@@ -199,10 +199,12 @@ async def test_golden_identity_accuracy_and_source_attribution() -> None:
 async def test_inferred_range_does_not_mask_arcface_authority() -> None:
     """An inferred revision range restates inference; it must not hide a swap.
 
-    record_inferred_range is unwired today, but if an inferred range ever covered
-    an ArcFace-authority frame, treating it as non-authoritative would zero the
-    gate. The frames stay ArcFace-authoritative, so the amma -> grandma flip is
-    still a swap.
+    record_inferred_range is now wired (identity-continuity M04,
+    UnknownBackfillService), gated behind resolver.enable_unknown_backfill
+    (default off) and fired only for a qualifying first direct_face commit out
+    of Unknown. If an inferred range ever covered an ArcFace-authority frame,
+    treating it as non-authoritative would zero the gate. The frames stay
+    ArcFace-authoritative, so the amma -> grandma flip is still a swap.
     """
     rows = [_arcface("ph-1", 0, "amma"), _arcface("ph-1", 1, "grandma")]
     repo = InMemoryIdentityCorrectionRepository()

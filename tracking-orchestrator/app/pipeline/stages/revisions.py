@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ...services.identity_rewriter import IdentityRewriter
+from ...services.unknown_backfill import UnknownBackfillService
 from ...storage.base import BboxAnnotationRepository
 from ...transport.revision_publisher import RevisionPublisher
 from ..frame_context import FrameContext
@@ -18,11 +19,13 @@ class RevisionsStage(FrameStage):
         identity_rewriter: IdentityRewriter | None = None,
         bbox_repo: BboxAnnotationRepository | None = None,
         identity_rewrite_on_face_commit: bool = True,
+        backfill_service: UnknownBackfillService | None = None,
     ) -> None:
         self._revision_publisher = revision_publisher
         self._identity_rewriter = identity_rewriter
         self._bbox_repo = bbox_repo
         self._identity_rewrite_on_face_commit = identity_rewrite_on_face_commit
+        self._backfill_service = backfill_service
 
     async def run(self, ctx: FrameContext) -> None:
         if ctx.new_revisions and self._revision_publisher:
@@ -49,3 +52,10 @@ class RevisionsStage(FrameStage):
                     applies_from=applies_from,
                     applies_to=rewrite_time,
                 )
+
+        if self._backfill_service is not None and ctx.outcome_decisions:
+            await self._backfill_service.process(
+                outcome_decisions=ctx.outcome_decisions,
+                ph_born_at_by_id=ctx.ph_born_at_by_id,
+                event_time=ctx.event_time,
+            )

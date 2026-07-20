@@ -54,8 +54,16 @@ class TrajectoryRepository(ABC):
         room_name: str | None = None,
         after: datetime | None = None,
         limit: int = 100,
+        ph_id: str | None = None,
+        before: datetime | None = None,
     ) -> list[RoomDwell]:
-        """List room dwell intervals with optional filters."""
+        """List room dwell intervals with optional filters.
+
+        ``ph_id`` and ``before`` (identity-continuity M04) let a caller select
+        one PH's dwells within an explicit ``[after, before]`` window, as the
+        internal dwell-range endpoint needs; ``after``/``before`` filter on
+        ``entered_at``.
+        """
 
 
 class KeyframeRepository(ABC):
@@ -181,6 +189,8 @@ class InMemoryTrajectoryRepository(TrajectoryRepository):
         room_name: str | None = None,
         after: datetime | None = None,
         limit: int = 100,
+        ph_id: str | None = None,
+        before: datetime | None = None,
     ) -> list[RoomDwell]:
         all_dwells = list(self._open_dwells.values()) + self._closed_dwells
         if identity_id is not None:
@@ -189,6 +199,10 @@ class InMemoryTrajectoryRepository(TrajectoryRepository):
             all_dwells = [d for d in all_dwells if d.room_name == room_name]
         if after is not None:
             all_dwells = [d for d in all_dwells if d.entered_at >= after]
+        if ph_id is not None:
+            all_dwells = [d for d in all_dwells if d.ph_id == ph_id]
+        if before is not None:
+            all_dwells = [d for d in all_dwells if d.entered_at <= before]
         all_dwells.sort(key=lambda d: d.entered_at, reverse=True)
         return all_dwells[:limit]
 

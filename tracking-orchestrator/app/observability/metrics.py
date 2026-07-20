@@ -211,6 +211,11 @@ class Metrics:
     # see the vote corpus collapse if gallery_vote_max_age_s starves ReID.
     reid_gallery_hits_total: Counter  # label: path (multiview|fallback|shadow)
 
+    # ---- M04 unknown-segment backfill ----
+    identity_backfill_total: Counter  # labels: mode (shadow|enabled), outcome
+    identity_backfill_clip_total: Counter  # label: reason
+    identity_backfill_range_seconds: Histogram
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -742,6 +747,23 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Gallery search_similar hits returned per query path, after the M03 vote-age "
             "cutoff and voting-states filter.",
             ["path"],
+        ),
+        identity_backfill_total=_counter(
+            "cts_identity_backfill_total",
+            "Unknown-segment backfill attempts by mode (shadow|enabled) and outcome "
+            "(applied, shadow, operator_conflict, skipped_<reason>).",
+            ["mode", "outcome"],
+        ),
+        identity_backfill_clip_total=_counter(
+            "cts_identity_backfill_clip_total",
+            "Unknown-segment backfill range clips by reason (clipped_prior_decision, "
+            "clipped_operator_range, clipped_cap).",
+            ["reason"],
+        ),
+        identity_backfill_range_seconds=_hist(
+            "cts_identity_backfill_range_seconds",
+            "Computed Unknown-segment backfill range span, in seconds.",
+            (60, 300, 900, 1800, 3600, 7200, 14400, 28800),
         ),
     )
 

@@ -253,6 +253,9 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         enable_multiview_gallery=r.as_bool("enable_multiview_gallery"),
         multiview_shadow_sample_rate=r.as_float("multiview_shadow_sample_rate"),
         seed_orientation_min_confidence=r.as_float("seed_orientation_min_confidence"),
+        enable_unknown_backfill=r.as_bool("enable_unknown_backfill"),
+        backfill_shadow=r.as_bool("backfill_shadow"),
+        backfill_max_range_s=r.as_float("backfill_max_range_s"),
     )
 
 
@@ -726,13 +729,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         else InMemoryIdentityCorrectionRepository()
     )
 
-    # Wire revision publisher for manual PH corrections.
+    # Wire revision publisher for manual PH corrections (merge/split; routers/ph.py).
+    # NOTE: _pipeline._revision_publisher is None here (initialize() has not run
+    # yet), so this call is a no-op today, exactly as before this milestone's
+    # changes. Left in its original position deliberately: fixing this ordering
+    # would activate the merge/split revision-publish path in routers/ph.py for
+    # the first time, a behavioral change unrelated to and out of scope for
+    # identity-continuity M04 (see the milestone doc's dated-correction note on
+    # this pre-existing bug). Fix it in its own change if desired.
     if _pipeline._revision_publisher is not None:
         set_revision_publisher(_pipeline._revision_publisher)
 
     # -- Wire everything and start --
     identity_rewriter = (
         PostgresIdentityRewriter(_pool) if _pool is not None else InMemoryIdentityRewriter()
+    )
+
+    # Wire the M06 correction service (single owner of operator corrections).
+    # Constructed here, before FrameProcessingPipeline.initialize(), so it can
+    # be handed to UnknownBackfillService (identity-continuity M04) through
+    # ordinary constructor injection via PipelineDependencies. The real
+    # RevisionPublisher only exists once the pipeline initializes (it needs
+    # transport config resolved during initialize()), so publisher=None here
+    # and IdentityCorrectionService.set_publisher(...) wires it in below,
+    # after initialize() returns. record_inferred_range (the only method
+    # UnknownBackfillService calls on this service before the publisher is
+    # wired) never touches the publisher, so this ordering is safe.
+    from .services.identity_correction_service import IdentityCorrectionService
+
+    correction_service = IdentityCorrectionService(
+        ph_repo=deps_ph_repo,  # type: ignore[arg-type]
+        correction_repo=correction_repo_obj,
+        publisher=None,
+        rewriter=identity_rewriter,
     )
 
     # Cross-camera topology and co-presence repositories.
@@ -777,8 +806,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         baseline_repo=baseline_repo,
         gait_daily_repo=gait_daily_repo,
         identity_provenance_repo=identity_decision_repo,
+        identity_correction_service=correction_service,
     )
     await _pipeline.initialize(deps)
+
+    # Now that the pipeline has initialized, the real RevisionPublisher exists;
+    # wire it into the correction service used by the correct/batch_correct
+    # routes. (The separate routers/ph.py merge/split publish path is wired
+    # earlier, before initialize(), where it is intentionally still a no-op;
+    # see the comment at that call site.)
+    correction_service.set_publisher(_pipeline._revision_publisher)
 
     # Restore persisted adjacency edges from CC DB into in-memory calibration state.
     from .calibration.state import AdjacencyEdge as _AdjacencyEdge
@@ -905,15 +942,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.keyframe_revalidator = _revalidator
         app.state.keyframe_revalidator_task = asyncio.create_task(_revalidator.run())
 
-    # Wire the M06 correction service (single owner of operator corrections).
-    from .services.identity_correction_service import IdentityCorrectionService
-
-    correction_service = IdentityCorrectionService(
-        ph_repo=deps_ph_repo,  # type: ignore[arg-type]
-        correction_repo=correction_repo_obj,
-        publisher=_pipeline._revision_publisher,
-        rewriter=identity_rewriter,
-    )
+    # correction_service was constructed earlier (before pipeline.initialize())
+    # so UnknownBackfillService could depend on it via constructor injection;
+    # its publisher was wired in just after initialize() above.
     set_corrections_context(correction_service)
     # Route the PH inspector and batch correction endpoints through the same
     # service so every correction writes an effective revision range (M06).

@@ -332,6 +332,18 @@ class ResolverConfig:
     # face-recognized PH's non-frontal observation.
     seed_orientation_min_confidence: float = 0.5
 
+    # --- Unknown-segment backfill (identity-continuity M04) ---
+    # On a qualifying first calibrated-face commit of a previously Unknown PH,
+    # CTS can automatically backfill the PH's Unknown history to the newly
+    # committed identity (inferred revision range + retroactive relabel of
+    # identity-NULL trajectory/dwell rows). Staged rollout: off, then shadow
+    # (metrics/logs only), then enabled. See UnknownBackfillService.
+    enable_unknown_backfill: bool = False
+    backfill_shadow: bool = True
+    # Maximum span (seconds) a backfill may relabel backward from the commit,
+    # regardless of how much earlier the PH's Unknown history extends.
+    backfill_max_range_s: float = 14400.0
+
 
 class IdentityResolver:
     """Bayesian identity resolver with retroactive revision.

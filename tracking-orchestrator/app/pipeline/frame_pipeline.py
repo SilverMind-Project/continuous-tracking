@@ -66,11 +66,13 @@ from ..pipeline.types import (
 )
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..services.camera_room_map import CameraRoomMap, RoomPolygonMap
+from ..services.identity_correction_service import IdentityCorrectionService
 from ..services.identity_rewriter import (
     IdentityRewriter,
     InMemoryIdentityRewriter,
 )
 from ..services.transit_zone_map import TransitZoneMap
+from ..services.unknown_backfill import BackfillConfig, UnknownBackfillService
 from ..storage.base import (
     BboxAnnotationRepository,
     BehaviorBaselineRepository,
@@ -189,6 +191,11 @@ class PipelineDependencies:
     gait_bout_repo: GaitBoutRepository | None = None
     gait_daily_repo: GaitDailyRepository | None = None
     identity_provenance_repo: IdentityDecisionRepositoryProtocol | None = None
+    # Constructed early in main.py (publisher wired post-init via
+    # IdentityCorrectionService.set_publisher) so UnknownBackfillService can
+    # depend on it through ordinary constructor injection (identity-continuity
+    # M04) rather than a post-init reach-in into an already-built stage.
+    identity_correction_service: IdentityCorrectionService | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -287,6 +294,8 @@ class FrameProcessingPipeline:
         self._revision_publisher: RevisionPublisher | None = None
         self._ph_continuation_publisher: PHContinuationPublisher | None = None
         self._identity_provenance_repo: IdentityDecisionRepositoryProtocol | None = None
+        self._identity_correction_service: IdentityCorrectionService | None = None
+        self._backfill_service: UnknownBackfillService | None = None
         # World tracker
         self._world_tracker: WorldTracker | None = None
         self._ph_repo: PHRepositoryProtocol | None = None
@@ -402,6 +411,7 @@ class FrameProcessingPipeline:
         self._ph_repo = deps.ph_repo or InMemoryPHRepository()
         self._obs_repo = deps.obs_repo or InMemoryWorldObservationRepository()
         self._identity_provenance_repo = deps.identity_provenance_repo
+        self._identity_correction_service = deps.identity_correction_service
 
         # ---- Identity resolution ----
         self._floor_projector = FloorProjector(calibration_state)
@@ -419,6 +429,31 @@ class FrameProcessingPipeline:
             stream=self._config.transport.revisions_stream,
         )
         await self._revision_publisher.connect()
+
+        # Unknown-segment backfill (identity-continuity M04). Requires the
+        # identity-correction service (ranges/jobs/acks) and the identity
+        # decision repository (to find prior conflicting decisions); both are
+        # optional in dev/test wiring, so the backfill service is only built
+        # when both are present. Config keys live on ResolverConfig (see the
+        # M04 milestone doc's 2026-07-20 dated correction on config placement).
+        if (
+            self._identity_correction_service is not None
+            and self._identity_provenance_repo is not None
+        ):
+            resolver_cfg = self._config.resolver
+            self._backfill_service = UnknownBackfillService(
+                ph_repo=self._ph_repo,
+                identity_decision_repo=self._identity_provenance_repo,
+                correction_service=self._identity_correction_service,
+                identity_rewriter=self._identity_rewriter,
+                revision_publisher=self._revision_publisher,
+                config=BackfillConfig(
+                    enabled=resolver_cfg.enable_unknown_backfill,
+                    shadow=resolver_cfg.backfill_shadow,
+                    max_range_s=resolver_cfg.backfill_max_range_s,
+                ),
+            )
+
         self._ph_continuation_publisher = PHContinuationPublisher(
             redis_url=self._config.transport.redis_url,
         )
@@ -644,6 +679,7 @@ class FrameProcessingPipeline:
                 identity_rewriter=self._identity_rewriter,
                 bbox_repo=self._bbox_repo,
                 identity_rewrite_on_face_commit=self._config.identity_rewrite_on_face_commit,
+                backfill_service=self._backfill_service,
             ),
             TrailsStage(
                 trail_by_tracklet=self._trail_by_ph,
