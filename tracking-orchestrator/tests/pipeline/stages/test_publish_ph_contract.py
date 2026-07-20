@@ -83,7 +83,6 @@ async def test_publishes_identity_snapshots_for_known_and_unknown_phs():
     assert "ph-2" in ph_ids
 
 
-
 @pytest.mark.asyncio
 async def test_wire_uses_ph_id_not_global_track_id():
     """T3 (R3): identity_snapshots dict uses ph_id, never global_track_id."""
@@ -103,6 +102,3 @@ async def test_wire_uses_ph_id_not_global_track_id():
             "identity_snapshot must not use legacy global_track_id key"
         )
         assert snap["ph_id"] == "ph-a"
-
-
-

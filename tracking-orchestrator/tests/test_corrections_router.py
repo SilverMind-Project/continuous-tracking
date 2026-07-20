@@ -246,4 +246,3 @@ def test_job_status_unknown_revision_returns_404(client_and_publisher):
     resp = client.get("/internal/corrections/jobs/does-not-exist")
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "correction.job_not_found"
-
