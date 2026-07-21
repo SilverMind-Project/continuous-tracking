@@ -36,7 +36,7 @@ class FaceResult:
     recognition_state: str = "recognized"
     # Nearest centroid person_id, even below threshold.
     best_candidate_id: str | None = None
-    # Raw cosine similarity to best candidate (alias of similarity, M10 contract).
+    # Raw cosine similarity to best candidate (alias of similarity, contract).
     raw_similarity: float = 0.0
     # Raw cosine similarity (legacy field; kept for backward compatibility).
     similarity: float = 0.0
@@ -46,7 +46,7 @@ class FaceResult:
     roll_deg: float = 0.0
     # SCRFD detection score.
     det_score: float = 0.0
-    # M10 calibration fields. calibrated_confidence is None in any degraded state.
+    # Calibration fields. calibrated_confidence is None in any degraded state.
     calibrated_confidence: float | None = None
     calibration_status: str = "degraded_missing"
     arcface_model_version: str = ""

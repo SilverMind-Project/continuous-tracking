@@ -99,7 +99,7 @@ within acceptable limits given the pacing hazard detection signal already
 requires a minimum 60 s window.
 
 The cross-camera handoff fixture (16 s gap) remains fragmented at all tested
-grace values; fixing that path requires cross-camera revival (M5.1, already
+grace values; fixing that path requires cross-camera revival (already
 implemented but flagged `enable_cross_camera_revival=False`).
 
 **`gate_chi2` and alpha weights:** no recommendation for change.  These parameters

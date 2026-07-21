@@ -59,7 +59,7 @@ def _ctx(
     *,
     committed_identity_id: str | None = "grandma",
     face_person_id: str = "grandma",
-    # Below the M02 auto_verify_min_confidence default (0.90) but above the
+    # Below the auto_verify_min_confidence default (0.90) but above the
     # calibrated_confidence_min authority bar (0.80), so this fixture's
     # default keeps exercising the pending_review mint path. Tests that need
     # the auto_verified path pass calibrated_confidence=0.90 explicitly.

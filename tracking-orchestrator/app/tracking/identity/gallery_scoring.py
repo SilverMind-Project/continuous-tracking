@@ -27,8 +27,8 @@ class GalleryScoringConfig:
 
     verified_trust_multiplier: float = 2.0
     # Trust multiplier for auto_verified rows: calibrated high-confidence
-    # face matches minted directly at candidate creation (identity-continuity
-    # M02, decision D3), below operator_verified's full trust.
+    # face matches minted directly. Confidence is strictly bounded below
+    # operator_verified's full trust.
     auto_verified_trust_multiplier: float = 1.5
     recency_half_life_days: float = 7.0
     identified_entry_boost_min_sim: float = 0.65

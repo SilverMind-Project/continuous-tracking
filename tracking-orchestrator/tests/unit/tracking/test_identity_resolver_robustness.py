@@ -90,7 +90,7 @@ async def _duplicate_identity_resolver(
             Identity(identity_id=identity_id, display_name=identity_id, enrolled_at=now)
         )
     # state="operator_verified" so list_gallery_entries_for_tracklets's
-    # verified-only default (M03) still surfaces these as the resolver's
+    # verified-only default still surfaces these as the resolver's
     # query-building entries.
     for tracklet_id in ("t-held", "t-new"):
         await gallery.upsert_gallery_entry(
@@ -179,7 +179,7 @@ async def _coherence_resolver(
         )
     second_embedding = [1.0, 0.0] if coherent else [0.0, 1.0]
     # state="operator_verified" so list_gallery_entries_for_tracklets's
-    # verified-only default (M03) still surfaces these query-building entries;
+    # verified-only default still surfaces these query-building entries;
     # the actual vote comes from _ControlledGallery's overridden search_similar.
     for idx, embedding in enumerate(([1.0, 0.0], second_embedding)):
         await gallery.upsert_gallery_entry(
@@ -371,7 +371,7 @@ async def test_coherence_boost_shadow_counts_when_decision_would_change(
     resolver = await _coherence_resolver(
         ResolverConfig(
             enable_embedding_coherence_boost=False,
-            # Explicit sample rate: default 0.0 means no shadow query (M05 fix).
+            # Explicit sample rate: default 0.0 means no shadow query (fix).
             coherence_shadow_sample_rate=1.0,
             identified_entry_boost_min_sim=0.99,
             commit_prob=0.64,
@@ -454,7 +454,7 @@ async def _propagation_resolver(
             Identity(identity_id=identity_id, display_name=identity_id, enrolled_at=now)
         )
     # state="operator_verified" so gallery_similarity's verified-only default
-    # (M03) can see both tracklets' entries when computing propagation similarity.
+    # can see both tracklets' entries when computing propagation similarity.
     await gallery.upsert_gallery_entry(
         GalleryEmbedding(
             gallery_entry_id="src",

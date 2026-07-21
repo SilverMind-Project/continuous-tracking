@@ -103,7 +103,7 @@ class SignalHysteresis:
         self._last_emission: dict[tuple[str, str, str], datetime] = {}
         # (identity_id, signal_kind, episode_key) -> current episode severity or None
         self._episode_severity: dict[tuple[str, str, str], DementiaSignalSeverity | None] = {}
-        # Per-run evaluation results; cleared by begin_run().
+        # Per-run evaluation results; cleared by begin_run.
         self._run_results: dict[tuple[str, str, str], bool] = {}
 
     def begin_run(self, now: datetime) -> None:

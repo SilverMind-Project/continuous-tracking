@@ -237,7 +237,7 @@ class TestWorldTrackingEmitsRevisions:
         )
 
         # det_to_ph maps the detection_uuid to the existing PH — exactly what
-        # WorldTracker.step() builds during the association step.
+        # WorldTracker.step builds during the association step.
         det_to_ph = {detection_uuid: "ph-existing"}
 
         _decisions, revisions, identity_by_ph = await _resolve_identities(

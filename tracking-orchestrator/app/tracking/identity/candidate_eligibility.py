@@ -28,14 +28,14 @@ class CandidatePolicy:
     seed_orientation_min_confidence: float = 0.5
     min_quality: float = 0.35
     max_per_identity_orientation: int = 10
-    # Identity-continuity M02, decision D3: a calibrated direct-face
+    # A calibrated direct-face
     # confidence at or above this bar mints the candidate straight into
     # auto_verified instead of pending_review. Raw (uncalibrated) confidence
     # never qualifies, matching the ArcFace-authority fail-closed posture.
     auto_verify_min_confidence: float = 0.90
     # Provenance stamped on every created row. model_version reuses the live
     # Triton ReID model name (settings.yaml `triton.reid_model`) rather than a
-    # hardcoded "v1" (the M09 lesson: a wrong static version silently makes
+    # hardcoded "v1" (the lesson: a wrong static version silently makes
     # cross-version compatibility partitioning meaningless).
     model_version: str = ""
     preprocessing_version: str = "v1"
@@ -110,7 +110,7 @@ def evaluate_candidate(
     if quality < cfg.min_quality:
         return _ineligible("low_quality")
 
-    # Auto-verify mint rule (M02, D3): only a *calibrated* confidence at or
+    # Auto-verify mint rule: only a *calibrated* confidence at or
     # above the bar mints auto_verified. Raw ArcFace similarity is never
     # substituted here, even when calibration is unavailable and the
     # eligibility gate above already fell back to raw confidence -- that

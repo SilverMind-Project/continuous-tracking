@@ -76,7 +76,7 @@ class TestAllowlists:
         assert not overlap, f"delete/preserve overlap: {overlap}"
 
     def test_all_expected_cts_tables_present(self) -> None:
-        # Verified set from M11 spec implementation-reality table.
+        # Verified set from spec implementation-reality table.
         expected = {
             "person_hypotheses",
             "world_observations",

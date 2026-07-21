@@ -50,19 +50,19 @@ The gallery table is `continuous_tracking.reid_gallery`. There is no `identity_g
 
 | Object | Current purpose | Current writer | Planned identity owner |
 | --- | --- | --- | --- |
-| `continuous_tracking.person_hypotheses` | Persistent world PH and mutable current identity | CTS world tracker and PH repository | CTS association state; M02 adds the independent-evidence clock |
+| `continuous_tracking.person_hypotheses` | Persistent world PH and mutable current identity | CTS world tracker and PH repository | CTS association state; Adds the independent-evidence clock |
 | `continuous_tracking.world_observations` | Observation history linked to a PH | CTS world tracker | CTS immutable observation boundary source for corrections |
-| `continuous_tracking.reid_gallery` | 768-dim body embedding rows with `face_confirmed` | CTS gallery repository and multiview seeding | CTS governed gallery; M05 adds three-state lifecycle and provenance |
-| `continuous_tracking.tagged_keyframes` | One row per sampling trigger, referencing a raw frame | CTS keyframe sampler | CTS physical-frame read model; M07 groups trigger rows |
+| `continuous_tracking.reid_gallery` | 768-dim body embedding rows with `face_confirmed` | CTS gallery repository and multiview seeding | CTS governed gallery; Adds three-state lifecycle and provenance |
+| `continuous_tracking.tagged_keyframes` | One row per sampling trigger, referencing a raw frame | CTS keyframe sampler | CTS physical-frame read model; Groups trigger rows |
 | `continuous_tracking.keyframe_bbox_annotations` | Every persisted bbox for a sampled frame | CTS keyframe sampler | CTS bbox-level inferred and effective identity projection |
-| `continuous_tracking.ph_revisions` | Existing PH identity revision audit | CTS correction and resolver stack | CTS immutable revision lineage; M06 extends bounded ranges and jobs |
+| `continuous_tracking.ph_revisions` | Existing PH identity revision audit | CTS correction and resolver stack | CTS immutable revision lineage; Extends bounded ranges and jobs |
 | `CtsIdentityRevisionLog` / `cts_identity_revision_log` | CC record of applied CTS revision IDs | CC identity revision subscriber and rewriter | CC projection acknowledgement and audit |
 | `presence_segments` / `location_observations` | CC location history with supersession lineage | CC person-location and identity rewriter services | CC revision-aware location projection; `person_id` remains live |
-| `identity_decisions` | Not present | M04 | CTS durable inferred/effective decision provenance |
-| `identity_evidence_items` | Not present | M04 | CTS normalized evidence provenance |
-| `identity_decision_gallery_hits` | Not present | M04 | CTS decision-to-gallery contributor provenance |
-| `gallery_review_events` | Not present | M05 | CTS immutable gallery review audit |
-| correction jobs, ranges, acknowledgements | Not present | M06 | CTS correction orchestration and projection status |
+| `identity_decisions` | Not present | Planned | CTS durable inferred/effective decision provenance |
+| `identity_evidence_items` | Not present | Planned | CTS normalized evidence provenance |
+| `identity_decision_gallery_hits` | Not present | Planned | CTS decision-to-gallery contributor provenance |
+| `gallery_review_events` | Not present | Planned | CTS immutable gallery review audit |
+| correction jobs, ranges, acknowledgements | Not present | Planned | CTS correction orchestration and projection status |
 
 Every future CTS DDL object uses `continuous_tracking`, opens its migration with
 `SET search_path = continuous_tracking, public;`, and schema-qualifies references. Python SQL in
@@ -84,7 +84,7 @@ Source files:
 | `resolver.commit_prob` / `commit_margin` | `0.65` / `0.15` | Live posterior commit thresholds |
 | `resolver.commit_prob_dense` / `commit_margin_dense` | `0.80` / `0.20` | Live dense-scene thresholds |
 | `resolver.prior_weight` | `0.6` | Live temporal-prior weight |
-| `resolver.prior_maintenance_max_age_s` | `120.0` | Live value; target authority window is 30 seconds in M02 |
+| `resolver.prior_maintenance_max_age_s` | `120.0` | Live value; target authority window is 30 seconds in upcoming release |
 | `resolver.enable_quality_gate` | `true` | Authoritative gate enabled |
 | `resolver.enable_flip_debounce` | `true` | Authoritative debounce enabled |
 | `resolver.enable_sticky_maintenance` | `true` | Authoritative sticky hold enabled |
@@ -101,7 +101,7 @@ Source files:
 | `recognition.unknown_threshold` | `0.25` | Person service raw-cosine unrecognized threshold |
 
 Only adaptive ReID cadence and the duplicate-active guard are explicitly shadow-only in the
-current configuration. M00 does not flip either flag.
+current configuration. This baseline does not flip either flag.
 
 ## Docker and infrastructure ownership
 
@@ -123,7 +123,7 @@ All services join the external `nanai` Docker network.
 RTSP ingress stores source JPEGs under
 `frames/{camera_id}/{YYYY/MM/DD/HH}/{frame_index}-{capture_time}.jpg`. A keyframe stores that raw
 `frames/...` object key. It is metadata pointing to the physical source frame, not a separately
-rendered image. M05 review crops use separate immutable crop keys.
+rendered image. Review crops use separate immutable crop keys.
 
 ## Redis streams relevant to identity
 
@@ -131,8 +131,8 @@ The normative wire format is one raw protobuf value per stream entry. The comple
 compatibility table is in
 `../../../docs/identity-integrity-contract-matrix.md`.
 
-The `cc.identity_assertions` producer (live as of M38) and consumer are a known exception: they exchange
-individual text fields rather than one protobuf payload. M00 records this defect but does not alter
+The `cc.identity_assertions` producer (live) and consumer are a known exception: they exchange
+individual text fields rather than one protobuf payload. This baseline records this defect but does not alter
 the live path. Its fix requires a coordinated producer/consumer cutover because dual-codec stream
 shims are prohibited.
 
@@ -142,13 +142,13 @@ No fixture contains household names, media, URLs, credentials, or captured embed
 
 | Defect | Fixture | Removal milestone |
 | --- | --- | --- |
-| Two visible people with exchanged labels | `tests/fixtures/identity_integrity/two_person_handoff.json` | M03 |
-| One physical person handed between two PHs | same fixture, second scenario | M03 and M06 |
-| Duplicate active identity contenders | `tests/fixtures/identity_integrity/duplicate_active_identity.json` | M02 |
-| Prior-only timestamp renewal | `tests/fixtures/identity_integrity/prior_only_timestamp_renewal.json` | M02 |
-| Recognized face conflicts with gallery seed label | `tests/fixtures/identity_integrity/gallery_seed_identity_mismatch.json` | M05 |
-| Two bbox identities collapse to one trigger identity | CC `tests/fixtures/identity_integrity/keyframe_identity_collapse.json` | M07 |
-| Missing calibration artifact | person service `tests/fixtures/identity_integrity/missing_calibration_artifact.json` | M10 |
+| Two visible people with exchanged labels | `tests/fixtures/identity_integrity/two_person_handoff.json` | Planned |
+| One physical person handed between two PHs | same fixture, second scenario | Planned |
+| Duplicate active identity contenders | `tests/fixtures/identity_integrity/duplicate_active_identity.json` | Planned |
+| Prior-only timestamp renewal | `tests/fixtures/identity_integrity/prior_only_timestamp_renewal.json` | Planned |
+| Recognized face conflicts with gallery seed label | `tests/fixtures/identity_integrity/gallery_seed_identity_mismatch.json` | Planned |
+| Two bbox identities collapse to one trigger identity | CC `tests/fixtures/identity_integrity/keyframe_identity_collapse.json` | Planned |
+| Missing calibration artifact | person service `tests/fixtures/identity_integrity/missing_calibration_artifact.json` | Planned |
 
 Strict xfails state the desired invariant and name the milestone that removes them. An unexpected
 pass fails the suite so the xfail cannot silently outlive its defect.
@@ -156,7 +156,7 @@ pass fails the suite so the xfail cannot silently outlive its defect.
 ## Privacy boundary
 
 Committed fixtures are synthetic. Private household images, crops, embeddings, populated
-manifests, presigned URLs, and production exports remain local. M11 adds and verifies explicit
+manifests, presigned URLs, and production exports remain local. Adds and verifies explicit
 ignore patterns alongside the private replay tooling. Until then, every identity-integrity change
 must audit all three repository statuses before handoff.
 

@@ -58,7 +58,7 @@ comparison may tune thresholds, but shadow mode cannot be the final enforcement 
 - Raw inference remains immutable; corrections affect the effective projection.
 - ArcFace enrollment remains a separate golden dataset.
 - Resolver and association changes require reviewed two-person replay coverage.
-- The current 120-second prior and disabled duplicate guard are baseline defects scheduled for M02.
+- The current 120-second prior and disabled duplicate guard are baseline defects scheduled for resolution.
 
 ## Review checklist
 

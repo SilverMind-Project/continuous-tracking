@@ -341,7 +341,7 @@ def test_group_appearance_dedup_disabled_skips() -> None:
 
 
 # ---------------------------------------------------------------------------
-# M04: Information-form fusion tests
+# Information-form fusion tests
 # ---------------------------------------------------------------------------
 
 

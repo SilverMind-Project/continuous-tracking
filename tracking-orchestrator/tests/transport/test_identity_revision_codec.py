@@ -97,7 +97,7 @@ def test_round_trip_handles_no_evidence() -> None:
     assert evidence["rewritten_rows"] == 0
 
 
-# -- M06 typed revision-range fields ----------------------------------------
+# -- typed revision-range fields ----------------------------------------
 
 
 def test_m06_typed_fields_round_trip() -> None:

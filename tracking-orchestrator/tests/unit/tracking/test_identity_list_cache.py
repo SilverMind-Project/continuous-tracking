@@ -28,7 +28,7 @@ async def test_identity_list_loaded_on_first_resolve() -> None:
 
     assert resolver._identities_loaded_at is None
 
-    # resolve() with zero hypotheses triggers the identity load path.
+    # resolve with zero hypotheses triggers the identity load path.
     await resolver.resolve(hypotheses=[], new_face_anchors=[], captured_at=_ts())
 
     assert "alice" in resolver._identities

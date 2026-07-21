@@ -1231,7 +1231,7 @@ def main() -> None:
         ("uncalibrated_pacing", uncalibrated_pacing()),
         ("uncalibrated_two_people_home", uncalibrated_two_people_home()),
         ("mixed_calibration_entry", mixed_calibration_entry()),
-        # M09 acceptance fixtures
+        # acceptance fixtures
         ("stationary_two_camera", stationary_two_camera()),
         ("slow_shuffle", slow_shuffle()),
         ("oblique_single_camera", oblique_single_camera()),

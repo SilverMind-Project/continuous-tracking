@@ -1,12 +1,12 @@
 # Agitation detection: model upgrade path
 
 This document describes the planned upgrade from the heuristic `agitation_index`
-signal (M4, experimental) to a skeleton-action recognition model. It defines
+signal (experimental) to a skeleton-action recognition model. It defines
 the candidate architecture, data collection plan, serving budget, and the
 concrete promotion criteria that trigger the investment.
 
 This is a decision-ready note for architect review. No new code is introduced
-here; the code lives in the M4 detector and the Part A feedback loop.
+here; the code lives in the detector and the Part A feedback loop.
 
 ---
 
@@ -45,7 +45,7 @@ in the orchestrator's trajectory store.
 ### Collection
 
 Keypoint sequences for windows that received caregiver feedback through the
-Part A loop (M4.3) become the fine-tuning training set.
+Part A loop become the fine-tuning training set.
 
 | Field | Detail |
 | --- | --- |

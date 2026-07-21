@@ -93,5 +93,5 @@ class TestDetectionBackfillPh:
         stage = DetectionBackfillStage()
         await stage.run(ctx)
 
-        # replace() overwrites ph_id from det_to_ph regardless
+        # replace overwrites ph_id from det_to_ph regardless
         assert ctx.domain_detections[0].ph_id == "ph-a"

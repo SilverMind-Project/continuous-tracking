@@ -1,4 +1,4 @@
-# Continuous Tracking System: operational runbook (M10)
+# Continuous Tracking System: operational runbook
 
 This runbook covers the day-2 ops surface for the production CTS
 deployment. It assumes the manifests in `k8s/` are applied and the

@@ -168,7 +168,7 @@ def pair_cost_detail(
     cost = alpha_geo * geo_cost + alpha_app * app_cost + cfg.alpha_height * height_cost
 
     # 5. Verified-ReID disagreement: configurable strong cost, not a hard gate.
-    #    Inert until M05 plumbs obs_verified_reid_identity_id.
+    #    Inert until plumbs obs_verified_reid_identity_id.
     if (
         cfg.enable_reid_disagreement_cost
         and obs_verified_reid_identity_id is not None

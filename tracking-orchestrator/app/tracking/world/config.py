@@ -45,7 +45,7 @@ class WorldTrackerConfig:
     # ---- Appearance ----
     height_sigma_m: float = 0.15
 
-    # ---- PH-local appearance-update contamination guard (M03 tasks 7-9) ----
+    # ---- PH-local appearance-update contamination guard ----
     # One bad association must not immediately pollute a PH's appearance state.
     # An embedding is EMA'd into gallery_mean / view prototypes / mean_quality
     # only when it is finite, unit-normalised, quality-qualified, orientation-
@@ -54,7 +54,7 @@ class WorldTrackerConfig:
     # Kalman state and observation_count but touch NO appearance state, and are
     # never labelled as the PH's identity.
     #
-    # Ships ON: M03's completion criterion ("one bad association cannot
+    # Ships ON: completion criterion ("one bad association cannot
     # immediately pollute PH-local prototypes") is a property of the shipped
     # milestone, not of a flag that has to be flipped. The flag is a kill-switch
     # that DEFAULTS ON, for rollback only.
@@ -77,7 +77,7 @@ class WorldTrackerConfig:
     # ---- Identity conflict hard gate ----
     face_conflict_threshold: float = 0.70
 
-    # ---- Association covariance/point validation (M03) ----
+    # ---- Association covariance/point validation ----
     # Fail-closed validation of floor points and observation covariance before
     # the Mahalanobis gate. Non-finite points/covariance always gate out (pure
     # safety, not flagged). This flag additionally enforces the symmetry/PSD
@@ -90,24 +90,24 @@ class WorldTrackerConfig:
     covariance_symmetry_tol_m2: float = 1e-6
     covariance_psd_tol_m2: float = -1e-9
 
-    # ---- Typed authoritative identity evidence in association (M03 task 5) ----
+    # ---- Typed authoritative identity evidence in association ----
     # Operator-confirmed PH identity is absolute authority: a conflicting
     # recognized face hard-gates regardless of face_conflict_threshold, and a
     # sub-threshold same-identity face cannot weaken it. Wired from PH metadata.
     # Verified-ReID disagreement is a configurable STRONG COST, never a hard
     # gate. The input (a per-observation verified-ReID identity) is plumbed by
-    # M05 governed-gallery; until then no verified-ReID id reaches association,
+    # governed-gallery; until then no verified-ReID id reaches association,
     # so this is inert. Default OFF for that cross-milestone dependency, NOT as
     # a "ship dark" robustness toggle.
     enable_reid_disagreement_cost: bool = False
     reid_disagreement_cost: float = 0.6  # added to pair cost on verified disagreement
     # Minimum gallery cosine similarity for treating a top operator_verified
-    # gallery hit as an observation's verified-ReID identity (M12 plumbing).
+    # gallery hit as an observation's verified-ReID identity.
     # Only consulted when enable_reid_disagreement_cost is true, so the
     # per-observation gallery lookup adds zero cost while the flag is off.
     reid_disagreement_min_similarity: float = 0.5
     # Hard vote-age cutoff for the disagreement probe's gallery lookup, in
-    # seconds (identity-continuity M03, decision D4). None means no cutoff.
+    # seconds. None means no cutoff.
     # Production default is 43200s/12h via settings.yaml, mirroring
     # resolver.gallery_vote_max_age_s so the probe sees the same corpus the
     # resolver votes with even though the flag above is off in production
@@ -158,7 +158,7 @@ class WorldTrackerConfig:
 
     # ---- Observation uncertainty model (used by information-form fusion) ----
     # These mirror the module-level constants in observation_model.py and make
-    # them tunable per-deployment.  Tune against M09 acceptance fixtures.
+    # them tunable per-deployment.  Tune against acceptance fixtures.
     k_cal: float = 1.0  # R_cal/bias-floor = (k_cal · residual_m)² · I  (m²)
     base_footpoint_sigma_px: float = 4.0  # detector bbox-bottom localization noise (px, 1 sigma)
     occluded_footpoint_inflation: float = 8.0  # sigma multiplier when feet are hidden/truncated

@@ -273,7 +273,7 @@ async def test_split_both_halves_carry_ph_state_correctly() -> None:
     await obs_repo.save(_obs_for_split(t1), "ph-1")
     oid2 = await obs_repo.save(_obs_for_split(t2), "ph-1")
     # Inject the persisted observations into the PH repo's internal list --
-    # split() reads its own repository-local observation index, not the
+    # split reads its own repository-local observation index, not the
     # separate WorldObservationRepository (matches the existing test convention
     # in tests/storage/postgres/test_ph_merge_split_validation.py).
     repo._observations["ph-1"] = await obs_repo.list_by_ph("ph-1", limit=10)

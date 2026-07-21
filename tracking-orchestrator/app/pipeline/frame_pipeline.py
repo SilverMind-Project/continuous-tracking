@@ -155,7 +155,7 @@ class FaceIdConfig:
     min_confidence: float = 0.6
     enabled: bool = True
     camera_configs: dict[str, FaceIdCameraConfig] = field(default_factory=dict)
-    # M10: expected versions for calibration compatibility gating on the CTS side.
+    # expected versions for calibration compatibility gating on the CTS side.
     expected_arcface_model_version: str = ""
     expected_preprocessing_version: str = ""
 
@@ -193,8 +193,8 @@ class PipelineDependencies:
     identity_provenance_repo: IdentityDecisionRepositoryProtocol | None = None
     # Constructed early in main.py (publisher wired post-init via
     # IdentityCorrectionService.set_publisher) so UnknownBackfillService can
-    # depend on it through ordinary constructor injection (identity-continuity
-    # M04) rather than a post-init reach-in into an already-built stage.
+    # depend on it through ordinary constructor injection rather than a
+    # post-init reach-in into an already-built stage.
     identity_correction_service: IdentityCorrectionService | None = None
 
 
@@ -254,7 +254,7 @@ class PipelineConfig:
     # --- Adaptive ReID cadence ---
     adaptive_reid: AdaptiveReidConfig = field(default_factory=AdaptiveReidConfig)
 
-    # --- Governed ReID gallery candidate creation (M04) ---
+    # --- Governed ReID gallery candidate creation  ---
     reid_candidates: CandidatePolicy = field(default_factory=CandidatePolicy)
 
     # --- Gait daily aggregation ---
@@ -430,12 +430,11 @@ class FrameProcessingPipeline:
         )
         await self._revision_publisher.connect()
 
-        # Unknown-segment backfill (identity-continuity M04). Requires the
+        # Unknown-segment backfill. Requires the
         # identity-correction service (ranges/jobs/acks) and the identity
         # decision repository (to find prior conflicting decisions); both are
         # optional in dev/test wiring, so the backfill service is only built
-        # when both are present. Config keys live on ResolverConfig (see the
-        # M04 milestone doc's 2026-07-20 dated correction on config placement).
+        # when both are present. Config keys live on ResolverConfig.
         if (
             self._identity_correction_service is not None
             and self._identity_provenance_repo is not None

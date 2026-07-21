@@ -39,7 +39,7 @@ def test_shared_enum_matches_proto_enum_member_set() -> None:
     enum must define exactly the same kinds/severities (excluding UNSPECIFIED). If the
     proto gains a kind the shared enum lacks (or vice versa), this fails -- catching the
     divergence as a clean test failure rather than waiting for an import-time crash."""
-    # ``.keys()`` is the protobuf EnumTypeWrapper API (proto enum names), not a dict.
+    # ``.keys`` is the protobuf EnumTypeWrapper API (proto enum names), not a dict.
     proto_kind_names = list(signals_pb2.DementiaSignalKind.keys())
     proto_kinds = {
         n.removeprefix("DEMENTIA_SIGNAL_KIND_")

@@ -15,7 +15,7 @@ _APP = Path(__file__).parents[2] / "app"
 # Call names that mutate reid_gallery directly. A module outside the
 # approved list must never call these -- gallery writes are governed either
 # through ReIDCandidateStage.create_review_candidate (creation) or
-# ReIDReviewService's apply_review_action/compensate_review (M09 review).
+# ReIDReviewService's apply_review_action/compensate_review.
 _MUTATION_CALLS = ("upsert_gallery_entry", "create_review_candidate")
 
 # The only approved call site within the scanned roots (tracking/world,

@@ -385,7 +385,7 @@ async def test_face_evidence_includes_detection_id_in_ph_mode():
 
 
 # ---------------------------------------------------------------------------
-# M10: calibration authority contract tests
+# calibration authority contract tests
 # ---------------------------------------------------------------------------
 
 

@@ -610,7 +610,7 @@ class IdentityRevision:
     applied_at: datetime
     rewritten_rows: int
     evidence: IdentityEvidence | None = None
-    # -- M06 revision-range / projection metadata (typed proto fields 18-25) --
+    # -- revision-range / projection metadata (typed proto fields 18-25) --
     revision_kind: str = ""
     range_start: datetime | None = None
     range_end: datetime | None = None
@@ -647,10 +647,10 @@ class FaceAnchor:
     similarity: float = 0.0
     # head pose yaw in degrees (primary frontality axis).
     yaw_deg: float = 0.0
-    # Calibrated ArcFace confidence from model calibration pipeline (M10).
+    # Calibrated ArcFace confidence from model calibration pipeline.
     # None means no calibration available → authority fails closed.
     calibrated_confidence: float | None = None
-    # Evidence grade (identity-continuity M09). "native" is a same-frame
+    # Evidence grade. "native" is a same-frame
     # CTS ArcFace anchor; "cc_assertion" is a spatially-matched external
     # assertion from cognitive-companion. External anchors are excluded from
     # ArcFace authority, the independent-evidence clock, duplicate-identity
@@ -792,7 +792,7 @@ class GalleryEmbedding:
     # column (distinct from `origin_tracklet_id`, which carries the real
     # persisted observation id). InMemory has no second dict keyed by ph_id,
     # so this field lets `phs_with_pending_reid` match the same way Postgres
-    # does for rows created by ReIDCandidateStage (M04).
+    # does for rows created by ReIDCandidateStage.
     ph_id: str = ""
 
 
@@ -919,7 +919,7 @@ class IdentityCorrection:
 
 
 # ---------------------------------------------------------------------------
-# M06: Segment correction, revision ranges, jobs, and effective projections
+# Segment correction, revision ranges, jobs, and effective projections
 # ---------------------------------------------------------------------------
 
 # Structured reason codes captured on every operator correction.

@@ -306,7 +306,7 @@ async def test_enabled_records_range_relabels_and_publishes() -> None:
     assert revision.required_projections == ("cc",)
 
     # The job requires both cts_internal and cc acks; only cts_internal is
-    # acked synchronously here (M05 acks cc once CC projects the segment), so
+    # acked synchronously here (acks cc once CC projects the segment), so
     # the job stays "applying" until then.
     job = await corr_repo.get_job(revision.revision_id)
     assert job is not None

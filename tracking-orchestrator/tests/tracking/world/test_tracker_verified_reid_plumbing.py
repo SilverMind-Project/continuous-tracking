@@ -205,7 +205,7 @@ async def test_step_feeds_verified_reid_ids_to_associate_when_flag_on(monkeypatc
         return real_associate(*args, **kwargs)
 
     # First frame spawns a PH (no PH to associate against yet); the second frame
-    # exercises the primary associate() call with an open PH present.
+    # exercises the primary associate call with an open PH present.
     monkeypatch.setattr(tracker_module, "associate", _spy)
     await tracker.step([_obs("d1", amma)], now=NOW, room_polygons=_ROOM)
     await tracker.step([_obs("d2", amma)], now=NOW + timedelta(seconds=1), room_polygons=_ROOM)

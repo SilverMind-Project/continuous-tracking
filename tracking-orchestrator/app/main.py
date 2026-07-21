@@ -335,19 +335,19 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         low_confidence_floor=wt.as_float("low_confidence_floor"),
         recovery_gate_chi2=wt.as_float("recovery_gate_chi2"),
         measure_low_confidence_band=wt.as_bool("measure_low_confidence_band"),
-        # Association covariance/point validation (M03)
+        # Association covariance/point validation
         enable_covariance_validation=wt.as_bool("enable_covariance_validation"),
         covariance_max_trace_m2=wt.as_float("covariance_max_trace_m2"),
         covariance_symmetry_tol_m2=wt.as_float("covariance_symmetry_tol_m2"),
         covariance_psd_tol_m2=wt.as_float("covariance_psd_tol_m2"),
-        # Typed authoritative identity evidence (M03 task 5)
+        # Typed authoritative identity evidence (task 5)
         enable_reid_disagreement_cost=wt.as_bool("enable_reid_disagreement_cost"),
         reid_disagreement_cost=wt.as_float("reid_disagreement_cost"),
         reid_disagreement_min_similarity=wt.as_float("reid_disagreement_min_similarity"),
         reid_disagreement_max_age_s=_optional_max_age_s(
             s, "world_tracker.reid_disagreement_max_age_s"
         ),
-        # PH-local appearance contamination guard (M03 tasks 7-9)
+        # PH-local appearance contamination guard (tasks 7-9)
         enable_appearance_outlier_rejection=wt.as_bool("enable_appearance_outlier_rejection"),
         appearance_min_quality=wt.as_float("appearance_min_quality"),
         appearance_embedding_norm_tol=wt.as_float("appearance_embedding_norm_tol"),
@@ -724,7 +724,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     set_ph_repository(_ph_repo_n1)  # type: ignore[arg-type]
     deps_ph_repo = _ph_repo_n1
 
-    # M06 identity-correction repository (segment corrections + revision ranges).
+    # identity-correction repository (segment corrections + revision ranges).
     from .storage.corrections import InMemoryIdentityCorrectionRepository
     from .storage.postgres.correction_repo import PostgresIdentityCorrectionRepository
 
@@ -735,13 +735,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     # Wire revision publisher for manual PH corrections (merge/split; routers/ph.py).
-    # NOTE: _pipeline._revision_publisher is None here (initialize() has not run
-    # yet), so this call is a no-op today, exactly as before this milestone's
-    # changes. Left in its original position deliberately: fixing this ordering
-    # would activate the merge/split revision-publish path in routers/ph.py for
-    # the first time, a behavioral change unrelated to and out of scope for
-    # identity-continuity M04 (see the milestone doc's dated-correction note on
-    # this pre-existing bug). Fix it in its own change if desired.
+    # NOTE: _pipeline._revision_publisher is None here (initialize has not run
+    # yet), so this call is a no-op today. It is left in its original position
+    # deliberately: fixing this ordering would activate the merge/split revision-publish
+    # path in routers/ph.py for the first time, which is a behavioral change unrelated
+    # to the current scope. This pre-existing bug should be fixed in its own
+    # dedicated change if desired.
     if _pipeline._revision_publisher is not None:
         set_revision_publisher(_pipeline._revision_publisher)
 
@@ -750,14 +749,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         PostgresIdentityRewriter(_pool) if _pool is not None else InMemoryIdentityRewriter()
     )
 
-    # Wire the M06 correction service (single owner of operator corrections).
+    # Wire the correction service (single owner of operator corrections).
     # Constructed here, before FrameProcessingPipeline.initialize(), so it can
-    # be handed to UnknownBackfillService (identity-continuity M04) through
+    # be handed to UnknownBackfillService through
     # ordinary constructor injection via PipelineDependencies. The real
     # RevisionPublisher only exists once the pipeline initializes (it needs
-    # transport config resolved during initialize()), so publisher=None here
+    # transport config resolved during initialize), so publisher=None here
     # and IdentityCorrectionService.set_publisher(...) wires it in below,
-    # after initialize() returns. record_inferred_range (the only method
+    # after initialize returns. record_inferred_range() (the only method
     # UnknownBackfillService calls on this service before the publisher is
     # wired) never touches the publisher, so this ordering is safe.
     from .services.identity_correction_service import IdentityCorrectionService
@@ -818,7 +817,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Now that the pipeline has initialized, the real RevisionPublisher exists;
     # wire it into the correction service used by the correct/batch_correct
     # routes. (The separate routers/ph.py merge/split publish path is wired
-    # earlier, before initialize(), where it is intentionally still a no-op;
+    # earlier, before initialize, where it is intentionally still a no-op;
     # see the comment at that call site.)
     correction_service.set_publisher(_pipeline._revision_publisher)
 
@@ -947,12 +946,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.keyframe_revalidator = _revalidator
         app.state.keyframe_revalidator_task = asyncio.create_task(_revalidator.run())
 
-    # correction_service was constructed earlier (before pipeline.initialize())
+    # correction_service was constructed earlier (before pipeline.initialize)
     # so UnknownBackfillService could depend on it via constructor injection;
-    # its publisher was wired in just after initialize() above.
+    # its publisher was wired in just after initialize above.
     set_corrections_context(correction_service)
     # Route the PH inspector and batch correction endpoints through the same
-    # service so every correction writes an effective revision range (M06).
+    # service so every correction writes an effective revision range.
     from .routers.ph import set_correction_service as set_ph_correction_service
 
     set_ph_correction_service(correction_service)
@@ -971,7 +970,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if gallery_repo is not None:
         gallery_router_mod.set_context(gallery_repo=gallery_repo, reid_embedder=reid_embedder)
 
-        # M09 ReID review queue: governed approve/relabel/reject over the gallery.
+        # ReID review queue: governed approve/relabel/reject over the gallery.
         # active_model_versions is left unconfigured (None) for now: model
         # incompatibility is surfaced once a current-version list is wired here.
         from .services.reid_review_service import ReIDReviewService
@@ -992,7 +991,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if bbox_repo is not None:
         dashboard_router_mod.set_bbox_repo(bbox_repo)  # type: ignore[arg-type]
 
-    # M07 keyframe read model: provenance-bearing repos for grouped cards.
+    # keyframe read model: provenance-bearing repos for grouped cards.
     if identity_decision_repo is not None and gallery_repo is not None:
         dashboard_router_mod.set_read_model_repos(
             decision=identity_decision_repo,

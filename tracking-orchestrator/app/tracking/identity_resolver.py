@@ -156,7 +156,7 @@ class ResolverConfig:
     # allowing ordinary no-pose detections to commit.
     min_quality_to_commit: float = 0.35
 
-    # Quality gate — now enabled by default in M02.
+    # Quality gate — now enabled by default.
     enable_quality_gate: bool = True
 
     # Higher commit threshold used in dense scenes (≥ 2 candidate
@@ -179,7 +179,7 @@ class ResolverConfig:
     # decisions the debounce would have changed.
     enable_flip_debounce: bool = False
 
-    # Duplicate-active identity guard — authoritative in M02.
+    # Duplicate-active identity guard — authoritative.
     enable_duplicate_active_identity_guard: bool = True
 
     # Minimum direct face confidence required to bypass the duplicate-active
@@ -245,26 +245,26 @@ class ResolverConfig:
     # similarity exceeds identified_entry_boost_min_sim.
     # Without this floor, a back-facing query finding front-facing
     # alice entries at sim≈0.73 produces logistic≈0.65, which after
-    # _combine() smoothing collapses to posterior≈0.35 — below
+    # _combine smoothing collapses to posterior≈0.35 — below
     # commit_prob.  The floor ensures the posterior crosses commit_prob
     # even when only alice's entries appear in the top-k results.
     identified_entry_min_likelihood: float = 0.80
 
-    # --- Gallery vote scoring (M01: unified across every gallery query path) ---
+    # --- Gallery vote scoring (unified across every gallery query path) ---
     # Trust multiplier for operator_verified gallery entries before aggregation.
     gallery_verified_trust_multiplier: float = 2.0
 
     # Trust multiplier for auto_verified gallery entries (identity-continuity
-    # M02, decision D3): calibrated high-confidence face matches minted
+    # Calibrated high-confidence face matches minted
     # directly at candidate creation, below operator_verified's full trust.
     gallery_auto_verified_trust_multiplier: float = 1.5
 
     # Exponential recency half-life in days, no floor. Default 2.0
-    # (identity-continuity M03, decision D2; shortened from the original 7.0).
+    # (shortened from the original 7.0).
     gallery_recency_half_life_days: float = 2.0
 
     # Hard vote-age cutoff in seconds: gallery entries older than this
-    # contribute zero vote weight on every path (identity-continuity M03,
+    # contribute zero vote weight on every path (,
     # decision D4). None means no cutoff (rollback state; production default
     # is 43200s/12h via settings.yaml). SOLIDER-REID embeddings are
     # clothing-dominated, so a stale entry describes yesterday's outfit; the
@@ -306,11 +306,11 @@ class ResolverConfig:
     # Minimum face anchor confidence to drive a commit via the posterior path.
     face_commit_min_confidence: float = 0.70
 
-    # Calibrated ArcFace confidence required for direct-face authority (M02).
+    # Calibrated ArcFace confidence required for direct-face authority.
     # Fails closed: authority never fires when calibrated_confidence is None.
     arcface_authority_calibrated_confidence: float = 0.80
 
-    # --- External identity evidence (identity-continuity M09) ---
+    # --- External identity evidence  ---
     # Multiplier applied to FaceAnchor.origin == "cc_assertion" likelihood
     # weight in _from_face_anchors. Same recognizer as native ArcFace, but a
     # cross-fleet spatial match (room or floor-distance gated) is weaker
@@ -319,7 +319,7 @@ class ResolverConfig:
     cc_assertion_likelihood_scale: float = 0.5
 
     # Rollout mode for cc.identity_assertions matching: "off" preserves
-    # pre-M09 behavior exactly (matcher not consulted); "shadow" runs the
+    # pre-behavior exactly (matcher not consulted); "shadow" runs the
     # matcher and records outcome metrics without injecting anchors;
     # "enabled" injects matched anchors as evidence. Flip is a config
     # change, never a code change (shadow-before-authority house rule).
@@ -344,7 +344,7 @@ class ResolverConfig:
     cross_gt_face_propagation_threshold: float = 0.72
 
     # Maximum number of adjacent GlobalTracks to propagate face identity to per
-    # resolve() call.  Caps the gallery query overhead for busy scenes.
+    # resolve call.  Caps the gallery query overhead for busy scenes.
     cross_gt_face_propagation_max_gts: int = 4
 
     # --- Multi-view gallery query ---
@@ -357,7 +357,7 @@ class ResolverConfig:
     # face-recognized PH's non-frontal observation.
     seed_orientation_min_confidence: float = 0.5
 
-    # --- Unknown-segment backfill (identity-continuity M04) ---
+    # --- Unknown-segment backfill ---
     # On a qualifying first calibrated-face commit of a previously Unknown PH,
     # CTS can automatically backfill the PH's Unknown history to the newly
     # committed identity (inferred revision range + retroactive relabel of
@@ -419,7 +419,7 @@ class IdentityResolver:
         }
         # Timestamps for the TTL-based identity-list cache.
         self._identities_loaded_at: datetime | None = (
-            None  # None forces an immediate load on first resolve()
+            None  # None forces an immediate load on first resolve
         )
         # Revision rate limiter: global_track_id -> list of revision timestamps
         self._revision_log: dict[str, list[datetime]] = defaultdict(list)
@@ -853,7 +853,7 @@ class IdentityResolver:
         )
 
     # ------------------------------------------------------------------
-    # ArcFace authority (M02)
+    # ArcFace authority
     # ------------------------------------------------------------------
 
     def _check_arcface_authority(
@@ -875,7 +875,7 @@ class IdentityResolver:
         qualifying: dict[str, float] = {}  # identity_id → best calibrated_confidence
         for fa in face_anchors:
             # External evidence never grants authority (identity-continuity
-            # M09): belt and braces on top of the structural
+            # ): belt and braces on top of the structural
             # calibrated_confidence=None every cc_assertion anchor carries.
             if fa.origin == "cc_assertion":
                 continue
@@ -1009,7 +1009,7 @@ class IdentityResolver:
             weight_mult = (
                 self._config.propagated_face_weight_multiplier if source == "propagated" else 1.0
             )
-            # External evidence grade (identity-continuity M09): a cross-fleet
+            # External evidence grade: a cross-fleet
             # spatial match is weaker association than a same-frame native
             # anchor. Real yaw/quality still flow through frontality/_p_face
             # below like any native anchor.
@@ -1661,7 +1661,7 @@ class IdentityResolver:
         """
         (top_id, top_prob), margin = posterior.top_with_margin()
 
-        # --- ArcFace authority pre-emption (M02) ---
+        # --- ArcFace authority pre-emption  ---
         if arcface_authority == "CONFLICT":
             prev_id = entity.current_identity_id
             logger.info(
@@ -1854,7 +1854,7 @@ class IdentityResolver:
         ev_ts = entity.last_independent_identity_evidence_at
         ev_ts_ns = int(ev_ts.timestamp() * 1e9) if ev_ts else 0
 
-        # Authority ladder rung for this commit (F9/M07): distinct from
+        # Authority ladder rung for this commit (F9/): distinct from
         # commit_source, which states *which evidence led* the posterior.
         if new_id is None:
             authority = IdentityAuthority.NONE
@@ -2022,7 +2022,7 @@ class IdentityResolver:
                         )
                     )
                 elif fe.source == "cc_assertion":
-                    # Distinct source (identity-continuity M09) so the replay
+                    # Distinct source  so the replay
                     # evaluator and reid-disagreement metrics can segment
                     # external evidence from native association hints.
                     items.append(
@@ -2205,7 +2205,7 @@ class IdentityResolver:
                     continue
                 # dataclasses.replace (not hand-copied fields, per
                 # engineering-standards F1/F10): a synthetic propagated anchor
-                # carries origin unchanged (identity-continuity M09) and every
+                # carries origin unchanged  and every
                 # other src_anchor field forward automatically, so a new
                 # FaceAnchor field is never silently dropped here. Explicitly
                 # reset calibrated_confidence to None: propagated evidence
@@ -2256,4 +2256,4 @@ class IdentityResolver:
 
 
 # _compute_contradiction has been moved to identity.commit_policy.compute_contradiction.
-# The resolver calls compute_contradiction() (imported at the top of this module).
+# The resolver calls compute_contradiction (imported at the top of this module).

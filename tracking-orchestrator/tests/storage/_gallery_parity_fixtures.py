@@ -83,11 +83,11 @@ def expected_ids(*, states: frozenset[str] | None, identity_id: str | None = Non
 
 
 # The `states`/`allowed_states` values the milestone requires the matrix to cover.
-# M02 adds auto_verified as a fourth lifecycle state and VOTING_STATES (the new
+# The addition of auto_verified as a fourth lifecycle state and VOTING_STATES
 # vote-path default) as a fifth case.
 STATE_FILTER_CASES: tuple[frozenset[str] | None, ...] = (
     frozenset({"operator_verified"}),  # the old VERIFIED_ONLY default
-    frozenset({"operator_verified", "auto_verified"}),  # VOTING_STATES, the M02 default
+    frozenset({"operator_verified", "auto_verified"}),  # VOTING_STATES, the default
     None,
     frozenset({"pending_review"}),
     frozenset({"pending_review", "operator_verified"}),

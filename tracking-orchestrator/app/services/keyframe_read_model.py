@@ -46,8 +46,8 @@ from ..tracking.identity.types import IdentityAuthority
 # Stable namespace for deriving ``physical_frame_id`` from the source tuple.
 _PHYSICAL_FRAME_NS = uuid.UUID("6f3d2c1a-0b4e-5a6f-9c8d-1e2f3a4b5c6d")
 
-# Bounded authority vocabulary (F9/M07). A stored row outside this set
-# (empty string, or a pre-M07 identity id on the ArcFace-authority path)
+# Bounded authority vocabulary. A stored row outside this set
+# (empty string, or a pre-identity id on the ArcFace-authority path)
 # composes to ``none`` at read time — display tolerance only, never persisted.
 _KNOWN_AUTHORITIES = frozenset(a.value for a in IdentityAuthority)
 

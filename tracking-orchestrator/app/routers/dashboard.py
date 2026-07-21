@@ -90,7 +90,7 @@ def set_bbox_repo(bbox: BboxAnnotationRepository) -> None:
 
 
 # ---------------------------------------------------------------------------
-# M07 keyframe read model: provenance-bearing repos and the composing service
+# keyframe read model: provenance-bearing repos and the composing service
 # ---------------------------------------------------------------------------
 
 _decision_repo: IdentityDecisionRepositoryProtocol = InMemoryIdentityDecisionRepository()

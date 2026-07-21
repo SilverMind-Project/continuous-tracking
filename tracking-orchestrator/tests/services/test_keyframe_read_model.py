@@ -406,14 +406,14 @@ async def test_legacy_identity_shaped_authority_composes_to_none() -> None:
         decision_id=str(uuid.uuid4()),
         ph_id="ph-alpha",
         captured_at=_T0,
-        authority="amma",  # pre-M07: the ArcFace-authority path wrote the identity id.
+        authority="amma",  # pre-ArcFace-authority path wrote the identity id.
         decision_source="arcface_authority",
         diagnostics={},
         inferred_identity_id="amma",
         effective_identity_id="amma",
         top_probability=0.9,
     )
-    decision_repo._decisions[legacy_decision.decision_id] = legacy_decision  # bypass save() guard
+    decision_repo._decisions[legacy_decision.decision_id] = legacy_decision  # bypass save guard
 
     svc = _service(keyframe_repo=keyframe_repo, bbox_repo=bbox_repo, decision_repo=decision_repo)
     card = (await svc.list_physical_frames()).frames[0]

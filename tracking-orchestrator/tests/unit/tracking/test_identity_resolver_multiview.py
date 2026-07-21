@@ -97,7 +97,7 @@ async def gallery_with_alice_back() -> InMemoryGalleryRepository:
         )
     )
     # Add alice back entries. state="operator_verified" so search_similar's
-    # verified-only default (M03) can see them.
+    # verified-only default can see them.
     for i in range(5):
         await repo.upsert_gallery_entry(
             GalleryEmbedding(

@@ -131,8 +131,8 @@ cameras while leaving fused position, covariance, and lifecycle logic unchanged.
 
 ## 3. Milestones (with dependencies)
 
-Fusion track (M1–M8) is independent of the visibility/drift track (M9–M10); they can
-proceed in parallel. Each milestone ships its docs page (D13).
+Fusion track is independent of the visibility/drift track; they can
+proceed in parallel. Each milestone ships its docs page.
 
 - **M1 — Observation model foundation.** `ObservationGeometry` frozen descriptor +
   `observation_model.py` pure functions: footpoint Jacobian, Σ_px, `R_obs`,
@@ -163,16 +163,16 @@ proceed in parallel. Each milestone ships its docs page (D13).
   from depth inliers; return it from `/internal/calibration/auto`. CC: store on
   `cts_cameras`, project the floor-region boundary in `compute_visibility_from_homography`,
   operator confirm/edit. Independent. → docs 6.
-- **M10 — Drift detection.** Reference keyframe at calibration; periodic SSIM/feature
+- **Drift detection.** Reference keyframe at calibration; periodic SSIM/feature
   comparison; operator "needs recalibration" flag + alert. Independent. → docs 7.
-- **M11 — Docs series.** Tie pages 1–7 together (+ overview page 2 "why one dot
+- **Docs series.** Tie pages 1–7 together (+ overview page 2 "why one dot
   jitters"); link from `person-tracking.md`. Cross-cutting.
 
 ### Recommended sequencing
 
 Front-load the jitter fix (M1 → M2 → M3 → M4), then M5/M6 in parallel, then M7/M8.
-Run M9 (visibility polygon — a quick, isolated win) in parallel from the start. M10 after
-M9. Docs ride each milestone; M11 finalizes.
+Run visibility polygon (a quick, isolated win) in parallel from the start. Drift detection after
+visibility polygon. Docs ride each milestone; finalizes.
 
 ### Open verification items (resolve during implementation, not blockers)
 

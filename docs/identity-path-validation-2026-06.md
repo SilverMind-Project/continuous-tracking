@@ -143,6 +143,6 @@ semantics, so dual authority is itself the defect.
    and activity APIs. Split those responsibilities before any final class
    removal.
 
-Suggested removal milestone: the first post-M7 architecture milestone, after
+Suggested removal milestone: the first upcoming architecture milestone, after
 the presence-provider and legacy person-route migrations have shipped and the
 comparison session above has been archived.

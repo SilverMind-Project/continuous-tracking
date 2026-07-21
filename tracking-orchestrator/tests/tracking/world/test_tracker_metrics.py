@@ -60,7 +60,7 @@ async def test_dedup_counter_increments_once_per_collapsed_observation(monkeypat
         world_tracker_ph_closed_total = fake_closed
         world_tracker_spawn_rejected_out_of_room_total = fake_rejected
         identity_shadow_mismatch_total = fake_shadow
-        # M03 association-integrity counters (primary pass only).
+        # association-integrity counters (primary pass only).
         worldtracker_association_rejections_total = MagicMock()
         worldtracker_association_outcome_total = MagicMock()
         worldtracker_appearance_updates_rejected_total = MagicMock()
@@ -108,7 +108,7 @@ async def test_missing_floorpoint_counter_increments(monkeypatch):
         world_tracker_ph_closed_total = fake_closed
         world_tracker_spawn_rejected_out_of_room_total = fake_rejected
         identity_shadow_mismatch_total = fake_shadow
-        # M03 association-integrity counters (primary pass only).
+        # association-integrity counters (primary pass only).
         worldtracker_association_rejections_total = MagicMock()
         worldtracker_association_outcome_total = MagicMock()
         worldtracker_appearance_updates_rejected_total = MagicMock()

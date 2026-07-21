@@ -162,11 +162,8 @@ class WorldTrackerResult:
     identity_decisions: list[IdentityDecision] = field(default_factory=list)
     revisions: list[IdentityRevision] = field(default_factory=list)
     det_to_ph: dict[str, str] = field(default_factory=dict)
-    # Real repository-assigned WorldObservation ids, keyed by source detection
-    # id. ReIDCandidateStage (M04) needs these -- not detection_id -- for
-    # origin_tracklet_id, because the resolver's list_gallery_entries_for_tracklets
-    # query matches against PersonHypothesis.observation_ids, which are these
-    # same repository-assigned ids, not detection ids.
+    # Real repository-assigned WorldObservation IDs, keyed by source detection ID.
+    # ReIDCandidateStage uses these for origin_tracklet_id lookups.
     det_to_observation_id: dict[str, str] = field(default_factory=dict)
     revived_ph_ids: frozenset[str] = frozenset()
 
@@ -312,9 +309,9 @@ class WorldTracker:
         # for a held identity instead of emitting a sentinel 0.0 that the UI shows
         # as null. Lost on restart (self-heals on next resolution); pruned on close.
         self._last_identity_confidence: dict[str, float] = {}
-        # Snapshot of open PHs from the most recent step() call. Exposed via
+        # Snapshot of open PHs from the most recent step call. Exposed via
         # last_open_phs so ReidNeedPolicy (InferenceStage) can evaluate proximity
-        # without issuing an async DB query. Empty until the first step().
+        # without issuing an async DB query. Empty until the first step.
         self._last_open_phs: list[PersonHypothesis] = []
         self._still_counter: dict[str, int] = {}
         self._primary_camera: dict[str, str] = {}
@@ -442,9 +439,9 @@ class WorldTracker:
         obs_vecs = _unpack_observations(observations)
         ph_vecs = _unpack_ph_vectors(active_phs)
 
-        # M12: resolve each observation's verified-ReID identity from the
+        # resolve each observation's verified-ReID identity from the
         # governed (operator_verified) gallery so association can charge a
-        # disagreement cost (M03 cost path). Gated on the flag: while it is
+        # disagreement cost (cost path). Gated on the flag: while it is
         # off this adds zero per-frame gallery queries and the input stays
         # None, leaving association behaviour unchanged.
         obs_verified_reid_ids: list[str | None] | None = None
@@ -469,7 +466,7 @@ class WorldTracker:
             obs_verified_reid_identity_ids=obs_verified_reid_ids,
         )
 
-        # M03: record association integrity diagnostics from the PRIMARY pass
+        # record association integrity diagnostics from the PRIMARY pass
         # only. The shadow and low-band passes below must not touch these
         # counters or they would double/triple-count the same frame.
         for _reason, _count in assignment.rejection_reasons.items():
@@ -551,7 +548,7 @@ class WorldTracker:
                 observation_y_m=obs.floor_point.y_mm / 1000.0,
                 observation_cov_m2=obs_r,
             )
-            # M03 contamination guard: a geometrically valid match may still be
+            # contamination guard: a geometrically valid match may still be
             # an appearance outlier. When it is, the Kalman state and
             # observation_count still advance (the person was there) but
             # gallery_mean / view prototypes / mean_quality are left untouched,
@@ -1107,7 +1104,7 @@ class WorldTracker:
             if pid in open_ph_ids
         }
 
-        # Gallery candidate creation moved to ReIDCandidateStage (M04): the
+        # Gallery candidate creation moved to ReIDCandidateStage: the
         # tracker has no image bytes, and creation needs crop provenance
         # (source_frame_key/crop_key/hashes) that only the pipeline stage has.
         # See app/pipeline/stages/reid_candidates.py.

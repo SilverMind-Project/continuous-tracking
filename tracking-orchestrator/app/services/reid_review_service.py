@@ -129,7 +129,7 @@ class ReIDReviewService:
 
     def eligibility(self, candidate: ReviewCandidate) -> Eligibility:
         reasons: list[str] = []
-        # Reviewable states are pending_review and auto_verified (M02): an
+        # Reviewable states are pending_review and auto_verified: an
         # operator may still approve, relabel, or reject a machine-trusted
         # row. Only the terminal states are "already reviewed".
         if candidate.state in ("operator_verified", "rejected"):

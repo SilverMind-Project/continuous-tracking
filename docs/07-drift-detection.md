@@ -72,7 +72,7 @@ When drift is detected:
 
 The operator then chooses whether to recalibrate.  The UI provides a
 **"Re-run Auto-Calibration"** CTA that goes through the same operator-reviewed
-auto-calibration flow as M10/Track-G — the operator must review and commit the
+auto-calibration flow — the operator must review and commit the
 draft before it becomes active.  No silent homography mutations occur.
 
 ---
@@ -87,7 +87,7 @@ When an operator commits a homography (manual calibration), the system:
 
 This reference frame is the "what the scene looked like when calibrated"
 baseline used by all subsequent drift checks.  Cameras without a
-`calibration_ref_key` (pre-M11 calibrations or cameras calibrated while the
+`calibration_ref_key` (legacy calibrations or cameras calibrated while the
 ingress was unavailable) are skipped by the drift poll until a new calibration
 is committed.
 

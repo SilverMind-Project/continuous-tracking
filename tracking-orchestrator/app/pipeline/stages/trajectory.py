@@ -89,7 +89,7 @@ class ClosePHStage(FrameStage):
                 self._last_identity_by_ph[ph_id] = snap.identity_id
             # Detect room change
             if prev_room and snap.room_name and snap.room_name != prev_room:
-                pass  # Room change logic removed in M37
+                pass  # Room change logic removed.
             self._last_room_by_ph[ph_id] = snap.room_name
 
         terminated_ph_ids = self._prev_active_ph_ids - current_ph_ids

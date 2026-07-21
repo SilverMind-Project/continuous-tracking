@@ -518,7 +518,7 @@ class TestIdentityResolver:
             captured_at=datetime.now(UTC),
         )
         assert len(outcome.decisions) == 1
-        # With the gallery refresh in resolve(), alice should be in the prior
+        # With the gallery refresh in resolve, alice should be in the prior
         # and the strong ReID hit should push the posterior above commit_prob.
         assert outcome.decisions[0].identity_id == "alice"
 
@@ -661,7 +661,7 @@ class TestIdentityResolver:
             await gallery.upsert_identity(ident)
 
         # person_0's front-facing gallery entry. state="operator_verified" so
-        # it is visible to search_similar's default verified-only vote (M03).
+        # it is visible to search_similar's default verified-only vote.
         gallery_emb = _unit(0)
         await gallery.upsert_gallery_entry(
             GalleryEmbedding(
@@ -679,7 +679,7 @@ class TestIdentityResolver:
         # Back-facing query: cos_sim ≈ 0.7 to gallery_emb — below commit threshold
         # when combined with prior smoothing across 6 identities. This row feeds
         # the resolver's query-building read (list_gallery_entries_for_tracklets),
-        # which also defaults to verified-only (M03), so it needs the same state.
+        # which also defaults to verified-only, so it needs the same state.
         import math
 
         back_query = [0.0] * dim
@@ -819,7 +819,7 @@ class TestGalleryBoost:
         # Alice has 3 front-facing gallery entries (face-confirmed).
         # state="operator_verified" throughout: these entries are searched via
         # search_similar / list_gallery_entries_for_tracklets, both verified-only
-        # by default (M03).
+        # by default.
         for i in range(3):
             await gallery.upsert_gallery_entry(
                 GalleryEmbedding(
@@ -931,7 +931,7 @@ class TestGalleryBoost:
             await gallery.upsert_identity(ident)
 
         # state="operator_verified": both entries must be visible to the
-        # resolver's verified-only default (M03) for the ambiguity to arise.
+        # resolver's verified-only default for the ambiguity to arise.
         for person in ("alice", "bob"):
             await gallery.upsert_gallery_entry(
                 GalleryEmbedding(
@@ -1259,8 +1259,8 @@ class TestCrossGtFacePropagation:
         for ident in identities:
             await gallery_repo.upsert_identity(ident)
 
-        # GT-A tracklet gallery: embedding [1, 0, 0, ...]. state="operator_verified"
-        # so gallery_similarity's verified-only default (M03) can see both rows.
+        # GT-A tracklet gallery: embedding [1, 0, 0,...]. state="operator_verified"
+        # so gallery_similarity's verified-only default can see both rows.
         base_emb = [1.0] + [0.0] * 767
         await gallery_repo.upsert_gallery_entry(
             GalleryEmbedding(
@@ -1304,7 +1304,7 @@ class TestCrossGtFacePropagation:
 
         # GT-A commits alice directly (direct face evidence).
         # GT-B also resolves alice via propagated anchor but the duplicate-active
-        # guard (enabled by default in M02) blocks it since GT-A already holds alice.
+        # guard (enabled by default) blocks it since GT-A already holds alice.
         decisions_by_gt = {d.ph_id: d for d in outcome.decisions}
         assert decisions_by_gt["gt-a"].identity_id == "alice"
         assert decisions_by_gt["gt-b"].identity_id is None
@@ -1327,7 +1327,7 @@ class TestCrossGtFacePropagation:
             await gallery_repo.upsert_identity(ident)
 
         # GT-A: embedding in one direction. state="operator_verified" so
-        # gallery_similarity's verified-only default (M03) can see both rows.
+        # gallery_similarity's verified-only default can see both rows.
         await gallery_repo.upsert_gallery_entry(
             GalleryEmbedding(
                 gallery_entry_id="ge-a",
@@ -1394,7 +1394,7 @@ class TestResolveOutcome:
 
 
 # ---------------------------------------------------------------------------
-# External evidence grade (identity-continuity M09)
+# External evidence grade
 # ---------------------------------------------------------------------------
 
 

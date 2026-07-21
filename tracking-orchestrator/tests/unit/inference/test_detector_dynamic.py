@@ -24,7 +24,7 @@ from app.inference.detector import PersonDetector
 class _MockTritonClient:
     def __init__(self, batch_size: int) -> None:
         # Return a zero output tensor whose leading dim matches whatever batch
-        # the caller sends.  Tests inspect .infer call args directly.
+        # the caller sends.  Tests inspect.infer call args directly.
         self.infer = AsyncMock(
             side_effect=lambda **kwargs: {
                 "output0": np.zeros((kwargs["inputs"][0][1].shape[0], 300, 6), dtype=np.float32)

@@ -179,7 +179,7 @@ def test_empty_assertions_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# Room-level matching (identity-continuity M09)
+# Room-level matching
 # ---------------------------------------------------------------------------
 
 

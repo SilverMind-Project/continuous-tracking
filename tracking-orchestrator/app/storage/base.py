@@ -207,10 +207,6 @@ class WorldObservationRepositoryProtocol(Protocol):
     async def list_by_ph(self, ph_id: str, limit: int = 50) -> list[WorldObservation]: ...
 
 
-# Bounded authority vocabulary (F9/M07). Every repository that persists an
-# ``IdentityProvenanceDecision`` must reject an out-of-vocabulary ``authority``
-# at the boundary — a CHECK constraint substitute since no migration is in
-# scope. Shared by InMemory and Postgres so validation cannot drift.
 _VALID_IDENTITY_AUTHORITIES = frozenset(a.value for a in IdentityAuthority)
 
 

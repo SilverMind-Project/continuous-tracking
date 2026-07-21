@@ -134,7 +134,7 @@ async def build_records(
             # No covering range, or an inferred range. An inferred range only
             # restates inference over a span; it never changes who held
             # authority, so the raw decision still owns it. (record_inferred_range
-            # is wired since identity-continuity M04 via UnknownBackfillService,
+            # is wired via UnknownBackfillService,
             # gated behind resolver.enable_unknown_backfill (default off), so
             # range_auth == "inferred" can occur once enabled; this branch's
             # defensive handling ensures an inferred range can never mask a

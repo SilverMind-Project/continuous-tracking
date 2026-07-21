@@ -63,7 +63,7 @@ def export_onnx(
     model.eval()
 
     # DepthAnythingForDepthEstimation.forward returns a DepthEstimatorOutput
-    # with .predicted_depth and .hidden_states.  We wrap it so ONNX export
+    # with predicted_depth and hidden_states. We wrap it so ONNX export
     # only captures the predicted_depth tensor.
     class _ExportWrapper(torch.nn.Module):
         def __init__(self, inner: torch.nn.Module) -> None:

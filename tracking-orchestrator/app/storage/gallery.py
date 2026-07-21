@@ -20,7 +20,7 @@ class ReviewConflictError(Exception):
 
 _REVIEW_ACTIONS = frozenset({"approve", "reject", "relabel", "demote"})
 
-# States apply_review_action's approve/reject/relabel may act on (M02): a
+# States apply_review_action's approve/reject/relabel may act on : a
 # pending row awaiting first review, or an auto_verified row an operator is
 # still free to promote, correct, or reject. demote has its own, narrower
 # guard (auto_verified only) enforced at the call site.
@@ -31,12 +31,12 @@ REVIEWABLE_STATES: Final[frozenset[str]] = frozenset({"pending_review", "auto_ve
 # means "no filter" and is reserved for administrative/service callers, each
 # of which must carry a one-line justification comment at the call site.
 # Retained for admin/list surfaces (list_gallery_entries has no vote-path
-# caller); vote-adjacent reads use VOTING_STATES instead (identity-continuity
-# M02, decision D3).
+# caller); vote-adjacent reads use VOTING_STATES instead.
 VERIFIED_ONLY: Final[frozenset[str]] = frozenset({"operator_verified"})
 
-# Vote-path default (identity-continuity M02, decision D3): both
-# operator_verified and auto_verified rows vote in identity resolution, at
+# Vote-path default: both
+# The authoritative configuration of states and decisions for the
+# identity-integrity domain, at
 # their respective configured trust multipliers (see gallery_scoring.py).
 # Every read whose result feeds identity resolution (search_similar, the
 # gallery-similarity/tracklet-query paths that build or compare against a
@@ -44,8 +44,8 @@ VERIFIED_ONLY: Final[frozenset[str]] = frozenset({"operator_verified"})
 # never vote under any default.
 VOTING_STATES: Final[frozenset[str]] = frozenset({"operator_verified", "auto_verified"})
 
-# Default state set for the per-(identity, orientation) creation cap (M04, F4;
-# extended M02). Pending rows must count against the cap or the review queue
+# Default state set for the per-(identity, orientation) creation cap.
+# Pending rows must count against the cap or the review queue
 # floods; auto_verified rows must count too or the same-day-face-match
 # population (which is the *dominant* state in practice) grows unbounded past
 # the cap -- the identical F4 lesson applied to the new state. Never rejected.
@@ -200,7 +200,7 @@ class GalleryRepository(ABC):
         """
         return set()
 
-    # -- M09 ReID review queue ------------------------------------------------
+    # -- ReID review queue ------------------------------------------------
     #
     # Default no-op implementations keep non-gallery repository doubles working;
     # InMemory and Postgres override them with real behaviour and parity.
@@ -306,7 +306,7 @@ class InMemoryGalleryRepository(GalleryRepository):
     def __init__(self) -> None:
         self._identities: dict[str, Identity] = {}
         self._entries: dict[str, GalleryEmbedding] = {}
-        # M09 review queue: rich candidates + immutable history, independent of
+        # review queue: rich candidates + immutable history, independent of
         # the lean GalleryEmbedding voting rows above.
         self._candidates: dict[str, ReviewCandidate] = {}
         self._events: dict[str, list[ReviewEvent]] = {}
@@ -338,7 +338,7 @@ class InMemoryGalleryRepository(GalleryRepository):
 
     async def create_review_candidate(self, candidate: NewReviewCandidate) -> str:
         # Idempotent on candidate_id: a retry after a partial MinIO/DB failure
-        # must not duplicate the row (M04 recoverable-creation requirement).
+        # must not duplicate the row (recoverable-creation requirement).
         if candidate.candidate_id in self._candidates:
             return candidate.candidate_id
 
@@ -394,7 +394,7 @@ class InMemoryGalleryRepository(GalleryRepository):
             quality=candidate.quality,
             origin_tracklet_id=candidate.origin_tracklet_id,
             # face_confirmed is a legacy authority boolean nothing reads
-            # (M04 rationale); leave it at the domain default rather than
+            # leave it at the domain default rather than
             # asserting authority through a deprecated field a second time.
             camera_id=candidate.camera_id,
             orientation=candidate.orientation,
@@ -432,7 +432,7 @@ class InMemoryGalleryRepository(GalleryRepository):
                 matches.add(key)
         return matches
 
-    # -- M09 ReID review queue ------------------------------------------------
+    # -- ReID review queue ------------------------------------------------
 
     async def list_review_candidates(
         self,
@@ -622,7 +622,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         # Restore the state the candidate was promoted from, per the most
         # recent review event, rather than assuming pending_review: undoing
         # an approve-from-auto_verified must land back on auto_verified, not
-        # silently downgrade a machine-trusted row to pending (M02).
+        # silently downgrade a machine-trusted row to pending.
         prior_events = self._events.get(candidate_id, [])
         restore_state = prior_events[-1].previous_state if prior_events else "pending_review"
         now = datetime.now(UTC)
@@ -686,7 +686,7 @@ class InMemoryGalleryRepository(GalleryRepository):
             entries = [e for e in entries if e.camera_id == camera_id]
         if max_age_seconds is not None:
             # Strict `>` matches the Postgres peer's `seen_at > now() - interval`
-            # (identity-continuity M03): an entry exactly at the cutoff age is
+            # so an entry exactly at the cutoff age is
             # excluded on both peers.
             cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
             entries = [e for e in entries if e.seen_at > cutoff]

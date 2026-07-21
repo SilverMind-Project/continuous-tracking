@@ -22,7 +22,7 @@ from ..gallery import (
     ReviewNotFoundError,
 )
 
-# Columns the M09 review queue projects from reid_gallery.
+# Columns the review queue projects from reid_gallery.
 _REVIEW_COLUMNS = """
     id, identity_id, proposed_identity_id, effective_identity_id, state,
     label_source, candidate_reason, model_version, preprocessing_version,
@@ -458,7 +458,7 @@ class PostgresGalleryRepository(GalleryRepository):
             return 0.5
         return self._cosine_between_centroids(entries_a, entries_b)
 
-    # -- M09 ReID review queue ------------------------------------------------
+    # -- ReID review queue ------------------------------------------------
 
     async def list_review_candidates(
         self,
@@ -721,7 +721,7 @@ class PostgresGalleryRepository(GalleryRepository):
             # Restore the state the candidate was promoted from, per the most
             # recent review event, rather than assuming pending_review: undoing
             # an approve-from-auto_verified must land back on auto_verified,
-            # not silently downgrade a machine-trusted row to pending (M02).
+            # not silently downgrade a machine-trusted row to pending.
             last_event = await conn.fetchrow(
                 """
                     SELECT previous_state

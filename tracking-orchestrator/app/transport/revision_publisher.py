@@ -109,7 +109,7 @@ def _to_proto(revision: IdentityRevision) -> tracking_pb2.IdentityRevision:
             default=str,
         ),
     )
-    # -- M06 typed revision-range / projection fields (18-25) --
+    # -- typed revision-range / projection fields (18-25) --
     if revision.revision_kind:
         pb.revision_kind = revision.revision_kind
     if revision.range_start is not None:

@@ -23,7 +23,7 @@ from prometheus_client import (
     Histogram,
 )
 
-# Histogram buckets tuned for the latency budgets in phase-1 §1.9b.4
+# Histogram buckets tuned for the latency budgets
 # (frame-end-to-end p99 target = 450 ms).
 LATENCY_BUCKETS_MS = (5, 10, 25, 50, 100, 200, 350, 500, 750, 1000, 2000, 5000)
 # Posterior entropy is bits-per-decision; ranges 0..log2(N+1) for N
@@ -112,12 +112,12 @@ class Metrics:
     world_tracker_clock_skew_ms: Histogram
     world_tracker_spawn_rejected_out_of_room_total: Counter
 
-    # ---- U1 cross-camera dedup -----------------------------------------
+    # ---- cross-camera dedup -----------------------------------------
     worldtracker_observations_deduped_total: Counter
     worldtracker_dedup_clusters_total: Counter
     worldtracker_observation_missing_floorpoint_total: Counter
 
-    # ---- M03 association integrity (primary pass only) -----------------
+    # ---- association integrity (primary pass only) -----------------
     worldtracker_association_rejections_total: Counter  # label: reason
     worldtracker_association_outcome_total: Counter  # label: outcome
     worldtracker_appearance_updates_rejected_total: Counter  # label: reason
@@ -192,7 +192,7 @@ class Metrics:
     cts_reid_executed_total: Counter
     cts_reid_skipped_total: Counter
 
-    # ---- M12 identity-integrity observability ----
+    # ---- identity-integrity observability ----
     # Bounded labels only; PH/decision/identity IDs go to structlog, never here.
     identity_duplicate_active_blocks_total: Counter  # enforced duplicate / tie-clear blocks
     reid_rejected_vector_vote_attempts_total: Counter  # invariant=0; alert if >0
@@ -202,21 +202,21 @@ class Metrics:
     identity_duplicate_active_breach_total: Counter  # >1 active PH holds one identity post-commit
     identity_prior_only_evidence_advance_total: Counter  # prior-only advanced evidence time
 
-    # ---- M04 governed candidate creation ----
+    # ---- governed candidate creation ----
     reid_candidate_rejected_total: Counter  # label: reason (bounded, typed set)
-    reid_candidate_created_total: Counter  # label: state (pending_review|auto_verified, M02)
+    reid_candidate_created_total: Counter  # label: state (pending_review|auto_verified)
 
-    # ---- M03 temporal vote window ----
+    # ---- temporal vote window ----
     # Vote volume per query path. Compare against candidate-creation volume to
     # see the vote corpus collapse if gallery_vote_max_age_s starves ReID.
     reid_gallery_hits_total: Counter  # label: path (multiview|fallback|shadow)
 
-    # ---- M04 unknown-segment backfill ----
+    # ---- unknown-segment backfill ----
     identity_backfill_total: Counter  # labels: mode (shadow|enabled), outcome
     identity_backfill_clip_total: Counter  # label: reason
     identity_backfill_range_seconds: Histogram
 
-    # ---- M09 CC assertion evidence integrity ----
+    # ---- CC assertion evidence integrity ----
     cc_assertions_matched_total: Counter  # label: gate (floor|room)
     cc_assertions_rejected_total: Counter  # label: reason
     cc_assertions_shadow_total: Counter  # label: outcome (would_name_unknown|agrees|disagrees)
@@ -483,7 +483,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_world_tracker_spawn_rejected_out_of_room_total",
             "WorldTracker PH spawns rejected because a calibrated observation was outside rooms.",
         ),
-        # ---- U1 cross-camera dedup -----------------------------------------
+        # ---- cross-camera dedup -----------------------------------------
         worldtracker_observations_deduped_total=_counter(
             "cts_worldtracker_observations_deduped_total",
             "Source observations merged into a dedup cluster representative (one per collapsed).",
@@ -496,7 +496,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_worldtracker_observation_missing_floorpoint_total",
             "Observations skipped from dedup weighting due to missing calibrated floor point.",
         ),
-        # ---- M03 association integrity (emitted from the primary pass only) ----
+        # ---- association integrity (emitted from the primary pass only) ----
         worldtracker_association_rejections_total=_counter(
             "cts_worldtracker_association_rejections_total",
             "Gated (PH, obs) pairs by typed reason in the primary association pass.",
@@ -709,7 +709,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Frames where adaptive policy skipped ReID (or would have skipped in shadow mode).",
             ["reason"],
         ),
-        # ---- M12 identity-integrity observability ----
+        # ---- identity-integrity observability ----
         identity_duplicate_active_blocks_total=_counter(
             "cts_identity_duplicate_active_blocks_total",
             "New identity assignments demoted to UNKNOWN by the enforced "

@@ -68,7 +68,7 @@ factors, and aggregate result.
 
 ## Consequences
 
-- The current inert five-state `gallery_governance.py` is replaced in M05 rather than extended.
+- The current inert five-state `gallery_governance.py` is replaced in upcoming release rather than extended.
 - Reviewable crops are separate MinIO objects; keyframes continue to reference raw `frames/...`
   objects.
 - ArcFace enrollment, calibration datasets, PH-local prototypes, and ReID review data stay

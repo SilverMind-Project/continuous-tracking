@@ -31,7 +31,7 @@ _EXPR = re.compile(
 )
 
 # cts_correction_projection_failures_total is exported by cognitive-companion;
-# every other M12 alert metric is a CTS counter.
+# every other alert metric is a CTS counter.
 _CC_ONLY_METRICS = {"cts_correction_projection_failures_total"}
 
 

@@ -130,7 +130,7 @@ class CCIdentityAssertionSubscriber:
         if not msg.person_id:
             return
 
-        # No 0.7 fallback (identity-continuity M09): an assertion without a
+        # No 0.7 fallback: an assertion without a
         # calibrated confidence is cached with confidence=None and can never
         # become an anchor (the matcher's confidence gate reads calibrated
         # confidence only), but it still counts in shadow metrics so an

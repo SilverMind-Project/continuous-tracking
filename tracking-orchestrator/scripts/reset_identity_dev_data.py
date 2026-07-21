@@ -39,7 +39,7 @@ import httpx
 # ---------------------------------------------------------------------------
 
 # CTS derived tables to truncate. Schema: continuous_tracking.
-# Source: identity-integrity-m11-dev-reset-and-private-replay-data.md (verified 2026-06-21).
+# Source: identity-integrity--dev-reset-and-private-replay-data.md (verified 2026-06-21).
 _CTS_DELETE_TABLES: tuple[str, ...] = (
     "person_hypotheses",
     "world_observations",
@@ -88,7 +88,7 @@ _CC_DELETE_TABLES: tuple[str, ...] = (
 )
 
 # MinIO prefixes that contain ReID candidate crops only.
-# Source: ReIDCandidateStage in app/pipeline/stages/reid_candidates.py (M04).
+# Source: ReIDCandidateStage in app/pipeline/stages/reid_candidates.py.
 # NEVER delete frames/... -- keyframes reference raw frame objects.
 _REID_PREFIXES: tuple[str, ...] = (
     "reid-candidates/",

@@ -124,7 +124,7 @@ class WorldTrackingStage(FrameStage):
         self._anchor_match_distance_m = anchor_match_distance_m
         self._anchor_min_confidence = anchor_min_confidence
         self._floor_projector = floor_projector or FloorProjector(calibration_state)
-        # Identity-continuity M09: off preserves pre-M09 behavior exactly
+        # Identity-continuity off preserves pre-behavior exactly
         # (matcher not consulted); shadow runs the matcher and records
         # would_name_unknown/agrees/disagrees metrics without injecting
         # anchors; enabled injects matched anchors as evidence.
@@ -184,7 +184,7 @@ class WorldTrackingStage(FrameStage):
             face_evidence for ctx in contexts for face_evidence in (ctx._face_evidence or [])
         ]
 
-        # Off preserves pre-M09 behavior exactly; enabled injects matched
+        # Off preserves pre-behavior exactly; enabled injects matched
         # anchors as evidence; shadow runs matching (metrics already
         # recorded above) but withholds injection and instead compares the
         # match against the PH's post-resolve committed identity below.
@@ -382,7 +382,7 @@ class WorldTrackingStage(FrameStage):
     ) -> list[FaceAnchor]:
         from ...tracking.world.assertion_matching import match_assertions_to_face_anchors
 
-        # off preserves pre-M09 behavior exactly: the matcher is not
+        # off preserves pre-behavior exactly: the matcher is not
         # consulted at all, not even for metrics.
         if self._cc_assertion_mode == "off":
             return []

@@ -134,7 +134,7 @@ def _write(path: Path, header: dict, frames: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Positive fixtures - must produce check_impact() != None on at least one frame
+# Positive fixtures - must produce check_impact != None on at least one frame
 # ---------------------------------------------------------------------------
 
 
@@ -211,7 +211,7 @@ def fall_slump_slow() -> tuple[dict, list[dict]]:
             h = _H_LYING
             lying = 0.75
             post = True
-        # Post-event motion > stillness_motion_floor keeps is_escalatable() False.
+        # Post-event motion > stillness_motion_floor keeps is_escalatable False.
         frames.append(
             _frame(
                 t, hip_y=hip, height=h, lying=lying, floor_speed=0.4, motion=0.12 if post else 0.02

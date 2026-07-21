@@ -22,7 +22,7 @@ from tests.integration._fusion_metrics import compute_eigen_ratio, run_replay
 from tests.integration._replay import FIXTURES_DIR, load_fixture, load_truth
 
 # ── Gate constants ─────────────────────────────────────────────────────────────
-# All thresholds justified by the M09 implementation baseline run (2026-06-18).
+# All thresholds justified by the implementation baseline run (2026-06-18).
 
 # Baseline (legacy=isotropic+no-ZUPT): step jitter = 0.0279 m
 # Baseline (fused):                    step jitter = 0.0073 m  → ratio = 0.262
@@ -200,7 +200,7 @@ async def test_oblique_camera_r_anisotropic() -> None:
 
     result = await run_replay(steps)
 
-    # Skip step 0 (PH spawn: covariance is the isotropic initialize() prior,
+    # Skip step 0 (PH spawn: covariance is the isotropic initialize prior,
     # not yet updated with the anisotropic R).  Use the last converged step.
     converged = [s for s in result.steps if s.position_cov_flat is not None and s.step >= 1]
     assert converged, "No PH with anisotropic covariance found after step 0"

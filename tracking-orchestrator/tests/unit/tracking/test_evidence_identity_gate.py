@@ -299,7 +299,7 @@ class TestEvaluateCommitIdentityMatchedEvidence:
             enable_sticky_maintenance=False,
             enforce_quality_gate=False,
             enforce_flip_debounce=False,
-            # evidence_identity_ids omitted -> defaults to frozenset()
+            # evidence_identity_ids omitted -> defaults to frozenset
         )
 
         assert not result.has_evidence
