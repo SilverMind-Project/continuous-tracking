@@ -60,7 +60,12 @@ When material evidence conflicts and the hierarchy does not resolve it, the effe
   similarity thresholds for compatibility and weak-evidence weighting. `authoritative` is a
   separate determination.
 - ArcFace enrollment is a golden dataset. PH inference, operator identity correction, and ReID
-  review never modify enrollment.
+  review never modify enrollment. Amended by identity-continuity M06: enrollment gains entries
+  only via explicit enroll calls or explicit operator naming of a visitor cluster
+  (`person-identification-service`'s `VisitorStore.name_cluster`); never automatically. Visitor
+  clusters themselves (unmatched face embeddings persisted for cross-visit review) are a
+  separate, non-authoritative dataset that never enters enrollment, identification, or tracking
+  until a caregiver explicitly names one.
 
 ## Temporal prior
 
