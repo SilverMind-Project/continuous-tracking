@@ -920,6 +920,8 @@ That focused skill is normative for identity work; this section remains the arch
 - **Duplicate active identity is a guarded invariant.** `IdentityResolver.resolve()` owns the occupancy check over all open PHs (`open_ph_identities` carries incumbents not observed this frame). A second active PH must not newly acquire an identity already held by another open PH unless it has strong direct recognized face evidence for that identity. Shadow mode reports `cts_identity_shadow_mismatch_total{feature="duplicate_active_identity"}` before enforcement.
 - **Gallery labels are governed.** Tentative commits → quarantine → promotion after stable evidence, not immediate trust.
 - **Revisions are idempotent.** Stable IDs and evidence summaries so CC can apply once and explain in the UI.
+- **Spatial gates fail closed: evidence without a floor point may match at room granularity with a confidence haircut, and evidence with neither floor point nor room matches nothing. Proto3 scalar floats cannot represent "unset"; any optional value on the wire carries an explicit presence flag, and (0,0) is a real position, never a sentinel (CC-M28/G15).**
+- **External identity evidence (`FaceAnchor.origin != 'native'`) is its own grade: it votes in the likelihood with a configured scale and real quality/frontality, and it is explicitly excluded from ArcFace authority, the independent-evidence clock, duplicate-identity ranking, and association vectors. Absent metadata defaults conservative (worst-case yaw, mid quality), never perfect. New external sources ship shadow-first with outcome metrics before they may influence the posterior.**
 
 ### Clinical and dementia signals
 

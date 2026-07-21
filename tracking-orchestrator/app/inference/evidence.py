@@ -81,7 +81,7 @@ class PoseEvidence:
 # Face evidence (person-identification-service / ArcFace)
 # ---------------------------------------------------------------------------
 
-FaceEvidenceSource = Literal["direct", "propagated", "manual"]
+FaceEvidenceSource = Literal["direct", "propagated", "manual", "cc_assertion"]
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,10 @@ class FaceEvidence:
     - ``"direct"``  — ArcFace match from a real person crop sent to the service.
     - ``"propagated"`` — synthetic anchor created by cross-GT face propagation.
     - ``"manual"`` — operator-applied identity correction.
+    - ``"cc_assertion"`` — external evidence matched from cognitive-companion's
+      cc.identity_assertions stream (identity-continuity M09). Never treated
+      as ``"direct"``: excluded from ArcFace authority and duplicate-identity
+      ranking (both keyed on ``source == "direct"``).
 
     ``recognition_state`` is a separate axis from ``source``:
     - ``"recognized"`` — similarity >= threshold (strong positive).

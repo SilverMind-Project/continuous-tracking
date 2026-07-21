@@ -27,7 +27,12 @@ from app.storage.base import VOTING_STATES
 from app.storage.gallery import InMemoryGalleryRepository
 from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 
-_NOW = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
+# Real wall-clock time, not a fixed past date: InMemoryGalleryRepository.search_similar's
+# max_age_seconds cutoff filters against datetime.now(UTC) internally, not against the
+# resolve() `captured_at` parameter. A hardcoded past _NOW eventually ages the seeded
+# gallery entry out of the 12h (43200s) cutoff purely from real time passing, unrelated
+# to any resolver behavior under test (found and fixed identity-continuity M09, 2026-07-21).
+_NOW = datetime.now(UTC)
 _ALICE_ID = "alice"
 
 

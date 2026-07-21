@@ -95,7 +95,7 @@ async def test_cache_handles_empty():
 @pytest.mark.asyncio
 async def test_subscriber_decodes_all_required_fields():
     """The _handle method decodes person_id, confidence, camera_id, captured_at,
-    floor_x_m, and floor_y_m from Redis byte fields."""
+    floor_x_m, and floor_y_m from Redis byte fields when has_floor_point is set."""
     cache = IdentityAssertionCache()
     subscriber = CCIdentityAssertionSubscriber(
         redis_client=object(),  # type: ignore[arg-type]
@@ -109,6 +109,7 @@ async def test_subscriber_decodes_all_required_fields():
         captured_at_unix_ns=int(now.timestamp() * 1e9),
         floor_x_m=5.0,
         floor_y_m=6.0,
+        has_floor_point=True,
     )
     msg.calibrated_confidence = 0.92
 
@@ -125,6 +126,88 @@ async def test_subscriber_decodes_all_required_fields():
     assert assertion["camera_id"] == "cam-3"
     assert assertion["floor_x_m"] == 5.0
     assert assertion["floor_y_m"] == 6.0
+
+
+@pytest.mark.asyncio
+async def test_subscriber_decode_round_trip_with_all_presence_flags():
+    """Room, yaw, and quality decode when their has_* flags are set."""
+    cache = IdentityAssertionCache()
+    subscriber = CCIdentityAssertionSubscriber(
+        redis_client=object(),  # type: ignore[arg-type]
+        cache=cache,
+    )
+    now = datetime.now(UTC)
+    msg = CCIdentityAssertion(
+        person_id="grace",
+        camera_id="recamera_kitchen",
+        captured_at_unix_ns=int(now.timestamp() * 1e9),
+        room_name="Kitchen",
+        yaw_deg=25.0,
+        has_yaw=True,
+        quality=0.7,
+        has_quality=True,
+    )
+    msg.calibrated_confidence = 0.88
+
+    await subscriber._handle(b"msg-flags", {b"assertion": msg.SerializeToString()})
+    result = await cache.get_recent()
+    assert len(result) == 1
+    a = result[0]
+    assert a["room_name"] == "Kitchen"
+    assert a["yaw_deg"] == 25.0
+    assert math.isclose(a["quality"], 0.7, abs_tol=1e-5)
+    assert a["floor_x_m"] is None
+    assert a["floor_y_m"] is None
+
+
+@pytest.mark.asyncio
+async def test_subscriber_decode_round_trip_without_presence_flags():
+    """Absent has_* flags decode to None, never a fabricated value."""
+    cache = IdentityAssertionCache()
+    subscriber = CCIdentityAssertionSubscriber(
+        redis_client=object(),  # type: ignore[arg-type]
+        cache=cache,
+    )
+    now = datetime.now(UTC)
+    msg = CCIdentityAssertion(
+        person_id="henry",
+        camera_id="cam-1",
+        captured_at_unix_ns=int(now.timestamp() * 1e9),
+    )
+    msg.calibrated_confidence = 0.85
+
+    await subscriber._handle(b"msg-no-flags", {b"assertion": msg.SerializeToString()})
+    result = await cache.get_recent()
+    assert len(result) == 1
+    a = result[0]
+    assert a["room_name"] is None
+    assert a["yaw_deg"] is None
+    assert a["quality"] is None
+    assert a["floor_x_m"] is None
+    assert a["floor_y_m"] is None
+
+
+@pytest.mark.asyncio
+async def test_subscriber_no_calibration_cached_with_none_confidence():
+    """No calibrated_confidence on the wire caches confidence=None (0.7 fallback removed)."""
+    cache = IdentityAssertionCache()
+    subscriber = CCIdentityAssertionSubscriber(
+        redis_client=object(),  # type: ignore[arg-type]
+        cache=cache,
+    )
+    now = datetime.now(UTC)
+    msg = CCIdentityAssertion(
+        person_id="ivy",
+        camera_id="cam-1",
+        captured_at_unix_ns=int(now.timestamp() * 1e9),
+        raw_similarity=0.9,
+    )
+    # calibrated_confidence deliberately left unset.
+
+    await subscriber._handle(b"msg-uncalibrated", {b"assertion": msg.SerializeToString()})
+    result = await cache.get_recent()
+    assert len(result) == 1
+    assert result[0]["confidence"] is None
 
 
 @pytest.mark.asyncio
@@ -176,7 +259,7 @@ async def test_subscriber_handles_malformed_captured_at():
 
 @pytest.mark.asyncio
 async def test_subscriber_handles_malformed_floor_coordinates():
-    """Missing floor coordinates default to 0.0 without crashing."""
+    """Missing floor coordinates decode to None, never fabricated (0, 0) (CC-M28/G15)."""
     cache = IdentityAssertionCache()
     subscriber = CCIdentityAssertionSubscriber(
         redis_client=object(),  # type: ignore[arg-type]
@@ -195,5 +278,31 @@ async def test_subscriber_handles_malformed_floor_coordinates():
     await subscriber._handle(b"msg-4", fields)
     result = await cache.get_recent()
     assert len(result) == 1
-    assert result[0]["floor_x_m"] == 0.0
-    assert result[0]["floor_y_m"] == 0.0
+    assert result[0]["floor_x_m"] is None
+    assert result[0]["floor_y_m"] is None
+
+
+@pytest.mark.asyncio
+async def test_subscriber_zero_zero_without_flag_is_not_a_position():
+    """A proto message with floor_x_m/floor_y_m literally 0.0 (proto3 default)
+    and has_floor_point unset must decode to None, not the real position (0, 0)."""
+    cache = IdentityAssertionCache()
+    subscriber = CCIdentityAssertionSubscriber(
+        redis_client=object(),  # type: ignore[arg-type]
+        cache=cache,
+    )
+    now = datetime.now(UTC)
+    msg = CCIdentityAssertion(
+        person_id="jack",
+        camera_id="cam-1",
+        captured_at_unix_ns=int(now.timestamp() * 1e9),
+        floor_x_m=0.0,
+        floor_y_m=0.0,
+        # has_floor_point deliberately left unset (False).
+    )
+
+    await subscriber._handle(b"msg-zero-zero", {b"assertion": msg.SerializeToString()})
+    result = await cache.get_recent()
+    assert len(result) == 1
+    assert result[0]["floor_x_m"] is None
+    assert result[0]["floor_y_m"] is None

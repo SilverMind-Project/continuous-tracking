@@ -587,6 +587,10 @@ class FrameProcessingPipeline:
             live_config=self._live_config,
             config=self._config.world_tracker,
             floor_projector=self._floor_projector,
+            cc_assertion_mode=self._config.resolver.cc_assertion_mode,
+            room_match_confidence_scale=self._config.resolver.room_match_confidence_scale,
+            cc_assertion_default_quality=self._config.resolver.cc_assertion_default_quality,
+            cc_assertion_default_yaw_deg=self._config.resolver.cc_assertion_default_yaw_deg,
         )
 
         # Named stage groups — replace fragile integer slices so adding

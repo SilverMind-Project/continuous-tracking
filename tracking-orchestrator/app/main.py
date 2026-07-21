@@ -256,6 +256,11 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         enable_unknown_backfill=r.as_bool("enable_unknown_backfill"),
         backfill_shadow=r.as_bool("backfill_shadow"),
         backfill_max_range_s=r.as_float("backfill_max_range_s"),
+        cc_assertion_likelihood_scale=r.as_float("cc_assertion_likelihood_scale"),
+        cc_assertion_mode=r.as_str("cc_assertion_mode"),
+        room_match_confidence_scale=r.as_float("room_match_confidence_scale"),
+        cc_assertion_default_quality=r.as_float("cc_assertion_default_quality"),
+        cc_assertion_default_yaw_deg=r.as_float("cc_assertion_default_yaw_deg"),
     )
 
 

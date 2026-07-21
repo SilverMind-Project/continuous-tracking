@@ -130,8 +130,13 @@ class CCIdentityAssertionSubscriber:
         if not msg.person_id:
             return
 
-        # Use calibrated_confidence if present, fallback to legacy mapping or 0.7
-        confidence = msg.calibrated_confidence if msg.HasField("calibrated_confidence") else 0.7
+        # No 0.7 fallback (identity-continuity M09): an assertion without a
+        # calibrated confidence is cached with confidence=None and can never
+        # become an anchor (the matcher's confidence gate reads calibrated
+        # confidence only), but it still counts in shadow metrics so an
+        # uncalibrated deployment is visible instead of silently voting at a
+        # fixed trust.
+        confidence = msg.calibrated_confidence if msg.HasField("calibrated_confidence") else None
 
         captured_at = (
             datetime.fromtimestamp(msg.captured_at_unix_ns / 1e9, tz=UTC)
@@ -139,13 +144,25 @@ class CCIdentityAssertionSubscriber:
             else datetime.now(UTC)
         )
 
+        # Presence flags are authoritative: a nonzero value without its flag
+        # set is treated as absent (proto3 scalar floats cannot represent
+        # "unset", and only this milestone's publisher sets these fields).
+        floor_x_m = msg.floor_x_m if msg.has_floor_point else None
+        floor_y_m = msg.floor_y_m if msg.has_floor_point else None
+        room_name = msg.room_name or None
+        yaw_deg = msg.yaw_deg if msg.has_yaw else None
+        quality = msg.quality if msg.has_quality else None
+
         assertion = {
             "person_id": msg.person_id,
             "confidence": confidence,
             "camera_id": msg.camera_id,
             "captured_at": captured_at,
-            "floor_x_m": msg.floor_x_m,
-            "floor_y_m": msg.floor_y_m,
+            "floor_x_m": floor_x_m,
+            "floor_y_m": floor_y_m,
+            "room_name": room_name,
+            "yaw_deg": yaw_deg,
+            "quality": quality,
             "raw_similarity": msg.raw_similarity,
             "calibration_status": msg.calibration_status,
             "source": msg.source,
@@ -157,6 +174,6 @@ class CCIdentityAssertionSubscriber:
         logger.debug(
             "cc_identity_assertion_received",
             person_id=msg.person_id,
-            confidence=round(confidence, 3),
+            confidence=confidence if confidence is None else round(confidence, 3),
             camera_id=msg.camera_id,
         )

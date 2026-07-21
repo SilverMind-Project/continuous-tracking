@@ -414,4 +414,26 @@ message CCIdentityAssertion {
 
   // Which preprocessing version was used.
   string preprocessing_version = 11;
+
+  // True when floor_x_m/floor_y_m carry a real measured position. Proto3 scalar
+  // floats cannot distinguish unset from 0.0; (0,0) is a real floor position and
+  // must never be fabricated (CC-M28/G15 rule).
+  bool has_floor_point = 12;
+
+  // Room the asserting camera observes (CC room name). Enables room-level
+  // matching for cameras without floor calibration (reCamera fleet).
+  string room_name = 13;
+
+  // Head-pose yaw in degrees from the face service, so the orchestrator's
+  // frontality down-weighting applies to external evidence exactly as to
+  // native anchors. 0.0 with has_yaw=false means "unknown", which the
+  // consumer treats as worst-case frontality, never as perfectly frontal.
+  float yaw_deg = 14;
+  bool has_yaw = 15;
+
+  // Face-crop quality in [0,1] when the face service provides one.
+  // Absent (has_quality=false) is treated as the configured conservative
+  // default, never as 1.0.
+  float quality = 16;
+  bool has_quality = 17;
 }

@@ -408,6 +408,28 @@ resolver:
   # time, regardless of how much earlier the PH's Unknown history extends.
   backfill_max_range_s: 14400.0
 
+  # External identity evidence from cc.identity_assertions (identity-continuity
+  # M09): reCamera face sightings and other CC-side identifications, matched
+  # to CTS observations at room or floor granularity. Rollout is shadow-first:
+  # the matcher and metrics always run once the producer publishes; "shadow"
+  # records outcome metrics without injecting anchors into the resolver.
+  # Flip to "enabled" only after >= 1 week of live shadow data shows
+  # would_name_unknown materially nonzero and an acceptable disagrees rate
+  # (see the M09 milestone doc's flip criteria and delete off-ramp).
+  cc_assertion_mode: shadow
+  # Same recognizer as native ArcFace, but a cross-fleet spatial match is
+  # weaker association than a same-frame native anchor. Calibrated by shadow
+  # data before flipping cc_assertion_mode to enabled.
+  cc_assertion_likelihood_scale: 0.5
+  # Confidence haircut for a room-matched (no floor point) assertion, on top
+  # of its calibrated confidence.
+  room_match_confidence_scale: 0.8
+  # Conservative defaults for external-assertion metadata absent from the
+  # wire (has_yaw/has_quality unset). Never 1.0 quality or 0.0 yaw -- those
+  # would make external evidence look better than native evidence.
+  cc_assertion_default_quality: 0.5
+  cc_assertion_default_yaw_deg: 60.0
+
 # Governed ReID gallery candidate creation (M04). The only pipeline write
 # path into reid_gallery: ReIDCandidateStage -> create_review_candidate,
 # always pending_review, always with crop/frame provenance. require_calibrated_face

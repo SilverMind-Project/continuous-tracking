@@ -233,22 +233,26 @@ def _unpack_observations(observations: list[WorldObservation]) -> _ObsVectors:
 
     Only recognized face anchors are forwarded to the identity-conflict gate;
     candidate and unrecognized anchors are weak-positive signals that must not
-    trigger a hard conflict.
+    trigger a hard conflict. External evidence (``origin == "cc_assertion"``,
+    identity-continuity M09) is excluded from the association vectors
+    entirely: a CC assertion must not drive PH association or hard-conflict
+    splits, only the resolver's posterior.
     """
     floor_points = [
         (obs.floor_point.x_mm / 1000.0, obs.floor_point.y_mm / 1000.0) for obs in observations
     ]
     embeddings: list[list[float] | None] = [obs.embedding or None for obs in observations]
+
+    def _native_recognized(obs: WorldObservation) -> bool:
+        fa = obs.face_anchor
+        return fa is not None and fa.recognition_state == "recognized" and fa.origin == "native"
+
     face_person_ids: list[str | None] = [
-        obs.face_anchor.person_id
-        if obs.face_anchor and obs.face_anchor.recognition_state == "recognized"
-        else None
+        obs.face_anchor.person_id if _native_recognized(obs) and obs.face_anchor else None
         for obs in observations
     ]
     face_confidences: list[float] = [
-        obs.face_anchor.confidence
-        if obs.face_anchor and obs.face_anchor.recognition_state == "recognized"
-        else 0.0
+        obs.face_anchor.confidence if _native_recognized(obs) and obs.face_anchor else 0.0
         for obs in observations
     ]
     return _ObsVectors(

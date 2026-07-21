@@ -134,6 +134,12 @@ def collect_evidence_identity_ids(
     - The ReID argmax qualifies when the distribution is non-empty, the
       argmax is not ``"UNKNOWN"``, and its score is > 0.3 (the same floor
       ``_build_evidence_ledger`` already uses).
+    - External evidence (``FaceAnchor.origin == "cc_assertion"``, identity-
+      continuity M09) never advances the independent-evidence clock: excluded
+      whenever ``recognized_only`` is True. It still qualifies for general
+      commit eligibility (``recognized_only`` False) — the whole point of
+      admitting it into the posterior is that it can drive a commit; only the
+      30s authority clock is denied to it.
     """
     ev_by_detection: dict[str, FaceEvidence] = {
         fe.detection_id: fe for fe in face_evidence if fe.detection_id
@@ -141,6 +147,8 @@ def collect_evidence_identity_ids(
 
     ids: set[str] = set()
     for fa in face_anchors:
+        if recognized_only and fa.origin == "cc_assertion":
+            continue
         matched = (
             fa.tracklet_id in entity_obs_ids
             or fa.tracklet_id == entity_id

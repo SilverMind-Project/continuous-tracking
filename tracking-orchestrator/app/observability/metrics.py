@@ -216,6 +216,11 @@ class Metrics:
     identity_backfill_clip_total: Counter  # label: reason
     identity_backfill_range_seconds: Histogram
 
+    # ---- M09 CC assertion evidence integrity ----
+    cc_assertions_matched_total: Counter  # label: gate (floor|room)
+    cc_assertions_rejected_total: Counter  # label: reason
+    cc_assertions_shadow_total: Counter  # label: outcome (would_name_unknown|agrees|disagrees)
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -764,6 +769,27 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_identity_backfill_range_seconds",
             "Computed Unknown-segment backfill range span, in seconds.",
             (60, 300, 900, 1800, 3600, 7200, 14400, 28800),
+        ),
+        cc_assertions_matched_total=_counter(
+            "cts_cc_assertions_matched_total",
+            "CC identity assertions matched to a WorldObservation, by spatial gate "
+            "(floor|room). Always-on regardless of resolver.cc_assertion_mode.",
+            ["gate"],
+        ),
+        cc_assertions_rejected_total=_counter(
+            "cts_cc_assertions_rejected_total",
+            "CC identity assertions rejected before matching, by reason "
+            "(no_spatial_evidence, room_mismatch, stale, uncalibrated, low_confidence). "
+            "Distinguishes 'flowing but not matching' from 'not flowing'.",
+            ["reason"],
+        ),
+        cc_assertions_shadow_total=_counter(
+            "cts_cc_assertions_shadow_total",
+            "Shadow-mode outcome for a matched CC assertion, by outcome "
+            "(would_name_unknown|agrees|disagrees), compared against the PH's "
+            "post-resolve committed identity. Only recorded when "
+            "resolver.cc_assertion_mode == 'shadow'.",
+            ["outcome"],
         ),
     )
 

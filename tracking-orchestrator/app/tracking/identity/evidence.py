@@ -27,6 +27,7 @@ class EvidenceSource(StrEnum):
     HEIGHT_PROXY = "height_proxy"
     OPERATOR = "operator"
     ASSOCIATION_HINT = "association_hint"
+    CC_ASSERTION = "cc_assertion"
 
 
 # Evidence sources that can justify a new identity assignment.
@@ -123,6 +124,30 @@ class IdentityEvidence:
             identity_id=identity_id,
             confidence=confidence,
             quality=0.3,  # prior alone is weak
+        )
+
+    @classmethod
+    def cc_assertion(
+        cls,
+        identity_id: str,
+        confidence: float,
+        tracklet_id: str,
+        captured_at: datetime,
+        quality: float = 0.5,
+    ) -> IdentityEvidence:
+        """Create external evidence from a matched cc.identity_assertions anchor.
+
+        Distinct source so the replay evaluator and reid-disagreement metrics
+        can segment external evidence from native ArcFace matches
+        (identity-continuity M09).
+        """
+        return cls(
+            source=EvidenceSource.CC_ASSERTION,
+            identity_id=identity_id,
+            confidence=confidence,
+            quality=quality,
+            captured_at=captured_at,
+            tracklet_id=tracklet_id,
         )
 
     @classmethod

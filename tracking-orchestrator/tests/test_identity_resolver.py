@@ -15,7 +15,9 @@ from app.domain import (
     PosteriorDist,
     ResolveOutcome,
 )
+from app.inference.evidence import FaceEvidence
 from app.storage.base import InMemoryGalleryRepository
+from app.tracking.identity.commit_policy import collect_evidence_identity_ids
 from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 
 # ---------------------------------------------------------------------------
@@ -1389,3 +1391,189 @@ class TestResolveOutcome:
         )
         assert len(outcome.decisions) == 1
         assert outcome.decisions[0].identity_id == "grandma"
+
+
+# ---------------------------------------------------------------------------
+# External evidence grade (identity-continuity M09)
+# ---------------------------------------------------------------------------
+
+
+class TestCcAssertionEvidenceGrade:
+    """FaceAnchor.origin == "cc_assertion" is a distinct, weaker evidence grade."""
+
+    @pytest.mark.asyncio
+    async def test_cc_assertion_likelihood_scaled(self) -> None:
+        """Same anchor confidence/quality, origin native vs cc_assertion: the
+        cc_assertion decision's posterior mass on the identity is lower by
+        (approximately) the configured likelihood scale."""
+        identities = [_make_identity("grandma", "Grandma")]
+        config = ResolverConfig(cc_assertion_likelihood_scale=0.5)
+
+        native_anchor = FaceAnchor(
+            person_id="grandma", confidence=0.9, quality=0.9, tracklet_id="t1", detection_id="det-1"
+        )
+        resolver_native = _make_resolver(identities=identities, config=config)
+        gt_native = _make_gt(current_identity_id=None, tracklet_ids=["t1"])
+        outcome_native = await resolver_native.resolve(
+            hypotheses=[gt_native], new_face_anchors=[native_anchor], captured_at=datetime.now(UTC)
+        )
+        native_mass = outcome_native.decisions[0].posterior.distribution.get("grandma", 0.0)
+
+        cc_anchor = FaceAnchor(
+            person_id="grandma",
+            confidence=0.9,
+            quality=0.9,
+            tracklet_id="t1",
+            detection_id="det-1",
+            origin="cc_assertion",
+        )
+        resolver_cc = _make_resolver(identities=identities, config=config)
+        gt_cc = _make_gt(current_identity_id=None, tracklet_ids=["t1"])
+        outcome_cc = await resolver_cc.resolve(
+            hypotheses=[gt_cc], new_face_anchors=[cc_anchor], captured_at=datetime.now(UTC)
+        )
+        cc_mass = outcome_cc.decisions[0].posterior.distribution.get("grandma", 0.0)
+
+        assert cc_mass < native_mass
+
+    @pytest.mark.asyncio
+    async def test_cc_assertion_never_grants_arcface_authority(self) -> None:
+        """A cc_assertion anchor with a high forced calibrated confidence must
+        not commit via the arcface_authority decision source."""
+        identities = [_make_identity("grandma", "Grandma")]
+        resolver = _make_resolver(identities=identities)
+
+        cc_anchor = FaceAnchor(
+            person_id="grandma",
+            confidence=0.99,
+            quality=0.95,
+            tracklet_id="t1",
+            detection_id="det-1",
+            recognition_state="recognized",
+            calibrated_confidence=0.99,
+            origin="cc_assertion",
+        )
+        gt = _make_gt(ph_id="gt-1", current_identity_id=None, tracklet_ids=["t1"])
+        outcome = await resolver.resolve(
+            hypotheses=[gt], new_face_anchors=[cc_anchor], captured_at=datetime.now(UTC)
+        )
+        assert outcome.decisions[0].decision_source != "arcface_authority"
+
+        # Positive control: an identical native anchor does grant authority.
+        native_anchor = FaceAnchor(
+            person_id="grandma",
+            confidence=0.99,
+            quality=0.95,
+            tracklet_id="t1",
+            detection_id="det-1",
+            recognition_state="recognized",
+            calibrated_confidence=0.99,
+        )
+        gt2 = _make_gt(ph_id="gt-2", current_identity_id=None, tracklet_ids=["t1"])
+        outcome2 = await resolver.resolve(
+            hypotheses=[gt2], new_face_anchors=[native_anchor], captured_at=datetime.now(UTC)
+        )
+        assert outcome2.decisions[0].decision_source == "arcface_authority"
+
+    def test_cc_assertion_does_not_advance_evidence_clock(self) -> None:
+        """collect_evidence_identity_ids(recognized_only=True) excludes
+        cc_assertion anchors from the independent-evidence clock, but still
+        counts them for general commit eligibility (recognized_only=False)."""
+        anchor = FaceAnchor(
+            person_id="grandma",
+            confidence=0.95,
+            quality=0.9,
+            detection_id="det-1",
+            recognition_state="recognized",
+            origin="cc_assertion",
+        )
+        clock_ids = collect_evidence_identity_ids(
+            entity_obs_ids=frozenset({"det-1"}),
+            entity_id="gt-1",
+            face_anchors=[anchor],
+            face_evidence=[],
+            reid_likelihood=PosteriorDist({}),
+            recognized_only=True,
+        )
+        assert clock_ids == frozenset()
+
+        commit_ids = collect_evidence_identity_ids(
+            entity_obs_ids=frozenset({"det-1"}),
+            entity_id="gt-1",
+            face_anchors=[anchor],
+            face_evidence=[],
+            reid_likelihood=PosteriorDist({}),
+            recognized_only=False,
+        )
+        assert commit_ids == frozenset({"grandma"})
+
+    @pytest.mark.asyncio
+    async def test_cc_assertion_excluded_from_duplicate_identity_ranking(self) -> None:
+        """A cc_assertion anchor above the direct-face bypass threshold must
+        not let a new contender keep an identity an external PH already holds."""
+        identities = [_make_identity("grandma", "Grandma")]
+        # cc_assertion_likelihood_scale=1.0: isolate the ranking exclusion from
+        # the separately-tested likelihood scale.
+        resolver = _make_resolver(
+            identities=identities,
+            config=ResolverConfig(
+                enable_duplicate_active_identity_guard=True,
+                cc_assertion_likelihood_scale=1.0,
+            ),
+        )
+
+        gt_new = _make_gt(ph_id="gt-new", current_identity_id=None, tracklet_ids=["t-new"])
+        anchor = FaceAnchor(
+            person_id="grandma",
+            confidence=0.99,
+            quality=0.95,
+            tracklet_id="t-new",
+            detection_id="det-new",
+            recognition_state="recognized",
+            origin="cc_assertion",
+        )
+
+        outcome = await resolver.resolve(
+            hypotheses=[gt_new],
+            new_face_anchors=[anchor],
+            captured_at=datetime.now(UTC),
+            open_ph_identities={"ext-holder": "grandma"},
+        )
+
+        decision = outcome.decisions[0]
+        assert decision.identity_id is None
+        assert "duplicate_active_identity_blocked" in decision.reason
+
+    @pytest.mark.asyncio
+    async def test_evidence_summary_records_cc_assertion_source(self) -> None:
+        """A matched cc_assertion anchor produces a distinct evidence_summary count."""
+        identities = [_make_identity("grandma", "Grandma")]
+        resolver = _make_resolver(identities=identities)
+
+        gt = _make_gt(current_identity_id=None, tracklet_ids=["t1"])
+        anchor = FaceAnchor(
+            person_id="grandma",
+            confidence=0.9,
+            quality=0.9,
+            tracklet_id="t1",
+            detection_id="det-1",
+            recognition_state="recognized",
+            origin="cc_assertion",
+        )
+        fe = FaceEvidence(
+            person_id="grandma",
+            confidence=0.9,
+            tracklet_id="t1",
+            detection_id="det-1",
+            source="cc_assertion",
+            recognition_state="recognized",
+        )
+
+        outcome = await resolver.resolve(
+            hypotheses=[gt],
+            new_face_anchors=[anchor],
+            captured_at=datetime.now(UTC),
+            face_evidence=[fe],
+        )
+        decision = outcome.decisions[0]
+        assert decision.evidence["sources"].get("cc_assertion") == 1

@@ -239,6 +239,37 @@ same-day, calibrated face matches (M02). A 12-hour cutoff with no same-day popul
 resolver's ReID vote every morning (V4) -- M02 must be landed and enabled in production, with
 `auto_verified` rows observably accumulating on ordinary days, before relying on the M03 defaults.
 
+## External identity evidence (identity-continuity M09)
+
+`FaceAnchor.origin` distinguishes a same-frame native ArcFace anchor (`"native"`, the default)
+from an anchor matched from cognitive-companion's `cc.identity_assertions` stream
+(`"cc_assertion"`). External evidence is corroborating, never authoritative:
+
+- It votes in `_from_face_anchors`' likelihood at a configured scale
+  (`resolver.cc_assertion_likelihood_scale`, default 0.5) below native weight, with its real
+  wire yaw/quality flowing through the same frontality and `_p_face` math as native anchors.
+  Absent yaw/quality resolve to conservative configured defaults
+  (`resolver.cc_assertion_default_quality` 0.5, `resolver.cc_assertion_default_yaw_deg` 60°),
+  never the perfect-crop/perfectly-frontal defaults native code paths assume.
+- It is explicitly excluded from: ArcFace authority (`_check_arcface_authority`), the
+  independent-evidence clock (`collect_evidence_identity_ids(recognized_only=True)`),
+  duplicate-active-identity ranking (`_direct_face_confidence`), and the association vectors
+  that drive Hungarian assignment and hard-conflict gating
+  (`_unpack_observations` in `app/tracking/world/tracker.py`). `calibrated_confidence` stays
+  `None` on every `cc_assertion` anchor by construction, so ArcFace authority fails closed
+  structurally in addition to the explicit origin check.
+- `app/tracking/world/assertion_matching.py::match_assertions_to_face_anchors` is the sole
+  matcher: a floor point (camera-id gated, same-fleet ids only) beats room-name agreement
+  (case-normalized, confidence-scaled by `resolver.room_match_confidence_scale`) when no floor
+  point exists; an assertion with neither matches nothing, never everything. Proto3 presence
+  flags (`has_floor_point`, `has_yaw`, `has_quality`) are authoritative; a value without its
+  flag is absent, never a real (0, 0) position (CC-M28/G15).
+- Rollout is shadow-first via `resolver.cc_assertion_mode` (`off | shadow | enabled`, default
+  `shadow`): shadow matches and records `cc_assertions_shadow_total{outcome=}` without
+  injecting anchors into the resolver; `cc_assertions_matched_total{gate=}` and
+  `cc_assertions_rejected_total{reason=}` are always-on regardless of mode once the flag is not
+  `off`. Flip to `enabled` only after a week of live shadow data.
+
 ## Evidence and revision persistence
 
 Persist a compact evidence snapshot for every PH identity decision. Use typed columns and foreign

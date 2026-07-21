@@ -6,6 +6,7 @@ Wires TransitDetector and RoomTransitionPublisher.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 
 from structlog import get_logger
@@ -19,6 +20,7 @@ from ...domain import (
     OrientationBin,
     WorldObservation,
 )
+from ...inference.evidence import FaceEvidence
 from ...observability import metrics as _metrics
 from ...tracking.floor_projector import FloorProjector
 from ...tracking.world.config import WorldTrackerConfig
@@ -108,6 +110,10 @@ class WorldTrackingStage(FrameStage):
         anchor_match_distance_m: float = 5.0,
         anchor_min_confidence: float = 0.5,
         floor_projector: FloorProjector | None = None,
+        cc_assertion_mode: str = "shadow",
+        room_match_confidence_scale: float = 0.8,
+        cc_assertion_default_quality: float = 0.5,
+        cc_assertion_default_yaw_deg: float = 60.0,
     ) -> None:
         self._tracker = tracker
         self._config = config or WorldTrackerConfig()
@@ -118,6 +124,14 @@ class WorldTrackingStage(FrameStage):
         self._anchor_match_distance_m = anchor_match_distance_m
         self._anchor_min_confidence = anchor_min_confidence
         self._floor_projector = floor_projector or FloorProjector(calibration_state)
+        # Identity-continuity M09: off preserves pre-M09 behavior exactly
+        # (matcher not consulted); shadow runs the matcher and records
+        # would_name_unknown/agrees/disagrees metrics without injecting
+        # anchors; enabled injects matched anchors as evidence.
+        self._cc_assertion_mode = cc_assertion_mode
+        self._room_match_confidence_scale = room_match_confidence_scale
+        self._cc_assertion_default_quality = cc_assertion_default_quality
+        self._cc_assertion_default_yaw_deg = cc_assertion_default_yaw_deg
         self._missing_room_binding_warnings: set[str] = set()
 
     async def run(self, ctx: FrameContext) -> None:
@@ -146,17 +160,9 @@ class WorldTrackingStage(FrameStage):
             low_band_observations.extend(self._build_low_band_observations(ctx))
 
         batch_time = max((ctx.event_time for ctx in contexts), default=contexts[0].event_time)
-        cc_face_anchors = await self._match_cc_assertions(
-            observations=observations,
-            now=batch_time,
-        )
-        all_face_anchors = [
-            face_anchor for ctx in contexts for face_anchor in ctx.face_anchors
-        ] + cc_face_anchors
-        observations_with_faces = self._attach_face_anchors(observations, all_face_anchors)
-        face_evidence = [
-            face_evidence for ctx in contexts for face_evidence in (ctx._face_evidence or [])
-        ]
+
+        # Room bindings computed before matching so a room-only CC assertion
+        # (no floor point, e.g. a reCamera sighting) can be spatially gated.
         camera_ids = {ctx.frame.camera_id for ctx in contexts} | {
             obs.camera_id for obs in observations
         }
@@ -166,6 +172,28 @@ class WorldTrackingStage(FrameStage):
                 self._missing_room_binding_warnings.add(camera_id)
                 logger.warning("world_tracking_camera_room_binding_missing", camera_id=camera_id)
         room_polygons, room_names = await room_polygon_snapshot(self._live_config.room_polygon_map)
+
+        cc_face_anchors = await self._match_cc_assertions(
+            observations=observations,
+            now=batch_time,
+            camera_room_lookup=camera_room_map,
+        )
+
+        native_face_anchors = [face_anchor for ctx in contexts for face_anchor in ctx.face_anchors]
+        native_face_evidence = [
+            face_evidence for ctx in contexts for face_evidence in (ctx._face_evidence or [])
+        ]
+
+        # Off preserves pre-M09 behavior exactly; enabled injects matched
+        # anchors as evidence; shadow runs matching (metrics already
+        # recorded above) but withholds injection and instead compares the
+        # match against the PH's post-resolve committed identity below.
+        inject_cc_anchors = self._cc_assertion_mode == "enabled" and cc_face_anchors
+        all_face_anchors = native_face_anchors + (cc_face_anchors if inject_cc_anchors else [])
+        face_evidence = native_face_evidence + (
+            self._build_cc_assertion_evidence(cc_face_anchors) if inject_cc_anchors else []
+        )
+        observations_with_faces = self._attach_face_anchors(observations, all_face_anchors)
 
         result = await self._tracker.step(
             observations=observations_with_faces,
@@ -177,6 +205,9 @@ class WorldTrackingStage(FrameStage):
             face_evidence=face_evidence or None,
             low_band_observations=low_band_observations or None,
         )
+
+        if self._cc_assertion_mode == "shadow" and cc_face_anchors:
+            self._record_cc_assertion_shadow_outcomes(cc_face_anchors, result)
 
         await self._publish_transit_events(result, batch_time)
 
@@ -347,14 +378,20 @@ class WorldTrackingStage(FrameStage):
         *,
         observations: list[WorldObservation],
         now: datetime,
+        camera_room_lookup: Mapping[str, str | None],
     ) -> list[FaceAnchor]:
         from ...tracking.world.assertion_matching import match_assertions_to_face_anchors
 
-        # Match CC assertions to observations (spatial + temporal + confidence gate).
+        # off preserves pre-M09 behavior exactly: the matcher is not
+        # consulted at all, not even for metrics.
+        if self._cc_assertion_mode == "off":
+            return []
+
         cc_face_anchors: list[FaceAnchor] = []
         if self._assertion_cache is not None:
             try:
                 recent_assertions = await self._assertion_cache.get_recent()  # type: ignore[attr-defined]
+                diagnostics: dict[str, int] = {}
                 cc_face_anchors = match_assertions_to_face_anchors(
                     assertions=recent_assertions,
                     observations=observations,
@@ -362,16 +399,91 @@ class WorldTrackingStage(FrameStage):
                     anchor_match_window_s=self._anchor_match_window_s,
                     anchor_match_distance_m=self._anchor_match_distance_m,
                     anchor_min_confidence=self._anchor_min_confidence,
+                    camera_room_lookup=camera_room_lookup,
+                    room_match_confidence_scale=self._room_match_confidence_scale,
+                    default_quality=self._cc_assertion_default_quality,
+                    default_yaw_deg=self._cc_assertion_default_yaw_deg,
+                    diagnostics=diagnostics,
                 )
+                self._record_cc_assertion_flow_metrics(diagnostics)
                 if cc_face_anchors:
                     logger.debug(
                         "cc_assertions_matched",
                         matched=len(cc_face_anchors),
                         assertions_checked=len(recent_assertions),
+                        mode=self._cc_assertion_mode,
                     )
             except Exception:
                 logger.exception("cc_assertion_matching_failed")
         return cc_face_anchors
+
+    @staticmethod
+    def _record_cc_assertion_flow_metrics(diagnostics: dict[str, int]) -> None:
+        """Always-on match/reject metrics, regardless of shadow vs enabled.
+
+        Silence is not success: the rejected counter distinguishes "flowing
+        but not matching" from "not flowing" (identity-continuity M09).
+        """
+        for key, count in diagnostics.items():
+            if key == "matched_floor":
+                _metrics.metrics.cc_assertions_matched_total.labels(gate="floor").inc(count)
+            elif key == "matched_room":
+                _metrics.metrics.cc_assertions_matched_total.labels(gate="room").inc(count)
+            else:
+                _metrics.metrics.cc_assertions_rejected_total.labels(reason=key).inc(count)
+
+    @staticmethod
+    def _build_cc_assertion_evidence(cc_face_anchors: list[FaceAnchor]) -> list[FaceEvidence]:
+        """Typed evidence records for matched CC anchors (identity-continuity M09).
+
+        Lets the replay evaluator and reid-disagreement metrics segment
+        external evidence from native ArcFace matches via the same
+        face_evidence plumbing every other source uses (one mechanism, not
+        two special-cased in the resolver).
+        """
+        return [
+            FaceEvidence(
+                person_id=fa.person_id,
+                confidence=fa.confidence,
+                # Empty tracklet_id: _resolve_identities' PH-mode remap fills
+                # tracklet_id = ph_id from det_to_ph, same as native evidence
+                # (FaceIdentityStage also emits tracklet_id="" for this reason).
+                tracklet_id="",
+                detection_id=fa.detection_id,
+                camera_id=fa.camera_id,
+                source="cc_assertion",
+                quality=fa.quality,
+                captured_at=fa.captured_at,
+                recognition_state=fa.recognition_state,
+                yaw_deg=fa.yaw_deg,
+                calibrated_confidence=None,
+            )
+            for fa in cc_face_anchors
+        ]
+
+    @staticmethod
+    def _record_cc_assertion_shadow_outcomes(
+        cc_face_anchors: list[FaceAnchor], result: WorldTrackerResult
+    ) -> None:
+        """Compare each matched (but not injected) anchor to the resolved identity.
+
+        would_name_unknown is the number that justifies the stream's
+        existence; disagrees is the number that would have poisoned identity
+        had the anchor been injected (identity-continuity M09).
+        """
+        committed_by_ph = {ph.ph_id: ph.current_identity_id for ph in result.updated_phs}
+        for fa in cc_face_anchors:
+            ph_id = result.det_to_ph.get(fa.detection_id)
+            if ph_id is None:
+                continue
+            committed_identity = committed_by_ph.get(ph_id)
+            if committed_identity is None:
+                outcome = "would_name_unknown"
+            elif committed_identity == fa.person_id:
+                outcome = "agrees"
+            else:
+                outcome = "disagrees"
+            _metrics.metrics.cc_assertions_shadow_total.labels(outcome=outcome).inc()
 
     def _attach_face_anchors(
         self,

@@ -650,6 +650,12 @@ class FaceAnchor:
     # Calibrated ArcFace confidence from model calibration pipeline (M10).
     # None means no calibration available → authority fails closed.
     calibrated_confidence: float | None = None
+    # Evidence grade (identity-continuity M09). "native" is a same-frame
+    # CTS ArcFace anchor; "cc_assertion" is a spatially-matched external
+    # assertion from cognitive-companion. External anchors are excluded from
+    # ArcFace authority, the independent-evidence clock, duplicate-identity
+    # ranking, and association vectors -- see cts-identity-governance skill.
+    origin: str = "native"
 
 
 @dataclass(frozen=True)

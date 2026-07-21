@@ -310,6 +310,31 @@ class ResolverConfig:
     # Fails closed: authority never fires when calibrated_confidence is None.
     arcface_authority_calibrated_confidence: float = 0.80
 
+    # --- External identity evidence (identity-continuity M09) ---
+    # Multiplier applied to FaceAnchor.origin == "cc_assertion" likelihood
+    # weight in _from_face_anchors. Same recognizer as native ArcFace, but a
+    # cross-fleet spatial match (room or floor-distance gated) is weaker
+    # association than a same-frame native anchor; this is the knob shadow
+    # data calibrates.
+    cc_assertion_likelihood_scale: float = 0.5
+
+    # Rollout mode for cc.identity_assertions matching: "off" preserves
+    # pre-M09 behavior exactly (matcher not consulted); "shadow" runs the
+    # matcher and records outcome metrics without injecting anchors;
+    # "enabled" injects matched anchors as evidence. Flip is a config
+    # change, never a code change (shadow-before-authority house rule).
+    cc_assertion_mode: str = "shadow"
+
+    # Confidence multiplier for a room-matched (no floor point) external
+    # assertion, applied on top of its calibrated confidence.
+    room_match_confidence_scale: float = 0.8
+
+    # Conservative defaults for external-assertion metadata the wire does
+    # not carry (has_yaw/has_quality unset). Never 1.0 quality or 0.0 yaw:
+    # those would make external evidence look better than native evidence.
+    cc_assertion_default_quality: float = 0.5
+    cc_assertion_default_yaw_deg: float = 60.0
+
     # --- Cross-GT face propagation ---
     # Minimum gallery cosine similarity for propagating a face-confirmed identity
     # to an adjacent GlobalTrack that has no face anchor of its own. Propagation
@@ -849,6 +874,11 @@ class IdentityResolver:
         entity_obs = set(entity.observation_ids)
         qualifying: dict[str, float] = {}  # identity_id → best calibrated_confidence
         for fa in face_anchors:
+            # External evidence never grants authority (identity-continuity
+            # M09): belt and braces on top of the structural
+            # calibrated_confidence=None every cc_assertion anchor carries.
+            if fa.origin == "cc_assertion":
+                continue
             if not (
                 fa.tracklet_id in entity_obs
                 or fa.tracklet_id == entity.entity_id
@@ -979,6 +1009,12 @@ class IdentityResolver:
             weight_mult = (
                 self._config.propagated_face_weight_multiplier if source == "propagated" else 1.0
             )
+            # External evidence grade (identity-continuity M09): a cross-fleet
+            # spatial match is weaker association than a same-frame native
+            # anchor. Real yaw/quality still flow through frontality/_p_face
+            # below like any native anchor.
+            if best.origin == "cc_assertion":
+                weight_mult *= self._config.cc_assertion_likelihood_scale
 
             frontality = self._frontality_factor(best.yaw_deg)
             p_face = self._p_face(best.confidence, best.quality) * weight_mult * frontality
@@ -1075,7 +1111,13 @@ class IdentityResolver:
         *,
         identity_id: str | None,
     ) -> float:
-        """Return the best direct recognized face confidence for this entity/id."""
+        """Return the best direct recognized face confidence for this entity/id.
+
+        Native anchors only (identity-continuity M09): an external
+        ``cc_assertion`` anchor must never satisfy the duplicate-active-
+        identity guard's direct-face bypass, so it is excluded from both
+        branches below.
+        """
         if identity_id is None:
             return 0.0
 
@@ -1100,6 +1142,7 @@ class IdentityResolver:
                 fa.confidence
                 for fa in face_anchors
                 if fa.recognition_state == "recognized"
+                and fa.origin != "cc_assertion"
                 and fa.person_id == identity_id
                 and (fa.tracklet_id in matched_ids or fa.detection_id in entity_obs_ids)
             ),
@@ -1978,6 +2021,19 @@ class IdentityResolver:
                             quality=fe.quality,
                         )
                     )
+                elif fe.source == "cc_assertion":
+                    # Distinct source (identity-continuity M09) so the replay
+                    # evaluator and reid-disagreement metrics can segment
+                    # external evidence from native association hints.
+                    items.append(
+                        IdentityEvidence.cc_assertion(
+                            identity_id=fe.person_id,
+                            confidence=fe.confidence,
+                            tracklet_id=fe.tracklet_id,
+                            captured_at=fe.captured_at,
+                            quality=fe.quality,
+                        )
+                    )
                 else:
                     items.append(
                         IdentityEvidence.association_hint(
@@ -2147,13 +2203,23 @@ class IdentityResolver:
                 syn_confidence = src_anchor.confidence * sim
                 if syn_confidence < self._config.face_commit_min_confidence:
                     continue
-                syn = FaceAnchor(
-                    person_id=src_anchor.person_id,
+                # dataclasses.replace (not hand-copied fields, per
+                # engineering-standards F1/F10): a synthetic propagated anchor
+                # carries origin unchanged (identity-continuity M09) and every
+                # other src_anchor field forward automatically, so a new
+                # FaceAnchor field is never silently dropped here. Explicitly
+                # reset calibrated_confidence to None: propagated evidence
+                # describes a different detection than the source anchor and
+                # must never carry the source's calibration into
+                # _check_arcface_authority for the destination entity.
+                syn = replace(
+                    src_anchor,
                     confidence=syn_confidence,
                     quality=src_anchor.quality * 0.8,
                     tracklet_id=dst_entity.observation_ids[0],
+                    detection_id="",
                     camera_id=dst_entity.camera_ids[0] if dst_entity.camera_ids else "",
-                    captured_at=src_anchor.captured_at,
+                    calibrated_confidence=None,
                 )
                 synthetic.append(syn)
                 propagated_count += 1
