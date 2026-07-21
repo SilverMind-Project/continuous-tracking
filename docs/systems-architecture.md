@@ -98,6 +98,7 @@ The robustness milestones (M1 to M6) target the dominant home-deployment failure
 | Multi-view ReID (M4) | `orientation.py`, `cost_matrix.py`, resolver `_from_gallery_multiview` | Per-observation body orientation (front/back/left/right) builds view-binned prototypes per PH and per identity. Association and the gallery query match by the best view (max-over-views), so a person who turned around is still retrievable. Online seeding writes orientation-tagged gallery entries only from recognized-face frames. |
 | Camera topology (M5.1) | `world/topology.py`, `camera_topology_edges` | Learns directed handoff edges with a transit-time distribution online; gates cross-camera revival by plausible transit time. |
 | Cross-camera revival + co-presence (M5.2, M5.3) | `world/revival.py`, `co_presence_links` | Acts on handoffs inside CTS (not just publishing to CC); links overlapping opposite-perspective cameras at the identity level. |
+| Inferred backfill (M07) | `UnknownBackfillService`, `RevisionsStage` | Unknown tracks are held in a voting window. When CC issues an `inferred_backfill` revision upon operator naming, CTS retroactively resolves past tracks and emits corrections. |
 
 The multi-view gallery query holds residual mass on UNKNOWN for weak matches, so with a single enrolled identity a non-matching body cannot normalize to that identity. Held-identity confidence is replayed on coasting frames (a per-PH in-process cache bounded to open PHs) so a carried identity keeps a meaningful posterior instead of a sentinel 0.
 

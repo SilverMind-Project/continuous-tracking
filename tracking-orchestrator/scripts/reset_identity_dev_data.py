@@ -78,12 +78,9 @@ _CTS_PRESERVE_TABLES: frozenset[str] = frozenset(
 # CC CTS-derived tables to truncate. Schema: public (Alembic-managed).
 # Source: CC Alembic baseline migration 0001_baseline.py (verified 2026-06-21).
 _CC_DELETE_TABLES: tuple[str, ...] = (
-    "person_location_history",
-    "person_location_state",
     "location_observations",
     "presence_segments",
     "room_occupancy_state",
-    "person_sightings",
     "person_activities",
     "transit_zones",
     "cts_dementia_signals",

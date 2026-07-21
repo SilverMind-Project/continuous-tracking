@@ -57,7 +57,7 @@ The gallery table is `continuous_tracking.reid_gallery`. There is no `identity_g
 | `continuous_tracking.keyframe_bbox_annotations` | Every persisted bbox for a sampled frame | CTS keyframe sampler | CTS bbox-level inferred and effective identity projection |
 | `continuous_tracking.ph_revisions` | Existing PH identity revision audit | CTS correction and resolver stack | CTS immutable revision lineage; M06 extends bounded ranges and jobs |
 | `CtsIdentityRevisionLog` / `cts_identity_revision_log` | CC record of applied CTS revision IDs | CC identity revision subscriber and rewriter | CC projection acknowledgement and audit |
-| `PersonLocationHistory` / `person_location_history` | CC location history with supersession lineage | CC person-location and identity rewriter services | CC revision-aware location projection; `person_id` remains live |
+| `presence_segments` / `location_observations` | CC location history with supersession lineage | CC person-location and identity rewriter services | CC revision-aware location projection; `person_id` remains live |
 | `identity_decisions` | Not present | M04 | CTS durable inferred/effective decision provenance |
 | `identity_evidence_items` | Not present | M04 | CTS normalized evidence provenance |
 | `identity_decision_gallery_hits` | Not present | M04 | CTS decision-to-gallery contributor provenance |

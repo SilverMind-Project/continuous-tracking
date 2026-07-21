@@ -12,7 +12,7 @@ single person-identification-service face match per camera workflow and has no
 equivalent posterior or revision model.
 
 `PersonTrackingService` is not removable yet. It remains the identity path for
-non-CTS reCamera workflows, writes raw `PersonSighting` records, correlates Home
+non-CTS reCamera workflows, writes raw `old_sightings_record` records, correlates Home
 Assistant presence, and owns activity methods used by `ActivityService`.
 
 ## Concrete Path Map
@@ -25,8 +25,8 @@ Assistant presence, and owns activity methods used by `ActivityService`.
    highest-confidence face match per person, and returns
    `PersonDetection` values to pipeline data.
 3. When `record_presence=true`, it writes `PersonLocationState` and
-   `PersonLocationHistory`. When `record_sightings=true`, it writes
-   `PersonSighting`.
+   `old_location_history`. When `record_sightings=true`, it writes
+   `old_sightings_record`.
 4. The HA polling job can infer a person from recent camera sightings and write
    another location conclusion.
 
@@ -50,16 +50,16 @@ Assistant presence, and owns activity methods used by `ActivityService`.
 | --- | --- | --- | --- |
 | Workflow `person_identification` outputs (`person_detections`, `room_transitions`) | Direct return from person-identification-service | None | No |
 | Effective `GET /api/v1/persons/locations` | The legacy `routers/persons.py` handler reads `PersonLocationState` written by CC | `LocationWriter` also writes the table from `tracking.events` | Yes |
-| Effective `GET /api/v1/persons/{id}/location` and legacy `/history` | The legacy handlers read `PersonLocationState` / `PersonLocationHistory` | `LocationWriter` and identity revision handling write the same tables | Yes |
+| Effective `GET /api/v1/persons/{id}/location` and legacy `/history` | The legacy handlers read `PersonLocationState` / `old_location_history` | `LocationWriter` and identity revision handling write the same tables | Yes |
 | Persons admin location/history tabs | Calls the legacy person routes | Indirectly visible through shared legacy tables | Yes |
-| Persons admin sightings tab and MCP `get_person_sightings` | Reads `PersonSighting` | CTS does not write `PersonSighting` | No |
+| Persons admin sightings tab and MCP `get_old_sightings_table` | Reads `old_sightings_record` | CTS does not write `old_sightings_record` | No |
 | New `routers/persons_location.py` implementations for `/persons/{id}/location` and `/persons/locations` | None | Reads `PersonLocationService` presence segments | No, but these duplicate paths are registered after the legacy handlers and are shadowed at runtime |
 | BFF `/persons/{id}/presence-history` and `/dwell` | None | Reads `PersonLocationService` | No |
 | MCP `get_person_location(s)` | None | Reads `PersonLocationService` | No |
 | Rule filters: room, room transition, person presence, presence dwell, presence status, home state, scene trend | None for location identity | Reads `PersonLocationService` | No |
 | CTS live view, floor plan, PH list, corrections | None | WebSocket and PH APIs sourced from `tracking.events` and revisions | No |
 | Legacy presence providers (`cts_location`, `night_anchor`, `stale_fallback`) | Read shared `PersonLocationState` | `LocationWriter` writes the table | Yes |
-| Activity timeline and daily report location entries | Read `PersonLocationHistory`; sightings also read `PersonSighting` | CTS writes location history, not sightings | Yes for location entries |
+| Activity timeline and daily report location entries | Read `old_location_history`; sightings also read `old_sightings_record` | CTS writes location history, not sightings | Yes for location entries |
 | Dashboard occupancy | None | CTS occupancy read model / canonical location service | No |
 
 The overlapping surfaces are the risk. `SourceAuthority` gives recent CTS
@@ -93,7 +93,7 @@ Use synchronized UTC timestamps and perform these known patterns:
 Capture these records for each camera frame or workflow batch:
 
 - CC conclusion: person ID, face confidence, sensor, room, and write time from
-  `PersonSighting` plus `PersonLocationHistory` rows with `source='camera'`.
+  `old_sightings_record` plus `old_location_history` rows with `source='camera'`.
 - CTS conclusion: PH ID, committed identity, top and second probabilities,
   direct-face flag, camera, room, event time, and revision ID from
   `cts_tracking_event_identity_decode`, `tracking.events`, and
@@ -127,7 +127,7 @@ semantics, so dual authority is itself the defect.
    Reject a production configuration that enables both identity/location
    writers unless a temporary comparison flag is also enabled.
 2. In CTS-enabled mode, keep `PersonTrackingService.process_camera_event()` for
-   workflow detection output and optional `PersonSighting` capture, but force
+   workflow detection output and optional `old_sightings_record` capture, but force
    `record_presence=false`. Keep HA presence as a separate provider rather than
    allowing it to infer identity from the CC face path.
 3. Remove the duplicate route registration by migrating the legacy person
@@ -137,7 +137,7 @@ semantics, so dual authority is itself the defect.
 4. Keep MCP location tools and rule filters on `PersonLocationService`; they
    are already migrated.
 5. After the legacy readers are gone, stop CTS `LocationWriter` writes to
-   `PersonLocationState` / `PersonLocationHistory`, then remove those tables in
+   `PersonLocationState` / `old_location_history`, then remove those tables in
    a dedicated migration milestone.
 6. Retain `PersonTrackingService` only for non-CTS face workflows, sightings,
    and activity APIs. Split those responsibilities before any final class

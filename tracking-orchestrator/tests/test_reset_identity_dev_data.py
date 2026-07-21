@@ -105,12 +105,9 @@ class TestAllowlists:
 
     def test_all_expected_cc_tables_present(self) -> None:
         expected = {
-            "person_location_history",
-            "person_location_state",
             "location_observations",
             "presence_segments",
             "room_occupancy_state",
-            "person_sightings",
             "person_activities",
             "transit_zones",
             "cts_dementia_signals",
@@ -136,8 +133,8 @@ class TestBuildTruncateSql:
         assert "TRUNCATE" in sql
 
     def test_cc_sql_unqualified(self) -> None:
-        sql = rsd._build_cc_truncate_sql(("person_location_history",))
-        assert "person_location_history" in sql
+        sql = rsd._build_cc_truncate_sql(("presence_segments",))
+        assert "presence_segments" in sql
         assert "continuous_tracking." not in sql
         assert "RESTART IDENTITY CASCADE" in sql
 

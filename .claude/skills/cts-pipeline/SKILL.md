@@ -73,7 +73,7 @@ The list is configuration-dependent. A conditional stage must name its enabling 
 | 11 | `FallDetectionStage` | `fall_detection.py` | `fall_detection.enabled` and signal publishing infrastructure is available through `signals_enabled` | Extracts fall features, evaluates impact/escalation state, and persists/publishes fall signals |
 | 12 | `TrajectoryStage` | `trajectory.py` | Always | Writes `person_trajectories` and `room_dwells` hypertable rows |
 | 13 | `KeyframeStage` | `keyframes.py` | Always | Periodic + identity-change keyframe sampling to `tagged_keyframes` and `scene.samples` stream |
-| 14 | `RevisionsStage` | `revisions.py` | Always | Publishes `IdentityRevision` protos and triggers retroactive cross-table rewriting |
+| 14 | `RevisionsStage` | `revisions.py` | Always | Publishes `IdentityRevision` protos and triggers retroactive cross-table rewriting; delegates Unknown-segment backfill to `UnknownBackfillService` (governed by `resolver.enable_unknown_backfill` and `resolver.backfill_shadow`) |
 | 15 | `TrailsStage` | `posture_trails.py` | Always | Maintains per-PH foot-point ring buffer published in `TrackingEvent` |
 | 16 | `ProvenancePersistStage` | `provenance.py` | `identity_provenance_repo` configured | Durably persists every `revises_previous` identity decision, unconditionally (no throttle) |
 | 17 | `ReIDCandidateStage` | `reid_candidates.py` | `reid_candidates.enabled` (default `true`; fail-closed in practice behind `require_calibrated_face`) | The only pipeline write path into `reid_gallery`; creates `pending_review` candidates from committed, face-matched detections via `evaluate_candidate` (`app/tracking/identity/candidate_eligibility.py`) |

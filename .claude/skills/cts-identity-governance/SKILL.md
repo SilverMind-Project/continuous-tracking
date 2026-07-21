@@ -350,7 +350,11 @@ Every identity change must include focused tests for applicable categories:
 - seed-invariant tests proving face identity equals candidate identity;
 - revision idempotency, stale-version, boundary, overlap, and compensating-revision tests;
 - protobuf/API compatibility tests for every producer and consumer;
-- replay tests with two-person crossings, occlusions, camera transitions, and explicit unknowns.
+- replay tests with two-person crossings, occlusions, camera transitions, and explicit unknowns;
+- scoring-unification guards proving no gallery path can bypass the central scorer;
+- vote-window parity tests for cutoff and decay behavior;
+- backfill invariant tests proving the NULL-only update rule;
+- visitor-gate tests for offline clustering, naming, and tracking promotion.
 
 An authoritative identity swap in a reviewed two-person replay is release-blocking. Increased
 `Unknown` rate is acceptable initially and must be measured rather than hidden by threshold
