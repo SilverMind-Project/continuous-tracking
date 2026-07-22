@@ -71,7 +71,7 @@ from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
 from .storage.postgres.gait_repo import PostgresGaitDailyRepository
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
-from .storage.postgres.ph_repo import PostgresPHRepository
+from .storage.postgres.ph_repo import PostgresPHRepository, PostgresWorldObservationRepository
 from .storage.postgres.settings_repo import PostgresSettingsRepository
 from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
@@ -724,6 +724,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     set_ph_repository(_ph_repo_n1)  # type: ignore[arg-type]
     deps_ph_repo = _ph_repo_n1
 
+    # -- World observation repository (Postgres or in-memory fallback) --
+    # Must be wired explicitly: FrameProcessingPipeline defaults to an
+    # in-memory repo when deps.obs_repo is None, so leaving this unset here
+    # silently drops every observation instead of persisting it, even though
+    # the PH rows themselves keep landing in Postgres via deps_ph_repo above.
+    from .storage.base import InMemoryWorldObservationRepository as _InMemObs
+
+    if _pool is not None:
+        _obs_repo_n1: _InMemObs | PostgresWorldObservationRepository = (
+            PostgresWorldObservationRepository(_pool)
+        )
+    else:
+        _obs_repo_n1 = _InMemObs()
+    deps_obs_repo = _obs_repo_n1
+
     # identity-correction repository (segment corrections + revision ranges).
     from .storage.corrections import InMemoryIdentityCorrectionRepository
     from .storage.postgres.correction_repo import PostgresIdentityCorrectionRepository
@@ -794,6 +809,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         detector=detector,
         gallery_repo=gallery_repo,
         ph_repo=deps_ph_repo,  # type: ignore[arg-type]  # Postgres-backed PH repository
+        obs_repo=deps_obs_repo,  # Postgres-backed world observation repository
         trajectory_repo=trajectory_repo,
         keyframe_repo=keyframe_repo,
         signal_repo=signal_repo,
@@ -1098,8 +1114,16 @@ def create_app() -> FastAPI:
             "message": "wired" if ph_repo_ok else "not configured",
         }
 
-        # Observation repository (wired through pipeline)
-        obs_repo_ok = _pipeline is not None and _pipeline._obs_repo is not None
+        # Observation repository (wired through pipeline). FrameProcessingPipeline
+        # silently falls back to an in-memory repo when unwired, so "not None" alone
+        # can't detect a misconfiguration -- check it's Postgres-backed whenever a
+        # database pool is available.
+        from .storage.base import InMemoryWorldObservationRepository as _InMemObsCheck
+
+        _obs_repo_ref = _pipeline._obs_repo if _pipeline else None
+        obs_repo_ok = _obs_repo_ref is not None and not (
+            _pool is not None and isinstance(_obs_repo_ref, _InMemObsCheck)
+        )
         checks["observation_repository"] = {
             "status": "ok" if obs_repo_ok else "degraded",
             "message": "wired" if obs_repo_ok else "not configured",
