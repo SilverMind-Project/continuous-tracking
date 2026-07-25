@@ -12,6 +12,7 @@ import yaml
 
 from app.config import Settings
 from app.main import (
+    _build_appearance_settings,
     _build_face_id_config,
     _build_resolver_config,
     _build_sampler_config,
@@ -22,6 +23,7 @@ from app.pipeline.frame_pipeline import FaceIdConfig, PipelineConfig
 from app.sampling.keyframe_sampler import SamplerConfig
 from app.tracking.identity_resolver import ResolverConfig
 from app.tracking.world.config import WorldTrackerConfig
+from app.trajectory.appearance_profile import AppearanceSettings
 from app.trajectory.dementia_signals import SignalConfig
 
 SETTINGS_PATH = Path(__file__).resolve().parents[2] / "config" / "settings.yaml"
@@ -62,11 +64,14 @@ def test_settings_loads_full_config(monkeypatch: pytest.MonkeyPatch) -> None:
     sampler = _build_sampler_config(settings)
     face_id = _build_face_id_config(settings, camera_configs={})
 
+    appearance = _build_appearance_settings(settings)
+
     assert isinstance(resolver, ResolverConfig)
     assert isinstance(world_tracker, WorldTrackerConfig)
     assert isinstance(signal, SignalConfig)
     assert isinstance(sampler, SamplerConfig)
     assert isinstance(face_id, FaceIdConfig)
+    assert isinstance(appearance, AppearanceSettings)
 
 
 def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,6 +105,23 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     assert world_tracker.zupt_consecutive_frames == 5
     assert world_tracker.zupt_velocity_sigma_m_s == pytest.approx(0.05)
     assert world_tracker.primary_switch_frames == 5
+
+    appearance = _build_appearance_settings(settings)
+    hyg = data["hygiene"]["same_clothes"]
+    assert appearance.enabled == hyg["enabled"] is False
+    assert appearance.similarity_threshold == pytest.approx(hyg["similarity_threshold"]) == 0.90
+    assert appearance.min_samples_per_day == hyg["min_samples_per_day"] == 5
+    assert appearance.evaluate_local_hour == hyg["evaluate_local_hour"] == 11
+    assert appearance.tz_name == data["app"]["timezone"]
+
+
+def test_appearance_settings_defaults_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch)
+    loaded = _build_appearance_settings(settings)
+    defaults = AppearanceSettings()
+
+    for field in fields(AppearanceSettings):
+        assert getattr(defaults, field.name) == getattr(loaded, field.name), field.name
 
 
 def test_signal_config_defaults_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:

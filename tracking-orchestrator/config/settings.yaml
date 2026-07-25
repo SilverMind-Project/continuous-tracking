@@ -662,6 +662,33 @@ gait:
   min_daily_bouts: 3
   min_daily_walking_s: 60
 
+# DL-M07: daily appearance profile + same_clothes_suspected evaluator.
+# Timezone is shared with `app.timezone` (day-over-day "yesterday's clothes"
+# is a local-calendar concept, and CC's day-boundary logic must agree with
+# this one, per the Daily Living program's local-day rule).
+hygiene:
+  same_clothes:
+    # Shadow-first (DL10): persist profiles and log/metric the candidate
+    # similarity, but never publish, until the backtest supports a flip.
+    enabled: false
+    # Day-over-day centroid cosine at or above this is "suspiciously similar".
+    # Calibrated by the DL-M07 backtest before live use; 0.90 is the
+    # pre-backtest default.
+    # 2026-07-25 backtest (scripts/backtest_appearance.py --days 21 against the
+    # live deployment DB): only 2 identities carry current_identity_id, 4 total
+    # qualifying PH rows, no identity has 2 consecutive local days each with
+    # min_samples_per_day; no similarity distribution could be computed.
+    # Threshold stays at this pre-backtest default; report at
+    # daily-living-m07-backtest-report.md. Re-run once identity attribution is
+    # denser (see the report's decision section).
+    similarity_threshold: 0.90
+    # Fewer quality-weighted PH samples than this on either day: no verdict
+    # (insufficient evidence, fail-silent per the worker's DataQuality pattern).
+    min_samples_per_day: 5
+    # Local hour to evaluate: she has dressed for the day, and the caregiver
+    # can still act today.
+    evaluate_local_hour: 11
+
 # Environment label (dev / staging / production)
 env: production
 

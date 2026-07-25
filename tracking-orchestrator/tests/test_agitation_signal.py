@@ -469,10 +469,10 @@ class TestKindPlumbing:
         assert "agitation_index" in get_args(DementiaSignalKind)
 
     def test_signal_spec_has_agitation_index(self) -> None:
-        from app.trajectory.dementia_signals import _SIGNAL_SPEC
+        from app.trajectory.signal_specs import SIGNAL_SPEC
 
-        assert "agitation_index" in _SIGNAL_SPEC
-        spec = _SIGNAL_SPEC["agitation_index"]
+        assert "agitation_index" in SIGNAL_SPEC
+        spec = SIGNAL_SPEC["agitation_index"]
         assert spec.evidence_grade == "experimental"
 
     def test_agitation_never_reaches_emergency(self) -> None:

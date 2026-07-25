@@ -95,6 +95,7 @@ class Metrics:
     signal_worker_identities: Gauge
     signal_worker_emitted_total: Counter
     signal_baseline_cache_hits_total: Counter
+    appearance_signal_candidates_total: Counter
 
     # ---- World tracker -------------------------------------------------
     world_tracker_ph_open: Gauge
@@ -540,6 +541,10 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         signal_baseline_cache_hits_total=_counter(
             "cts_signal_baseline_cache_hits_total",
             "Baseline repository cache hits in the signal worker.",
+        ),
+        appearance_signal_candidates_total=_counter(
+            "cts_appearance_signal_candidates_total",
+            "same_clothes_suspected candidate evaluations (shadow-mode observability, DL-M07).",
         ),
         frame_end_to_end_latency_ms=_hist(
             "cts_frame_end_to_end_latency_ms",

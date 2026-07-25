@@ -82,6 +82,9 @@ class PHRepositoryProtocol(Protocol):
     async def list_closed_since(
         self, since: datetime, limit: int = 100
     ) -> list[PersonHypothesis]: ...
+    async def list_overlapping_for_identity(
+        self, identity_id: str, since: datetime, until: datetime, limit: int = 500
+    ) -> list[PersonHypothesis]: ...
     async def evidence_backed_commit(
         self, ph_id: str, identity_id: str, evidence_at: datetime, committed_at: datetime
     ) -> None: ...
@@ -288,6 +291,19 @@ class InMemoryPHRepository:
         ]
         closed.sort(key=lambda ph: ph.closed_at, reverse=True)  # type: ignore[arg-type,return-value]
         return closed[:limit]
+
+    async def list_overlapping_for_identity(
+        self, identity_id: str, since: datetime, until: datetime, limit: int = 500
+    ) -> list[PersonHypothesis]:
+        results = [
+            ph
+            for ph in self._phs.values()
+            if ph.current_identity_id == identity_id
+            and ph.born_at <= until
+            and (ph.closed_at is None or ph.closed_at >= since)
+        ]
+        results.sort(key=lambda ph: ph.born_at)
+        return results[:limit]
 
     async def evidence_backed_commit(
         self, ph_id: str, identity_id: str, evidence_at: datetime, committed_at: datetime

@@ -204,6 +204,22 @@ class PostgresPHRepository:
             )
         return [_row_to_ph(row) for row in rows]
 
+    async def list_overlapping_for_identity(
+        self, identity_id: str, since: datetime, until: datetime, limit: int = 500
+    ) -> list[PersonHypothesis]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM continuous_tracking.person_hypotheses "
+                "WHERE current_identity_id = $1 AND born_at <= $3 "
+                "AND (closed_at IS NULL OR closed_at >= $2) "
+                "ORDER BY born_at ASC LIMIT $4",
+                identity_id,
+                since,
+                until,
+                limit,
+            )
+        return [_row_to_ph(row) for row in rows]
+
     async def evidence_backed_commit(
         self, ph_id: str, identity_id: str, evidence_at: datetime, committed_at: datetime
     ) -> None:

@@ -67,6 +67,70 @@ async def test_list_active_respects_limit_offset():
 
 
 @pytest.mark.asyncio
+async def test_list_overlapping_for_identity_includes_open_ph_born_before_window():
+    repo = InMemoryPHRepository()
+    since = datetime(2026, 1, 15, 0, 0, tzinfo=UTC)
+    until = datetime(2026, 1, 16, 0, 0, tzinfo=UTC)
+    ph = dataclasses.replace(
+        _make_ph("ph-1", identity_id="alice"),
+        born_at=since - timedelta(hours=1),
+        closed_at=None,
+    )
+    await repo.save(ph)
+
+    results = await repo.list_overlapping_for_identity("alice", since, until)
+    assert [r.ph_id for r in results] == ["ph-1"]
+
+
+@pytest.mark.asyncio
+async def test_list_overlapping_for_identity_excludes_ph_closed_before_window():
+    repo = InMemoryPHRepository()
+    since = datetime(2026, 1, 15, 0, 0, tzinfo=UTC)
+    until = datetime(2026, 1, 16, 0, 0, tzinfo=UTC)
+    ph = dataclasses.replace(
+        _make_ph("ph-1", identity_id="alice"),
+        born_at=since - timedelta(days=2),
+        closed_at=since - timedelta(days=1),
+    )
+    await repo.save(ph)
+
+    results = await repo.list_overlapping_for_identity("alice", since, until)
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_list_overlapping_for_identity_excludes_ph_born_after_window():
+    repo = InMemoryPHRepository()
+    since = datetime(2026, 1, 15, 0, 0, tzinfo=UTC)
+    until = datetime(2026, 1, 16, 0, 0, tzinfo=UTC)
+    ph = dataclasses.replace(
+        _make_ph("ph-1", identity_id="alice"),
+        born_at=until + timedelta(hours=1),
+        closed_at=None,
+    )
+    await repo.save(ph)
+
+    results = await repo.list_overlapping_for_identity("alice", since, until)
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_list_overlapping_for_identity_excludes_other_identity():
+    repo = InMemoryPHRepository()
+    since = datetime(2026, 1, 15, 0, 0, tzinfo=UTC)
+    until = datetime(2026, 1, 16, 0, 0, tzinfo=UTC)
+    ph = dataclasses.replace(
+        _make_ph("ph-1", identity_id="bob"),
+        born_at=since + timedelta(hours=1),
+        closed_at=None,
+    )
+    await repo.save(ph)
+
+    results = await repo.list_overlapping_for_identity("alice", since, until)
+    assert results == []
+
+
+@pytest.mark.asyncio
 async def test_correct_identity_returns_revision():
     repo = InMemoryPHRepository()
     await repo.save(_make_ph("ph-1"))

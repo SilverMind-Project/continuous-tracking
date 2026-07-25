@@ -17,7 +17,6 @@ from app.storage.base import (
     InMemoryTrajectoryRepository,
 )
 from app.trajectory.dementia_signals import (
-    _SIGNAL_SPEC,
     DementiaSignalWorker,
     SignalConfig,
     _stable_signal_id,
@@ -27,7 +26,9 @@ from app.trajectory.signal_specs import (
     EVENING_ACTIVITY_SPEC,
     NON_DIAGNOSTIC_DISCLAIMER,
     PACING_SPEC,
+    SIGNAL_SPEC,
     STILLNESS_SPEC,
+    apply_algorithm_metadata,
 )
 
 _NOW = datetime(2026, 5, 23, 18, 0, 0, tzinfo=UTC)
@@ -51,17 +52,18 @@ class TestAlgorithmSpecs:
             "fall_suspected",
             "gait_slowing",
             "agitation_index",
+            "same_clothes_suspected",
         }
-        assert set(_SIGNAL_SPEC.keys()) == expected_kinds
+        assert set(SIGNAL_SPEC.keys()) == expected_kinds
 
     def test_spec_has_evidence_grade(self) -> None:
         """Every spec must have a non-empty evidence grade."""
-        for kind, spec in _SIGNAL_SPEC.items():
+        for kind, spec in SIGNAL_SPEC.items():
             assert spec.evidence_grade, f"{kind} missing evidence_grade"
 
     def test_spec_has_non_diagnostic_disclaimer(self) -> None:
         """Every spec must include the non-diagnostic disclaimer."""
-        for kind, spec in _SIGNAL_SPEC.items():
+        for kind, spec in SIGNAL_SPEC.items():
             assert NON_DIAGNOSTIC_DISCLAIMER in spec.disclaimer, f"{kind} missing disclaimer"
 
     def test_pacing_requires_transition_data(self) -> None:
@@ -109,8 +111,6 @@ class TestAlgorithmMetadata:
     @pytest.mark.asyncio
     async def test_signal_gets_algorithm_metadata(self) -> None:
         """Emitted signals must carry algorithm name and evidence grade."""
-        worker = await self._make_worker()
-
         # Create a signal and apply metadata.
         signal = DementiaSignal(
             signal_id="sig-1",
@@ -119,7 +119,7 @@ class TestAlgorithmMetadata:
             severity="warning",
             value=3600.0,
         )
-        signal = worker._apply_algorithm_metadata(signal, "stillness_anomaly")
+        signal = apply_algorithm_metadata(signal, "stillness_anomaly")
 
         assert signal.algorithm_name == STILLNESS_SPEC.name
         assert signal.evidence_grade == STILLNESS_SPEC.evidence_grade
@@ -132,7 +132,6 @@ class TestAlgorithmMetadata:
     @pytest.mark.asyncio
     async def test_signal_context_has_disclaimer(self) -> None:
         """Signal context must include the non-diagnostic disclaimer."""
-        worker = await self._make_worker()
         signal = DementiaSignal(
             signal_id="sig-2",
             identity_id="bob",
@@ -140,7 +139,7 @@ class TestAlgorithmMetadata:
             severity="info",
             value=0.3,
         )
-        worker._apply_algorithm_metadata(signal, "pacing")
+        apply_algorithm_metadata(signal, "pacing")
         signal.context["disclaimer"] = NON_DIAGNOSTIC_DISCLAIMER
 
         assert "disclaimer" in signal.context

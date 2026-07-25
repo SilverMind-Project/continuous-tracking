@@ -73,6 +73,7 @@ from ..services.identity_rewriter import (
 )
 from ..services.transit_zone_map import TransitZoneMap
 from ..services.unknown_backfill import BackfillConfig, UnknownBackfillService
+from ..storage.appearance import DailyAppearanceRepo, InMemoryDailyAppearanceRepo
 from ..storage.base import (
     BboxAnnotationRepository,
     BehaviorBaselineRepository,
@@ -106,6 +107,7 @@ from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
 from ..tracking.world.config import WorldTrackerConfig
 from ..tracking.world.tracker import WorldTracker
+from ..trajectory.appearance_profile import AppearanceEvaluator, AppearanceSettings
 from ..trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
 from ..trajectory.gait import GaitAggregator, GaitConfig, WalkingBoutSegmenter
 from ..trajectory.motion_energy import MotionEnergyTracker
@@ -190,6 +192,7 @@ class PipelineDependencies:
     baseline_repo: BehaviorBaselineRepository | None = None
     gait_bout_repo: GaitBoutRepository | None = None
     gait_daily_repo: GaitDailyRepository | None = None
+    daily_appearance_repo: DailyAppearanceRepo | None = None
     identity_provenance_repo: IdentityDecisionRepositoryProtocol | None = None
     # Constructed early in main.py (publisher wired post-init via
     # IdentityCorrectionService.set_publisher) so UnknownBackfillService can
@@ -261,6 +264,9 @@ class PipelineConfig:
     gait_aggregate_interval_s: int = 3600
     gait_min_daily_bouts: int = 3
     gait_min_daily_walking_s: float = 60.0
+
+    # --- Daily appearance profile / same_clothes_suspected evaluator ---
+    appearance: AppearanceSettings = field(default_factory=AppearanceSettings)
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +352,8 @@ class FrameProcessingPipeline:
         self._gait_bout_repo: GaitBoutRepository | None = None
         self._gait_daily_repo: GaitDailyRepository | None = None
         self._gait_aggregator: GaitAggregator | None = None
+        self._daily_appearance_repo: DailyAppearanceRepo | None = None
+        self._appearance_evaluator: AppearanceEvaluator | None = None
         self._stage_runner: StageRunner | None = None
         self._post_detect_runner: StageRunner | None = None
         self._pre_world_runner: StageRunner | None = None
@@ -511,6 +519,20 @@ class FrameProcessingPipeline:
         self._keyframe_sampler = KeyframeSampler(
             repo=keyframe_repo,
             config=self._config.sampler,
+        )
+
+        # Daily appearance profile evaluator (same_clothes_suspected, DL-M07).
+        # Runs inside _signal_loop alongside the gait aggregator: no additional
+        # asyncio task, and its own once-per-identity-per-day gate makes a
+        # separate due()-style wrapper unnecessary (see AppearanceEvaluator's
+        # docstring).
+        self._daily_appearance_repo = deps.daily_appearance_repo or InMemoryDailyAppearanceRepo()
+        self._appearance_evaluator = AppearanceEvaluator(
+            ph_repo=self._ph_repo,
+            profile_repo=self._daily_appearance_repo,
+            gallery_repo=self._gallery_repo,
+            keyframe_repo=keyframe_repo,
+            cfg=self._config.appearance,
         )
 
         self._scene_publisher = SceneSamplesPublisher(
@@ -827,14 +849,18 @@ class FrameProcessingPipeline:
         logger.info("Consume loop stopped")
 
     async def _signal_loop(self) -> None:
-        """Periodic dementia signal computation and gait aggregation loop.
+        """Periodic dementia signal computation, gait aggregation, and appearance loop.
 
-        One scheduler loop drives two jobs:
+        One scheduler loop drives three jobs:
           1. DementiaSignalWorker.run_once() — every signal_interval_s (default 60 s)
           2. GaitAggregator.run_once()        — every gait.aggregate_interval_s (default 3600 s)
+          3. AppearanceEvaluator.run_once()   — once per identity per local day, at or
+             after hygiene.same_clothes.evaluate_local_hour
 
         The GaitAggregator tracks its own last-run timestamp internally via
-        GaitAggregator.due(), so no second asyncio task is needed.
+        GaitAggregator.due(); AppearanceEvaluator tracks its own per-identity
+        last-evaluated-day and self-gates on the hour internally. No second
+        asyncio task is needed for either.
         """
         assert self._signal_worker is not None
         assert self._signal_publisher is not None
@@ -855,6 +881,8 @@ class FrameProcessingPipeline:
                     break
                 now = datetime.now(UTC)
                 signals = await self._signal_worker.run_once(now=now)
+                if self._appearance_evaluator is not None:
+                    signals = signals + await self._appearance_evaluator.run_once(now=now)
                 if signals:
                     await self._signal_publisher.publish_batch(signals)
                 if self._gait_aggregator is not None and self._gait_aggregator.due(now):

@@ -7,8 +7,11 @@ emission on identity confidence, coverage, and baseline readiness.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from ..domain import DementiaSignal
 
 EvidenceGrade = Literal[
     "clinical_review",
@@ -141,6 +144,20 @@ AGITATION_MOTOR_SPEC = AlgorithmSpec(
     min_baseline_samples=5,
 )
 
+SAME_CLOTHES_SPEC = AlgorithmSpec(
+    name="same-clothes-appearance-v1",
+    version=1,
+    # Experimental: a day-over-day appearance-similarity prefilter, not yet
+    # backtested against caregiver-labelled same-clothes days for this
+    # deployment (DL-M07 Part D). CC's VLM confirm + shower-proxy join
+    # (DL-M08) is the evidenced-alert layer; this spec is the CTS-side
+    # prefilter's own metadata.
+    evidence_grade="experimental",
+    clinical_label="Same Clothes Suspected (Appearance Prefilter)",
+    required_inputs=("gallery_mean", "mean_quality"),
+    min_baseline_samples=0,  # day-over-day comparison, not a z-score baseline
+)
+
 
 @dataclass(frozen=True)
 class IdentitySignalContext:
@@ -166,3 +183,46 @@ class DataQuality:
     @property
     def sufficient(self) -> bool:
         return self.identity_confidence_ok and self.coverage_ok and self.baseline_ready
+
+
+# ---------------------------------------------------------------------------
+# Spec lookup + metadata application (shared by DementiaSignalWorker and any
+# other producer of a DementiaSignal, e.g. AppearanceEvaluator)
+# ---------------------------------------------------------------------------
+
+SIGNAL_SPEC: dict[str, AlgorithmSpec] = {
+    "pacing": PACING_SPEC,
+    "sundowning_index": EVENING_ACTIVITY_SPEC,
+    "nighttime_movement": NIGHTTIME_MOVEMENT_SPEC,
+    "stillness_anomaly": STILLNESS_SPEC,
+    "absence": UNOBSERVED_GAP_SPEC,
+    "bathroom_dwell_anomaly": BATHROOM_DWELL_SPEC,
+    "fall_suspected": FALL_SUSPECTED_SPEC,
+    "gait_slowing": GAIT_SLOWING_SPEC,
+    "agitation_index": AGITATION_MOTOR_SPEC,
+    "same_clothes_suspected": SAME_CLOTHES_SPEC,
+}
+
+
+def apply_algorithm_metadata(signal: DementiaSignal, signal_kind: str) -> DementiaSignal:
+    """Return a copy of *signal* stamped with its AlgorithmSpec metadata."""
+    spec = SIGNAL_SPEC.get(signal_kind)
+    if spec is not None:
+        return replace(
+            signal,
+            algorithm_name=spec.name,
+            evidence_grade=spec.evidence_grade,
+            algorithm_spec_json=(
+                f'{{"name": "{spec.name}", "version": {spec.version}, '
+                f'"evidence_grade": "{spec.evidence_grade}", '
+                f'"clinical_label": "{spec.clinical_label}", '
+                f'"disclaimer": "{spec.disclaimer}", '
+                f'"min_baseline_samples": {spec.min_baseline_samples}}}'
+            ),
+        )
+    return replace(
+        signal,
+        algorithm_name="unknown",
+        evidence_grade="experimental",
+        algorithm_spec_json="{}",
+    )

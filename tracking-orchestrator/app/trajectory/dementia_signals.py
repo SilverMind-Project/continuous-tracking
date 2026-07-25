@@ -41,38 +41,13 @@ from ..storage.base import (
 from ..storage.gait import GaitDailyRepository
 from .gait import GaitDailyRecord
 from .restlessness import RestlessnessConfig, compute_restlessness
-from .signal_specs import (
-    AGITATION_MOTOR_SPEC,
-    BATHROOM_DWELL_SPEC,
-    EVENING_ACTIVITY_SPEC,
-    FALL_SUSPECTED_SPEC,
-    GAIT_SLOWING_SPEC,
-    NIGHTTIME_MOVEMENT_SPEC,
-    NON_DIAGNOSTIC_DISCLAIMER,
-    PACING_SPEC,
-    STILLNESS_SPEC,
-    UNOBSERVED_GAP_SPEC,
-    AlgorithmSpec,
-)
+from .signal_specs import NON_DIAGNOSTIC_DISCLAIMER, apply_algorithm_metadata
 from .stats import robust_z, weighted_median
 
 _SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 _ALGORITHM_VERSION = 3  # Phase 3: robust baselines + hysteresis + detector rewrites
 
 logger = get_logger(__name__)
-
-# Map signal kind to AlgorithmSpec for metadata attachment.
-_SIGNAL_SPEC: dict[str, AlgorithmSpec] = {
-    "pacing": PACING_SPEC,
-    "sundowning_index": EVENING_ACTIVITY_SPEC,
-    "nighttime_movement": NIGHTTIME_MOVEMENT_SPEC,
-    "stillness_anomaly": STILLNESS_SPEC,
-    "absence": UNOBSERVED_GAP_SPEC,
-    "bathroom_dwell_anomaly": BATHROOM_DWELL_SPEC,
-    "fall_suspected": FALL_SUSPECTED_SPEC,
-    "gait_slowing": GAIT_SLOWING_SPEC,
-    "agitation_index": AGITATION_MOTOR_SPEC,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +436,7 @@ class DementiaSignalWorker:
 
         result: list[DementiaSignal] = []
         for sig in signals:
-            sig = self._apply_algorithm_metadata(sig, sig.signal_kind)
+            sig = apply_algorithm_metadata(sig, sig.signal_kind)
             new_context = dict(sig.context)
             new_context["identity_confidence_mean"] = round(mean_conf, 3)
             new_context["observation_coverage_ratio"] = round(coverage, 3)
@@ -473,31 +448,6 @@ class DementiaSignalWorker:
             result.append(replace(sig, context=new_context, severity=severity))
 
         return result
-
-    def _apply_algorithm_metadata(self, signal: DementiaSignal, signal_kind: str) -> DementiaSignal:
-        """Return a new signal with algorithm metadata attached."""
-        from dataclasses import replace
-
-        spec = _SIGNAL_SPEC.get(signal_kind)
-        if spec is not None:
-            return replace(
-                signal,
-                algorithm_name=spec.name,
-                evidence_grade=spec.evidence_grade,
-                algorithm_spec_json=(
-                    f'{{"name": "{spec.name}", "version": {spec.version}, '
-                    f'"evidence_grade": "{spec.evidence_grade}", '
-                    f'"clinical_label": "{spec.clinical_label}", '
-                    f'"disclaimer": "{spec.disclaimer}", '
-                    f'"min_baseline_samples": {spec.min_baseline_samples}}}'
-                ),
-            )
-        return replace(
-            signal,
-            algorithm_name="unknown",
-            evidence_grade="experimental",
-            algorithm_spec_json="{}",
-        )
 
     def _check_data_quality(
         self,

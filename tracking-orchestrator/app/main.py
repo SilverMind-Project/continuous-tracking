@@ -66,6 +66,7 @@ from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdenti
 from .services.overlap_group_sync import fetch_adjacency_edges, fetch_overlap_groups
 from .services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
 from .storage.migrations import MigrationRunner
+from .storage.postgres.appearance_repo import PostgresDailyAppearanceRepo
 from .storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
 from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
 from .storage.postgres.gait_repo import PostgresGaitDailyRepository
@@ -78,6 +79,7 @@ from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
 from .tracking.identity.candidate_eligibility import CandidatePolicy
 from .tracking.identity_resolver import ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
+from .trajectory.appearance_profile import AppearanceSettings
 from .trajectory.dementia_signals import SignalConfig
 from .trajectory.depth_posture_strategy import DepthPostureStrategy
 from .trajectory.fused_posture_strategy import FusedPostureStrategy
@@ -412,6 +414,17 @@ def _build_signal_config(s: Settings) -> SignalConfig:
     )
 
 
+def _build_appearance_settings(s: Settings) -> AppearanceSettings:
+    hyg = s.section("hygiene.same_clothes")
+    return AppearanceSettings(
+        enabled=hyg.as_bool("enabled"),
+        similarity_threshold=hyg.as_float("similarity_threshold"),
+        min_samples_per_day=hyg.as_int("min_samples_per_day"),
+        evaluate_local_hour=hyg.as_int("evaluate_local_hour"),
+        tz_name=s.as_str("app.timezone"),
+    )
+
+
 def _build_fall_detection_config(s: Settings) -> FallDetectionConfig:
     fd = s.section("fall_detection")
     return FallDetectionConfig(
@@ -556,6 +569,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         gait_aggregate_interval_s=settings.as_int("gait.aggregate_interval_s"),
         gait_min_daily_bouts=settings.as_int("gait.min_daily_bouts"),
         gait_min_daily_walking_s=settings.as_float("gait.min_daily_walking_s"),
+        appearance=_build_appearance_settings(settings),
     )
     _pipeline = FrameProcessingPipeline(config)
 
@@ -592,6 +606,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bbox_repo = PostgresBboxAnnotationRepository(_pool)
         baseline_repo = PostgresBehaviorBaselineRepository(_pool)
         gait_daily_repo = PostgresGaitDailyRepository(_pool)
+        daily_appearance_repo = PostgresDailyAppearanceRepo(_pool)
         from .storage.postgres.identity_decision_repo import (
             PostgresIdentityDecisionRepository,
         )
@@ -606,6 +621,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bbox_repo = None
         baseline_repo = None
         gait_daily_repo = None
+        daily_appearance_repo = None
         identity_decision_repo = None
 
     # -- Triton --
@@ -825,6 +841,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         overlap_groups=declared_overlap_groups,
         baseline_repo=baseline_repo,
         gait_daily_repo=gait_daily_repo,
+        daily_appearance_repo=daily_appearance_repo,
         identity_provenance_repo=identity_decision_repo,
         identity_correction_service=correction_service,
     )

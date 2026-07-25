@@ -138,3 +138,17 @@ async def test_save_rejects_non_mapping_metadata() -> None:
 
     with pytest.raises(TypeError, match=r"PersonHypothesis\.metadata"):
         await repo.save(_domain_ph(metadata="{}"))
+
+
+@pytest.mark.asyncio
+async def test_list_overlapping_for_identity_passes_bounds_and_limit() -> None:
+    conn = _Conn()
+    repo = PostgresPHRepository(_Pool(conn))
+    since = datetime(2026, 1, 14, 0, 0, tzinfo=UTC)
+    until = datetime(2026, 1, 15, 0, 0, tzinfo=UTC)
+
+    await repo.list_overlapping_for_identity("amma", since, until, limit=250)
+
+    assert "current_identity_id = $1" in conn.fetch_sql
+    assert "born_at <= $3" in conn.fetch_sql
+    assert "closed_at IS NULL OR closed_at >= $2" in conn.fetch_sql
