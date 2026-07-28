@@ -495,3 +495,454 @@ SELECT add_continuous_aggregate_policy(
     schedule_interval => INTERVAL '15 minutes',
     if_not_exists     => TRUE
 );
+
+
+-- ============================================================================
+-- Folded from 0002_gait_and_agitation_schema
+-- ============================================================================
+SET search_path = continuous_tracking, public;
+
+-- These objects were originally added to 0001 after deployed databases had
+-- already recorded that migration. Keep this migration idempotent so it also
+-- repairs databases created from an intermediate version of the baseline.
+ALTER TABLE continuous_tracking.person_trajectories
+    ADD COLUMN IF NOT EXISTS floor_speed_m_s DOUBLE PRECISION;
+
+CREATE TABLE IF NOT EXISTS continuous_tracking.gait_bouts (
+    bout_id          UUID PRIMARY KEY,
+    identity_id      TEXT NOT NULL REFERENCES continuous_tracking.identities(identity_id)
+                        ON DELETE CASCADE,
+    started_at       TIMESTAMPTZ NOT NULL,
+    ended_at         TIMESTAMPTZ NOT NULL,
+    duration_s       DOUBLE PRECISION NOT NULL,
+    distance_m       DOUBLE PRECISION NOT NULL,
+    median_speed_m_s DOUBLE PRECISION NOT NULL,
+    p95_speed_m_s    DOUBLE PRECISION NOT NULL,
+    sample_count     INTEGER NOT NULL,
+    rooms            TEXT[] NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_gait_bouts_identity
+    ON continuous_tracking.gait_bouts (identity_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS continuous_tracking.gait_daily (
+    identity_id        TEXT NOT NULL REFERENCES continuous_tracking.identities(identity_id)
+                          ON DELETE CASCADE,
+    local_date         DATE NOT NULL,
+    bout_count         INTEGER NOT NULL,
+    total_walking_s    DOUBLE PRECISION NOT NULL,
+    total_distance_m   DOUBLE PRECISION NOT NULL,
+    median_speed_m_s   DOUBLE PRECISION NOT NULL,
+    mad_speed_m_s      DOUBLE PRECISION NOT NULL,
+    p95_speed_m_s      DOUBLE PRECISION NOT NULL,
+    sample_bout_ids    TEXT[] NOT NULL DEFAULT '{}',
+    computed_at        TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (identity_id, local_date)
+);
+
+CREATE TABLE IF NOT EXISTS continuous_tracking.agitation_windows (
+    identity_id  TEXT NOT NULL REFERENCES continuous_tracking.identities(identity_id)
+                     ON DELETE CASCADE,
+    window_start TIMESTAMPTZ NOT NULL,
+    composite    FLOAT8 NOT NULL,
+    computed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (identity_id, window_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agitation_windows_identity_start
+    ON continuous_tracking.agitation_windows (identity_id, window_start DESC);
+
+
+-- ============================================================================
+-- Folded from 0003_identity_evidence_clock
+-- ============================================================================
+SET search_path = continuous_tracking, public;
+
+-- M02: Separate independent-evidence time from the identity label write time.
+-- Prior-only maintenance must not advance this clock; only direct ArcFace,
+-- verified ReID, and operator corrections may refresh it.
+ALTER TABLE continuous_tracking.person_hypotheses
+    ADD COLUMN IF NOT EXISTS last_independent_identity_evidence_at TIMESTAMPTZ NULL;
+
+
+-- ============================================================================
+-- Folded from 0004_identity_provenance
+-- ============================================================================
+SET search_path = continuous_tracking, public;
+
+CREATE TABLE continuous_tracking.identity_decisions (
+    decision_id UUID PRIMARY KEY,
+    ph_id UUID NOT NULL,
+    observation_id UUID NULL,
+    captured_at TIMESTAMPTZ NOT NULL,
+    inferred_identity_id TEXT NULL,
+    effective_identity_id TEXT NULL,
+    authority TEXT NOT NULL,
+    decision_source TEXT NOT NULL,
+    conflict_kind TEXT NULL,
+    top_probability REAL NULL,
+    second_probability REAL NULL,
+    posterior_entropy REAL NULL,
+    last_independent_evidence_at TIMESTAMPTZ NULL,
+    config_hash TEXT NULL,
+    resolver_version TEXT NULL,
+    model_set_version TEXT NULL,
+    diagnostics_schema_version TEXT NULL,
+    diagnostics JSONB NOT NULL DEFAULT '{}',
+    CONSTRAINT unique_decision_round UNIQUE (ph_id, observation_id, resolver_version)
+);
+
+CREATE INDEX idx_identity_decisions_ph_id_time ON continuous_tracking.identity_decisions (ph_id, captured_at DESC);
+CREATE INDEX idx_identity_decisions_observation ON continuous_tracking.identity_decisions (observation_id);
+CREATE INDEX idx_identity_decisions_effective_id ON continuous_tracking.identity_decisions (effective_identity_id);
+CREATE INDEX idx_identity_decisions_conflict ON continuous_tracking.identity_decisions (conflict_kind) WHERE conflict_kind IS NOT NULL;
+CREATE INDEX idx_identity_decisions_authority ON continuous_tracking.identity_decisions (authority);
+CREATE INDEX idx_identity_decisions_source ON continuous_tracking.identity_decisions (decision_source);
+
+CREATE TABLE continuous_tracking.identity_evidence_items (
+    evidence_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    decision_id UUID NOT NULL REFERENCES continuous_tracking.identity_decisions(decision_id) ON DELETE CASCADE,
+    source_identity_id TEXT NULL,
+    score_type TEXT NOT NULL,
+    score_value REAL NOT NULL,
+    quality REAL NULL,
+    camera_id TEXT NULL,
+    timestamp TIMESTAMPTZ NULL,
+    model_version TEXT NULL,
+    preprocessing_version TEXT NULL,
+    calibration_version TEXT NULL,
+    directness TEXT NULL,
+    authoritative_eligibility BOOLEAN NULL
+);
+
+CREATE INDEX idx_identity_evidence_decision ON continuous_tracking.identity_evidence_items (decision_id);
+
+CREATE TABLE continuous_tracking.identity_decision_gallery_hits (
+    hit_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    decision_id UUID NOT NULL REFERENCES continuous_tracking.identity_decisions(decision_id) ON DELETE CASCADE,
+    entry_id UUID NOT NULL,
+    identity_id TEXT NOT NULL,
+    raw_similarity REAL NOT NULL,
+    trust_multiplier REAL NOT NULL,
+    recency_factor REAL NOT NULL,
+    source_episode_group TEXT NULL,
+    orientation TEXT NULL,
+    rank INTEGER NOT NULL,
+    weighted_contribution REAL NOT NULL
+);
+
+CREATE INDEX idx_identity_gallery_hits_decision ON continuous_tracking.identity_decision_gallery_hits (decision_id);
+
+
+-- ============================================================================
+-- Folded from 0005_governed_reid_gallery
+-- ============================================================================
+SET search_path = continuous_tracking, public;
+
+-- 'auto_verified' (Identity Continuity M02 D3) is declared here rather than
+-- appended by a later ALTER TYPE; it stays last so the enum sort order matches.
+CREATE TYPE continuous_tracking.gallery_entry_state AS ENUM ('pending_review', 'operator_verified', 'rejected', 'auto_verified');
+
+-- Add new columns to reid_gallery
+ALTER TABLE continuous_tracking.reid_gallery 
+    ADD COLUMN state continuous_tracking.gallery_entry_state NOT NULL DEFAULT 'pending_review',
+    ADD COLUMN proposed_identity_id TEXT NULL,
+    ADD COLUMN effective_identity_id TEXT NULL,
+    ADD COLUMN label_source TEXT NULL,
+    ADD COLUMN model_version TEXT NULL,
+    ADD COLUMN preprocessing_version TEXT NULL,
+    ADD COLUMN dimension INTEGER NULL,
+    ADD COLUMN source_frame_key TEXT NULL,
+    ADD COLUMN crop_key TEXT NULL,
+    ADD COLUMN frame_hash TEXT NULL,
+    ADD COLUMN crop_hash TEXT NULL,
+    ADD COLUMN bbox JSONB NULL,
+    ADD COLUMN crop_width INTEGER NULL,
+    ADD COLUMN crop_height INTEGER NULL,
+    ADD COLUMN ph_id UUID NULL,
+    ADD COLUMN observation_id UUID NULL,
+    ADD COLUMN keyframe_id UUID NULL,
+    ADD COLUMN camera_id TEXT NULL,
+    ADD COLUMN capture_time TIMESTAMPTZ NULL,
+    ADD COLUMN confidence REAL NULL,
+    ADD COLUMN is_truncated BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN is_occluded BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN candidate_reason TEXT NULL,
+    ADD COLUMN source_episode_id UUID NULL,
+    ADD COLUMN created_actor TEXT NULL,
+    ADD COLUMN reviewed_actor TEXT NULL,
+    ADD COLUMN reviewed_time TIMESTAMPTZ NULL,
+    ADD COLUMN review_reason TEXT NULL,
+    ADD COLUMN review_note TEXT NULL,
+    ADD COLUMN supersedes_id UUID NULL REFERENCES continuous_tracking.reid_gallery(id),
+    ADD COLUMN superseded_by_id UUID NULL REFERENCES continuous_tracking.reid_gallery(id),
+    ADD COLUMN audit_version INTEGER NOT NULL DEFAULT 1;
+
+-- Backfill every existing row to pending_review.
+-- The default is already pending_review, but we ensure any row is pending_review
+UPDATE continuous_tracking.reid_gallery SET state = 'pending_review';
+
+-- Create gallery_review_events table
+CREATE TABLE continuous_tracking.gallery_review_events (
+    event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entry_id UUID NOT NULL REFERENCES continuous_tracking.reid_gallery(id),
+    previous_state continuous_tracking.gallery_entry_state NOT NULL,
+    new_state continuous_tracking.gallery_entry_state NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT NULL,
+    note TEXT NULL,
+    event_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+    audit_version INTEGER NOT NULL
+);
+
+CREATE INDEX idx_gallery_review_events_entry ON continuous_tracking.gallery_review_events(entry_id);
+
+
+-- ============================================================================
+-- Folded from 0006_identity_corrections
+-- ============================================================================
+SET search_path = continuous_tracking, public;
+
+-- =============================================================================
+-- Milestone 06: Segment correction, revision ranges, jobs, and effective
+-- projections.
+--
+-- These tables layer onto the existing ``ph_revisions`` (operator overrides) and
+-- ``identity_decisions`` (raw inference) tables; they do not replace either.
+--   * identity_corrections  -- the authoritative, append-only operator record
+--   * identity_revision_ranges -- effective identity over an explicit time range
+--   * identity_revision_jobs -- projection lifecycle (pending/applying/...)
+--   * identity_projection_acks -- per-consumer acknowledgement of one revision
+--
+-- Raw ``identity_decisions.inferred_identity_id`` never changes. Effective reads
+-- apply operator revision ranges on top of inference.
+-- =============================================================================
+
+CREATE TYPE continuous_tracking.correction_reason_code AS ENUM (
+    'wrong_person',
+    'identity_uncertain',
+    'track_handoff',
+    'duplicate_hypothesis',
+    'bad_bbox',
+    'other'
+);
+
+CREATE TYPE continuous_tracking.correction_kind AS ENUM (
+    'label',          -- ordinary bounded/frame-only identity correction
+    'frame_only',     -- single reviewed frame
+    'handoff_split',  -- track-handoff correction that composed a PH split
+    'geometry',       -- bbox/geometry correction sharing the audit envelope
+    'compensation'    -- undo of a prior correction
+);
+
+CREATE TYPE continuous_tracking.revision_authority AS ENUM ('operator', 'inferred');
+
+CREATE TYPE continuous_tracking.revision_job_status AS ENUM (
+    'pending',
+    'applying',
+    'completed',
+    'failed'
+);
+
+CREATE TYPE continuous_tracking.projection_ack_status AS ENUM ('acked', 'failed');
+
+-- -----------------------------------------------------------------------------
+-- identity_corrections: the immutable operator record. One row per operator
+-- action. Raw inference is never mutated; this drives revision ranges.
+-- -----------------------------------------------------------------------------
+CREATE TABLE continuous_tracking.identity_corrections (
+    correction_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ph_id                  UUID NOT NULL,
+    actor                  TEXT NOT NULL,
+    reason_code            continuous_tracking.correction_reason_code NOT NULL,
+    note                   TEXT NULL,
+    source_view            TEXT NULL,
+    -- target_identity_id NULL with set_unknown=true means "Set to Unknown".
+    target_identity_id     TEXT NULL,
+    set_unknown            BOOLEAN NOT NULL DEFAULT false,
+    correction_kind        continuous_tracking.correction_kind NOT NULL DEFAULT 'label',
+    frame_only             BOOLEAN NOT NULL DEFAULT false,
+    reviewed_frame_id      TEXT NULL,
+    reviewed_bbox          JSONB NULL,
+    observation_start      TIMESTAMPTZ NOT NULL,
+    observation_end        TIMESTAMPTZ NOT NULL,
+    -- Optimistic version token captured from the PH at proposal time.
+    base_ph_version        BIGINT NOT NULL,
+    base_revision_id       UUID NULL,
+    revision_id            UUID NOT NULL,
+    -- For compensation rows: the original correction being undone.
+    compensates_correction_id UUID NULL
+        REFERENCES continuous_tracking.identity_corrections(correction_id),
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT identity_corrections_reviewed_bbox_object
+        CHECK (reviewed_bbox IS NULL OR jsonb_typeof(reviewed_bbox) = 'object'),
+    CONSTRAINT identity_corrections_range_order
+        CHECK (observation_end >= observation_start),
+    -- Either a concrete identity target or an explicit Unknown; never both empty.
+    CONSTRAINT identity_corrections_target_present
+        CHECK (set_unknown OR target_identity_id IS NOT NULL)
+);
+
+CREATE INDEX idx_corrections_ph_time
+    ON continuous_tracking.identity_corrections (ph_id, observation_start);
+CREATE INDEX idx_corrections_revision
+    ON continuous_tracking.identity_corrections (revision_id);
+
+-- -----------------------------------------------------------------------------
+-- identity_revision_ranges: effective-identity projection. Operator ranges are
+-- authoritative inside their bounds and cannot be superseded by inferred ranges.
+-- -----------------------------------------------------------------------------
+CREATE TABLE continuous_tracking.identity_revision_ranges (
+    range_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    revision_id            UUID NOT NULL,
+    correction_id          UUID NULL
+        REFERENCES continuous_tracking.identity_corrections(correction_id),
+    ph_id                  UUID NOT NULL,
+    effective_identity_id  TEXT NULL,  -- NULL == Unknown
+    authority              continuous_tracking.revision_authority NOT NULL,
+    range_start            TIMESTAMPTZ NOT NULL,
+    range_end              TIMESTAMPTZ NOT NULL,
+    supersedes_range_id    UUID NULL
+        REFERENCES continuous_tracking.identity_revision_ranges(range_id),
+    superseded_by_range_id UUID NULL
+        REFERENCES continuous_tracking.identity_revision_ranges(range_id),
+    compensated_by_revision_id UUID NULL,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT identity_revision_ranges_order CHECK (range_end >= range_start)
+);
+
+CREATE INDEX idx_revision_ranges_ph_time
+    ON continuous_tracking.identity_revision_ranges (ph_id, range_start, range_end);
+CREATE INDEX idx_revision_ranges_revision
+    ON continuous_tracking.identity_revision_ranges (revision_id);
+-- Effective lookups read only live (non-superseded) ranges.
+CREATE INDEX idx_revision_ranges_live
+    ON continuous_tracking.identity_revision_ranges (ph_id, authority)
+    WHERE superseded_by_range_id IS NULL;
+
+-- -----------------------------------------------------------------------------
+-- identity_revision_jobs: a correction is complete only after every required
+-- projection acknowledges the same revision_id. Failures retry idempotently;
+-- an accepted correction is never rolled back.
+-- -----------------------------------------------------------------------------
+CREATE TABLE continuous_tracking.identity_revision_jobs (
+    job_id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    revision_id            UUID NOT NULL UNIQUE,
+    correction_id          UUID NULL
+        REFERENCES continuous_tracking.identity_corrections(correction_id),
+    status                 continuous_tracking.revision_job_status NOT NULL DEFAULT 'pending',
+    required_projections   TEXT[] NOT NULL DEFAULT '{}',
+    attempts               INTEGER NOT NULL DEFAULT 0,
+    last_error             TEXT NULL,
+    row_counts             JSONB NOT NULL DEFAULT '{}',
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT identity_revision_jobs_row_counts_object
+        CHECK (jsonb_typeof(row_counts) = 'object')
+);
+
+CREATE INDEX idx_revision_jobs_status
+    ON continuous_tracking.identity_revision_jobs (status);
+
+-- -----------------------------------------------------------------------------
+-- identity_projection_acks: one row per (revision, consumer). Idempotent on
+-- replay via the unique key.
+-- -----------------------------------------------------------------------------
+CREATE TABLE continuous_tracking.identity_projection_acks (
+    ack_id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    revision_id            UUID NOT NULL,
+    consumer               TEXT NOT NULL,
+    schema_version         TEXT NOT NULL,
+    status                 continuous_tracking.projection_ack_status NOT NULL,
+    counts                 JSONB NOT NULL DEFAULT '{}',
+    applied_at             TIMESTAMPTZ NULL,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT identity_projection_acks_counts_object
+        CHECK (jsonb_typeof(counts) = 'object'),
+    CONSTRAINT identity_projection_acks_unique UNIQUE (revision_id, consumer)
+);
+
+CREATE INDEX idx_projection_acks_revision
+    ON continuous_tracking.identity_projection_acks (revision_id);
+
+
+-- ============================================================================
+-- Folded from 0007_keyframe_read_indexes
+-- ============================================================================
+-- 0007_keyframe_read_indexes
+--
+-- M07 keyframe read model: indexes for grouping trigger rows into physical-frame
+-- cards and resolving per-bbox provenance in bounded queries.
+--
+-- physical_frame_id is a read-time uuid5 over (camera_id, minio_key,
+-- captured_at) and is never stored, so it cannot be indexed directly. The
+-- composite over those source columns serves both the grouping key and the
+-- camera-scoped recency scan that feeds one page.
+--
+-- Already covered by earlier migrations (no duplicate here):
+--   identity_decisions (ph_id, captured_at DESC)  -- 0004 latest-per-PH lookup
+--   identity_decisions conflict/authority/source   -- 0004 provenance filters
+--   keyframe_bbox_annotations (keyframe_id, ph_id, identity_id) -- 0001 joins
+--   identity_revision_ranges (ph_id, authority) WHERE live -- 0006 effective read
+
+SET search_path = continuous_tracking, public;
+
+-- Physical-frame grouping key + camera/time scoped window scan.
+CREATE INDEX IF NOT EXISTS idx_tagged_keyframes_physical
+    ON tagged_keyframes (camera_id, minio_key, captured_at);
+
+-- Recency-first window scan when no camera filter is applied.
+CREATE INDEX IF NOT EXISTS idx_tagged_keyframes_captured
+    ON tagged_keyframes (captured_at DESC);
+
+-- Pending-ReID indicator: which PHs have a candidate awaiting review.
+CREATE INDEX IF NOT EXISTS idx_reid_gallery_ph_pending
+    ON reid_gallery (ph_id)
+    WHERE state = 'pending_review';
+
+
+-- ============================================================================
+-- Folded from 0008_auto_verified_gallery_state
+-- ============================================================================
+-- 0008_auto_verified_gallery_state
+--
+-- Identity Continuity M02 (decision D3): a fourth reid_gallery lifecycle
+-- state, 'auto_verified', minted at candidate-creation time for calibrated
+-- high-confidence face matches. Only operator_verified and auto_verified
+-- rows vote in identity resolution.
+--
+-- ALTER TYPE ... ADD VALUE runs fine inside the MigrationRunner's default
+-- transactional path on PG18: the restriction on using ADD VALUE inside the
+-- same transaction that added it does not apply here because this migration
+-- does not reference the new value anywhere else in the same statement batch
+-- (verified against the target timescale/timescaledb-ha:pg18 image at
+-- implementation time). No `-- migrate:no-transaction` pragma is needed.
+
+SET search_path = continuous_tracking, public;
+
+-- (folded into the CREATE TYPE above; no ALTER needed in a baseline)
+
+
+-- ============================================================================
+-- Folded from 0009_daily_appearance_profiles
+-- ============================================================================
+SET search_path = continuous_tracking, public;
+
+-- DL-M07: daily quality-weighted appearance centroid per identity per local day,
+-- feeding the same_clothes_suspected evaluator. centroid mirrors
+-- person_hypotheses.gallery_mean's storage type exactly (FLOAT4[], L2-normalised
+-- SOLIDER embedding).
+CREATE TABLE IF NOT EXISTS continuous_tracking.daily_appearance_profiles (
+    identity_id          TEXT NOT NULL REFERENCES continuous_tracking.identities(identity_id)
+                             ON DELETE CASCADE,
+    day                  DATE NOT NULL,
+    centroid             FLOAT4[] NOT NULL,
+    sample_count         INTEGER NOT NULL,
+    mean_quality         REAL NOT NULL,
+    best_keyframe_objects TEXT[] NOT NULL DEFAULT '{}',
+    created_at           TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (identity_id, day)
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_appearance_profiles_identity
+    ON continuous_tracking.daily_appearance_profiles (identity_id, day DESC);
