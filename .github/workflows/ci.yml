@@ -87,7 +87,7 @@ jobs:
       - name: Pin GOTOOLCHAIN
         run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           working-directory: rtsp-ingress
 
