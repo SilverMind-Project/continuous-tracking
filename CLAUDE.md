@@ -12,6 +12,8 @@ Guidance for Claude Code agents working in this repository.
 | `.claude/skills/cts-pipeline/SKILL.md` | Frame stages, execution paths, tracker-round side effects, batching, StageRunner/FrameContext, and replay fixture formats |
 | `.claude/skills/cts-signals/SKILL.md` | Dementia signals, detectors, baselines, robust z-scores, hysteresis, severity, protobuf/CC kind plumbing, and signal tests |
 | `.claude/skills/cts-spatial-fusion/SKILL.md` | Floor-plane localization, homography Jacobian, measurement covariance, cross-camera fusion, Kalman/ZUPT, primary camera selection, and posture geometry weighting |
+| `.claude/skills/cts-identity-governance/SKILL.md` | PH identity evidence, the identity resolver, authority order, ReID gallery lifecycle, revisions, operator corrections, external identity evidence, and identity provenance |
+| `/home/sriram/code/nanai/.claude/skills/nanai-workspace/SKILL.md` | Any change spanning more than one repository: repo map, gates, proto two-repo rule, milestone workflow |
 
 ---
 

@@ -105,10 +105,13 @@ the InMemory peer and in the Protocol signature as an explicit parameter with a 
 default constant. A filter that exists in only one implementation is a parity defect even if
 all tests pass. New filtered reads require a parity matrix test.
 
-**RIGHT:** `app/storage/gallery.py`'s `VERIFIED_ONLY` constant is the shared default for
-`list_gallery_entries`, `search_similar`, `list_gallery_entries_for_tracklets`, and
-`gallery_similarity` across the Protocol, `InMemoryGalleryRepository`, and
-`PostgresGalleryRepository`; `tests/storage/test_gallery_state_parity.py` (InMemory, fast gate)
+**RIGHT:** `app/storage/gallery.py` exports two shared state-filter constants, used identically
+across the Protocol, `InMemoryGalleryRepository`, and `PostgresGalleryRepository`:
+`VOTING_STATES` (`operator_verified` + `auto_verified`) is the default for every read that feeds
+identity resolution (`search_similar`, `list_gallery_entries_for_tracklets`,
+`gallery_similarity`), and `VERIFIED_ONLY` is the default for the admin listing read
+(`list_gallery_entries`). See the cts-identity-governance skill for the vocabulary rule.
+`tests/storage/test_gallery_state_parity.py` (InMemory, fast gate)
 and `tests/integration/test_gallery_state_parity_postgres.py` (Postgres, `make ci`) prove both
 implementations return identical entry-ID sets for every state-filter value (M03).
 
@@ -686,19 +689,19 @@ Running bare `python` or `pip` installs into the system interpreter and silently
 | `tracking-orchestrator` | Custom `MigrationRunner` + raw SQL | asyncpg + TimescaleDB non-transactional DDL requires the `-- migrate:no-transaction` split path; no SQLAlchemy ORM |
 | `cognitive-companion` | Alembic | SQLAlchemy ORM with `target_metadata` autogenerate support |
 
-### Lifecycle: pre-release vs. post-release
+### Lifecycle: post-release, incremental (owner decision 2026-10-20)
 
-**Pre-release (current state):** A single squashed baseline `0001_NNNN` contains the complete
-final schema. There are no incremental migration files. All changes go directly into the
-baseline. Existing dev databases must be **dropped and recreated**: the `_schema_version`
-table and Alembic `alembic_version` table hold stale entries from any prior chain.
-Shape constraints belong in the baseline too: JSONB columns that the domain treats as objects
-must have `CHECK (jsonb_typeof(column) = 'object')`, and repository mappers must reject invalid
-legacy rows instead of silently coercing them.
+The squashed baseline `0001_init` is frozen. Every schema change gets its own numbered file on
+top of the current highest number: `NNNN_description.up.sql` / `NNNN_description.down.sql`
+(CTS) or `NNNN_description.py` (CC). Rollbacks are supported and the `downgrade()` /
+`.down.sql` must exactly reverse the up migration. Never fold a change into the baseline and
+never drop and recreate a database to apply one: live household identity history must survive
+upgrades. (Before 2026-10-20 the repo was pre-release and folded changes into the baseline;
+that posture is retired.)
 
-**Post-release:** Each atomic schema change gets its own numbered file:
-`NNNN_description.up.sql` / `NNNN_description.down.sql` (CTS) or `NNNN_description.py`
-(CC). Rollbacks are supported and the `downgrade()` / `.down.sql` must be correct.
+Shape constraints ride the migration that adds the column: JSONB columns that the domain treats
+as objects must have `CHECK (jsonb_typeof(column) = 'object')`, and repository mappers must
+reject invalid rows instead of silently coercing them.
 
 ### CTS migration conventions
 
@@ -868,6 +871,29 @@ frame_vel = float(np.mean(disp / scale) / dt)
 
 The RIGHT implementation names the result `mean_keypoint_velocity_nu_s` and links
 `scripts/calibrate_motion_energy.py` beside `_STILL_VELOCITY_FLOOR_NU_S`.
+
+### Hardware and vendor abstraction
+
+Sensors and devices (cameras, lenses, UWB anchors and tags, BLE receivers, wearables) are chosen
+by parts availability, so vendor specifics must never leak past one adapter boundary.
+
+- Every hardware integration is an adapter that implements a consumer-owned `Protocol` (Python)
+  or interface (Go) and emits one hardware-neutral, versioned contract (a protobuf message for
+  anything crossing a process boundary). Downstream code depends on the contract only.
+- Vendor SDKs, firmware message formats, and device-specific units are confined to the adapter
+  module. No vendor name appears in a domain type, a proto field name, a database column, or a
+  settings key outside the adapter's own config block.
+- What a device can do is declared, not inferred: adapters publish a capability descriptor
+  (for example: reports position with covariance, room only, or proximity only; update rate;
+  whether it reports wear state). Consumers branch on declared capability, never on vendor or
+  model identity.
+- Adapter selection is configuration, resolved through a registry mapping a config
+  discriminator to a builder (the CC presence-provider factory pattern). No `if vendor == ...`
+  chains in business logic.
+- Every adapter family has a simulator or replay adapter that produces the same contract. CI and
+  integration tests run against it; no test requires physical hardware.
+- Physical placement (camera pose, anchor position, mount height) is site configuration in the
+  shared floor-plan frame, owned by CC and synced through `cc_config_sync`, never hard-coded.
 
 ### Caches with temporal contracts
 

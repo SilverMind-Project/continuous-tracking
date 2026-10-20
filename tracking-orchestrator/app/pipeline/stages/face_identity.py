@@ -10,11 +10,19 @@ import numpy as np
 import numpy.typing as npt
 from structlog import get_logger
 
-from ...domain import BoundingBox, Detection, FaceAnchor, Identity
+from ...domain import (
+    BoundingBox,
+    Detection,
+    FaceAnchor,
+    FaceGateOutcome,
+    FaceObservationStat,
+    Identity,
+)
 from ...inference.evidence import FaceEvidence
-from ...inference.face_id_client import FaceIdentificationClient, FaceResult
+from ...inference.face_id_client import CropQueryResult, FaceIdentificationClient, FaceResult
 from ...observability import metrics as _metrics
 from ...storage.base import GalleryRepository
+from ...storage.face_stats import FaceObservationStatsRepository
 from ..frame_context import FrameContext
 from ..types import FaceIdCameraConfig
 from .base import FrameStage
@@ -109,6 +117,7 @@ class FaceIdentityStage(FrameStage):
 
     def __init__(
         self,
+        face_stats_repo: FaceObservationStatsRepository,
         face_id_client: FaceIdentificationClient | None = None,
         gallery_repo: GalleryRepository | None = None,
         face_id_cooldown_s: float = 5.0,
@@ -120,6 +129,7 @@ class FaceIdentityStage(FrameStage):
         expected_preprocessing_version: str = "",
     ) -> None:
         self._face_id_client = face_id_client
+        self._face_stats_repo = face_stats_repo
         self._gallery_repo = gallery_repo
         self._face_id_cooldown_s = face_id_cooldown_s
         self._face_id_min_confidence = face_id_min_confidence
@@ -247,6 +257,7 @@ class FaceIdentityStage(FrameStage):
             frame_width=ctx.effective_width,
             frame_height=ctx.effective_height,
             camera_id=camera_id,
+            captured_at=ctx.capture_time,
             sent_ids=sent_ids,
         )
         if ctx.face_anchors:
@@ -272,6 +283,7 @@ class FaceIdentityStage(FrameStage):
         frame_width: int,
         frame_height: int,
         camera_id: str,
+        captured_at: datetime,
         sent_ids: set[str] | None = None,
     ) -> list[FaceAnchor]:
         if self._face_id_client is None or not crops:
@@ -310,8 +322,10 @@ class FaceIdentityStage(FrameStage):
             for key in sent_ids:
                 self._last_face_id_by_tracklet[key] = now
 
-        if not crop_face_results:
-            return []
+        for crop_result in crop_face_results:
+            _metrics.metrics.cts_face_queries_total.labels(
+                camera_id=camera_id, result=crop_result.status.value
+            ).inc()
 
         min_conf = (
             cam_cfg.min_confidence
@@ -320,12 +334,13 @@ class FaceIdentityStage(FrameStage):
         )
 
         face_anchors: list[FaceAnchor] = []
+        stats: list[FaceObservationStat] = []
         recognized_count = 0
         candidate_count = 0
         unrecognized_count = 0
 
-        for crop_idx, face_results in crop_face_results:
-            det = crop_detections[crop_idx]
+        for crop_result in crop_face_results:
+            det = crop_detections[crop_result.crop_index]
             detection_id = det.detection_id
 
             if not detection_id:
@@ -333,15 +348,32 @@ class FaceIdentityStage(FrameStage):
                     "face_anchor_dropped_no_detection_id",
                     camera_id=camera_id,
                 )
+                stats.extend(
+                    _face_stat(
+                        face,
+                        crop_result,
+                        camera_id,
+                        "",
+                        captured_at,
+                        FaceGateOutcome.DROPPED_NO_DETECTION,
+                    )
+                    for face in crop_result.faces
+                    if face.recognition_state in _RECOGNITION_STATES
+                )
                 continue
 
-            for face in face_results:
+            for face in crop_result.faces:
                 state = face.recognition_state
+                outcome = _gate_outcome(face, min_conf)
+                if outcome is None:
+                    continue
+                stats.append(
+                    _face_stat(face, crop_result, camera_id, detection_id, captured_at, outcome)
+                )
+                if outcome is not FaceGateOutcome.EMITTED:
+                    continue
 
                 if state == "recognized":
-                    # Strong positive: emit if confidence >= min_conf.
-                    if face.confidence < min_conf:
-                        continue
                     face_anchors.append(
                         FaceAnchor(
                             person_id=face.person_id,
@@ -362,8 +394,7 @@ class FaceIdentityStage(FrameStage):
                     # Weak positive for the best candidate (grey zone).
                     # Do not apply min_conf gating; the similarity is intentionally below
                     # the recognition threshold but at or above unknown_threshold.
-                    if face.best_candidate_id is None:
-                        continue
+                    assert face.best_candidate_id is not None  # guaranteed by _gate_outcome
                     face_anchors.append(
                         FaceAnchor(
                             person_id=face.best_candidate_id,
@@ -401,6 +432,8 @@ class FaceIdentityStage(FrameStage):
                     )
                     unrecognized_count += 1
 
+        await self._record_face_stats(camera_id, stats)
+
         if face_anchors:
             logger.debug(
                 "face_anchors_created",
@@ -426,6 +459,20 @@ class FaceIdentityStage(FrameStage):
                 unrecognized_count
             )
         return face_anchors
+
+    async def _record_face_stats(self, camera_id: str, stats: list[FaceObservationStat]) -> None:
+        """Persist measurement rows and count outcomes; a failure never affects face evidence."""
+        for stat in stats:
+            _metrics.metrics.cts_face_gate_outcomes_total.labels(
+                camera_id=camera_id, outcome=stat.gate_outcome.value
+            ).inc()
+        if not stats:
+            return
+        try:
+            await self._face_stats_repo.append_many(stats)
+        except Exception:  # noqa: BLE001
+            _metrics.metrics.cts_face_stats_write_failures_total.inc()
+            logger.warning("face_stats_append_failed", camera_id=camera_id, rows=len(stats))
 
     def _build_face_evidence(self, ctx: FrameContext) -> None:
         """Populate ``ctx._face_evidence`` from ``ctx.face_anchors``.
@@ -459,3 +506,48 @@ class FaceIdentityStage(FrameStage):
                 )
             )
         ctx._face_evidence = evidence
+
+
+_RECOGNITION_STATES = frozenset({"recognized", "candidate", "unrecognized"})
+
+
+def _gate_outcome(face: FaceResult, min_raw_similarity: float) -> FaceGateOutcome | None:
+    """Decide what the stage does with one face; None for a state the service never defines.
+
+    Recognized faces below the raw-similarity floor are dropped; candidates without a nearest
+    enrolled identity cannot name anyone and are dropped; everything else becomes an anchor.
+    """
+    if face.recognition_state not in _RECOGNITION_STATES:
+        return None
+    if face.recognition_state == "recognized" and face.confidence < min_raw_similarity:
+        return FaceGateOutcome.DROPPED_MIN_CONFIDENCE
+    if face.recognition_state == "candidate" and face.best_candidate_id is None:
+        return FaceGateOutcome.DROPPED_NO_CANDIDATE
+    return FaceGateOutcome.EMITTED
+
+
+def _face_stat(
+    face: FaceResult,
+    crop_result: CropQueryResult,
+    camera_id: str,
+    detection_id: str,
+    captured_at: datetime,
+    outcome: FaceGateOutcome,
+) -> FaceObservationStat:
+    return FaceObservationStat(
+        observed_at=captured_at,
+        camera_id=camera_id,
+        detection_id=detection_id,
+        crop_width_px=crop_result.crop_width_px,
+        crop_height_px=crop_result.crop_height_px,
+        face_width_px=face.face_width_px,
+        face_height_px=face.face_height_px,
+        interocular_px=face.interocular_px,
+        det_score=face.det_score,
+        yaw_deg=face.yaw_deg,
+        pitch_deg=face.pitch_deg,
+        raw_similarity=face.raw_similarity,
+        recognition_state=face.recognition_state,
+        best_candidate_id=face.best_candidate_id,
+        gate_outcome=outcome,
+    )

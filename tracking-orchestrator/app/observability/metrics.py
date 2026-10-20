@@ -161,6 +161,9 @@ class Metrics:
 
     # ---- Rich face evidence ----
     cts_face_anchors_total: Counter
+    cts_face_gate_outcomes_total: Counter
+    cts_face_queries_total: Counter
+    cts_face_stats_write_failures_total: Counter
 
     # ---- Cross-camera & co-presence ----
     world_tracker_shadow_cross_camera_revival_total: Counter
@@ -644,6 +647,22 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_face_anchors_total",
             "Face anchors produced by FaceIdentityStage.",
             ["recognition_state"],
+        ),
+        cts_face_gate_outcomes_total=_counter(
+            "cts_face_gate_outcomes_total",
+            "Faces returned by person-identification-service, by what FaceIdentityStage did "
+            "with them (emitted as an anchor or dropped, and why).",
+            ["camera_id", "outcome"],
+        ),
+        cts_face_queries_total=_counter(
+            "cts_face_queries_total",
+            "Person crops sent for face identification, by result "
+            "(face_found, no_face, too_small, error).",
+            ["camera_id", "result"],
+        ),
+        cts_face_stats_write_failures_total=_counter(
+            "cts_face_stats_write_failures_total",
+            "Failed writes of face observation statistics rows; face evidence is unaffected.",
         ),
         # ---- Cross-camera and co-presence ----
         world_tracker_shadow_cross_camera_revival_total=_counter(

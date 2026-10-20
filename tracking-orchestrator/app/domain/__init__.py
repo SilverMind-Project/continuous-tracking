@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import IntEnum
+from enum import IntEnum, StrEnum
 from typing import Any, Literal, Protocol
 
 import numpy as np
@@ -656,6 +656,40 @@ class FaceAnchor:
     # ArcFace authority, the independent-evidence clock, duplicate-identity
     # ranking, and association vectors -- see cts-identity-governance skill.
     origin: str = "native"
+
+
+class FaceGateOutcome(StrEnum):
+    """What FaceIdentityStage did with one face returned by person-identification-service."""
+
+    EMITTED = "emitted"
+    DROPPED_MIN_CONFIDENCE = "dropped_min_confidence"
+    DROPPED_NO_CANDIDATE = "dropped_no_candidate"
+    DROPPED_NO_DETECTION = "dropped_no_detection"
+
+
+@dataclass(frozen=True)
+class FaceObservationStat:
+    """Non-biometric measurement of one face result, kept to size cameras for recognition.
+
+    Pixel quantities are in the pixels of the person crop sent to the face service, which equal
+    frame pixels because crops are not resized. No embedding, crop, or name is ever stored.
+    """
+
+    observed_at: datetime
+    camera_id: CameraId
+    detection_id: str
+    crop_width_px: int
+    crop_height_px: int
+    face_width_px: float
+    face_height_px: float
+    interocular_px: float | None
+    det_score: float
+    yaw_deg: float
+    pitch_deg: float
+    raw_similarity: float
+    recognition_state: str
+    best_candidate_id: IdentityId | None
+    gate_outcome: FaceGateOutcome
 
 
 @dataclass(frozen=True)

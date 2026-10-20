@@ -69,6 +69,7 @@ from .storage.migrations import MigrationRunner
 from .storage.postgres.appearance_repo import PostgresDailyAppearanceRepo
 from .storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
 from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
+from .storage.postgres.face_stats_repo import PostgresFaceObservationStatsRepository
 from .storage.postgres.gait_repo import PostgresGaitDailyRepository
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
@@ -607,6 +608,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         baseline_repo = PostgresBehaviorBaselineRepository(_pool)
         gait_daily_repo = PostgresGaitDailyRepository(_pool)
         daily_appearance_repo = PostgresDailyAppearanceRepo(_pool)
+        face_stats_repo = PostgresFaceObservationStatsRepository(_pool)
         from .storage.postgres.identity_decision_repo import (
             PostgresIdentityDecisionRepository,
         )
@@ -622,6 +624,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         baseline_repo = None
         gait_daily_repo = None
         daily_appearance_repo = None
+        face_stats_repo = None
         identity_decision_repo = None
 
     # -- Triton --
@@ -842,6 +845,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         baseline_repo=baseline_repo,
         gait_daily_repo=gait_daily_repo,
         daily_appearance_repo=daily_appearance_repo,
+        face_stats_repo=face_stats_repo,
         identity_provenance_repo=identity_decision_repo,
         identity_correction_service=correction_service,
     )

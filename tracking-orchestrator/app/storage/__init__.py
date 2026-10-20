@@ -25,15 +25,18 @@ from .base import (
     SettingsRepository,
     WorldObservationRepositoryProtocol,
 )
+from .face_stats import FaceObservationStatsRepository, InMemoryFaceObservationStatsRepository
 
 __all__ = [
     "ActivityRepository",
     "AssignmentRepository",
     "CorrectionRepository",
+    "FaceObservationStatsRepository",
     "GalleryRepository",
     "InMemoryActivityRepository",
     "InMemoryAssignmentRepository",
     "InMemoryCorrectionRepository",
+    "InMemoryFaceObservationStatsRepository",
     "InMemoryGalleryRepository",
     "InMemoryKeyframeRepository",
     "InMemoryPHRepository",

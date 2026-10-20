@@ -24,6 +24,7 @@ from app.pipeline.stages.trajectory import ClosePHStage, TrajectoryStage
 from app.pipeline.stages.world_tracking import WorldTrackingStage
 from app.pipeline.types import LiveConfigHolder
 from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+from app.storage.face_stats import InMemoryFaceObservationStatsRepository
 
 
 def _live_config() -> LiveConfigHolder:
@@ -36,7 +37,9 @@ def _pre_world_stages() -> list:
         PrivacyStage(),
         SpatialProjectionStage(projection_service=None),  # type: ignore[arg-type]
         InferenceStage(reid_embedder=None, pose_estimator=None),  # type: ignore[arg-type]
-        FaceIdentityStage(face_id_client=None),  # type: ignore[arg-type]
+        FaceIdentityStage(
+            face_stats_repo=InMemoryFaceObservationStatsRepository(), face_id_client=None
+        ),
     ]
 
 

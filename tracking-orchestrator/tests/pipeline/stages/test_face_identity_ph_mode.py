@@ -17,7 +17,11 @@ import numpy as np
 import pytest
 
 from app.domain import BoundingBox, Detection, FloorPoint
-from app.inference.face_id_client import FaceIdentificationClient
+from app.inference.face_id_client import (
+    CropQueryResult,
+    CropQueryStatus,
+    FaceIdentificationClient,
+)
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.face_identity import (
     FaceIdentityStage,
@@ -27,6 +31,7 @@ from app.pipeline.stages.face_identity import (
     _TrackEntry,
 )
 from app.pipeline.types import FaceIdCameraConfig
+from app.storage.face_stats import InMemoryFaceObservationStatsRepository
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -99,6 +104,20 @@ class _FakeFaceResult:
         self.calibration_status = calibration_status
         self.arcface_model_version = arcface_model_version
         self.preprocessing_version = preprocessing_version
+        self.face_width_px = 40.0
+        self.face_height_px = 48.0
+        self.interocular_px: float | None = 18.0
+
+
+def _found(index: int, *faces: _FakeFaceResult) -> CropQueryResult:
+    """A crop result the way FaceIdentificationClient reports a crop with faces."""
+    return CropQueryResult(
+        crop_index=index,
+        status=CropQueryStatus.FACE_FOUND,
+        crop_width_px=64,
+        crop_height_px=64,
+        faces=faces,  # type: ignore[arg-type]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -183,10 +202,11 @@ async def test_ph_mode_emits_face_anchor_with_detection_id():
     """Face ID produces FaceAnchors keyed by detection_id."""
     client = AsyncMock(spec=FaceIdentificationClient)
     client.identify_crops.return_value = [
-        (0, [_FakeFaceResult("alice", 0.85)]),
+        _found(0, _FakeFaceResult("alice", 0.85)),
     ]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -210,9 +230,10 @@ async def test_ph_mode_emits_face_anchor_with_detection_id():
 async def test_cooldown_fires_when_track_position_unchanged():
     """Same bbox between frames → same track ID → cooldown suppresses second call."""
     client = AsyncMock(spec=FaceIdentificationClient)
-    client.identify_crops.return_value = [(0, [_FakeFaceResult("alice", 0.85)])]
+    client.identify_crops.return_value = [_found(0, _FakeFaceResult("alice", 0.85))]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_cooldown_s=5.0,
         face_id_min_confidence=0.5,
@@ -241,9 +262,10 @@ async def test_cooldown_fires_when_track_position_unchanged():
 async def test_new_position_bypasses_cooldown():
     """Detection with no IoU match (new person or large movement) bypasses cooldown."""
     client = AsyncMock(spec=FaceIdentificationClient)
-    client.identify_crops.return_value = [(0, [_FakeFaceResult("bob", 0.85)])]
+    client.identify_crops.return_value = [_found(0, _FakeFaceResult("bob", 0.85))]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_cooldown_s=60.0,
         face_id_min_confidence=0.5,
@@ -273,12 +295,13 @@ async def test_crossing_forces_face_id_despite_cooldown():
     async def _mock_identify(crops, bboxes):
         nonlocal call_count
         call_count += 1
-        return [(i, [_FakeFaceResult(f"person-{i}", 0.85)]) for i in range(len(crops))]
+        return [_found(i, _FakeFaceResult(f"person-{i}", 0.85)) for i in range(len(crops))]
 
     client = AsyncMock(spec=FaceIdentificationClient)
     client.identify_crops.side_effect = _mock_identify
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_cooldown_s=60.0,
         face_id_min_confidence=0.5,
@@ -315,9 +338,10 @@ async def test_crossing_forces_face_id_despite_cooldown():
 async def test_disappeared_track_pruned_from_cooldown_dict():
     """Tracks that vanish from the frame are removed from _last_face_id_by_tracklet."""
     client = AsyncMock(spec=FaceIdentificationClient)
-    client.identify_crops.return_value = [(0, [_FakeFaceResult("alice", 0.85)])]
+    client.identify_crops.return_value = [_found(0, _FakeFaceResult("alice", 0.85))]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_cooldown_s=60.0,
         face_id_min_confidence=0.5,
@@ -344,9 +368,10 @@ async def test_disappeared_track_pruned_from_cooldown_dict():
 async def test_low_confidence_face_dropped():
     """Face results below min_confidence must not produce anchors."""
     client = AsyncMock(spec=FaceIdentificationClient)
-    client.identify_crops.return_value = [(0, [_FakeFaceResult("alice", 0.35)])]
+    client.identify_crops.return_value = [_found(0, _FakeFaceResult("alice", 0.35))]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -364,9 +389,10 @@ async def test_low_confidence_face_dropped():
 async def test_face_evidence_includes_detection_id_in_ph_mode():
     """FaceEvidence carries detection_id in PH mode."""
     client = AsyncMock(spec=FaceIdentificationClient)
-    client.identify_crops.return_value = [(0, [_FakeFaceResult("alice", 0.85)])]
+    client.identify_crops.return_value = [_found(0, _FakeFaceResult("alice", 0.85))]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -403,9 +429,10 @@ async def test_raw_similarity_0_95_with_null_calibrated_cannot_satisfy_authority
         calibrated_confidence=None,
         calibration_status="degraded_missing",
     )
-    client.identify_crops.return_value = [(0, [result])]
+    client.identify_crops.return_value = [_found(0, result)]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -441,9 +468,10 @@ async def test_calibrated_confidence_0_85_propagates_to_anchor():
         arcface_model_version="buffalo_l",
         preprocessing_version="v1",
     )
-    client.identify_crops.return_value = [(0, [result])]
+    client.identify_crops.return_value = [_found(0, result)]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -477,9 +505,10 @@ async def test_version_mismatch_nullifies_calibrated_confidence():
         arcface_model_version="some_other_model",  # mismatch
         preprocessing_version="v1",
     )
-    client.identify_crops.return_value = [(0, [result])]
+    client.identify_crops.return_value = [_found(0, result)]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -511,9 +540,10 @@ async def test_calibrated_confidence_propagates_to_face_evidence():
         arcface_model_version="buffalo_l",
         preprocessing_version="v1",
     )
-    client.identify_crops.return_value = [(0, [result])]
+    client.identify_crops.return_value = [_found(0, result)]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
@@ -545,9 +575,10 @@ async def test_candidate_anchor_never_carries_calibrated_confidence():
         recognition_state="candidate",
     )
     result.best_candidate_id = "alice"
-    client.identify_crops.return_value = [(0, [result])]
+    client.identify_crops.return_value = [_found(0, result)]
 
     stage = FaceIdentityStage(
+        face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_confidence=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},

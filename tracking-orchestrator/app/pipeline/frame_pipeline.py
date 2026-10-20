@@ -101,6 +101,10 @@ from ..storage.base import (
     TrajectoryRepository,
     WorldObservationRepositoryProtocol,
 )
+from ..storage.face_stats import (
+    FaceObservationStatsRepository,
+    InMemoryFaceObservationStatsRepository,
+)
 from ..tracking.floor_projector import FloorProjector
 from ..tracking.identity.candidate_eligibility import CandidatePolicy
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
@@ -193,6 +197,7 @@ class PipelineDependencies:
     gait_bout_repo: GaitBoutRepository | None = None
     gait_daily_repo: GaitDailyRepository | None = None
     daily_appearance_repo: DailyAppearanceRepo | None = None
+    face_stats_repo: FaceObservationStatsRepository | None = None
     identity_provenance_repo: IdentityDecisionRepositoryProtocol | None = None
     # Constructed early in main.py (publisher wired post-init via
     # IdentityCorrectionService.set_publisher) so UnknownBackfillService can
@@ -353,6 +358,7 @@ class FrameProcessingPipeline:
         self._gait_daily_repo: GaitDailyRepository | None = None
         self._gait_aggregator: GaitAggregator | None = None
         self._daily_appearance_repo: DailyAppearanceRepo | None = None
+        self._face_stats_repo: FaceObservationStatsRepository | None = None
         self._appearance_evaluator: AppearanceEvaluator | None = None
         self._stage_runner: StageRunner | None = None
         self._post_detect_runner: StageRunner | None = None
@@ -527,6 +533,7 @@ class FrameProcessingPipeline:
         # separate due()-style wrapper unnecessary (see AppearanceEvaluator's
         # docstring).
         self._daily_appearance_repo = deps.daily_appearance_repo or InMemoryDailyAppearanceRepo()
+        self._face_stats_repo = deps.face_stats_repo or InMemoryFaceObservationStatsRepository()
         self._appearance_evaluator = AppearanceEvaluator(
             ph_repo=self._ph_repo,
             profile_repo=self._daily_appearance_repo,
@@ -639,6 +646,7 @@ class FrameProcessingPipeline:
                 world_tracker=self._world_tracker,
             ),
             FaceIdentityStage(
+                face_stats_repo=self._face_stats_repo,
                 face_id_client=self._face_id_client,
                 gallery_repo=self._gallery_repo,
                 face_id_cooldown_s=self._config.face_id.cooldown_s,
