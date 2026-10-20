@@ -44,7 +44,7 @@ def _grandma_obs(k: int) -> WorldObservation:
         height_estimate_m=1.65,
         face_anchor=FaceAnchor(
             person_id="grandma",
-            confidence=0.95,
+            match_score=0.95,
             quality=0.9,
             detection_id=f"d{k}",
             camera_id="cam01",

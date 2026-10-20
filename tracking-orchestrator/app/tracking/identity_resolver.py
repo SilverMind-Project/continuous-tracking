@@ -182,10 +182,10 @@ class ResolverConfig:
     # Duplicate-active identity guard — authoritative.
     enable_duplicate_active_identity_guard: bool = True
 
-    # Minimum direct face confidence required to bypass the duplicate-active
-    # identity guard.  This is stricter than face_commit_min_confidence because
+    # Minimum direct-face raw cosine similarity required to bypass the duplicate-active
+    # identity guard.  This is stricter than face_commit_min_similarity because
     # the invariant is about two simultaneously visible PHs sharing one person.
-    duplicate_identity_direct_face_min_confidence: float = 0.90
+    duplicate_identity_direct_face_min_similarity: float = 0.90
 
     # Sticky maintenance — hold a committed identity within the maintenance
     # window unless strongly contradicted, even when the posterior argmax is
@@ -193,9 +193,9 @@ class ResolverConfig:
     # choice to "favor continuity and stability" under weak evidence.
     enable_sticky_maintenance: bool = False
 
-    # A different identity's face anchor at or above this confidence
+    # A different identity's recognized face at or above this raw cosine similarity
     # contradicts the held identity during sticky maintenance.
-    contradiction_face_confidence: float = 0.70
+    contradiction_face_similarity: float = 0.70
 
     # --- Rich face evidence ---
     # Multiplier applied to candidate (grey-zone) face evidence in _combine.
@@ -304,7 +304,7 @@ class ResolverConfig:
     multiview_shadow_sample_rate: float = 0.0
 
     # Minimum face anchor confidence to drive a commit via the posterior path.
-    face_commit_min_confidence: float = 0.70
+    face_commit_min_similarity: float = 0.70
 
     # Calibrated ArcFace confidence required for direct-face authority.
     # Fails closed: authority never fires when calibrated_confidence is None.
@@ -339,7 +339,7 @@ class ResolverConfig:
     # Minimum gallery cosine similarity for propagating a face-confirmed identity
     # to an adjacent GlobalTrack that has no face anchor of its own. Propagation
     # also requires src_face_confidence * gallery_similarity to clear
-    # face_commit_min_confidence, so 0.72 rejects weak ReID similarity while
+    # face_commit_min_similarity, so 0.72 rejects weak ReID similarity while
     # preserving high-confidence doorway handoffs.
     cross_gt_face_propagation_threshold: float = 0.72
 
@@ -625,7 +625,7 @@ class IdentityResolver:
             # Use the *original* anchors/evidence (pre-propagation) so the
             # duplicate-guard bypass only trusts a PH's own direct face — a
             # propagated anchor for another person must never grant the bypass.
-            direct_face_confidence = self._direct_face_confidence(
+            direct_face_confidence = self._direct_face_similarity(
                 entity,
                 new_face_anchors,
                 face_evidence or [],
@@ -744,7 +744,7 @@ class IdentityResolver:
         when several new assignments compete for an unoccupied identity, only the
         strongest posterior survives.
         """
-        threshold = self._config.duplicate_identity_direct_face_min_confidence
+        threshold = self._config.duplicate_identity_direct_face_min_similarity
         batch_ph_ids = {item.decision.ph_id for item in pending}
 
         # Identities already occupied by an open PH that is not in this batch.
@@ -1000,8 +1000,8 @@ class IdentityResolver:
         # --- Recognized anchors ---
         if recognized_anchors:
             # Use the strongest recognized anchor.
-            best = max(recognized_anchors, key=lambda fa: fa.confidence * fa.quality)
-            best_recognized_conf = best.confidence
+            best = max(recognized_anchors, key=lambda fa: fa.match_score * fa.quality)
+            best_recognized_conf = best.match_score
 
             # Determine evidence source for weight multiplier.
             ev = ev_by_detection.get(best.detection_id)
@@ -1017,7 +1017,7 @@ class IdentityResolver:
                 weight_mult *= self._config.cc_assertion_likelihood_scale
 
             frontality = self._frontality_factor(best.yaw_deg)
-            p_face = self._p_face(best.confidence, best.quality) * weight_mult * frontality
+            p_face = self._p_face(best.match_score, best.quality) * weight_mult * frontality
 
             if best.person_id:
                 likelihood[best.person_id] = p_face
@@ -1026,7 +1026,7 @@ class IdentityResolver:
                 "face_anchor_matched",
                 entity_id=entity.entity_id,
                 person_id=best.person_id,
-                confidence=round(best.confidence, 3),
+                confidence=round(best.match_score, 3),
                 source=source,
                 weight_multiplier=weight_mult,
                 frontality_factor=round(frontality, 3),
@@ -1103,7 +1103,7 @@ class IdentityResolver:
 
         return PosteriorDist(likelihood), best_recognized_conf
 
-    def _direct_face_confidence(
+    def _direct_face_similarity(
         self,
         entity: IdentityResolvableEntity,
         face_anchors: list[FaceAnchor],
@@ -1111,7 +1111,7 @@ class IdentityResolver:
         *,
         identity_id: str | None,
     ) -> float:
-        """Return the best direct recognized face confidence for this entity/id.
+        """Return the best direct recognized face match score (raw similarity) for this entity/id.
 
         Native anchors only (identity-continuity M09): an external
         ``cc_assertion`` anchor must never satisfy the duplicate-active-
@@ -1127,7 +1127,7 @@ class IdentityResolver:
         if face_evidence:
             return max(
                 (
-                    fe.confidence
+                    fe.match_score
                     for fe in face_evidence
                     if fe.source == "direct"
                     and fe.recognition_state == "recognized"
@@ -1139,7 +1139,7 @@ class IdentityResolver:
 
         return max(
             (
-                fa.confidence
+                fa.match_score
                 for fa in face_anchors
                 if fa.recognition_state == "recognized"
                 and fa.origin != "cc_assertion"
@@ -1889,12 +1889,12 @@ class IdentityResolver:
             commit_margin_dense=c.commit_margin_dense,
             prior_maintenance_max_age_s=c.prior_maintenance_max_age_s,
             arcface_authority_calibrated_confidence=c.arcface_authority_calibrated_confidence,
-            face_commit_min_confidence=c.face_commit_min_confidence,
+            face_commit_min_similarity=c.face_commit_min_similarity,
             min_quality_to_commit=c.min_quality_to_commit,
             enable_quality_gate=c.enable_quality_gate,
             flip_debounce_window_s=c.flip_debounce_window_s,
             enable_flip_debounce=c.enable_flip_debounce,
-            contradiction_face_confidence=c.contradiction_face_confidence,
+            contradiction_face_similarity=c.contradiction_face_similarity,
             contradiction_posterior_prob=c.contradiction_posterior_prob,
             contradiction_posterior_margin=c.contradiction_posterior_margin,
             enable_sticky_maintenance=c.enable_sticky_maintenance,
@@ -2015,7 +2015,7 @@ class IdentityResolver:
                     items.append(
                         IdentityEvidence.direct_face(
                             identity_id=fe.person_id,
-                            confidence=fe.confidence,
+                            confidence=fe.match_score,
                             tracklet_id=fe.tracklet_id,
                             captured_at=fe.captured_at,
                             quality=fe.quality,
@@ -2028,7 +2028,7 @@ class IdentityResolver:
                     items.append(
                         IdentityEvidence.cc_assertion(
                             identity_id=fe.person_id,
-                            confidence=fe.confidence,
+                            confidence=fe.match_score,
                             tracklet_id=fe.tracklet_id,
                             captured_at=fe.captured_at,
                             quality=fe.quality,
@@ -2038,7 +2038,7 @@ class IdentityResolver:
                     items.append(
                         IdentityEvidence.association_hint(
                             identity_id=fe.person_id,
-                            confidence=fe.confidence,
+                            confidence=fe.match_score,
                             tracklet_id=fe.tracklet_id,
                             captured_at=fe.captured_at,
                         )
@@ -2100,7 +2100,7 @@ class IdentityResolver:
                 result.append(
                     FaceEvidence(
                         person_id=fa.person_id,
-                        confidence=fa.confidence,
+                        match_score=fa.match_score,
                         tracklet_id=fa.tracklet_id,
                         camera_id=fa.camera_id,
                         frame_index=0,  # propagated anchors have no frame index
@@ -2157,7 +2157,7 @@ class IdentityResolver:
             evidenced_entity_ids.add(src_entity.entity_id)
             existing = best_anchor_by_entity.get(src_entity.entity_id)
             if existing is None or (
-                fa.confidence * fa.quality > existing.confidence * existing.quality
+                fa.match_score * fa.quality > existing.match_score * existing.quality
             ):
                 best_anchor_by_entity[src_entity.entity_id] = fa
 
@@ -2200,8 +2200,8 @@ class IdentityResolver:
                     )
                     continue
 
-                syn_confidence = src_anchor.confidence * sim
-                if syn_confidence < self._config.face_commit_min_confidence:
+                syn_match_score = src_anchor.match_score * sim
+                if syn_match_score < self._config.face_commit_min_similarity:
                     continue
                 # dataclasses.replace (not hand-copied fields, per
                 # engineering-standards F1/F10): a synthetic propagated anchor
@@ -2211,10 +2211,12 @@ class IdentityResolver:
                 # reset calibrated_confidence to None: propagated evidence
                 # describes a different detection than the source anchor and
                 # must never carry the source's calibration into
-                # _check_arcface_authority for the destination entity.
+                # _check_arcface_authority for the destination entity; for the
+                # same reason it carries no face detection score.
                 syn = replace(
                     src_anchor,
-                    confidence=syn_confidence,
+                    match_score=syn_match_score,
+                    det_score=0.0,
                     quality=src_anchor.quality * 0.8,
                     tracklet_id=dst_entity.observation_ids[0],
                     detection_id="",
@@ -2230,8 +2232,8 @@ class IdentityResolver:
                     src_entity=src_entity_id,
                     dst_entity=dst_entity.entity_id,
                     person_id=src_anchor.person_id,
-                    original_confidence=round(src_anchor.confidence, 3),
-                    propagated_confidence=round(syn.confidence, 3),
+                    original_confidence=round(src_anchor.match_score, 3),
+                    propagated_confidence=round(syn.match_score, 3),
                     gallery_sim=round(sim, 4),
                 )
 

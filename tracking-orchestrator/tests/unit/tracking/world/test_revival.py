@@ -90,7 +90,7 @@ def _config(**overrides: object) -> WorldTrackerConfig:
         "revive_max_age_s": 30.0,
         "revive_max_distance_m": 2.0,
         "revive_appearance_min_sim": 0.55,
-        "face_conflict_threshold": 0.70,
+        "face_conflict_min_similarity": 0.70,
     }
     kw.update(overrides)
     return WorldTrackerConfig(**kw)  # type: ignore[arg-type]
@@ -181,7 +181,7 @@ def test_face_conflict_rejects_revival() -> None:
     obs = _obs(
         face_anchor=FaceAnchor(
             person_id="bob",
-            confidence=0.85,
+            match_score=0.85,
             quality=0.9,
             detection_id="det-1",
         )
@@ -191,12 +191,12 @@ def test_face_conflict_rejects_revival() -> None:
 
 
 def test_face_conflict_below_threshold_allows_revival() -> None:
-    """A face anchor below face_conflict_threshold does not block revival."""
+    """A face anchor below face_conflict_min_similarity does not block revival."""
     closed = _closed_ph(identity_id="alice")
     obs = _obs(
         face_anchor=FaceAnchor(
             person_id="bob",
-            confidence=0.60,  # below default 0.70 threshold
+            match_score=0.60,  # below default 0.70 threshold
             quality=0.9,
             detection_id="det-1",
         )
@@ -215,7 +215,7 @@ def test_candidate_face_does_not_block_revival() -> None:
     obs = _obs(
         face_anchor=FaceAnchor(
             person_id="bob",
-            confidence=0.85,
+            match_score=0.85,
             quality=0.9,
             detection_id="det-1",
             recognition_state="candidate",  # grey-zone, not a hard assertion
@@ -233,7 +233,7 @@ def test_unrecognized_face_does_not_block_revival() -> None:
     obs = _obs(
         face_anchor=FaceAnchor(
             person_id="unknown",
-            confidence=0.70,
+            match_score=0.70,
             quality=0.9,
             detection_id="det-1",
             recognition_state="unrecognized",
@@ -372,7 +372,7 @@ def test_cross_camera_face_conflict_blocked() -> None:
         camera_id="cam-a",
         face_anchor=FaceAnchor(
             person_id="bob",
-            confidence=0.85,
+            match_score=0.85,
             quality=0.9,
             detection_id="det-1",
         ),

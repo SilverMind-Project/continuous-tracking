@@ -29,17 +29,14 @@ class FaceResult:
 
     person_id: str
     name: str
-    confidence: float
     # Normalised bounding box [x1, y1, x2, y2] in [0, 1].
     bbox_normalized: list[float]
     # Three-valued recognition state.
     recognition_state: str = "recognized"
     # Nearest centroid person_id, even below threshold.
     best_candidate_id: str | None = None
-    # Raw cosine similarity to best candidate (alias of similarity, contract).
+    # Raw cosine similarity to the best candidate; the only similarity field.
     raw_similarity: float = 0.0
-    # Raw cosine similarity (legacy field; kept for backward compatibility).
-    similarity: float = 0.0
     # Head pose in degrees.
     yaw_deg: float = 0.0
     pitch_deg: float = 0.0
@@ -96,7 +93,6 @@ class FaceIdentificationClient:
         self,
         base_url: str,
         timeout_s: float = 2.0,
-        min_confidence: float = 0.5,
         transport: httpx.AsyncBaseTransport | None = None,
         jpeg_quality: int = 95,
     ) -> None:
@@ -107,7 +103,6 @@ class FaceIdentificationClient:
         # Tests inject httpx.MockTransport; production uses the default network transport.
         self._transport = transport
         self._timeout = timeout_s
-        self._min_confidence = min_confidence
         self._client: httpx.AsyncClient | None = None
 
     @property
@@ -260,18 +255,17 @@ def _parse_face(
     nx2 = cx1 + (fx2 / crop_w) * crop_w_norm
     ny2 = cy1 + (fy2 / crop_h) * crop_h_norm
 
+    # An older service sends only the legacy "similarity" alias.
     raw_sim = float(face.get("raw_similarity", face.get("similarity", 0)))
     cal_conf_raw = face.get("calibrated_confidence")
     interocular_raw = face.get("interocular_px")
     return FaceResult(
         person_id=face.get("person_id", "unknown"),
         name=face.get("name", "Unknown"),
-        confidence=float(face.get("confidence", 0)),
         bbox_normalized=[nx1, ny1, nx2, ny2],
         recognition_state=str(face.get("recognition_state", "recognized")),
         best_candidate_id=face.get("best_candidate_id"),
         raw_similarity=raw_sim,
-        similarity=raw_sim,
         yaw_deg=float(face.get("yaw_deg", 0)),
         pitch_deg=float(face.get("pitch_deg", 0)),
         roll_deg=float(face.get("roll_deg", 0)),

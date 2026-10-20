@@ -30,7 +30,7 @@ def _make_observation(face_anchor: FaceAnchor | None) -> WorldObservation:
 
 def test_native_recognized_anchor_populates_association_vectors() -> None:
     anchor = FaceAnchor(
-        person_id="alice", confidence=0.9, quality=0.9, recognition_state="recognized"
+        person_id="alice", match_score=0.9, quality=0.9, recognition_state="recognized"
     )
     vecs = _unpack_observations([_make_observation(anchor)])
     assert vecs.face_person_ids == ["alice"]
@@ -41,7 +41,7 @@ def test_cc_assertion_excluded_from_association_vectors() -> None:
     """A recognized cc_assertion anchor must not appear in face_person_ids."""
     anchor = FaceAnchor(
         person_id="alice",
-        confidence=0.9,
+        match_score=0.9,
         quality=0.9,
         recognition_state="recognized",
         origin="cc_assertion",

@@ -110,7 +110,7 @@ async def _replay_with_continuity_features(
         face_evidence = [
             FaceEvidence(
                 person_id=fa.person_id,
-                confidence=fa.confidence,
+                match_score=fa.match_score,
                 tracklet_id=fa.tracklet_id,
                 detection_id=fa.detection_id,
                 source="direct",
@@ -159,7 +159,7 @@ async def _replay_shadow(
         face_evidence = [
             FaceEvidence(
                 person_id=fa.person_id,
-                confidence=fa.confidence,
+                match_score=fa.match_score,
                 tracklet_id=fa.tracklet_id,
                 detection_id=fa.detection_id,
                 source="direct",

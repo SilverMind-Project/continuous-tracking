@@ -154,7 +154,7 @@ class TestCandidateCorroboration:
         # With candidate: a weak face anchor for alice at similarity 0.33, yaw=35°.
         candidate_anchor = FaceAnchor(
             person_id="alice",
-            confidence=0.33,  # raw similarity
+            match_score=0.33,  # raw similarity
             recognition_state="candidate",
             similarity=0.33,
             yaw_deg=35.0,
@@ -204,7 +204,7 @@ class TestUnknownFaceNoPenalty:
 
         unrecognized_anchor = FaceAnchor(
             person_id="unknown",
-            confidence=0.70,  # det_score
+            match_score=0.70,  # det_score
             recognition_state="unrecognized",
             similarity=0.12,
             yaw_deg=10.0,
@@ -238,7 +238,7 @@ class TestUnknownFaceNoPenalty:
 
         unrecognized_anchor = FaceAnchor(
             person_id="unknown",
-            confidence=0.70,
+            match_score=0.70,
             recognition_state="unrecognized",
             similarity=0.10,
             yaw_deg=5.0,
@@ -279,7 +279,7 @@ class TestFrontalityWeighting:
 
         frontal_anchor = FaceAnchor(
             person_id="alice",
-            confidence=0.70,
+            match_score=0.70,
             recognition_state="recognized",
             similarity=0.70,
             yaw_deg=5.0,
@@ -287,7 +287,7 @@ class TestFrontalityWeighting:
         )
         profile_anchor = FaceAnchor(
             person_id="alice",
-            confidence=0.70,
+            match_score=0.70,
             recognition_state="recognized",
             similarity=0.70,
             yaw_deg=70.0,
@@ -325,7 +325,7 @@ class TestFrontalityWeighting:
         # Frontal face with same confidence.
         frontal_anchor = FaceAnchor(
             person_id="alice",
-            confidence=0.65,
+            match_score=0.65,
             recognition_state="recognized",
             similarity=0.65,
             yaw_deg=5.0,
@@ -334,7 +334,7 @@ class TestFrontalityWeighting:
         # Profile face at yaw=70° (frontality_factor should be min_factor=0.3).
         profile_anchor = FaceAnchor(
             person_id="alice",
-            confidence=0.65,
+            match_score=0.65,
             recognition_state="recognized",
             similarity=0.65,
             yaw_deg=70.0,
@@ -407,7 +407,7 @@ class TestCandidateNotContradiction:
             top_id="bob",
             top_prob=0.85,
             margin=0.3,
-            config=CommitPolicy(contradiction_face_confidence=0.70),
+            config=CommitPolicy(contradiction_face_similarity=0.70),
         )
         assert contradicted is True
 
@@ -421,6 +421,6 @@ class TestCandidateNotContradiction:
             top_id="alice",
             top_prob=0.88,
             margin=0.3,
-            config=CommitPolicy(contradiction_face_confidence=0.70),
+            config=CommitPolicy(contradiction_face_similarity=0.70),
         )
         assert contradicted is False

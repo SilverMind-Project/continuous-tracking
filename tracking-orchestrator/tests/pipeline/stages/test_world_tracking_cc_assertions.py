@@ -189,7 +189,7 @@ async def test_stage_passes_room_lookup_and_configured_scale_to_matcher() -> Non
 
     injected = captured[0]
     assert len(injected) == 1
-    assert injected[0].confidence == pytest.approx(0.9 * 0.4)
+    assert injected[0].match_score == pytest.approx(0.9 * 0.4)
 
 
 @pytest.mark.asyncio

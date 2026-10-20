@@ -127,7 +127,7 @@ def _make_face_anchor(
 ) -> FaceAnchor:
     return FaceAnchor(
         person_id=person_id,
-        confidence=confidence,
+        match_score=confidence,
         quality=0.9,
         tracklet_id=tracklet_id,
     )
@@ -374,7 +374,7 @@ class TestIdentityResolver:
         # First: assign grandma via face anchor
         face_anchor = FaceAnchor(
             person_id="grandma",
-            confidence=0.9,
+            match_score=0.9,
             quality=0.8,
             tracklet_id="t1",
         )
@@ -395,7 +395,7 @@ class TestIdentityResolver:
         # Second: assign dad via face anchor -> should produce revision
         face_anchor2 = FaceAnchor(
             person_id="dad",
-            confidence=0.9,
+            match_score=0.9,
             quality=0.8,
             tracklet_id="t1",
         )
@@ -537,7 +537,7 @@ class TestIdentityResolver:
         # First commit should produce a revision
         face_anchor = FaceAnchor(
             person_id="alice",
-            confidence=0.9,
+            match_score=0.9,
             quality=0.8,
             tracklet_id="t1",
         )
@@ -1140,7 +1140,7 @@ class TestF1EvidenceClockIdentityMatch:
         config = ResolverConfig(
             prior_maintenance_max_age_s=30.0,
             enable_sticky_maintenance=False,
-            contradiction_face_confidence=0.70,
+            contradiction_face_similarity=0.70,
         )
         resolver, _ = await self._resolver(config)
         foreign_anchor = _make_face_anchor("grandma", confidence=0.3)
@@ -1218,7 +1218,7 @@ class TestF1EvidenceClockIdentityMatch:
         config = ResolverConfig(
             prior_maintenance_max_age_s=30.0,
             enable_sticky_maintenance=True,
-            contradiction_face_confidence=0.70,
+            contradiction_face_similarity=0.70,
         )
         resolver, _ = await self._resolver(config)
         # Strong enough to flip the posterior argmax to grandma but below
@@ -1287,7 +1287,7 @@ class TestCrossGtFacePropagation:
 
         config = ResolverConfig(
             cross_gt_face_propagation_threshold=0.70,
-            face_commit_min_confidence=0.60,
+            face_commit_min_similarity=0.60,
         )
         resolver = _make_resolver(identities=identities, gallery_repo=gallery_repo, config=config)
 
@@ -1410,7 +1410,11 @@ class TestCcAssertionEvidenceGrade:
         config = ResolverConfig(cc_assertion_likelihood_scale=0.5)
 
         native_anchor = FaceAnchor(
-            person_id="grandma", confidence=0.9, quality=0.9, tracklet_id="t1", detection_id="det-1"
+            person_id="grandma",
+            match_score=0.9,
+            quality=0.9,
+            tracklet_id="t1",
+            detection_id="det-1",
         )
         resolver_native = _make_resolver(identities=identities, config=config)
         gt_native = _make_gt(current_identity_id=None, tracklet_ids=["t1"])
@@ -1421,7 +1425,7 @@ class TestCcAssertionEvidenceGrade:
 
         cc_anchor = FaceAnchor(
             person_id="grandma",
-            confidence=0.9,
+            match_score=0.9,
             quality=0.9,
             tracklet_id="t1",
             detection_id="det-1",
@@ -1445,7 +1449,7 @@ class TestCcAssertionEvidenceGrade:
 
         cc_anchor = FaceAnchor(
             person_id="grandma",
-            confidence=0.99,
+            match_score=0.99,
             quality=0.95,
             tracklet_id="t1",
             detection_id="det-1",
@@ -1462,7 +1466,7 @@ class TestCcAssertionEvidenceGrade:
         # Positive control: an identical native anchor does grant authority.
         native_anchor = FaceAnchor(
             person_id="grandma",
-            confidence=0.99,
+            match_score=0.99,
             quality=0.95,
             tracklet_id="t1",
             detection_id="det-1",
@@ -1481,7 +1485,7 @@ class TestCcAssertionEvidenceGrade:
         counts them for general commit eligibility (recognized_only=False)."""
         anchor = FaceAnchor(
             person_id="grandma",
-            confidence=0.95,
+            match_score=0.95,
             quality=0.9,
             detection_id="det-1",
             recognition_state="recognized",
@@ -1525,7 +1529,7 @@ class TestCcAssertionEvidenceGrade:
         gt_new = _make_gt(ph_id="gt-new", current_identity_id=None, tracklet_ids=["t-new"])
         anchor = FaceAnchor(
             person_id="grandma",
-            confidence=0.99,
+            match_score=0.99,
             quality=0.95,
             tracklet_id="t-new",
             detection_id="det-new",
@@ -1553,7 +1557,7 @@ class TestCcAssertionEvidenceGrade:
         gt = _make_gt(current_identity_id=None, tracklet_ids=["t1"])
         anchor = FaceAnchor(
             person_id="grandma",
-            confidence=0.9,
+            match_score=0.9,
             quality=0.9,
             tracklet_id="t1",
             detection_id="det-1",
@@ -1562,7 +1566,7 @@ class TestCcAssertionEvidenceGrade:
         )
         fe = FaceEvidence(
             person_id="grandma",
-            confidence=0.9,
+            match_score=0.9,
             tracklet_id="t1",
             detection_id="det-1",
             source="cc_assertion",

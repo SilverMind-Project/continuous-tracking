@@ -38,7 +38,6 @@ def _face(person_id: str, cx: float, cy: float, similarity: float = 0.8) -> Face
     return FaceResult(
         person_id=person_id,
         name=person_id,
-        confidence=similarity,
         bbox_normalized=[
             (cx - 12) / _W_PX,
             (cy - 15) / _H_PX,
@@ -48,7 +47,6 @@ def _face(person_id: str, cx: float, cy: float, similarity: float = 0.8) -> Face
         recognition_state="recognized",
         best_candidate_id=person_id,
         raw_similarity=similarity,
-        similarity=similarity,
         det_score=0.9,
         face_width_px=24.0,
         face_height_px=30.0,
@@ -116,7 +114,7 @@ async def _run(faces: tuple[FaceResult, ...]) -> tuple[FrameContext, list[FaceGa
     stage = FaceIdentityStage(
         face_stats_repo=repo,
         face_id_client=_OneCropClient(faces),
-        face_id_min_confidence=0.6,
+        face_id_min_raw_similarity=0.6,
         face_id_camera_configs={_CAMERA: FaceIdCameraConfig(enabled=True)},
     )
     ctx = _ctx()

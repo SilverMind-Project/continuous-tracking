@@ -5,7 +5,7 @@ The stage must:
 - Suppress repeat calls via per-track IoU-based cooldown.
 - Force face-id for both detections when their bboxes overlap (crossing).
 - Prune cooldown entries for tracks that disappear from the frame.
-- Drop low-confidence face results.
+- Drop recognized faces below the raw-similarity floor.
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ class _FakeFaceResult:
     def __init__(
         self,
         person_id: str,
-        confidence: float,
+        raw_similarity: float,
         calibrated_confidence: float | None = None,
         calibration_status: str = "degraded_missing",
         arcface_model_version: str = "buffalo_l",
@@ -93,11 +93,9 @@ class _FakeFaceResult:
         recognition_state: str = "recognized",
     ):
         self.person_id = person_id
-        self.confidence = confidence
         self.recognition_state = recognition_state
         self.best_candidate_id = person_id if person_id != "unknown" else None
-        self.raw_similarity = confidence
-        self.similarity = confidence
+        self.raw_similarity = raw_similarity
         self.yaw_deg = 0.0
         self.pitch_deg = 0.0
         self.roll_deg = 0.0
@@ -213,7 +211,7 @@ async def test_ph_mode_emits_face_anchor_with_detection_id():
     stage = FaceIdentityStage(
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -228,7 +226,8 @@ async def test_ph_mode_emits_face_anchor_with_detection_id():
     assert fa.person_id == "alice"
     assert fa.detection_id == "det-1"
     assert fa.tracklet_id == ""
-    assert fa.confidence == 0.85
+    assert fa.match_score == 0.85
+    assert fa.det_score == 0.85  # the fake face's detector score, carried for later policy
 
 
 @pytest.mark.asyncio
@@ -241,7 +240,7 @@ async def test_cooldown_fires_when_track_position_unchanged():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_cooldown_s=5.0,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -273,7 +272,7 @@ async def test_new_position_bypasses_cooldown():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_cooldown_s=60.0,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -309,7 +308,7 @@ async def test_crossing_forces_face_id_despite_cooldown():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_cooldown_s=60.0,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -349,7 +348,7 @@ async def test_disappeared_track_pruned_from_cooldown_dict():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_cooldown_s=60.0,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -371,14 +370,14 @@ async def test_disappeared_track_pruned_from_cooldown_dict():
 
 @pytest.mark.asyncio
 async def test_low_confidence_face_dropped():
-    """Face results below min_confidence must not produce anchors."""
+    """Recognized faces below min_raw_similarity must not produce anchors."""
     client = AsyncMock(spec=FaceIdentificationClient)
     client.identify_crops.return_value = [_found(0, _FakeFaceResult("alice", 0.35))]
 
     stage = FaceIdentityStage(
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -399,7 +398,7 @@ async def test_face_evidence_includes_detection_id_in_ph_mode():
     stage = FaceIdentityStage(
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -430,7 +429,7 @@ async def test_raw_similarity_0_95_with_null_calibrated_cannot_satisfy_authority
     # High raw similarity (0.95) but degraded calibration (status=degraded_missing)
     result = _FakeFaceResult(
         "alice",
-        confidence=0.95,
+        raw_similarity=0.95,
         calibrated_confidence=None,
         calibration_status="degraded_missing",
     )
@@ -439,7 +438,7 @@ async def test_raw_similarity_0_95_with_null_calibrated_cannot_satisfy_authority
     stage = FaceIdentityStage(
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
         expected_arcface_model_version="buffalo_l",
         expected_preprocessing_version="v1",
@@ -467,7 +466,7 @@ async def test_calibrated_confidence_0_85_propagates_to_anchor():
     client = AsyncMock(spec=FaceIdentificationClient)
     result = _FakeFaceResult(
         "alice",
-        confidence=0.90,
+        raw_similarity=0.90,
         calibrated_confidence=0.85,
         calibration_status="ready",
         arcface_model_version="buffalo_l",
@@ -478,7 +477,7 @@ async def test_calibrated_confidence_0_85_propagates_to_anchor():
     stage = FaceIdentityStage(
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
         expected_arcface_model_version="buffalo_l",
         expected_preprocessing_version="v1",
@@ -504,7 +503,7 @@ async def test_version_mismatch_nullifies_calibrated_confidence():
     client = AsyncMock(spec=FaceIdentificationClient)
     result = _FakeFaceResult(
         "alice",
-        confidence=0.90,
+        raw_similarity=0.90,
         calibrated_confidence=0.88,
         calibration_status="ready",
         arcface_model_version="some_other_model",  # mismatch
@@ -515,7 +514,7 @@ async def test_version_mismatch_nullifies_calibrated_confidence():
     stage = FaceIdentityStage(
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
         expected_arcface_model_version="buffalo_l",
         expected_preprocessing_version="v1",
@@ -539,7 +538,7 @@ async def test_calibrated_confidence_propagates_to_face_evidence():
     client = AsyncMock(spec=FaceIdentificationClient)
     result = _FakeFaceResult(
         "alice",
-        confidence=0.90,
+        raw_similarity=0.90,
         calibrated_confidence=0.82,
         calibration_status="ready",
         arcface_model_version="buffalo_l",
@@ -550,7 +549,7 @@ async def test_calibrated_confidence_propagates_to_face_evidence():
     stage = FaceIdentityStage(
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
         expected_arcface_model_version="buffalo_l",
         expected_preprocessing_version="v1",
@@ -572,7 +571,7 @@ async def test_candidate_anchor_never_carries_calibrated_confidence():
     client = AsyncMock(spec=FaceIdentificationClient)
     result = _FakeFaceResult(
         "alice",
-        confidence=0.35,
+        raw_similarity=0.35,
         calibrated_confidence=0.50,  # would be valid if recognized
         calibration_status="ready",
         arcface_model_version="buffalo_l",
@@ -585,7 +584,7 @@ async def test_candidate_anchor_never_carries_calibrated_confidence():
     stage = FaceIdentityStage(
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
-        face_id_min_confidence=0.5,
+        face_id_min_raw_similarity=0.5,
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
         expected_arcface_model_version="buffalo_l",
         expected_preprocessing_version="v1",

@@ -60,7 +60,7 @@ def _obs(
         orientation_confidence=0.9,
         face_anchor=FaceAnchor(
             person_id=person,
-            confidence=0.96,
+            match_score=0.96,
             quality=0.9,
             detection_id=det_id,
             camera_id=cam,

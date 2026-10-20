@@ -444,7 +444,7 @@ class WorldTrackingStage(FrameStage):
         return [
             FaceEvidence(
                 person_id=fa.person_id,
-                confidence=fa.confidence,
+                match_score=fa.match_score,
                 # Empty tracklet_id: _resolve_identities' PH-mode remap fills
                 # tracklet_id = ph_id from det_to_ph, same as native evidence
                 # (FaceIdentityStage also emits tracklet_id="" for this reason).

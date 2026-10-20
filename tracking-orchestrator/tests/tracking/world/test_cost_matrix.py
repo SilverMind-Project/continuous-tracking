@@ -57,7 +57,7 @@ class TestPairCost:
         assert cost == GATE_INF
 
     def test_identity_conflict_gates(self) -> None:
-        cfg = WorldTrackerConfig(face_conflict_threshold=0.70)
+        cfg = WorldTrackerConfig(face_conflict_min_similarity=0.70)
         state = _make_state(0.0, 0.0)
         cost = pair_cost(
             ph_state=state,
@@ -75,7 +75,7 @@ class TestPairCost:
         assert cost == GATE_INF
 
     def test_identity_conflict_below_threshold_passes(self) -> None:
-        cfg = WorldTrackerConfig(face_conflict_threshold=0.70)
+        cfg = WorldTrackerConfig(face_conflict_min_similarity=0.70)
         state = _make_state(0.0, 0.0)
         cost = pair_cost(
             ph_state=state,
@@ -350,7 +350,7 @@ class TestTypedIdentityEvidence:
         cost, reason = pair_cost_detail(
             **self._kwargs(cfg),
             obs_face_anchor_person_id="grandpa",
-            obs_face_anchor_confidence=0.95,  # >= face_conflict_threshold
+            obs_face_anchor_confidence=0.95,  # >= face_conflict_min_similarity
         )
         assert cost == GATE_INF
         assert reason is RejectionReason.IDENTITY_CONFLICT

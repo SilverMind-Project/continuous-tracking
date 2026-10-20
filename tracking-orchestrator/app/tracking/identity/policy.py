@@ -44,8 +44,8 @@ class CommitPolicy:
     # Fails closed: authority never fires if calibrated_confidence is None.
     arcface_authority_calibrated_confidence: float = 0.80
 
-    # --- Face-commit gating -----------------------------------------------
-    face_commit_min_confidence: float = 0.70
+    # --- Face-commit gating (raw ArcFace cosine similarity) ------------------
+    face_commit_min_similarity: float = 0.70
 
     # --- Quality gate -------------------------------------------------------
     min_quality_to_commit: float = 0.35
@@ -56,7 +56,7 @@ class CommitPolicy:
     enable_flip_debounce: bool = False
 
     # --- Contradiction detection --------------------------------------------
-    contradiction_face_confidence: float = 0.70
+    contradiction_face_similarity: float = 0.70
     contradiction_posterior_prob: float = 0.80
     contradiction_posterior_margin: float = 0.20
 

@@ -104,7 +104,10 @@ class FaceEvidence:
     """
 
     person_id: str
-    confidence: float
+    # Same meaning as FaceAnchor.match_score: raw cosine similarity for native recognized and
+    # candidate evidence, the face detection score for unrecognized markers, and the calibrated
+    # confidence after the spatial-match haircut for external evidence.
+    match_score: float
     tracklet_id: str = ""
     detection_id: str = ""
     camera_id: str = ""

@@ -160,8 +160,9 @@ async def _fetch_cc_camera_configs(
 ) -> dict[str, FaceIdCameraConfig]:
     """Fetch per-camera face-id configs from cognitive-companion's camera API.
 
-    CC is the primary source for per-camera face-id settings (enabled flag
-    and min_confidence).
+    CC is the primary source for per-camera face-id settings (enabled flag and similarity floor).
+    CC's camera field for the floor keeps its historical "confidence" name; this function is the
+    one place it is decoded, into ``FaceIdCameraConfig.min_raw_similarity``.
     """
     try:
         cameras: list[dict[str, Any]] = await client.get("/api/v1/cts/cameras")
@@ -176,10 +177,12 @@ async def _fetch_cc_camera_configs(
         if not cam_id or not isinstance(enabled, bool):
             logger.warning("Skipped malformed CC camera config", camera=cam)
             continue
-        min_conf = cam.get("face_id_min_confidence")
+        min_raw_similarity = cam.get("face_id_min_confidence")
         cfgs[str(cam_id)] = FaceIdCameraConfig(
             enabled=enabled,
-            min_confidence=float(min_conf) if min_conf is not None else None,
+            min_raw_similarity=(
+                float(min_raw_similarity) if min_raw_similarity is not None else None
+            ),
         )
 
     logger.info("Fetched face-id configs from CC", camera_count=len(cfgs))
@@ -225,8 +228,8 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         flip_debounce_window_s=r.as_float("flip_debounce_window_s"),
         enable_flip_debounce=r.as_bool("enable_flip_debounce"),
         enable_duplicate_active_identity_guard=r.as_bool("enable_duplicate_active_identity_guard"),
-        duplicate_identity_direct_face_min_confidence=r.as_float(
-            "duplicate_identity_direct_face_min_confidence"
+        duplicate_identity_direct_face_min_similarity=r.as_float(
+            "duplicate_identity_direct_face_min_similarity"
         ),
         prior_maintenance_max_age_s=r.as_float("prior_maintenance_max_age_s"),
         identified_entry_boost_min_sim=r.as_float("identified_entry_boost_min_sim"),
@@ -239,14 +242,14 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         embedding_coherence_window=r.as_int("embedding_coherence_window"),
         embedding_coherence_min_sim=r.as_float("embedding_coherence_min_sim"),
         embedding_coherence_boost=r.as_float("embedding_coherence_boost"),
-        face_commit_min_confidence=r.as_float("face_commit_min_confidence"),
+        face_commit_min_similarity=r.as_float("face_commit_min_similarity"),
         arcface_authority_calibrated_confidence=r.as_float(
             "arcface_authority_calibrated_confidence"
         ),
         cross_gt_face_propagation_threshold=r.as_float("cross_gt_face_propagation_threshold"),
         cross_gt_face_propagation_max_gts=r.as_int("cross_gt_face_propagation_max_gts"),
         enable_sticky_maintenance=r.as_bool("enable_sticky_maintenance"),
-        contradiction_face_confidence=r.as_float("contradiction_face_confidence"),
+        contradiction_face_similarity=r.as_float("contradiction_face_similarity"),
         contradiction_posterior_prob=r.as_float("contradiction_posterior_prob"),
         contradiction_posterior_margin=r.as_float("contradiction_posterior_margin"),
         # Rich face evidence
@@ -297,7 +300,7 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         process_noise_accel_m_s2=wt.as_float("process_noise_accel_m_s2"),
         ph_close_grace_s=wt.as_float("ph_close_grace_s"),
         min_observations_to_publish=wt.as_int("min_observations_to_publish"),
-        face_conflict_threshold=wt.as_float("face_conflict_threshold"),
+        face_conflict_min_similarity=wt.as_float("face_conflict_min_similarity"),
         inferred_handoff_max_s=wt.as_float("inferred_handoff_max_s"),
         inferred_handoff_max_distance_m=wt.as_float("inferred_handoff_max_distance_m"),
         initial_position_sigma_m=wt.as_float("initial_position_sigma_m"),
@@ -489,7 +492,7 @@ def _build_face_id_config(
         url=url,
         cooldown_s=fi.as_float("cooldown_s"),
         timeout_s=fi.as_float("timeout_s"),
-        min_confidence=fi.as_float("min_confidence"),
+        min_raw_similarity=fi.as_float("min_raw_similarity"),
         enabled=fi.as_bool("enabled"),
         camera_configs=camera_configs,
         expected_arcface_model_version=_optional_str(fi, "expected_arcface_model_version"),

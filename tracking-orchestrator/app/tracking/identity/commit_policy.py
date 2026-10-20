@@ -76,7 +76,7 @@ def compute_contradiction(
 
     Two contradiction paths (either one is sufficient):
     1. A *recognized* face anchor names a different identity at or above
-       ``contradiction_face_confidence``. Candidate and unrecognized faces
+       ``contradiction_face_similarity``. Candidate and unrecognized faces
        cannot contradict — they are too weak to overturn a held identity.
     2. Posterior argmax is a different non-UNKNOWN identity clearing both
        ``contradiction_posterior_prob`` and ``contradiction_posterior_margin``.
@@ -88,7 +88,7 @@ def compute_contradiction(
 
     if (
         best_face_confidence is not None
-        and best_face_confidence >= config.contradiction_face_confidence
+        and best_face_confidence >= config.contradiction_face_similarity
         and face_likelihood.distribution
     ):
         face_top = max(face_likelihood.distribution, key=face_likelihood.distribution.__getitem__)

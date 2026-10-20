@@ -163,7 +163,7 @@ async def test_no_room_polygons_still_spawns_ph_and_snapshot_identity():
         _obs("cam-1", 5.0, 5.0, "det-grandma", t0, quality=0.9),
         face_anchor=FaceAnchor(
             person_id="grandma",
-            confidence=0.94,
+            match_score=0.94,
             tracklet_id="",
             detection_id="det-grandma",
             camera_id="cam-1",

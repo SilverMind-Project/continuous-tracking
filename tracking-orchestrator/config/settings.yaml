@@ -65,10 +65,10 @@ face_id:
   url: "${PERSON_ID_SERVICE_URL}"
   cooldown_s: 5.0
   timeout_s: 2.0
-  # Face-ID emission gate: service matches below this confidence are dropped
-  # before becoming face anchors. Resolver face_commit_min_confidence is the
+  # Face-ID emission gate: recognized faces whose raw ArcFace cosine similarity is below this
+  # floor are dropped before becoming face anchors. Resolver face_commit_min_similarity is the
   # stricter identity-lock gate after an anchor exists.
-  min_confidence: 0.6
+  min_raw_similarity: 0.6
   enabled: true
   # M10: expected calibration versions. calibrated_confidence is set to None
   # when the person-id response carries a different model or preprocessing version,
@@ -336,10 +336,12 @@ resolver:
   # Shadow-first guard for duplicate active resident identities. Enable after
   # replay proves same-person cross-camera continuation still works.
   enable_duplicate_active_identity_guard: true
-  duplicate_identity_direct_face_min_confidence: 0.90
-  # Identity-lock gate for emitted face anchors. This is intentionally stricter
-  # than face_id.min_confidence, which only controls whether an anchor is emitted.
-  face_commit_min_confidence: 0.70
+  # Raw ArcFace cosine similarity a direct face needs to rank a PH in the duplicate guard.
+  duplicate_identity_direct_face_min_similarity: 0.90
+  # Identity-lock gate for emitted face anchors, as raw ArcFace cosine similarity. This is
+  # intentionally stricter than face_id.min_raw_similarity, which only controls whether an anchor
+  # is emitted.
+  face_commit_min_similarity: 0.70
   arcface_authority_calibrated_confidence: 0.80
 
   # Advanced / rarely changed constants.
@@ -381,11 +383,13 @@ resolver:
   embedding_coherence_window: 5
   embedding_coherence_min_sim: 0.70
   embedding_coherence_boost: 2.0
-  # Sticky maintenance — hold committed identity unless strongly contradicted.
-  # M2 enabled 2026-06-02 after make ci guardrails (two_people_one_room,
+  # Sticky maintenance: hold committed identity unless strongly contradicted.
+  # Enabled 2026-06-02 after the make ci guardrails (two_people_one_room,
   # resident_plus_stranger) passed green. Staged rollout phase 1.
   enable_sticky_maintenance: true
-  contradiction_face_confidence: 0.70
+  # A recognized face for another identity at or above this raw ArcFace cosine similarity
+  # contradicts a held identity.
+  contradiction_face_similarity: 0.70
   contradiction_posterior_prob: 0.80
   contradiction_posterior_margin: 0.20
 
@@ -397,7 +401,7 @@ resolver:
   frontality_min_factor: 0.3
 
   # Synthetic face propagation also requires src_face_confidence * gallery_sim
-  # to clear face_commit_min_confidence, so 0.72 remains reachable for true
+  # to clear face_commit_min_similarity, so 0.72 remains reachable for true
   # handoffs while refusing weak relative/clothing matches.
   cross_gt_face_propagation_threshold: 0.72
   cross_gt_face_propagation_max_gts: 4
@@ -495,7 +499,9 @@ world_tracker:
   process_noise_accel_m_s2: 0.5
   ph_close_grace_s: 15.0
   min_observations_to_publish: 3
-  face_conflict_threshold: 0.70
+  # A recognized face for a different identity at or above this raw ArcFace cosine similarity
+  # blocks association with (and revival of) a PH.
+  face_conflict_min_similarity: 0.70
   inferred_handoff_max_s: 600
   inferred_handoff_max_distance_m: 5.0
   initial_position_sigma_m: 1.0

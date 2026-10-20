@@ -160,7 +160,7 @@ class FaceIdConfig:
     url: str = ""
     cooldown_s: float = 5.0
     timeout_s: float = 2.0
-    min_confidence: float = 0.6
+    min_raw_similarity: float = 0.6
     enabled: bool = True
     camera_configs: dict[str, FaceIdCameraConfig] = field(default_factory=dict)
     # expected versions for calibration compatibility gating on the CTS side.
@@ -597,7 +597,6 @@ class FrameProcessingPipeline:
             self._face_id_client = FaceIdentificationClient(
                 base_url=self._config.face_id.url,
                 timeout_s=self._config.face_id.timeout_s,
-                min_confidence=self._config.face_id.min_confidence,
                 jpeg_quality=self._config.face_id.crop_jpeg_quality,
             )
             await self._face_id_client.connect()
@@ -656,7 +655,7 @@ class FrameProcessingPipeline:
                 face_id_client=self._face_id_client,
                 gallery_repo=self._gallery_repo,
                 face_id_cooldown_s=self._config.face_id.cooldown_s,
-                face_id_min_confidence=self._config.face_id.min_confidence,
+                face_id_min_raw_similarity=self._config.face_id.min_raw_similarity,
                 face_id_camera_configs=self._config.face_id.camera_configs,
                 last_face_id_by_tracklet=self._last_face_id_by_tracklet,
                 expected_arcface_model_version=self._config.face_id.expected_arcface_model_version,

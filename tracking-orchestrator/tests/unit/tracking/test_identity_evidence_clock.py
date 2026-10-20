@@ -85,7 +85,7 @@ def _face_anchor(
 ) -> FaceAnchor:
     return FaceAnchor(
         person_id=person_id,
-        confidence=confidence,
+        match_score=confidence,
         quality=0.9,
         tracklet_id=tracklet_id,
         calibrated_confidence=calibrated_confidence,
@@ -473,7 +473,7 @@ class TestDuplicateActiveGuard:
             gallery_repo=gallery,
             config=ResolverConfig(
                 enable_duplicate_active_identity_guard=True,
-                face_commit_min_confidence=0.60,
+                face_commit_min_similarity=0.60,
             ),
         )
 
@@ -517,7 +517,7 @@ class TestDuplicateActiveGuard:
     async def test_off_frame_incumbent_blocks_weak_new_assignment(self) -> None:
         """An off-frame incumbent blocks weak (below-holder-threshold) new assignments.
 
-        The guard uses duplicate_identity_direct_face_min_confidence=0.90 to
+        The guard uses duplicate_identity_direct_face_min_similarity=0.90 to
         distinguish "holder" from "candidate".  A face anchor below 0.90 is a
         candidate and is blocked by the external incumbent.  An anchor at or
         above 0.90 is treated as a privileged holder (overrides the incumbent).
@@ -529,8 +529,8 @@ class TestDuplicateActiveGuard:
             identities=identities,
             config=ResolverConfig(
                 enable_duplicate_active_identity_guard=True,
-                face_commit_min_confidence=0.60,
-                duplicate_identity_direct_face_min_confidence=0.90,
+                face_commit_min_similarity=0.60,
+                duplicate_identity_direct_face_min_similarity=0.90,
             ),
         )
 
@@ -589,9 +589,9 @@ class TestDuplicateActiveGuard:
             gallery_repo=gallery,
             config=ResolverConfig(
                 enable_duplicate_active_identity_guard=True,
-                face_commit_min_confidence=0.60,
+                face_commit_min_similarity=0.60,
                 # Keep holder threshold high so neither face anchor qualifies.
-                duplicate_identity_direct_face_min_confidence=0.99,
+                duplicate_identity_direct_face_min_similarity=0.99,
             ),
         )
 
@@ -657,7 +657,7 @@ class TestResolverEvidenceRouting:
         resolver = _make_resolver(
             identities=[_make_identity("alice")],
             config=ResolverConfig(
-                face_commit_min_confidence=0.60,
+                face_commit_min_similarity=0.60,
                 enable_sticky_maintenance=False,
             ),
         )
@@ -678,7 +678,7 @@ class TestResolverEvidenceRouting:
             face_evidence=[
                 FaceEvidence(
                     person_id="alice",
-                    confidence=0.90,
+                    match_score=0.90,
                     tracklet_id="t1",
                     source="direct",
                     captured_at=now,
@@ -704,7 +704,7 @@ class TestResolverEvidenceRouting:
         resolver = _make_resolver(
             identities=identities,
             config=ResolverConfig(
-                face_commit_min_confidence=0.60,
+                face_commit_min_similarity=0.60,
                 prior_maintenance_max_age_s=30.0,
                 enable_sticky_maintenance=False,
             ),
@@ -726,7 +726,7 @@ class TestResolverEvidenceRouting:
         # Propagated face (cross-GT) for alice — not a real ArcFace call.
         propagated = FaceEvidence(
             person_id="alice",
-            confidence=0.95,
+            match_score=0.95,
             tracklet_id="t1",
             source="propagated",
             captured_at=now,

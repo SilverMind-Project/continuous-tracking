@@ -123,7 +123,7 @@ class FaceIdentityStage(FrameStage):
         face_id_client: FaceIdentificationClient | None = None,
         gallery_repo: GalleryRepository | None = None,
         face_id_cooldown_s: float = 5.0,
-        face_id_min_confidence: float = 0.5,
+        face_id_min_raw_similarity: float = 0.5,
         face_id_camera_configs: dict[str, FaceIdCameraConfig] | None = None,
         last_face_id_by_tracklet: dict[str, datetime] | None = None,
         face_service_version: str = "",
@@ -140,7 +140,7 @@ class FaceIdentityStage(FrameStage):
         self._face_stats_repo = face_stats_repo
         self._gallery_repo = gallery_repo
         self._face_id_cooldown_s = face_id_cooldown_s
-        self._face_id_min_confidence = face_id_min_confidence
+        self._face_id_min_raw_similarity = face_id_min_raw_similarity
         self._face_id_camera_configs = face_id_camera_configs or {}
         self._face_service_version = face_service_version
         self._expected_arcface_model_version = expected_arcface_model_version
@@ -345,10 +345,10 @@ class FaceIdentityStage(FrameStage):
                 camera_id=camera_id, result=crop_result.status.value
             ).inc()
 
-        min_conf = (
-            cam_cfg.min_confidence
-            if cam_cfg.min_confidence is not None
-            else self._face_id_min_confidence
+        min_raw_similarity = (
+            cam_cfg.min_raw_similarity
+            if cam_cfg.min_raw_similarity is not None
+            else self._face_id_min_raw_similarity
         )
 
         face_anchors: list[FaceAnchor] = []
@@ -390,7 +390,7 @@ class FaceIdentityStage(FrameStage):
             )
             for face, attribution in zip(crop_result.faces, attributions, strict=True):
                 state = face.recognition_state
-                outcome = _gate_outcome(face, min_conf, attribution)
+                outcome = _gate_outcome(face, min_raw_similarity, attribution)
                 if outcome is None:
                     continue
                 stats.append(
@@ -403,14 +403,15 @@ class FaceIdentityStage(FrameStage):
                     face_anchors.append(
                         FaceAnchor(
                             person_id=face.person_id,
-                            confidence=face.confidence,
+                            match_score=face.raw_similarity,
                             tracklet_id="",
                             detection_id=detection_id,
                             camera_id=camera_id,
                             captured_at=now,
                             recognition_state="recognized",
-                            similarity=face.similarity,
+                            similarity=face.raw_similarity,
                             yaw_deg=face.yaw_deg,
+                            det_score=face.det_score,
                             calibrated_confidence=self._resolve_calibrated_confidence(face),
                         )
                     )
@@ -418,20 +419,21 @@ class FaceIdentityStage(FrameStage):
 
                 elif state == "candidate":
                     # Weak positive for the best candidate (grey zone).
-                    # Do not apply min_conf gating; the similarity is intentionally below
+                    # The raw-similarity floor does not apply; the similarity is intentionally below
                     # the recognition threshold but at or above unknown_threshold.
                     assert face.best_candidate_id is not None  # guaranteed by _gate_outcome
                     face_anchors.append(
                         FaceAnchor(
                             person_id=face.best_candidate_id,
-                            confidence=face.similarity,  # raw cosine, not ArcFace confidence
+                            match_score=face.raw_similarity,
                             tracklet_id="",
                             detection_id=detection_id,
                             camera_id=camera_id,
                             captured_at=now,
                             recognition_state="candidate",
-                            similarity=face.similarity,
+                            similarity=face.raw_similarity,
                             yaw_deg=face.yaw_deg,
+                            det_score=face.det_score,
                             # candidates never carry calibrated authority
                             calibrated_confidence=None,
                         )
@@ -445,14 +447,15 @@ class FaceIdentityStage(FrameStage):
                     face_anchors.append(
                         FaceAnchor(
                             person_id="unknown",
-                            confidence=face.det_score,  # detection score, not recognition
+                            match_score=face.det_score,  # detection score, not recognition
                             tracklet_id="",
                             detection_id=detection_id,
                             camera_id=camera_id,
                             captured_at=now,
                             recognition_state="unrecognized",
-                            similarity=face.similarity,
+                            similarity=face.raw_similarity,
                             yaw_deg=face.yaw_deg,
+                            det_score=face.det_score,
                             calibrated_confidence=None,
                         )
                     )
@@ -559,7 +562,7 @@ class FaceIdentityStage(FrameStage):
             evidence.append(
                 FaceEvidence(
                     person_id=fa.person_id,
-                    confidence=fa.confidence,
+                    match_score=fa.match_score,
                     tracklet_id=fa.tracklet_id,
                     detection_id=fa.detection_id,
                     camera_id=fa.camera_id,
@@ -596,8 +599,8 @@ def _gate_outcome(
         return FaceGateOutcome.DROPPED_AMBIGUOUS
     if attribution is FaceAttribution.NO_FACE_IN_HEAD_REGION:
         return FaceGateOutcome.DROPPED_NOT_IN_HEAD_REGION
-    if face.recognition_state == "recognized" and face.confidence < min_raw_similarity:
-        return FaceGateOutcome.DROPPED_MIN_CONFIDENCE
+    if face.recognition_state == "recognized" and face.raw_similarity < min_raw_similarity:
+        return FaceGateOutcome.DROPPED_MIN_SIMILARITY
     if face.recognition_state == "candidate" and face.best_candidate_id is None:
         return FaceGateOutcome.DROPPED_NO_CANDIDATE
     return FaceGateOutcome.EMITTED

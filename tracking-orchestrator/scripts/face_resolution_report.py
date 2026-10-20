@@ -3,7 +3,7 @@
 
 Answers, per camera: how many pixels sit between the eyes of the faces the cameras see, what raw
 similarity recognized faces score, and how many recognized faces the face-ID gate discarded
-(the ``dropped_min_confidence`` outcome). Use it to size and place cameras for face recognition.
+(the ``dropped_min_similarity`` outcome). Use it to size and place cameras for face recognition.
 
 Read-only. All aggregation runs in SQL. The share of person crops that yielded any face is not in
 this table (rows exist only for faces); read it from the ``cts_face_queries_total`` metric.
@@ -69,7 +69,7 @@ SELECT camera_id, count(*) AS faces,
        percentile_cont(0.9) WITHIN GROUP (ORDER BY raw_similarity) AS p90
 FROM continuous_tracking.face_observation_stats
 WHERE observed_at >= $1 AND observed_at < $2 AND ($3::text IS NULL OR camera_id = $3)
-  AND gate_outcome = 'dropped_min_confidence'
+  AND gate_outcome = 'dropped_min_similarity'
 GROUP BY camera_id
 ORDER BY camera_id
 """
@@ -106,7 +106,7 @@ async def build_report(
                 "interocular_px": None,
                 "interocular_band_share": None,
                 "raw_similarity_by_state": {},
-                "dropped_min_confidence": {"faces": 0},
+                "dropped_min_similarity": {"faces": 0},
                 "recognized_by_candidate": {},
             },
         )
@@ -129,7 +129,7 @@ async def build_report(
         }
 
     for row in await conn.fetch(_SQL_GATE_DROPS, *args):
-        camera(row["camera_id"])["dropped_min_confidence"] = {
+        camera(row["camera_id"])["dropped_min_similarity"] = {
             "faces": row["faces"],
             **_percentiles(row),
         }
@@ -177,7 +177,7 @@ def render_table(report: dict[str, Any]) -> str:
                 f"  raw similarity [{state}] (n={stats['faces']}): "
                 f"p10={stats['p10']} p50={stats['p50']} p90={stats['p90']}"
             )
-        drops = entry["dropped_min_confidence"]
+        drops = entry["dropped_min_similarity"]
         lines.append(
             f"  recognized faces dropped by the min-similarity gate: {drops['faces']}"
             + (

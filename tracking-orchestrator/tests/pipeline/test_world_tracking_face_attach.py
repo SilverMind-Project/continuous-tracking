@@ -41,7 +41,7 @@ def _detection(detection_id: str, x_min: int) -> Detection:
 def _anchor(person_id: str, detection_id: str, similarity: float) -> FaceAnchor:
     return FaceAnchor(
         person_id=person_id,
-        confidence=similarity,
+        match_score=similarity,
         similarity=similarity,
         detection_id=detection_id,
         camera_id="cam-1",
@@ -113,7 +113,7 @@ async def test_unfaced_person_does_not_inherit_another_persons_face() -> None:
 async def test_anchor_without_detection_id_attaches_to_nothing() -> None:
     orphan = FaceAnchor(
         person_id="alice",
-        confidence=0.9,
+        match_score=0.9,
         camera_id="cam-1",
         captured_at=_NOW,
         recognition_state="recognized",

@@ -199,7 +199,7 @@ def match_assertions_to_face_anchors(
 
             best = FaceAnchor(
                 person_id=person_id,
-                confidence=effective_confidence,
+                match_score=effective_confidence,
                 quality=float(quality) if quality is not None else default_quality,
                 detection_id=obs.detection_id,
                 camera_id=obs.camera_id,

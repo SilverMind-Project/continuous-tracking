@@ -222,7 +222,7 @@ async def test_face_anchor_frame_embeds() -> None:
         camera_id="cam-1",
         detection_id="det-0",
         recognition_state="recognized",
-        confidence=0.92,
+        match_score=0.92,
         captured_at=_T0,
     )
     ctx = _ctx(dets=[_det()], floor_points={0: _fp(1000)}, face_anchors=[anchor])

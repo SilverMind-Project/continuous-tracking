@@ -81,7 +81,7 @@ def _face_anchor(recognized: bool = True) -> FaceAnchor:
         camera_id="cam-1",
         detection_id="det-1",
         recognition_state="recognized" if recognized else "unrecognized",
-        confidence=0.9 if recognized else 0.1,
+        match_score=0.9 if recognized else 0.1,
         captured_at=_T0,
     )
 

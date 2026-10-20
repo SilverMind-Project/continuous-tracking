@@ -77,7 +77,7 @@ def pair_cost_detail(
     Typed authoritative identity evidence (M03 task 5):
 
     - A qualifying *direct* ArcFace conflict (recognized face whose person_id
-      differs from the PH identity, confidence ≥ ``face_conflict_threshold``)
+      differs from the PH identity, raw similarity ≥ ``face_conflict_min_similarity``)
       is a hard gate. Only recognized anchors reach here — candidate / weak /
       propagated face evidence is filtered upstream and never hard-gates.
     - ``ph_identity_is_operator_confirmed`` makes the PH identity absolute: a
@@ -135,7 +135,7 @@ def pair_cost_detail(
     # 2. Identity-conflict hard gate (direct ArcFace + operator authority).
     if obs_face_anchor_person_id is not None and ph_current_identity_id:
         identities_disagree = obs_face_anchor_person_id != ph_current_identity_id
-        face_qualifies = obs_face_anchor_confidence >= cfg.face_conflict_threshold
+        face_qualifies = obs_face_anchor_confidence >= cfg.face_conflict_min_similarity
         if identities_disagree and (face_qualifies or ph_identity_is_operator_confirmed):
             return GATE_INF, RejectionReason.IDENTITY_CONFLICT
 

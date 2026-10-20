@@ -317,7 +317,7 @@ def _build_representative(
     best_face = best.face_anchor
     for obs in cluster:
         if obs.face_anchor is not None and (
-            best_face is None or obs.face_anchor.confidence > best_face.confidence
+            best_face is None or obs.face_anchor.match_score > best_face.match_score
         ):
             best_face = obs.face_anchor
 

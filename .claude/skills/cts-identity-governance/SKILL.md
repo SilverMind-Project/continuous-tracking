@@ -49,6 +49,21 @@ When material evidence conflicts and the hierarchy does not resolve it, the effe
 
 ## ArcFace rules
 
+Face scores have four names, and each name means one thing:
+
+| Name | Meaning | Where |
+| --- | --- | --- |
+| match score | The score the resolver weighs for a face: raw cosine similarity for native recognized and candidate anchors, the face detection score for an unrecognized marker, the calibrated confidence after the spatial-match haircut for a `cc_assertion` anchor | `FaceAnchor.match_score`, `FaceEvidence.match_score` |
+| raw similarity | ArcFace cosine similarity to the nearest enrolled centroid, in [-1, 1]; not a probability | `FaceResult.raw_similarity`, `FaceAnchor.similarity`, `face_observation_stats.raw_similarity` |
+| detection score | SCRFD face detector score, in [0, 1]; says a face exists, not whose it is | `FaceResult.det_score`, `FaceAnchor.det_score` |
+| calibrated confidence | Calibrated probability of a match; null unless calibration is ready | `calibrated_confidence` everywhere |
+
+- A threshold compared against raw similarity is named `*_similarity` (for example
+  `face_id.min_raw_similarity`, `resolver.face_commit_min_similarity`,
+  `resolver.contradiction_face_similarity`, `world_tracker.face_conflict_min_similarity`). Only a
+  calibrated probability is called a confidence. `tests/contracts/test_face_vocabulary_names.py`
+  keeps the old names out of `app/` and `config/settings.yaml`; cognitive-companion's camera field
+  `face_id_min_confidence` is decoded once, in `app/main.py`.
 - Persist raw cosine similarity and calibrated confidence as different fields.
 - Raw similarity is never presented or consumed as probability.
 - Only direct face evidence may become authoritative. Propagated evidence cannot satisfy the
@@ -262,7 +277,7 @@ from an anchor matched from cognitive-companion's `cc.identity_assertions` strea
   never the perfect-crop/perfectly-frontal defaults native code paths assume.
 - It is explicitly excluded from: ArcFace authority (`_check_arcface_authority`), the
   independent-evidence clock (`collect_evidence_identity_ids(recognized_only=True)`),
-  duplicate-active-identity ranking (`_direct_face_confidence`), and the association vectors
+  duplicate-active-identity ranking (`_direct_face_similarity`), and the association vectors
   that drive Hungarian assignment and hard-conflict gating
   (`_unpack_observations` in `app/tracking/world/tracker.py`). `calibrated_confidence` stays
   `None` on every `cc_assertion` anchor by construction, so ArcFace authority fails closed

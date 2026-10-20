@@ -249,7 +249,7 @@ def _unpack_observations(observations: list[WorldObservation]) -> _ObsVectors:
         for obs in observations
     ]
     face_confidences: list[float] = [
-        obs.face_anchor.confidence if _native_recognized(obs) and obs.face_anchor else 0.0
+        obs.face_anchor.match_score if _native_recognized(obs) and obs.face_anchor else 0.0
         for obs in observations
     ]
     return _ObsVectors(

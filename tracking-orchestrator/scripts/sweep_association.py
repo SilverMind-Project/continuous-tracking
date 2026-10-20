@@ -102,7 +102,7 @@ def _frames_to_world_obs(raw_steps: list[list[dict]]):  # type: ignore[return]
 
                 face_anchor = FaceAnchor(
                     person_id=fa_data["person_id"],
-                    confidence=float(fa_data["confidence"]),
+                    match_score=float(fa_data["confidence"]),
                     quality=float(fa_data.get("quality", 1.0)),
                     detection_id=fa_data.get("detection_id", ""),
                     camera_id=fa_data.get("camera_id", ""),

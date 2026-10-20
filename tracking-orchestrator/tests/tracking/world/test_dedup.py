@@ -30,7 +30,7 @@ def _obs(
     if face_person_id is not None:
         face = FaceAnchor(
             person_id=face_person_id,
-            confidence=0.9,
+            match_score=0.9,
             quality=1.0,
             tracklet_id="",
             camera_id=camera_id,

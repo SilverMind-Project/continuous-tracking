@@ -39,7 +39,7 @@ _ROWS = [
         "cam-1",
         18.0,
         raw_similarity=0.52,
-        gate_outcome=FaceGateOutcome.DROPPED_MIN_CONFIDENCE,
+        gate_outcome=FaceGateOutcome.DROPPED_MIN_SIMILARITY,
     ),
     _row(6, "cam-2", 44.0, best_candidate_id="resident-beta"),
     _row(7200, "cam-1", 99.0),  # outside the window
@@ -63,8 +63,8 @@ async def test_report_bands_percentiles_and_gate_drops(db_pool: asyncpg.Pool) ->
         "24_to_40px": 0.2,
         "ge_40px": 0.2,
     }
-    assert cam1["dropped_min_confidence"]["faces"] == 1
-    assert cam1["dropped_min_confidence"]["p50"] == 0.52
+    assert cam1["dropped_min_similarity"]["faces"] == 1
+    assert cam1["dropped_min_similarity"]["p50"] == 0.52
     assert cam1["raw_similarity_by_state"]["unrecognized"]["faces"] == 1
     assert cam1["recognized_by_candidate"] == {"resident-alpha": 5}
     assert report["cameras"]["cam-2"]["recognized_by_candidate"] == {"resident-beta": 1}

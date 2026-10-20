@@ -26,7 +26,7 @@ def _face(
 ) -> FaceAnchor:
     return FaceAnchor(
         person_id=person_id,
-        confidence=0.95,
+        match_score=0.95,
         recognition_state=recognition_state,
         calibrated_confidence=calibrated_confidence,
     )

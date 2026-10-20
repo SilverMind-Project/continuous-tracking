@@ -29,7 +29,7 @@ def test_recognized_face_must_match_gallery_seed_identity() -> None:
 
     face_anchor = FaceAnchor(
         person_id=data["direct_face_identity_id"],
-        confidence=0.95,
+        match_score=0.95,
         recognition_state=data["recognition_state"],
         calibrated_confidence=0.95,
     )

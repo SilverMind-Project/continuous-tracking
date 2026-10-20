@@ -75,7 +75,8 @@ class WorldTrackerConfig:
     appearance_new_orientation_min_confidence: float = 0.30
 
     # ---- Identity conflict hard gate ----
-    face_conflict_threshold: float = 0.70
+    # Raw ArcFace cosine similarity a recognized face for another identity needs to hard-gate.
+    face_conflict_min_similarity: float = 0.70
 
     # ---- Association covariance/point validation ----
     # Fail-closed validation of floor points and observation covariance before
@@ -92,7 +93,7 @@ class WorldTrackerConfig:
 
     # ---- Typed authoritative identity evidence in association ----
     # Operator-confirmed PH identity is absolute authority: a conflicting
-    # recognized face hard-gates regardless of face_conflict_threshold, and a
+    # recognized face hard-gates regardless of face_conflict_min_similarity, and a
     # sub-threshold same-identity face cannot weaken it. Wired from PH metadata.
     # Verified-ReID disagreement is a configurable STRONG COST, never a hard
     # gate. The input (a per-observation verified-ReID identity) is plumbed by

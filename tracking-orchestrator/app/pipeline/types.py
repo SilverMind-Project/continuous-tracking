@@ -103,9 +103,9 @@ class FaceIdCameraConfig:
 
     If *enabled* is False, face identification is skipped entirely for
     this camera (e.g. top-down surveillance cameras where faces are
-    never visible).  If *min_confidence* is not None it overrides the
-    global ``face_id_min_confidence`` for this camera.
+    never visible).  If *min_raw_similarity* is not None it overrides the
+    global ``face_id.min_raw_similarity`` floor for this camera.
     """
 
     enabled: bool = True
-    min_confidence: float | None = None
+    min_raw_similarity: float | None = None

@@ -55,7 +55,7 @@ def test_matching_assertion_produces_face_anchor():
     assert len(anchors) == 1
     assert anchors[0].person_id == "alice"
     assert anchors[0].detection_id == "det-1"
-    assert anchors[0].confidence == 0.85
+    assert anchors[0].match_score == 0.85
     assert anchors[0].origin == "cc_assertion"
 
 
@@ -168,7 +168,7 @@ def test_strongest_assertion_per_observation_wins():
     anchors = match_assertions_to_face_anchors(assertions, observations, now)
     assert len(anchors) == 1
     assert anchors[0].person_id == "bob"
-    assert anchors[0].confidence == 0.95
+    assert anchors[0].match_score == 0.95
 
 
 def test_empty_assertions_returns_empty():
@@ -206,7 +206,7 @@ def test_room_match_creates_anchor_with_scaled_confidence():
     )
     assert len(anchors) == 1
     assert anchors[0].person_id == "grace"
-    assert math.isclose(anchors[0].confidence, 0.9 * 0.8, rel_tol=1e-9)
+    assert math.isclose(anchors[0].match_score, 0.9 * 0.8, rel_tol=1e-9)
     assert anchors[0].origin == "cc_assertion"
 
 

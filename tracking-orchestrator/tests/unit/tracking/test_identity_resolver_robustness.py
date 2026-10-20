@@ -73,7 +73,7 @@ def _make_gt(
 def _anchor(person_id: str, *, confidence: float = 0.95, quality: float = 0.9) -> FaceAnchor:
     return FaceAnchor(
         person_id=person_id,
-        confidence=confidence,
+        match_score=confidence,
         quality=quality,
         tracklet_id="t1",
     )
@@ -263,7 +263,7 @@ async def test_quality_gate_commit_threshold_boundary(fresh_metrics: Metrics) ->
     config = ResolverConfig(
         enable_quality_gate=True,
         min_quality_to_commit=0.35,
-        face_commit_min_confidence=0.70,
+        face_commit_min_similarity=0.70,
     )
     resolver = await _resolver(config)
 
@@ -481,7 +481,7 @@ async def _propagation_resolver(
         gallery_repo=gallery,
         config=ResolverConfig(
             cross_gt_face_propagation_threshold=0.72,
-            face_commit_min_confidence=0.70,
+            face_commit_min_similarity=0.70,
             enable_quality_gate=True,
             enable_duplicate_active_identity_guard=enable_guard,
         ),
@@ -492,7 +492,7 @@ async def _propagation_resolver(
 async def test_propagation_threshold_respected(fresh_metrics: Metrics) -> None:
     src = _make_gt(ph_id="src", tracklet_ids=["t-src"], camera_ids=["cam-a"])
     dst = _make_gt(ph_id="dst", tracklet_ids=["t-dst"], camera_ids=["cam-b"])
-    anchor = FaceAnchor(person_id="alice", confidence=1.0, quality=1.0, tracklet_id="t-src")
+    anchor = FaceAnchor(person_id="alice", match_score=1.0, quality=1.0, tracklet_id="t-src")
 
     below = await _propagation_resolver(0.71)
     below_anchors = await below._propagate_face_anchors([src, dst], [anchor])
@@ -514,7 +514,7 @@ async def test_propagation_respects_quality_gate(fresh_metrics: Metrics) -> None
     outcome = await resolver.resolve(
         hypotheses=[src, dst],
         new_face_anchors=[
-            FaceAnchor(person_id="alice", confidence=1.0, quality=1.0, tracklet_id="t-src")
+            FaceAnchor(person_id="alice", match_score=1.0, quality=1.0, tracklet_id="t-src")
         ],
         captured_at=datetime.now(UTC),
         ph_qualities={"src": 0.9, "dst": 0.1},
@@ -534,7 +534,7 @@ async def test_propagation_negative_relatives(fresh_metrics: Metrics) -> None:
 
     anchors = await resolver._propagate_face_anchors(
         [src, dst],
-        [FaceAnchor(person_id="alice", confidence=1.0, quality=1.0, tracklet_id="t-src")],
+        [FaceAnchor(person_id="alice", match_score=1.0, quality=1.0, tracklet_id="t-src")],
     )
 
     assert len(anchors) == 1
@@ -620,7 +620,7 @@ def test_sticky_maintenance_overturned_by_face_contradiction(
         config=ResolverConfig(
             enable_sticky_maintenance=True,
             prior_maintenance_max_age_s=120.0,
-            contradiction_face_confidence=0.70,
+            contradiction_face_similarity=0.70,
         ),
     )
 
@@ -819,7 +819,7 @@ async def test_duplicate_active_identity_guard_allows_strong_direct_faces() -> N
         config=ResolverConfig(
             commit_prob=0.50,
             enable_duplicate_active_identity_guard=True,
-            duplicate_identity_direct_face_min_confidence=0.90,
+            duplicate_identity_direct_face_min_similarity=0.90,
         ),
     )
 
@@ -829,8 +829,8 @@ async def test_duplicate_active_identity_guard_allows_strong_direct_faces() -> N
             _make_gt(ph_id="ph-b", tracklet_ids=["t-b"]),
         ],
         new_face_anchors=[
-            FaceAnchor(person_id="amma", confidence=0.95, quality=0.95, tracklet_id="t-a"),
-            FaceAnchor(person_id="amma", confidence=0.96, quality=0.95, tracklet_id="t-b"),
+            FaceAnchor(person_id="amma", match_score=0.95, quality=0.95, tracklet_id="t-a"),
+            FaceAnchor(person_id="amma", match_score=0.96, quality=0.95, tracklet_id="t-b"),
         ],
         captured_at=now,
     )
@@ -876,14 +876,14 @@ async def test_duplicate_active_identity_guard_allows_unobserved_incumbent_with_
         config=ResolverConfig(
             commit_prob=0.50,
             enable_duplicate_active_identity_guard=True,
-            duplicate_identity_direct_face_min_confidence=0.90,
+            duplicate_identity_direct_face_min_similarity=0.90,
         ),
     )
 
     outcome = await resolver.resolve(
         hypotheses=[_make_gt(ph_id="ph-new", tracklet_ids=["t-new"])],
         new_face_anchors=[
-            FaceAnchor(person_id="amma", confidence=0.96, quality=0.95, tracklet_id="t-new"),
+            FaceAnchor(person_id="amma", match_score=0.96, quality=0.95, tracklet_id="t-new"),
         ],
         captured_at=now,
         open_ph_identities={"ph-held": "amma"},
@@ -909,7 +909,7 @@ async def test_duplicate_active_identity_guard_does_not_trust_propagated_face() 
     outcome = await resolver.resolve(
         hypotheses=[src, dst],
         new_face_anchors=[
-            FaceAnchor(person_id="alice", confidence=1.0, quality=1.0, tracklet_id="t-src")
+            FaceAnchor(person_id="alice", match_score=1.0, quality=1.0, tracklet_id="t-src")
         ],
         captured_at=datetime.now(UTC),
         ph_qualities={"src": 0.9, "dst": 0.9},

@@ -56,7 +56,7 @@ def _face_anchor(
 ) -> FaceAnchor:
     return FaceAnchor(
         person_id=identity_id,
-        confidence=confidence,
+        match_score=confidence,
         quality=0.9,
         tracklet_id=tracklet_id,
     )

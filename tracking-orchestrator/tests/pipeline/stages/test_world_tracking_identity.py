@@ -121,7 +121,7 @@ class TestWorldTrackingEmitsRevisions:
         # Use the real observation UUID as the tracklet_id key.
         face_anchor = FaceAnchor(
             person_id="alice",
-            confidence=0.95,
+            match_score=0.95,
             quality=1.0,
             tracklet_id=real_obs_id,
             camera_id="cam1",
@@ -228,7 +228,7 @@ class TestWorldTrackingEmitsRevisions:
         detection_uuid = "aaaa-bbbb-cccc-dddd"
         face_anchor = FaceAnchor(
             person_id="grandma",
-            confidence=0.92,
+            match_score=0.92,
             quality=1.0,
             tracklet_id="",  # empty — PH mode
             detection_id=detection_uuid,

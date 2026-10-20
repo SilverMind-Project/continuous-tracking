@@ -48,7 +48,7 @@ def _face_anchor(
 ) -> FaceAnchor:
     return FaceAnchor(
         person_id=person_id,
-        confidence=confidence,
+        match_score=confidence,
         quality=0.9,
         tracklet_id=tracklet_id,
         calibrated_confidence=calibrated_confidence,
@@ -202,7 +202,7 @@ class TestProducerPathsEmitVocabulary:
             gallery_repo=gallery,
             config=ResolverConfig(
                 enable_duplicate_active_identity_guard=True,
-                face_commit_min_confidence=0.60,
+                face_commit_min_similarity=0.60,
             ),
         )
 

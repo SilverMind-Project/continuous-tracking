@@ -167,7 +167,7 @@ class TestEvidenceTypes:
 
         direct = FaceEvidence(
             person_id="alice",
-            confidence=0.95,
+            match_score=0.95,
             tracklet_id="tl-1",
             camera_id="cam-1",
             frame_index=42,
@@ -176,7 +176,7 @@ class TestEvidenceTypes:
         )
         propagated = FaceEvidence(
             person_id="alice",
-            confidence=0.95,
+            match_score=0.95,
             tracklet_id="tl-2",
             camera_id="cam-2",
             frame_index=0,
@@ -193,7 +193,7 @@ class TestEvidenceTypes:
 
         ev = FaceEvidence(
             person_id="alice",
-            confidence=0.95,
+            match_score=0.95,
             tracklet_id="tl-1",
             camera_id="cam-1",
             frame_index=0,

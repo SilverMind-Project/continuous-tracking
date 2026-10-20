@@ -627,7 +627,7 @@ class FaceAnchor:
 
     Face anchors are the strongest evidence source in the Bayesian
     posterior. They carry a person_id from the face recognition service
-    along with confidence and quality metrics.
+    along with a match score and quality metrics.
 
     In the PH-native pipeline, detection_id replaces tracklet_id
     as the primary per-detection key. tracklet_id is kept for backward
@@ -635,7 +635,11 @@ class FaceAnchor:
     """
 
     person_id: IdentityId
-    confidence: float
+    # The score the resolver weighs for this anchor. For native recognized and candidate anchors
+    # it is the raw cosine similarity to the matched enrolled identity. For native unrecognized
+    # markers it is the face detection score and carries no identity meaning. For external
+    # anchors it is the calibrated confidence after the spatial-match haircut.
+    match_score: float
     quality: float = 1.0
     tracklet_id: TrackletId = ""
     detection_id: str = ""
@@ -656,13 +660,15 @@ class FaceAnchor:
     # ArcFace authority, the independent-evidence clock, duplicate-identity
     # ranking, and association vectors -- see cts-identity-governance skill.
     origin: str = "native"
+    # Face detector score for this face, in [0, 1]. Not yet read by policy.
+    det_score: float = 0.0
 
 
 class FaceGateOutcome(StrEnum):
     """What FaceIdentityStage did with one face returned by person-identification-service."""
 
     EMITTED = "emitted"
-    DROPPED_MIN_CONFIDENCE = "dropped_min_confidence"
+    DROPPED_MIN_SIMILARITY = "dropped_min_similarity"
     DROPPED_NO_CANDIDATE = "dropped_no_candidate"
     DROPPED_NO_DETECTION = "dropped_no_detection"
     DROPPED_NOT_IN_HEAD_REGION = "dropped_not_in_head_region"

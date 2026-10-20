@@ -147,3 +147,30 @@ async def test_crops_are_encoded_at_the_configured_jpeg_quality() -> None:
 def test_out_of_range_jpeg_quality_is_rejected(quality: int) -> None:
     with pytest.raises(ValueError, match="jpeg_quality"):
         FaceIdentificationClient("http://person-id.test", jpeg_quality=quality)
+
+
+@pytest.mark.asyncio
+async def test_legacy_confidence_is_ignored_and_raw_similarity_is_read() -> None:
+    # An older service still sends "confidence"; it never reaches FaceResult.
+    face = {**_FACE, "confidence": 0.99, "raw_similarity": 0.52, "similarity": 0.52}
+    client = await _client(
+        httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
+    )
+    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)])
+
+    [parsed] = result.faces
+    assert parsed.raw_similarity == 0.52
+    assert not hasattr(parsed, "confidence")
+    await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_service_without_raw_similarity_falls_back_to_similarity() -> None:
+    face = {k: v for k, v in _FACE.items() if k != "raw_similarity"} | {"similarity": 0.61}
+    client = await _client(
+        httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
+    )
+    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)])
+
+    assert result.faces[0].raw_similarity == 0.61
+    await client.disconnect()

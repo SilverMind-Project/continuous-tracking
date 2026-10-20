@@ -95,8 +95,8 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
         data["signal"]["bathroom_z_threshold_night"]
     )
     assert signal.pacing_min_obs_density == pytest.approx(data["signal"]["pacing_min_obs_density"])
-    assert face_id.min_confidence == data["face_id"]["min_confidence"] == pytest.approx(0.6)
-    assert FaceIdConfig().min_confidence == pytest.approx(0.6)
+    assert face_id.min_raw_similarity == data["face_id"]["min_raw_similarity"] == pytest.approx(0.6)
+    assert FaceIdConfig().min_raw_similarity == pytest.approx(0.6)
     assert resolver.cross_gt_face_propagation_threshold == pytest.approx(0.72)
     assert world_tracker.dedup_residual_coeff_k == pytest.approx(1.0)
     assert world_tracker.dedup_max_distance_ceiling_m == pytest.approx(1.5)

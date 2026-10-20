@@ -54,7 +54,6 @@ def _face(index: int, state: str, similarity: float, best_candidate_id: str | No
     return FaceResult(
         person_id=best_candidate_id if state == "recognized" and best_candidate_id else "unknown",
         name="n",
-        confidence=similarity,
         bbox_normalized=[
             (cx - 14) / _FRAME_W_PX,
             (cy - 17) / _FRAME_H_PX,
@@ -64,7 +63,6 @@ def _face(index: int, state: str, similarity: float, best_candidate_id: str | No
         recognition_state=state,
         best_candidate_id=best_candidate_id,
         raw_similarity=similarity,
-        similarity=similarity,
         yaw_deg=10.0,
         pitch_deg=-20.0,
         det_score=0.9,
@@ -153,14 +151,14 @@ def _stage(repo: object) -> FaceIdentityStage:
     return FaceIdentityStage(
         face_stats_repo=repo,  # type: ignore[arg-type]
         face_id_client=_ScriptedClient(),
-        face_id_min_confidence=0.6,
+        face_id_min_raw_similarity=0.6,
         face_id_camera_configs={_CAMERA: FaceIdCameraConfig(enabled=True)},
     )
 
 
 def _anchor_summary(ctx: FrameContext) -> list[tuple[str, str, float, str]]:
     return [
-        (a.person_id, a.recognition_state, a.confidence, a.detection_id) for a in ctx.face_anchors
+        (a.person_id, a.recognition_state, a.match_score, a.detection_id) for a in ctx.face_anchors
     ]
 
 
@@ -180,7 +178,7 @@ def _sample(name: str, **labels: str) -> float:
 async def test_outcomes_recorded_per_face_and_anchors_unchanged() -> None:
     repo = InMemoryFaceObservationStatsRepository()
     dropped_before = _sample(
-        "cts_face_gate_outcomes_total", camera_id=_CAMERA, outcome="dropped_min_confidence"
+        "cts_face_gate_outcomes_total", camera_id=_CAMERA, outcome="dropped_min_similarity"
     )
     found_before = _sample("cts_face_queries_total", camera_id=_CAMERA, result="face_found")
     assigned_before = _sample("cts_face_attribution_total", camera_id=_CAMERA, result="assigned")
@@ -191,7 +189,7 @@ async def test_outcomes_recorded_per_face_and_anchors_unchanged() -> None:
     assert _anchor_summary(ctx) == _EXPECTED_ANCHORS
     rows = await repo.list_between(_CAPTURE_TIME, _CAPTURE_TIME.replace(minute=31))
     assert [r.gate_outcome for r in rows] == [
-        FaceGateOutcome.DROPPED_MIN_CONFIDENCE,
+        FaceGateOutcome.DROPPED_MIN_SIMILARITY,
         FaceGateOutcome.EMITTED,
         FaceGateOutcome.DROPPED_NO_CANDIDATE,
         FaceGateOutcome.EMITTED,
@@ -204,7 +202,7 @@ async def test_outcomes_recorded_per_face_and_anchors_unchanged() -> None:
     assert (first.interocular_px, first.raw_similarity) == (13.0, 0.55)
     assert first.best_candidate_id == "resident-alpha"
     assert (
-        _sample("cts_face_gate_outcomes_total", camera_id=_CAMERA, outcome="dropped_min_confidence")
+        _sample("cts_face_gate_outcomes_total", camera_id=_CAMERA, outcome="dropped_min_similarity")
         - dropped_before
         == 1
     )

@@ -34,7 +34,7 @@ def _anchor(
 ) -> FaceAnchor:
     return FaceAnchor(
         person_id=person_id,
-        confidence=confidence,
+        match_score=confidence,
         quality=quality,
         tracklet_id=tracklet_id,
         detection_id=detection_id,
@@ -52,7 +52,7 @@ def _evidence(
 ) -> FaceEvidence:
     return FaceEvidence(
         person_id=person_id,
-        confidence=0.9,
+        match_score=0.9,
         tracklet_id=tracklet_id,
         detection_id=detection_id,
         source=source,  # type: ignore[arg-type]

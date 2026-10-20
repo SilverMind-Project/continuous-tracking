@@ -94,7 +94,7 @@ def _ctx(
     ctx.face_anchors = [
         FaceAnchor(
             person_id=face_person_id,
-            confidence=0.95,
+            match_score=0.95,
             recognition_state="recognized",
             detection_id="d1",
             calibrated_confidence=calibrated_confidence,

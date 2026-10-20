@@ -33,7 +33,7 @@ def select_revival_candidate(
     4. Appearance gate: cosine similarity >= ``revive_appearance_min_sim``.
        If either embedding is missing, fall back to space and time only.
     5. Identity-conflict hard gate: if *obs* has a face anchor naming a
-       different identity at >= ``face_conflict_threshold``, reject.
+       different identity at >= ``face_conflict_min_similarity``, reject.
     6. Among passing candidates, pick the highest appearance similarity,
        breaking ties by smallest distance.
 
@@ -145,7 +145,7 @@ def _has_face_conflict(
         and obs.face_anchor.person_id
         and closed.current_identity_id
         and obs.face_anchor.person_id != closed.current_identity_id
-        and obs.face_anchor.confidence >= cfg.face_conflict_threshold
+        and obs.face_anchor.match_score >= cfg.face_conflict_min_similarity
     )
 
 

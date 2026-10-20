@@ -68,7 +68,7 @@ async def _replay_with_cross_camera_revival(
         face_evidence = [
             FaceEvidence(
                 person_id=fa.person_id,
-                confidence=fa.confidence,
+                match_score=fa.match_score,
                 tracklet_id=fa.tracklet_id or "",
                 detection_id=fa.detection_id,
                 source="direct",
@@ -159,7 +159,7 @@ class TestCrossCameraStrangerGuardrail:
             fa = (
                 FaceAnchor(
                     person_id="grandma",
-                    confidence=0.95,
+                    match_score=0.95,
                     quality=0.9,
                     detection_id=f"{cam}-{fidx}",
                     camera_id=cam,

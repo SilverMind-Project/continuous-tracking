@@ -154,7 +154,7 @@ class ReIDCandidateStage(FrameStage):
         confidence = (
             face_anchor.calibrated_confidence
             if face_anchor.calibrated_confidence is not None
-            else face_anchor.confidence
+            else face_anchor.match_score
         )
 
         candidate = NewReviewCandidate(
