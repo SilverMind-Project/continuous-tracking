@@ -662,6 +662,14 @@ class FaceAnchor:
     origin: str = "native"
     # Face detector score for this face, in [0, 1]. Not yet read by policy.
     det_score: float = 0.0
+    # Face image quality in [0, 1] measured by person-identification-service (resolution,
+    # sharpness, detection, pitch), and the scorer version it came from. None when the service did
+    # not score the face and for external anchors. Separate from ``quality``, which is the
+    # evidence-path weight (1.0 for a native anchor, attenuated on propagation, the assertion's
+    # own quality for an external anchor); the resolver's face-quality mode decides whether the
+    # two are combined.
+    face_quality: float | None = None
+    face_quality_version: str = ""
 
 
 class FaceGateOutcome(StrEnum):
@@ -700,6 +708,9 @@ class FaceObservationStat:
     recognition_state: str
     best_candidate_id: IdentityId | None
     gate_outcome: FaceGateOutcome
+    # Face image quality in [0, 1] and its scorer version; None when the service did not score it.
+    quality_score: float | None = None
+    quality_version: str | None = None
 
 
 @dataclass(frozen=True)

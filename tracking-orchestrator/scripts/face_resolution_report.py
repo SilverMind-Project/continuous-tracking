@@ -2,8 +2,9 @@
 """Per-camera face resolution report from continuous_tracking.face_observation_stats.
 
 Answers, per camera: how many pixels sit between the eyes of the faces the cameras see, what raw
-similarity recognized faces score, and how many recognized faces the face-ID gate discarded
-(the ``dropped_min_similarity`` outcome). Use it to size and place cameras for face recognition.
+similarity recognized faces score, how many recognized faces the face-ID gate discarded (the
+``dropped_min_similarity`` outcome), and how face traffic splits across face-quality bands (the
+service's quality score). Use it to size and place cameras for face recognition.
 
 Read-only. All aggregation runs in SQL. The share of person crops that yielded any face is not in
 this table (rows exist only for faces); read it from the ``cts_face_queries_total`` metric.
@@ -74,6 +75,28 @@ GROUP BY camera_id
 ORDER BY camera_id
 """
 
+# Face quality bands (the service's score in [0, 1]); the lowest band is the traffic whose weight
+# drops most once the resolver weighs evidence by face quality.
+_QUALITY_BANDS = ("lt_0.2", "0.2_to_0.4", "0.4_to_0.6", "ge_0.6")
+
+_SQL_QUALITY_BANDS = """
+SELECT camera_id,
+       CASE
+           WHEN quality_score < 0.2 THEN 'lt_0.2'
+           WHEN quality_score < 0.4 THEN '0.2_to_0.4'
+           WHEN quality_score < 0.6 THEN '0.4_to_0.6'
+           ELSE 'ge_0.6'
+       END                                                             AS band,
+       count(*)                                                        AS faces,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY interocular_px)     AS interocular_p50,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY raw_similarity)     AS raw_similarity_p50
+FROM continuous_tracking.face_observation_stats
+WHERE observed_at >= $1 AND observed_at < $2 AND ($3::text IS NULL OR camera_id = $3)
+  AND quality_score IS NOT NULL
+GROUP BY camera_id, band
+ORDER BY camera_id, band
+"""
+
 _SQL_RECOGNIZED_BY_CANDIDATE = """
 SELECT camera_id, best_candidate_id, count(*) AS faces
 FROM continuous_tracking.face_observation_stats
@@ -84,11 +107,12 @@ ORDER BY camera_id, faces DESC, best_candidate_id
 """
 
 
+def _round(value: float | None) -> float | None:
+    return None if value is None else round(float(value), 3)
+
+
 def _percentiles(row: asyncpg.Record) -> dict[str, float | None]:
-    return {
-        key: None if row[key] is None else round(float(row[key]), 3)
-        for key in ("p10", "p50", "p90")
-    }
+    return {key: _round(row[key]) for key in ("p10", "p50", "p90")}
 
 
 async def build_report(
@@ -107,6 +131,7 @@ async def build_report(
                 "interocular_band_share": None,
                 "raw_similarity_by_state": {},
                 "dropped_min_similarity": {"faces": 0},
+                "quality_bands": {},
                 "recognized_by_candidate": {},
             },
         )
@@ -132,6 +157,19 @@ async def build_report(
         camera(row["camera_id"])["dropped_min_similarity"] = {
             "faces": row["faces"],
             **_percentiles(row),
+        }
+
+    for row in await conn.fetch(_SQL_QUALITY_BANDS, *args):
+        camera(row["camera_id"])["quality_bands"][row["band"]] = {
+            "faces": row["faces"],
+            "interocular_p50": _round(row["interocular_p50"]),
+            "raw_similarity_p50": _round(row["raw_similarity_p50"]),
+        }
+    for entry in cameras.values():
+        entry["quality_bands"] = {
+            band: entry["quality_bands"][band]
+            for band in _QUALITY_BANDS
+            if band in entry["quality_bands"]
         }
 
     for row in await conn.fetch(_SQL_RECOGNIZED_BY_CANDIDATE, *args):
@@ -186,6 +224,15 @@ def render_table(report: dict[str, Any]) -> str:
                 else ""
             )
         )
+        if entry["quality_bands"]:
+            lines.append(
+                "  face quality bands: "
+                + ", ".join(
+                    f"{band} n={stats['faces']} iod_p50={stats['interocular_p50']} "
+                    f"sim_p50={stats['raw_similarity_p50']}"
+                    for band, stats in entry["quality_bands"].items()
+                )
+            )
         if entry["recognized_by_candidate"]:
             lines.append(
                 "  recognized faces by identity: "

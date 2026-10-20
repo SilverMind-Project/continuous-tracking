@@ -30,4 +30,6 @@ def face_stat(
         recognition_state="recognized",
         best_candidate_id="resident-alpha",
         gate_outcome=outcome,
+        quality_score=0.42,
+        quality_version="heuristic-v1",
     )

@@ -8,7 +8,11 @@ import httpx
 import numpy as np
 import pytest
 
-from app.inference.face_id_client import CropQueryStatus, FaceIdentificationClient
+from app.inference.face_id_client import (
+    CropQueryStatus,
+    FaceIdentificationClient,
+    FaceQualityReading,
+)
 
 _FACE = {
     "person_id": "resident-alpha",
@@ -173,4 +177,49 @@ async def test_service_without_raw_similarity_falls_back_to_similarity() -> None
     [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)])
 
     assert result.faces[0].raw_similarity == 0.61
+    await client.disconnect()
+
+
+_QUALITY = {
+    "score": 0.41,
+    "resolution": 0.35,
+    "sharpness": 0.6,
+    "detection": 0.8,
+    "pitch": 1.0,
+    "version": "heuristic-v1",
+}
+
+
+@pytest.mark.asyncio
+async def test_face_quality_is_parsed_into_a_reading() -> None:
+    face = {**_FACE, "quality": _QUALITY}
+    client = await _client(
+        httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
+    )
+    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)])
+
+    assert result.faces[0].quality == FaceQualityReading(**_QUALITY)
+    await client.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "quality",
+    [
+        None,
+        "high",
+        {k: v for k, v in _QUALITY.items() if k != "sharpness"},
+        {**_QUALITY, "score": 1.4},
+        {**_QUALITY, "detection": "n/a"},
+        {**_QUALITY, "version": ""},
+    ],
+)
+async def test_absent_or_malformed_quality_is_unmeasured(quality: object) -> None:
+    face = _FACE | ({} if quality is None else {"quality": quality})
+    client = await _client(
+        httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
+    )
+    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)])
+
+    assert result.faces[0].quality is None
     await client.disconnect()

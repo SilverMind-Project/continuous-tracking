@@ -98,6 +98,10 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     assert face_id.min_raw_similarity == data["face_id"]["min_raw_similarity"] == pytest.approx(0.6)
     assert FaceIdConfig().min_raw_similarity == pytest.approx(0.6)
     assert resolver.cross_gt_face_propagation_threshold == pytest.approx(0.72)
+    # Face quality ships in shadow; the dataclass default stays off so a bare config is inert.
+    assert resolver.face_quality_mode == data["resolver"]["face_quality_mode"] == "shadow"
+    assert ResolverConfig().face_quality_mode == "off"
+    assert resolver.face_quality_missing_default == pytest.approx(0.5)
     assert world_tracker.dedup_residual_coeff_k == pytest.approx(1.0)
     assert world_tracker.dedup_max_distance_ceiling_m == pytest.approx(1.5)
     assert world_tracker.zupt_speed_enter_m_s == pytest.approx(0.12)

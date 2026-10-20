@@ -399,6 +399,11 @@ class FaceIdentityStage(FrameStage):
                 if outcome is not FaceGateOutcome.EMITTED:
                     continue
 
+                # Recorded as measured; whether it weighs the evidence is the resolver's
+                # face-quality mode, never decided here.
+                face_quality = face.quality.score if face.quality is not None else None
+                face_quality_version = face.quality.version if face.quality is not None else ""
+
                 if state == "recognized":
                     face_anchors.append(
                         FaceAnchor(
@@ -412,6 +417,8 @@ class FaceIdentityStage(FrameStage):
                             similarity=face.raw_similarity,
                             yaw_deg=face.yaw_deg,
                             det_score=face.det_score,
+                            face_quality=face_quality,
+                            face_quality_version=face_quality_version,
                             calibrated_confidence=self._resolve_calibrated_confidence(face),
                         )
                     )
@@ -434,6 +441,8 @@ class FaceIdentityStage(FrameStage):
                             similarity=face.raw_similarity,
                             yaw_deg=face.yaw_deg,
                             det_score=face.det_score,
+                            face_quality=face_quality,
+                            face_quality_version=face_quality_version,
                             # candidates never carry calibrated authority
                             calibrated_confidence=None,
                         )
@@ -456,6 +465,8 @@ class FaceIdentityStage(FrameStage):
                             similarity=face.raw_similarity,
                             yaw_deg=face.yaw_deg,
                             det_score=face.det_score,
+                            face_quality=face_quality,
+                            face_quality_version=face_quality_version,
                             calibrated_confidence=None,
                         )
                     )
@@ -630,4 +641,6 @@ def _face_stat(
         recognition_state=face.recognition_state,
         best_candidate_id=face.best_candidate_id,
         gate_outcome=outcome,
+        quality_score=face.quality.score if face.quality is not None else None,
+        quality_version=face.quality.version if face.quality is not None else None,
     )

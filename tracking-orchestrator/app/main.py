@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI
 from fastapi.responses import Response
@@ -80,7 +80,7 @@ from .storage.postgres.settings_repo import PostgresSettingsRepository
 from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
 from .tracking.identity.candidate_eligibility import CandidatePolicy
-from .tracking.identity_resolver import ResolverConfig
+from .tracking.identity_resolver import FaceQualityMode, ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
 from .trajectory.appearance_profile import AppearanceSettings
 from .trajectory.dementia_signals import SignalConfig
@@ -269,6 +269,9 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         room_match_confidence_scale=r.as_float("room_match_confidence_scale"),
         cc_assertion_default_quality=r.as_float("cc_assertion_default_quality"),
         cc_assertion_default_yaw_deg=r.as_float("cc_assertion_default_yaw_deg"),
+        # ResolverConfig validates the value; the cast only narrows the type for mypy.
+        face_quality_mode=cast(FaceQualityMode, r.as_str("face_quality_mode")),
+        face_quality_missing_default=r.as_float("face_quality_missing_default"),
     )
 
 
@@ -281,6 +284,7 @@ def _build_candidate_policy(s: Settings) -> CandidatePolicy:
         calibrated_confidence_min=rc.as_float("calibrated_confidence_min"),
         seed_orientation_min_confidence=rc.as_float("seed_orientation_min_confidence"),
         min_quality=rc.as_float("min_quality"),
+        min_face_quality=rc.as_float("min_face_quality"),
         max_per_identity_orientation=rc.as_int("max_per_identity_orientation"),
         model_version=s.as_str("triton.reid_model"),
         preprocessing_version=rc.as_str("preprocessing_version"),

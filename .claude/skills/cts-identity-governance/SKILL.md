@@ -66,6 +66,15 @@ Face scores have four names, and each name means one thing:
   `face_id_min_confidence` is decoded once, in `app/main.py`.
 - Persist raw cosine similarity and calibrated confidence as different fields.
 - Raw similarity is never presented or consumed as probability.
+- Face image quality comes only from person-identification-service (`FaceResult.quality`,
+  carried as `FaceAnchor.face_quality` with its scorer version). It is a separate field from
+  `FaceAnchor.quality`, the evidence-path weight (1.0 native, attenuated on propagation, the
+  assertion's own quality for `cc_assertion`); never overwrite one with the other.
+  `IdentityResolver._effective_face_quality` is the only place the two combine, under
+  `resolver.face_quality_mode` (`off`, `shadow`, `enabled`). Outside `off`, a native anchor with
+  no score uses `resolver.face_quality_missing_default` (0.5), never 1.0; external anchors are not
+  discounted again; persisted provenance (`FaceEvidence.quality`, `IdentityEvidence.quality`)
+  never depends on the mode. Face quality never grants or removes ArcFace authority.
 - Only direct face evidence may become authoritative. Propagated evidence cannot satisfy the
   authority threshold or refresh the authoritative-evidence timestamp.
 - Authority additionally requires an unambiguous face-to-person observation association.

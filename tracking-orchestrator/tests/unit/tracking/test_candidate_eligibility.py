@@ -7,6 +7,8 @@ direct fix for F3, the confirmed gallery seed-identity mismatch bug).
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from app.domain import FaceAnchor, OrientationBin
 from app.tracking.identity.candidate_eligibility import (
     CandidateEligibility,
@@ -162,3 +164,28 @@ def test_quality_boundary_just_below_threshold() -> None:
 def test_quality_boundary_at_threshold_is_eligible() -> None:
     result = _eval(quality=0.35)
     assert result.eligible is True
+
+
+def _with_face_quality(face_quality: float | None) -> FaceAnchor:
+    return replace(_face(), face_quality=face_quality, face_quality_version="heuristic-v1")
+
+
+def test_face_quality_gate_is_off_by_default() -> None:
+    assert _CFG.min_face_quality == 0.0
+    assert _eval(face_anchor=_with_face_quality(None)).eligible is True
+    assert _eval(face_anchor=_with_face_quality(0.01)).eligible is True
+
+
+def test_face_quality_too_low_below_the_bar_and_fails_closed_when_unmeasured() -> None:
+    cfg = CandidatePolicy(min_face_quality=0.4)
+    for face_quality in (0.39, None):
+        result = _eval(face_anchor=_with_face_quality(face_quality), cfg=cfg)
+        assert result.eligible is False
+        assert result.reason == "face_quality_too_low"
+    assert _eval(face_anchor=_with_face_quality(0.4), cfg=cfg).eligible is True
+
+
+def test_calibration_gate_runs_before_the_face_quality_gate() -> None:
+    cfg = CandidatePolicy(min_face_quality=0.4)
+    face = replace(_with_face_quality(0.1), calibrated_confidence=None)
+    assert _eval(face_anchor=face, cfg=cfg).reason == "calibration_not_authoritative"

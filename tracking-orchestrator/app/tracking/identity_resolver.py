@@ -30,7 +30,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict, get_args
 
 import numpy as np
 from structlog import get_logger
@@ -92,6 +92,9 @@ class _PendingIdentityDecision:
     entity: IdentityResolvableEntity
     decision: IdentityDecision
     direct_face_confidence: float
+
+
+FaceQualityMode = Literal["off", "shadow", "enabled"]
 
 
 @dataclass(frozen=True)
@@ -335,6 +338,26 @@ class ResolverConfig:
     cc_assertion_default_quality: float = 0.5
     cc_assertion_default_yaw_deg: float = 60.0
 
+    # --- Face image quality ---
+    # Whether the service-measured face quality (FaceAnchor.face_quality) weighs recognized face
+    # evidence. "off": the anchor's evidence-path quality only (pre-existing behavior). "shadow":
+    # live as "off", plus a quality-weighted evaluation that only counts disagreements.
+    # "enabled": recognized-anchor weight is evidence-path quality times face quality.
+    face_quality_mode: FaceQualityMode = "off"
+    # Face quality assumed for a native anchor whose service sent no score, once the mode is not
+    # "off". Conservative, like cc_assertion_default_quality: never 1.0, which would rank an
+    # unmeasured face above a measured good one.
+    face_quality_missing_default: float = 0.5
+
+    def __post_init__(self) -> None:
+        if self.face_quality_mode not in get_args(FaceQualityMode):
+            raise ValueError(
+                f"resolver.face_quality_mode must be one of {get_args(FaceQualityMode)}, "
+                f"got {self.face_quality_mode!r}"
+            )
+        if not 0.0 <= self.face_quality_missing_default <= 1.0:
+            raise ValueError("resolver.face_quality_missing_default must be in [0, 1]")
+
     # --- Cross-GT face propagation ---
     # Minimum gallery cosine similarity for propagating a face-confirmed identity
     # to an adjacent GlobalTrack that has no face anchor of its own. Propagation
@@ -478,8 +501,11 @@ class IdentityResolver:
 
         for entity in hypotheses:
             prior = self._build_prior(entity, captured_at)
+            live_quality_mode: FaceQualityMode = (
+                "enabled" if self._config.face_quality_mode == "enabled" else "off"
+            )
             face_likelihood, best_face_conf = self._from_face_anchors(
-                entity, augmented_anchors, augmented_evidence
+                entity, augmented_anchors, augmented_evidence, face_quality_mode=live_quality_mode
             )
             reid_likelihood = await self._from_gallery(entity)
             height_likelihood = self._from_height(entity, ph_heights or {})
@@ -581,6 +607,23 @@ class IdentityResolver:
             )
 
             arcface_authority = self._check_arcface_authority(entity, augmented_anchors)
+            # Face-quality shadow: pure CPU over this frame's anchors, so it is not sample-gated.
+            # ArcFace authority decides without the posterior, so face quality cannot change it.
+            if self._config.face_quality_mode == "shadow" and arcface_authority is None:
+                self._shadow_face_quality(
+                    entity,
+                    augmented_anchors,
+                    augmented_evidence,
+                    prior,
+                    posterior,
+                    face_likelihood,
+                    best_face_conf,
+                    reid_likelihood,
+                    height_likelihood,
+                    captured_at,
+                    entity_quality,
+                    commit_evidence_ids,
+                )
             decision = self._commit(
                 entity,
                 posterior,
@@ -943,8 +986,14 @@ class IdentityResolver:
         entity: IdentityResolvableEntity,
         face_anchors: list[FaceAnchor],
         face_evidence: list[FaceEvidence] | None = None,
+        *,
+        face_quality_mode: FaceQualityMode = "off",
     ) -> tuple[PosteriorDist, float | None]:
         """Build likelihood from face anchors associated with this entity.
+
+        ``face_quality_mode`` is "off" or "enabled" here (the caller resolves "shadow"); it only
+        changes the quality each recognized anchor is weighed with, via
+        :meth:`_effective_face_quality`.
 
         Three recognition states are handled distinctly:
         - recognized: (strong positive via p_face).
@@ -1000,7 +1049,10 @@ class IdentityResolver:
         # --- Recognized anchors ---
         if recognized_anchors:
             # Use the strongest recognized anchor.
-            best = max(recognized_anchors, key=lambda fa: fa.match_score * fa.quality)
+            best = max(
+                recognized_anchors,
+                key=lambda fa: fa.match_score * self._effective_face_quality(fa, face_quality_mode),
+            )
             best_recognized_conf = best.match_score
 
             # Determine evidence source for weight multiplier.
@@ -1017,7 +1069,13 @@ class IdentityResolver:
                 weight_mult *= self._config.cc_assertion_likelihood_scale
 
             frontality = self._frontality_factor(best.yaw_deg)
-            p_face = self._p_face(best.match_score, best.quality) * weight_mult * frontality
+            p_face = (
+                self._p_face(
+                    best.match_score, self._effective_face_quality(best, face_quality_mode)
+                )
+                * weight_mult
+                * frontality
+            )
 
             if best.person_id:
                 likelihood[best.person_id] = p_face
@@ -1149,11 +1207,109 @@ class IdentityResolver:
             default=0.0,
         )
 
-    def _p_face(self, confidence: float, quality: float) -> float:
-        """Probability that a face anchor is correct.
+    def _effective_face_quality(self, anchor: FaceAnchor, mode: FaceQualityMode) -> float:
+        """The quality a recognized face anchor is weighed with; the only face-quality mode switch.
 
-        Real sigmoid calibrated to typical face-recognition performance.
-        At (0.5, 0.5) -> ~0.5; at (0.95, 1.0) -> ~0.96.
+        ``anchor.quality`` is the evidence-path weight (1.0 for a native anchor, attenuated on
+        propagation, the assertion's own quality for an external anchor). With the mode enabled
+        it is multiplied by the service-measured face quality. A native anchor whose service sent
+        no score uses ``face_quality_missing_default``; an external anchor's quality already is
+        its assertion's, so it is not discounted again.
+        """
+        if mode == "off":
+            return anchor.quality
+        if anchor.face_quality is not None:
+            return anchor.quality * anchor.face_quality
+        if anchor.origin == "native":
+            return anchor.quality * self._config.face_quality_missing_default
+        return anchor.quality
+
+    def _shadow_face_quality(
+        self,
+        entity: IdentityResolvableEntity,
+        face_anchors: list[FaceAnchor],
+        face_evidence: list[FaceEvidence],
+        prior: PosteriorDist,
+        posterior: PosteriorDist,
+        face_likelihood: PosteriorDist,
+        best_face_conf: float | None,
+        reid_likelihood: PosteriorDist,
+        height_likelihood: PosteriorDist,
+        captured_at: datetime,
+        entity_quality: float,
+        evidence_identity_ids: frozenset[str],
+    ) -> None:
+        """Evaluate this entity with quality-weighted face evidence, purely for measurement.
+
+        Quality can change both the face likelihood and which recognized anchor is the best one,
+        and the best anchor's match score feeds the sticky-maintenance contradiction check, so
+        each side is evaluated with its own contradiction, exactly as the live commit does.
+        """
+        shadow_face, shadow_best_face_conf = self._from_face_anchors(
+            entity, face_anchors, face_evidence, face_quality_mode="enabled"
+        )
+        if (
+            shadow_face.distribution == face_likelihood.distribution
+            and shadow_best_face_conf == best_face_conf
+        ):
+            return
+        shadow_posterior = self._combine(prior, shadow_face, reid_likelihood, height_likelihood)
+        live_eval, shadow_eval = (
+            self._evaluate_commit(
+                entity,
+                evaluated_posterior,
+                evaluated_face,
+                reid_likelihood,
+                captured_at,
+                entity_quality,
+                contradicted=self._contradicted(
+                    entity, evaluated_posterior, evaluated_face, evaluated_best
+                ),
+                enable_sticky_maintenance=self._config.enable_sticky_maintenance,
+                enforce_quality_gate=self._config.enable_quality_gate,
+                enforce_flip_debounce=self._config.enable_flip_debounce,
+                evidence_identity_ids=evidence_identity_ids,
+            )
+            for evaluated_posterior, evaluated_face, evaluated_best in (
+                (posterior, face_likelihood, best_face_conf),
+                (shadow_posterior, shadow_face, shadow_best_face_conf),
+            )
+        )
+        if shadow_eval.new_id != live_eval.new_id:
+            # The rollout review reads these events to judge each disagreement.
+            logger.info(
+                "face_quality_shadow_mismatch",
+                entity_id=entity.entity_id,
+                live_identity_id=live_eval.new_id,
+                shadow_identity_id=shadow_eval.new_id,
+            )
+        self._shadow_mismatch("face_quality", live_eval.new_id, shadow_eval)
+
+    def _contradicted(
+        self,
+        entity: IdentityResolvableEntity,
+        posterior: PosteriorDist,
+        face_likelihood: PosteriorDist,
+        best_face_confidence: float | None,
+    ) -> bool:
+        """The sticky-maintenance contradiction check, as ``_commit`` applies it."""
+        (top_id, top_prob), margin = posterior.top_with_margin()
+        return compute_contradiction(
+            prev_id=entity.current_identity_id,
+            face_likelihood=face_likelihood,
+            best_face_confidence=best_face_confidence,
+            top_id=top_id,
+            top_prob=top_prob,
+            margin=margin,
+            config=self._to_commit_policy(),
+        )
+
+    def _p_face(self, confidence: float, quality: float) -> float:
+        """Face likelihood weight for a recognized anchor from its match score and quality.
+
+        An uncalibrated tanh heuristic, not a fitted probability: 0.7 * score + 0.3 * quality is
+        squashed around 0.5 and capped at 0.99. At (0.5, 0.5) -> 0.5; at (0.95, 1.0) -> ~0.96.
+        ``quality`` is :meth:`_effective_face_quality`'s value.
         """
         combined = 0.7 * confidence + 0.3 * quality
         return min(0.99, 0.5 + 0.5 * math.tanh(4 * (combined - 0.5)))
@@ -1715,15 +1871,7 @@ class IdentityResolver:
 
         # --- Normal Bayesian posterior path ---
         prev_id = entity.current_identity_id
-        contradicted = compute_contradiction(
-            prev_id=prev_id,
-            face_likelihood=face_likelihood,
-            best_face_confidence=best_face_confidence,
-            top_id=top_id,
-            top_prob=top_prob,
-            margin=margin,
-            config=self._to_commit_policy(),
-        )
+        contradicted = self._contradicted(entity, posterior, face_likelihood, best_face_confidence)
 
         live_eval = self._evaluate_commit(
             entity,

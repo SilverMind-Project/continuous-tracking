@@ -27,6 +27,9 @@ class CandidatePolicy:
     calibrated_confidence_min: float = 0.80
     seed_orientation_min_confidence: float = 0.5
     min_quality: float = 0.35
+    # Minimum service-measured face image quality of the seeding face. 0.0 disables the gate;
+    # above 0.0 a face without a measured quality fails closed.
+    min_face_quality: float = 0.0
     max_per_identity_orientation: int = 10
     # A calibrated direct-face
     # confidence at or above this bar mints the candidate straight into
@@ -94,6 +97,11 @@ def evaluate_candidate(
         calibrated = face_anchor.calibrated_confidence
         if calibrated is None or calibrated < cfg.calibrated_confidence_min:
             return _ineligible("calibration_not_authoritative")
+
+    if cfg.min_face_quality > 0.0 and (
+        face_anchor.face_quality is None or face_anchor.face_quality < cfg.min_face_quality
+    ):
+        return _ineligible("face_quality_too_low")
 
     if orientation == OrientationBin.UNKNOWN:
         return _ineligible("unknown_orientation")

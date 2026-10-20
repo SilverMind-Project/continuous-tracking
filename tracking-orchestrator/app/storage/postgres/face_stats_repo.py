@@ -13,12 +13,13 @@ from ...domain import FaceGateOutcome, FaceObservationStat
 _COLUMNS = """
     observed_at, camera_id, detection_id, crop_width_px, crop_height_px,
     face_width_px, face_height_px, interocular_px, det_score, yaw_deg, pitch_deg,
-    raw_similarity, recognition_state, best_candidate_id, gate_outcome
+    raw_similarity, recognition_state, best_candidate_id, gate_outcome,
+    quality_score, quality_version
 """
 
 _SQL_INSERT = f"""
 INSERT INTO continuous_tracking.face_observation_stats ({_COLUMNS})
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 """
 
 _SQL_LIST = f"""
@@ -70,6 +71,8 @@ def _to_args(row: FaceObservationStat) -> tuple[Any, ...]:
         row.recognition_state,
         row.best_candidate_id,
         row.gate_outcome.value,
+        row.quality_score,
+        row.quality_version,
     )
 
 
@@ -90,4 +93,6 @@ def _from_record(r: asyncpg.Record) -> FaceObservationStat:
         recognition_state=r["recognition_state"],
         best_candidate_id=r["best_candidate_id"],
         gate_outcome=FaceGateOutcome(r["gate_outcome"]),
+        quality_score=None if r["quality_score"] is None else float(r["quality_score"]),
+        quality_version=r["quality_version"],
     )

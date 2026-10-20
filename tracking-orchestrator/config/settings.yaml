@@ -451,6 +451,17 @@ resolver:
   # would make external evidence look better than native evidence.
   cc_assertion_default_quality: 0.5
   cc_assertion_default_yaw_deg: 60.0
+  # Face image quality (the person-id service's score from face size, sharpness, detection score
+  # and pitch) weighs recognized face evidence only when this is "enabled". "shadow" keeps live
+  # decisions unchanged and counts disagreements in
+  # cts_identity_shadow_mismatch_total{feature="face_quality"} (log event
+  # face_quality_shadow_mismatch). Flip to "enabled" after 7 days of shadow data only if, on
+  # reviewed mismatches, the quality-weighted decision moves a correct commit to Unknown no more
+  # often than it removes a wrong commit. "off" ignores face quality entirely.
+  face_quality_mode: shadow
+  # Face quality assumed for a native face whose service sent no score, outside "off" mode.
+  # Conservative (same posture as cc_assertion_default_quality), never 1.0.
+  face_quality_missing_default: 0.5
 
 # Governed ReID gallery candidate creation (M04). The only pipeline write
 # path into reid_gallery: ReIDCandidateStage -> create_review_candidate,
@@ -463,6 +474,9 @@ reid_candidates:
   calibrated_confidence_min: 0.80
   seed_orientation_min_confidence: 0.5
   min_quality: 0.35
+  # Minimum service-measured face image quality of the seeding face, in [0, 1]. 0.0 keeps
+  # behavior unchanged; above 0.0 a face without a quality score never seeds (fail closed).
+  min_face_quality: 0.0
   max_per_identity_orientation: 10
   # model_version is read separately from triton.reid_model (the live Triton
   # model identifier); this key only covers the crop preprocessing pipeline.

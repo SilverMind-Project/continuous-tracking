@@ -24,6 +24,22 @@ logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
+class FaceQualityReading:
+    """Face image quality reported by person-identification-service, all components in [0, 1].
+
+    The service computes it from the aligned face crop; CTS only carries it. ``version`` names the
+    scorer, so a policy or calibration that depends on the score binds to that version.
+    """
+
+    score: float
+    resolution: float
+    sharpness: float
+    detection: float
+    pitch: float
+    version: str
+
+
+@dataclass(frozen=True)
 class FaceResult:
     """A single face identification result from person-identification-service."""
 
@@ -53,6 +69,8 @@ class FaceResult:
     face_height_px: float = 0.0
     # Eye-keypoint distance in crop pixels; None when the service could not measure it.
     interocular_px: float | None = None
+    # None for a service that does not score face quality, or a malformed reading.
+    quality: FaceQualityReading | None = None
 
 
 class CropQueryStatus(StrEnum):
@@ -277,7 +295,27 @@ def _parse_face(
         face_width_px=float(face.get("face_width_px", 0.0)),
         face_height_px=float(face.get("face_height_px", 0.0)),
         interocular_px=float(interocular_raw) if interocular_raw is not None else None,
+        quality=_parse_quality(face.get("quality")),
     )
+
+
+_QUALITY_COMPONENTS = ("score", "resolution", "sharpness", "detection", "pitch")
+
+
+def _parse_quality(raw: Any) -> FaceQualityReading | None:
+    """Parse the service's quality object; anything malformed is treated as unmeasured."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        values = {name: float(raw[name]) for name in _QUALITY_COMPONENTS}
+        version = str(raw["version"])
+    except (KeyError, TypeError, ValueError):
+        logger.warning("face_quality_malformed", keys=sorted(raw))
+        return None
+    if not version or not all(0.0 <= v <= 1.0 for v in values.values()):
+        logger.warning("face_quality_out_of_range", version=version)
+        return None
+    return FaceQualityReading(version=version, **values)
 
 
 def _encode_crop(

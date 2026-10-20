@@ -31,8 +31,8 @@ def _row(offset_s: float, camera_id: str, interocular_px: float | None, **change
 _ROWS = [
     _row(0, "cam-1", 10.0),
     _row(1, "cam-1", 20.0),
-    _row(2, "cam-1", 30.0),
-    _row(3, "cam-1", 50.0),
+    _row(2, "cam-1", 30.0, quality_score=0.15),
+    _row(3, "cam-1", 50.0, quality_score=0.8),
     _row(4, "cam-1", None, recognition_state="unrecognized", best_candidate_id=None),
     _row(
         5,
@@ -41,7 +41,14 @@ _ROWS = [
         raw_similarity=0.52,
         gate_outcome=FaceGateOutcome.DROPPED_MIN_SIMILARITY,
     ),
-    _row(6, "cam-2", 44.0, best_candidate_id="resident-beta"),
+    _row(
+        6,
+        "cam-2",
+        44.0,
+        best_candidate_id="resident-beta",
+        quality_score=None,
+        quality_version=None,
+    ),
     _row(7200, "cam-1", 99.0),  # outside the window
 ]
 
@@ -67,8 +74,17 @@ async def test_report_bands_percentiles_and_gate_drops(db_pool: asyncpg.Pool) ->
     assert cam1["dropped_min_similarity"]["p50"] == 0.52
     assert cam1["raw_similarity_by_state"]["unrecognized"]["faces"] == 1
     assert cam1["recognized_by_candidate"] == {"resident-alpha": 5}
+    # Fixture default quality is 0.42; one row each in the lowest and highest bands.
+    assert cam1["quality_bands"] == {
+        "lt_0.2": {"faces": 1, "interocular_p50": 30.0, "raw_similarity_p50": 0.47},
+        "0.4_to_0.6": {"faces": 4, "interocular_p50": 18.0, "raw_similarity_p50": 0.47},
+        "ge_0.6": {"faces": 1, "interocular_p50": 50.0, "raw_similarity_p50": 0.47},
+    }
+    assert report["cameras"]["cam-2"]["quality_bands"] == {}
     assert report["cameras"]["cam-2"]["recognized_by_candidate"] == {"resident-beta": 1}
-    assert "Camera cam-1: 6 faces" in report_script.render_table(report)
+    table = report_script.render_table(report)
+    assert "Camera cam-1: 6 faces" in table
+    assert "lt_0.2 n=1" in table
 
 
 @pytest.mark.integration
