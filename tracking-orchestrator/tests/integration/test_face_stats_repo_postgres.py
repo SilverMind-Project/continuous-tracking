@@ -27,6 +27,8 @@ _ROWS = [
     face_stat(5, "cam-2", FaceGateOutcome.DROPPED_MIN_CONFIDENCE),
     replace(face_stat(9, "cam-1"), interocular_px=None, best_candidate_id=None),
     face_stat(3600, "cam-1"),
+    face_stat(12, "cam-1", FaceGateOutcome.DROPPED_NOT_IN_HEAD_REGION),
+    face_stat(13, "cam-2", FaceGateOutcome.DROPPED_AMBIGUOUS),
 ]
 
 
@@ -93,7 +95,8 @@ async def test_migration_0002_down_then_up(db_pool: asyncpg.Pool) -> None:
         assert await _face_stats_objects(conn) == (True, 1)
 
     try:
-        assert await runner.rollback(1) == 1
+        # 0003 (attribution outcomes) sits on top of 0002; roll back both.
+        assert await runner.rollback(2) == 2
         async with db_pool.acquire() as conn:
             assert await _face_stats_objects(conn) == (False, 0)
     finally:
@@ -102,3 +105,44 @@ async def test_migration_0002_down_then_up(db_pool: asyncpg.Pool) -> None:
 
     async with db_pool.acquire() as conn:
         assert await _face_stats_objects(conn) == (True, 1)
+
+
+async def _insert_outcome(conn: asyncpg.Connection, outcome: str) -> None:
+    await conn.execute(
+        """
+        INSERT INTO continuous_tracking.face_observation_stats (
+            observed_at, camera_id, detection_id, crop_width_px, crop_height_px,
+            face_width_px, face_height_px, interocular_px, det_score, yaw_deg,
+            pitch_deg, raw_similarity, recognition_state, best_candidate_id, gate_outcome
+        ) VALUES ($1, 'cam-1', 'd', 10, 10, 1, 1, NULL, 0.9, 0, 0, 0.5,
+                  'recognized', NULL, $2)
+        """,
+        _T0,
+        outcome,
+    )
+
+
+@pytest.mark.integration
+async def test_migration_0003_widens_and_restores_outcome_check(db_pool: asyncpg.Pool) -> None:
+    runner = MigrationRunner(db_pool, _MIGRATIONS_DIR)
+    async with db_pool.acquire() as conn:
+        await _insert_outcome(conn, "dropped_ambiguous")
+
+    try:
+        assert await runner.rollback(1) == 1
+        async with db_pool.acquire() as conn:
+            # The down migration removed the row it could no longer represent.
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM continuous_tracking.face_observation_stats"
+                )
+                == 0
+            )
+            with pytest.raises(asyncpg.CheckViolationError):
+                await _insert_outcome(conn, "dropped_not_in_head_region")
+            await _insert_outcome(conn, "emitted")
+    finally:
+        await runner.migrate()
+
+    async with db_pool.acquire() as conn:
+        await _insert_outcome(conn, "dropped_not_in_head_region")

@@ -113,6 +113,15 @@ Physical plausibility belongs in world association, not identity resolution.
 - If every pair is invalid, spawn or revive an `Unknown` PH; never force a least-bad match.
 - Preserve current PH batch-time behavior unless a separately approved replay-backed change
   demonstrates that event-time refactoring is required.
+- An observation carries a face anchor only when that anchor was produced for the same detection
+  (`WorldTrackingStage._attach_face_anchors` matches on `detection_id` only; there is no
+  camera-wide fallback, and an anchor without a `detection_id` attaches to nothing). At most one
+  face per person crop becomes evidence, chosen by the head-region rule
+  (`app/pipeline/face_attribution.py`: the face centre must lie in the top
+  `face_id.head_region_height_frac` of the person box, widened by
+  `face_id.head_region_side_margin_frac`, including the upward crop padding); two faces in the
+  region are ambiguous and yield no anchor. Attribution is decided inside `_gate_outcome`
+  (outcomes `dropped_not_in_head_region`, `dropped_ambiguous`), never in a second gate.
 
 ## Track-local appearance versus identity gallery
 

@@ -98,7 +98,11 @@ class FaceIdentificationClient:
         timeout_s: float = 2.0,
         min_confidence: float = 0.5,
         transport: httpx.AsyncBaseTransport | None = None,
+        jpeg_quality: int = 95,
     ) -> None:
+        if not 1 <= jpeg_quality <= 100:
+            raise ValueError("jpeg_quality must be in [1, 100]")
+        self._jpeg_quality = jpeg_quality
         self._base_url = base_url.rstrip("/")
         # Tests inject httpx.MockTransport; production uses the default network transport.
         self._transport = transport
@@ -204,7 +208,7 @@ class FaceIdentificationClient:
             return _result(CropQueryStatus.TOO_SMALL)
 
         try:
-            crop_b64 = _encode_crop(crop)
+            crop_b64 = _encode_crop(crop, quality=self._jpeg_quality)
         except Exception:
             logger.exception("Failed to encode crop for face id", crop_index=idx)
             return _result(CropQueryStatus.ERROR)
@@ -284,7 +288,7 @@ def _parse_face(
 
 def _encode_crop(
     crop: npt.NDArray[np.uint8],
-    quality: int = 90,
+    quality: int,
 ) -> str:
     """Encode a person crop as base64 JPEG (no downscaling)."""
     bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)

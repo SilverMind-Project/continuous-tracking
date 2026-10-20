@@ -8,6 +8,10 @@ similarity recognized faces score, and how many recognized faces the face-ID gat
 Read-only. All aggregation runs in SQL. The share of person crops that yielded any face is not in
 this table (rows exist only for faces); read it from the ``cts_face_queries_total`` metric.
 
+Rows recorded since face crops were padded (upward and sideways around the person box) carry the
+padded crop size in ``crop_width_px`` / ``crop_height_px``; earlier rows carry the tight person
+box. Face sizes and interocular distances are frame pixels in both cases and remain comparable.
+
 Usage:
     DATABASE_URL=postgresql://... python scripts/face_resolution_report.py --since 2026-10-20
     ... --until 2026-10-27 --camera cam-01 --format json

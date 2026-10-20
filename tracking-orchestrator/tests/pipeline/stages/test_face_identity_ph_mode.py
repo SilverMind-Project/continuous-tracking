@@ -76,6 +76,8 @@ def _make_ctx(camera_id: str = "cam-1") -> FrameContext:
         capture_time=datetime.now(UTC),
         effective_width=640,
         effective_height=480,
+        # The face path crops its padded face boxes from the frame itself.
+        image=np.zeros((480, 640, 3), dtype=np.uint8),
     )
 
 
@@ -107,6 +109,9 @@ class _FakeFaceResult:
         self.face_width_px = 40.0
         self.face_height_px = 48.0
         self.interocular_px: float | None = 18.0
+        # Centred at (60, 50) px of the 640x480 frame: inside the head region of the default
+        # detection box (10, 20, 110, 220).
+        self.bbox_normalized = [50 / 640, 40 / 480, 70 / 640, 60 / 480]
 
 
 def _found(index: int, *faces: _FakeFaceResult) -> CropQueryResult:

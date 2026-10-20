@@ -7,6 +7,8 @@ privacy stage must never reach any model adapter.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import numpy.typing as npt
 
@@ -49,6 +51,45 @@ def crop_detection_from_bbox(
     x2 = max(x1 + 1, min(w, bbox.x_max))
     y2 = max(y1 + 1, min(h, bbox.y_max))
     return np.ascontiguousarray(image[y1:y2, x1:x2])
+
+
+@dataclass(frozen=True)
+class FaceCropPadding:
+    """How far the face crop extends beyond the person box, as fractions of the box size.
+
+    SCRFD is trained on faces with surrounding context; a tight person box often cuts the head at
+    its top edge. The bottom is never padded because a face is never below the person box.
+    """
+
+    top_frac: float = 0.15
+    side_frac: float = 0.10
+
+    def __post_init__(self) -> None:
+        if self.top_frac < 0.0 or self.side_frac < 0.0:
+            raise ValueError("face crop padding fractions must be non-negative")
+
+
+def face_crop_box(
+    person_box_px: BoundingBox,
+    frame_width_px: int,
+    frame_height_px: int,
+    padding: FaceCropPadding,
+) -> BoundingBox:
+    """Expand a person box upward and sideways for face detection, clamped to the frame.
+
+    Privacy zones need no handling here: ``PrivacyStage`` blurs or masks them in the frame image
+    itself, so any crop of that image, padded or not, inherits the mask.
+    """
+    width_px = person_box_px.x_max - person_box_px.x_min
+    height_px = person_box_px.y_max - person_box_px.y_min
+    side_px = round(padding.side_frac * width_px)
+    top_px = round(padding.top_frac * height_px)
+    return BoundingBox(
+        x_min=max(0, person_box_px.x_min - side_px),
+        y_min=max(0, person_box_px.y_min - top_px),
+        x_max=min(frame_width_px, person_box_px.x_max + side_px),
+        y_max=min(frame_height_px, person_box_px.y_max),
+    )
 
 
 def is_degenerate(crop: npt.NDArray[np.uint8]) -> bool:

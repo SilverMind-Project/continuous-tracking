@@ -30,6 +30,8 @@ from ..inference.face_id_client import FaceIdentificationClient
 from ..inference.pose import PoseEstimator
 from ..observability import metrics as _metrics
 from ..pipeline.batcher import FrameBatcher
+from ..pipeline.crops import FaceCropPadding
+from ..pipeline.face_attribution import HeadRegionPolicy
 from ..pipeline.frame_context import FrameContext
 from ..pipeline.gallery_cache import GalleryCache
 from ..pipeline.reid_policy import AdaptiveReidConfig, ReidNeedPolicy
@@ -164,6 +166,9 @@ class FaceIdConfig:
     # expected versions for calibration compatibility gating on the CTS side.
     expected_arcface_model_version: str = ""
     expected_preprocessing_version: str = ""
+    head_region: HeadRegionPolicy = field(default_factory=HeadRegionPolicy)
+    crop_padding: FaceCropPadding = field(default_factory=FaceCropPadding)
+    crop_jpeg_quality: int = 95
 
 
 @dataclass
@@ -593,6 +598,7 @@ class FrameProcessingPipeline:
                 base_url=self._config.face_id.url,
                 timeout_s=self._config.face_id.timeout_s,
                 min_confidence=self._config.face_id.min_confidence,
+                jpeg_quality=self._config.face_id.crop_jpeg_quality,
             )
             await self._face_id_client.connect()
 
@@ -655,6 +661,8 @@ class FrameProcessingPipeline:
                 last_face_id_by_tracklet=self._last_face_id_by_tracklet,
                 expected_arcface_model_version=self._config.face_id.expected_arcface_model_version,
                 expected_preprocessing_version=self._config.face_id.expected_preprocessing_version,
+                head_region_policy=self._config.face_id.head_region,
+                crop_padding=self._config.face_id.crop_padding,
             ),
         ]
 

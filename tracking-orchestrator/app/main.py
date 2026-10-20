@@ -34,6 +34,8 @@ from .inference.pose import PoseEstimator
 from .inference.reid_embedder import ReidEmbedder
 from .inference.triton_client import TritonClientProtocol, TritonGrpcClient
 from .pipeline import FrameProcessingPipeline
+from .pipeline.crops import FaceCropPadding
+from .pipeline.face_attribution import HeadRegionPolicy
 from .pipeline.frame_pipeline import (
     FaceIdConfig,
     PipelineConfig,
@@ -492,6 +494,15 @@ def _build_face_id_config(
         camera_configs=camera_configs,
         expected_arcface_model_version=_optional_str(fi, "expected_arcface_model_version"),
         expected_preprocessing_version=_optional_str(fi, "expected_preprocessing_version"),
+        head_region=HeadRegionPolicy(
+            head_height_frac=fi.as_float("head_region_height_frac"),
+            side_margin_frac=fi.as_float("head_region_side_margin_frac"),
+        ),
+        crop_padding=FaceCropPadding(
+            top_frac=fi.as_float("crop_pad_top_frac"),
+            side_frac=fi.as_float("crop_pad_side_frac"),
+        ),
+        crop_jpeg_quality=fi.as_int("crop_jpeg_quality"),
     )
 
 

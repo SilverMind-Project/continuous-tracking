@@ -75,6 +75,24 @@ face_id:
   # ensuring the authority gate fails closed on model mismatches.
   expected_arcface_model_version: "buffalo_l"
   expected_preprocessing_version: "v1"
+  # A face is attributed to a person only if its centre lies in the person's head region: the top
+  # head_region_height_frac of the person box, widened by head_region_side_margin_frac of the box
+  # width on each side. Standing, walking, and seated people keep their face in the top 35%; a
+  # face elsewhere in the crop belongs to someone overlapping them. Two faces in the region give
+  # no attribution (Unknown is preferable to a swap).
+  head_region_height_frac: 0.35
+  head_region_side_margin_frac: 0.10
+  # The face crop is the person box padded upward and sideways (never downward), as fractions of
+  # the box size, because SCRFD needs context around the head and detector boxes often cut the
+  # head at their top edge. Privacy zones are already blurred in the frame, so padding cannot
+  # expose them.
+  crop_pad_top_frac: 0.15
+  crop_pad_side_frac: 0.10
+  # JPEG quality for face crops sent to person-identification-service. Frames are already JPEG
+  # (ingress q85) on top of H.264; q95 roughly halves the extra re-encoding error of q90 for
+  # about 1.6x the bytes on crops well under 100 kB. Lossless PNG costs 5 to 10x for no
+  # measurable gain on an already lossy source.
+  crop_jpeg_quality: 95
 
 # Dementia signal computation
 #

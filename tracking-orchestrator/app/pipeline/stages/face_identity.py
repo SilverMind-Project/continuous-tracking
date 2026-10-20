@@ -23,6 +23,8 @@ from ...inference.face_id_client import CropQueryResult, FaceIdentificationClien
 from ...observability import metrics as _metrics
 from ...storage.base import GalleryRepository
 from ...storage.face_stats import FaceObservationStatsRepository
+from ..crops import FaceCropPadding, crop_detection_from_bbox, face_crop_box
+from ..face_attribution import FaceAttribution, HeadRegionPolicy, assign_face_to_person
 from ..frame_context import FrameContext
 from ..types import FaceIdCameraConfig
 from .base import FrameStage
@@ -127,8 +129,14 @@ class FaceIdentityStage(FrameStage):
         face_service_version: str = "",
         expected_arcface_model_version: str = "",
         expected_preprocessing_version: str = "",
+        head_region_policy: HeadRegionPolicy | None = None,
+        crop_padding: FaceCropPadding | None = None,
     ) -> None:
         self._face_id_client = face_id_client
+        # Production values come from settings.yaml face_id.* via app/main.py; the defaults
+        # exist for tests that do not exercise attribution or padding.
+        self._head_region_policy = head_region_policy or HeadRegionPolicy()
+        self._crop_padding = crop_padding or FaceCropPadding()
         self._face_stats_repo = face_stats_repo
         self._gallery_repo = gallery_repo
         self._face_id_cooldown_s = face_id_cooldown_s
@@ -211,7 +219,10 @@ class FaceIdentityStage(FrameStage):
         # ------------------------------------------------------------------
         eligible_crops: list[npt.NDArray[np.uint8]] = []
         eligible_detections: list[Detection] = []
+        eligible_face_boxes: list[BoundingBox] = []
         sent_ids: set[str] = set()
+        image = ctx.require_image()
+        image_h, image_w = image.shape[:2]
 
         for idx, det in enumerate(ctx.domain_detections):
             track_id = track_ids[idx]
@@ -230,8 +241,12 @@ class FaceIdentityStage(FrameStage):
                         )
                         continue
 
-            eligible_crops.append(ctx.crops[idx])
+            # The face path crops its own padded box from the privacy-filtered frame; ReID and
+            # pose keep the tight crops in ctx.crops.
+            face_box = face_crop_box(det.bbox, image_w, image_h, self._crop_padding)
+            eligible_crops.append(crop_detection_from_bbox(image, face_box))
             eligible_detections.append(det)
+            eligible_face_boxes.append(face_box)
             sent_ids.add(track_id)
 
         # ------------------------------------------------------------------
@@ -254,6 +269,7 @@ class FaceIdentityStage(FrameStage):
         ctx.face_anchors = await self._identify_faces_from_crops(
             crops=eligible_crops,
             crop_detections=eligible_detections,
+            face_boxes=eligible_face_boxes,
             frame_width=ctx.effective_width,
             frame_height=ctx.effective_height,
             camera_id=camera_id,
@@ -280,6 +296,7 @@ class FaceIdentityStage(FrameStage):
         self,
         crops: list[npt.NDArray[np.uint8]],
         crop_detections: list[Detection],
+        face_boxes: list[BoundingBox],
         frame_width: int,
         frame_height: int,
         camera_id: str,
@@ -293,16 +310,17 @@ class FaceIdentityStage(FrameStage):
         if not cam_cfg.enabled:
             return []
 
-        crop_bboxes_norm: list[tuple[float, float, float, float]] = []
-        for det in crop_detections:
-            crop_bboxes_norm.append(
-                (
-                    det.bbox.x_min / frame_width,
-                    det.bbox.y_min / frame_height,
-                    det.bbox.x_max / frame_width,
-                    det.bbox.y_max / frame_height,
-                )
+        # Normalized coordinates of the padded crops actually sent, so face boxes map back to
+        # frame space correctly.
+        crop_bboxes_norm = [
+            (
+                box.x_min / frame_width,
+                box.y_min / frame_height,
+                box.x_max / frame_width,
+                box.y_max / frame_height,
             )
+            for box in face_boxes
+        ]
 
         now = datetime.now(UTC)
         try:
@@ -362,9 +380,17 @@ class FaceIdentityStage(FrameStage):
                 )
                 continue
 
-            for face in crop_result.faces:
+            attributions = self._attribute_faces(
+                crop_result,
+                det.bbox,
+                face_boxes[crop_result.crop_index],
+                frame_width,
+                frame_height,
+                camera_id,
+            )
+            for face, attribution in zip(crop_result.faces, attributions, strict=True):
                 state = face.recognition_state
-                outcome = _gate_outcome(face, min_conf)
+                outcome = _gate_outcome(face, min_conf, attribution)
                 if outcome is None:
                     continue
                 stats.append(
@@ -460,6 +486,49 @@ class FaceIdentityStage(FrameStage):
             )
         return face_anchors
 
+    def _attribute_faces(
+        self,
+        crop_result: CropQueryResult,
+        person_box_px: BoundingBox,
+        face_box_px: BoundingBox,
+        frame_width: int,
+        frame_height: int,
+        camera_id: str,
+    ) -> list[FaceAttribution]:
+        """Per-face attribution for one crop: ASSIGNED for at most one face, else why not.
+
+        A face outside the head region is another person's; every face of an ambiguous crop is
+        ambiguous.
+        """
+        if not crop_result.faces:
+            return []
+        face_boxes_px = [
+            (
+                face.bbox_normalized[0] * frame_width,
+                face.bbox_normalized[1] * frame_height,
+                face.bbox_normalized[2] * frame_width,
+                face.bbox_normalized[3] * frame_height,
+            )
+            for face in crop_result.faces
+        ]
+        result, assigned_index = assign_face_to_person(
+            person_box_px,
+            face_boxes_px,
+            self._head_region_policy,
+            pad_top_px=person_box_px.y_min - face_box_px.y_min,
+        )
+        _metrics.metrics.cts_face_attribution_total.labels(
+            camera_id=camera_id, result=result.value
+        ).inc()
+        if result is FaceAttribution.AMBIGUOUS:
+            return [FaceAttribution.AMBIGUOUS] * len(crop_result.faces)
+        return [
+            FaceAttribution.ASSIGNED
+            if index == assigned_index
+            else FaceAttribution.NO_FACE_IN_HEAD_REGION
+            for index in range(len(crop_result.faces))
+        ]
+
     async def _record_face_stats(self, camera_id: str, stats: list[FaceObservationStat]) -> None:
         """Persist measurement rows and count outcomes; a failure never affects face evidence."""
         for stat in stats:
@@ -511,14 +580,22 @@ class FaceIdentityStage(FrameStage):
 _RECOGNITION_STATES = frozenset({"recognized", "candidate", "unrecognized"})
 
 
-def _gate_outcome(face: FaceResult, min_raw_similarity: float) -> FaceGateOutcome | None:
+def _gate_outcome(
+    face: FaceResult, min_raw_similarity: float, attribution: FaceAttribution
+) -> FaceGateOutcome | None:
     """Decide what the stage does with one face; None for a state the service never defines.
 
+    Only the one face attributed to the person can become evidence: a face outside the person's
+    head region belongs to someone else, and every face of an ambiguous crop is dropped.
     Recognized faces below the raw-similarity floor are dropped; candidates without a nearest
     enrolled identity cannot name anyone and are dropped; everything else becomes an anchor.
     """
     if face.recognition_state not in _RECOGNITION_STATES:
         return None
+    if attribution is FaceAttribution.AMBIGUOUS:
+        return FaceGateOutcome.DROPPED_AMBIGUOUS
+    if attribution is FaceAttribution.NO_FACE_IN_HEAD_REGION:
+        return FaceGateOutcome.DROPPED_NOT_IN_HEAD_REGION
     if face.recognition_state == "recognized" and face.confidence < min_raw_similarity:
         return FaceGateOutcome.DROPPED_MIN_CONFIDENCE
     if face.recognition_state == "candidate" and face.best_candidate_id is None:

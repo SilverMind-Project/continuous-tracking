@@ -665,14 +665,18 @@ class FaceGateOutcome(StrEnum):
     DROPPED_MIN_CONFIDENCE = "dropped_min_confidence"
     DROPPED_NO_CANDIDATE = "dropped_no_candidate"
     DROPPED_NO_DETECTION = "dropped_no_detection"
+    DROPPED_NOT_IN_HEAD_REGION = "dropped_not_in_head_region"
+    DROPPED_AMBIGUOUS = "dropped_ambiguous"
 
 
 @dataclass(frozen=True)
 class FaceObservationStat:
     """Non-biometric measurement of one face result, kept to size cameras for recognition.
 
-    Pixel quantities are in the pixels of the person crop sent to the face service, which equal
-    frame pixels because crops are not resized. No embedding, crop, or name is ever stored.
+    Pixel quantities are frame pixels (crops are not resized). ``crop_width_px`` and
+    ``crop_height_px`` describe the crop sent to the face service, which is the person box padded
+    upward and sideways for face detection; rows written before padding existed describe the tight
+    person box. No embedding, crop, or name is ever stored.
     """
 
     observed_at: datetime

@@ -164,6 +164,8 @@ class Metrics:
     cts_face_gate_outcomes_total: Counter
     cts_face_queries_total: Counter
     cts_face_stats_write_failures_total: Counter
+    cts_face_attribution_total: Counter
+    cts_face_anchor_duplicate_detection_total: Counter
 
     # ---- Cross-camera & co-presence ----
     world_tracker_shadow_cross_camera_revival_total: Counter
@@ -663,6 +665,16 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         cts_face_stats_write_failures_total=_counter(
             "cts_face_stats_write_failures_total",
             "Failed writes of face observation statistics rows; face evidence is unaffected.",
+        ),
+        cts_face_attribution_total=_counter(
+            "cts_face_attribution_total",
+            "Person crops with faces, by how a face was attributed to the person "
+            "(assigned, no_face_in_head_region, ambiguous).",
+            ["camera_id", "result"],
+        ),
+        cts_face_anchor_duplicate_detection_total=_counter(
+            "cts_face_anchor_duplicate_detection_total",
+            "Face anchors that collided on one detection_id; the weaker match was dropped.",
         ),
         # ---- Cross-camera and co-presence ----
         world_tracker_shadow_cross_camera_revival_total=_counter(

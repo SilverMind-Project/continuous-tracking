@@ -1,7 +1,9 @@
 """FaceIdentityStage records one measurement row and one gate outcome per face.
 
-Recording is observation only: the anchors the stage produces must be exactly the anchors it
-produced before measurement existed, and a failing stats repository must not change them.
+Each detection's crop holds one face inside that person's head region, so every
+``_gate_outcome`` branch is exercised once per crop. Multi-face crops (attribution) are covered
+in ``test_face_identity_two_faces_in_crop.py``. Recording is observation only: a failing stats
+repository must not change the anchors.
 """
 
 from __future__ import annotations
@@ -37,12 +39,28 @@ _CAMERA = "cam-gate"
 _CAPTURE_TIME = datetime(2026, 10, 20, 9, 30, tzinfo=UTC)
 
 
-def _face(state: str, similarity: float, best_candidate_id: str | None) -> FaceResult:
+_FRAME_W_PX = 640
+_FRAME_H_PX = 480
+# Four people side by side, 90 x 210 px each, no overlap (so no crossing bypass is involved).
+_BOXES = [
+    BoundingBox(x_min=10 + 120 * i, y_min=20, x_max=100 + 120 * i, y_max=230) for i in range(4)
+]
+
+
+def _face(index: int, state: str, similarity: float, best_candidate_id: str | None) -> FaceResult:
+    # Face centred horizontally in detection *index*'s box, 30 px below its top: in its head region.
+    cx = (_BOXES[index].x_min + _BOXES[index].x_max) / 2.0
+    cy = _BOXES[index].y_min + 30.0
     return FaceResult(
         person_id=best_candidate_id if state == "recognized" and best_candidate_id else "unknown",
         name="n",
         confidence=similarity,
-        bbox_normalized=[0.1, 0.1, 0.2, 0.2],
+        bbox_normalized=[
+            (cx - 14) / _FRAME_W_PX,
+            (cy - 17) / _FRAME_H_PX,
+            (cx + 14) / _FRAME_W_PX,
+            (cy + 17) / _FRAME_H_PX,
+        ],
         recognition_state=state,
         best_candidate_id=best_candidate_id,
         raw_similarity=similarity,
@@ -57,15 +75,15 @@ def _face(state: str, similarity: float, best_candidate_id: str | None) -> FaceR
 
 
 _FACES = (
-    _face("recognized", 0.55, "resident-alpha"),
-    _face("recognized", 0.65, "resident-beta"),
-    _face("candidate", 0.30, None),
-    _face("unrecognized", 0.10, "resident-alpha"),
+    _face(0, "recognized", 0.55, "resident-alpha"),
+    _face(1, "recognized", 0.65, "resident-beta"),
+    _face(2, "candidate", 0.30, None),
+    _face(3, "unrecognized", 0.10, "resident-alpha"),
 )
 
 
 class _ScriptedClient(FaceIdentificationClient):
-    """Returns all scripted faces for the single crop, like a real service response."""
+    """Returns the scripted face of each crop, like a real service response."""
 
     def __init__(self) -> None:
         super().__init__("http://unused.test")
@@ -77,12 +95,13 @@ class _ScriptedClient(FaceIdentificationClient):
     ) -> list[CropQueryResult]:
         return [
             CropQueryResult(
-                crop_index=0,
+                crop_index=index,
                 status=CropQueryStatus.FACE_FOUND,
-                crop_width_px=90,
-                crop_height_px=210,
-                faces=_FACES,
+                crop_width_px=int(crop.shape[1]),
+                crop_height_px=int(crop.shape[0]),
+                faces=(_FACES[index],),
             )
+            for index, crop in enumerate(crops)
         ]
 
 
@@ -109,22 +128,24 @@ def _ctx() -> FrameContext:
         frame=frame,
         event_time=datetime.now(UTC),
         capture_time=_CAPTURE_TIME,
-        effective_width=640,
-        effective_height=480,
+        effective_width=_FRAME_W_PX,
+        effective_height=_FRAME_H_PX,
+        image=np.zeros((_FRAME_H_PX, _FRAME_W_PX, 3), dtype=np.uint8),
     )
     ctx.domain_detections = [
         Detection(
-            detection_id="det-1",
+            detection_id=f"det-{index + 1}",
             camera_id=_CAMERA,
-            bbox=BoundingBox(x_min=10, y_min=20, x_max=100, y_max=230),
+            bbox=box,
             embedding=[],
             capture_time=_CAPTURE_TIME,
             event_time=_CAPTURE_TIME,
             confidence=0.9,
-            floor_point=FloorPoint(x_mm=1000, y_mm=2000, calibrated=True),
+            floor_point=FloorPoint(x_mm=1000 * (index + 1), y_mm=2000, calibrated=True),
         )
+        for index, box in enumerate(_BOXES)
     ]
-    ctx.crops = [np.zeros((210, 90, 3), dtype=np.uint8)]
+    ctx.crops = [np.zeros((210, 90, 3), dtype=np.uint8) for _ in _BOXES]
     return ctx
 
 
@@ -143,11 +164,11 @@ def _anchor_summary(ctx: FrameContext) -> list[tuple[str, str, float, str]]:
     ]
 
 
-# What the stage emitted before measurement existed: the 0.55 recognized face is below the
-# 0.6 floor, the candidate has no nearest identity, so two anchors remain.
+# The 0.55 recognized face is below the 0.6 floor and the candidate has no nearest identity,
+# so two anchors remain, each on its own detection.
 _EXPECTED_ANCHORS = [
-    ("resident-beta", "recognized", 0.65, "det-1"),
-    ("unknown", "unrecognized", 0.9, "det-1"),
+    ("resident-beta", "recognized", 0.65, "det-2"),
+    ("unknown", "unrecognized", 0.9, "det-4"),
 ]
 
 
@@ -162,6 +183,7 @@ async def test_outcomes_recorded_per_face_and_anchors_unchanged() -> None:
         "cts_face_gate_outcomes_total", camera_id=_CAMERA, outcome="dropped_min_confidence"
     )
     found_before = _sample("cts_face_queries_total", camera_id=_CAMERA, result="face_found")
+    assigned_before = _sample("cts_face_attribution_total", camera_id=_CAMERA, result="assigned")
     ctx = _ctx()
 
     await _stage(repo).run(ctx)
@@ -177,7 +199,8 @@ async def test_outcomes_recorded_per_face_and_anchors_unchanged() -> None:
     first = rows[0]
     assert first.observed_at == _CAPTURE_TIME
     assert (first.camera_id, first.detection_id) == (_CAMERA, "det-1")
-    assert (first.crop_width_px, first.crop_height_px) == (90, 210)
+    # The crop sent is the person box padded 10% per side and 15% upward, clamped at the top.
+    assert (first.crop_width_px, first.crop_height_px) == (108, 230)
     assert (first.interocular_px, first.raw_similarity) == (13.0, 0.55)
     assert first.best_candidate_id == "resident-alpha"
     assert (
@@ -187,7 +210,12 @@ async def test_outcomes_recorded_per_face_and_anchors_unchanged() -> None:
     )
     assert (
         _sample("cts_face_queries_total", camera_id=_CAMERA, result="face_found") - (found_before)
-        == 1
+        == 4
+    )
+    assert (
+        _sample("cts_face_attribution_total", camera_id=_CAMERA, result="assigned")
+        - assigned_before
+        == 4
     )
 
 

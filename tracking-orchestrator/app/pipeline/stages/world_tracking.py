@@ -490,22 +490,29 @@ class WorldTrackingStage(FrameStage):
         observations: list[WorldObservation],
         all_face_anchors: list[FaceAnchor],
     ) -> list[WorldObservation]:
-        # Map face anchors to observations (detection_id primary, camera_id fallback).
-        face_by_detection: dict[str, FaceAnchor] = {}
-        face_by_camera: dict[str, FaceAnchor] = {}
-        for fa in all_face_anchors:
-            if fa.detection_id:
-                face_by_detection[fa.detection_id] = fa
-            key = fa.camera_id if fa.camera_id else fa.tracklet_id
-            if key:
-                face_by_camera[key] = fa
+        """Attach each face anchor to the observation of the detection it was produced for.
 
-        # Rebuild observations with matched face anchors.
+        Invariant: an observation carries a face anchor only when that anchor was produced for
+        the same detection. There is no camera-wide fallback: on a camera seeing two people, an
+        unfaced person must never inherit the other person's face. Anchors without a
+        detection_id attach to nothing.
+        """
+        face_by_detection: dict[str, FaceAnchor] = {}
+        for fa in all_face_anchors:
+            if not fa.detection_id:
+                continue
+            existing = face_by_detection.get(fa.detection_id)
+            if existing is not None:
+                # One face per person crop makes this unreachable for native anchors; if two
+                # sources ever collide, keep the stronger match and make the collision visible.
+                _metrics.metrics.cts_face_anchor_duplicate_detection_total.inc()
+                if existing.similarity >= fa.similarity:
+                    continue
+            face_by_detection[fa.detection_id] = fa
+
         observations_with_faces: list[WorldObservation] = []
         for obs in observations:
             face_anchor = face_by_detection.get(obs.detection_id)
-            if face_anchor is None:
-                face_anchor = face_by_camera.get(obs.camera_id)
             observations_with_faces.append(
                 WorldObservation(
                     camera_id=obs.camera_id,

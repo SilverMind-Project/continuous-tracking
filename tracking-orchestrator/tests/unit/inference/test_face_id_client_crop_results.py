@@ -119,3 +119,31 @@ async def test_disconnected_client_reports_error_for_every_crop() -> None:
     client = FaceIdentificationClient("http://person-id.test")
     results = await client.identify_crops([_crop(64, 64), _crop(64, 64)], [(0, 0, 1, 1)] * 2)
     assert [r.status for r in results] == [CropQueryStatus.ERROR, CropQueryStatus.ERROR]
+
+
+@pytest.mark.asyncio
+async def test_crops_are_encoded_at_the_configured_jpeg_quality() -> None:
+    sizes: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sizes.append(len(json.loads(request.content)["image"]))
+        return httpx.Response(200, json={"faces": []})
+
+    rng = np.random.default_rng(7)
+    textured = rng.integers(0, 255, size=(120, 120, 3), dtype=np.uint8)
+    for quality in (60, 95):
+        client = FaceIdentificationClient(
+            "http://person-id.test", transport=httpx.MockTransport(handler), jpeg_quality=quality
+        )
+        await client.connect()
+        await client.identify_crops([textured], [(0.0, 0.0, 1.0, 1.0)])
+        await client.disconnect()
+
+    low, high = sizes
+    assert high > low
+
+
+@pytest.mark.parametrize("quality", [0, 101])
+def test_out_of_range_jpeg_quality_is_rejected(quality: int) -> None:
+    with pytest.raises(ValueError, match="jpeg_quality"):
+        FaceIdentificationClient("http://person-id.test", jpeg_quality=quality)
