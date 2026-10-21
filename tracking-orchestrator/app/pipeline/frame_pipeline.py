@@ -166,6 +166,7 @@ class FaceIdConfig:
     # expected versions for calibration compatibility gating on the CTS side.
     expected_arcface_model_version: str = ""
     expected_preprocessing_version: str = ""
+    expected_quality_version: str = "heuristic-v1"
     head_region: HeadRegionPolicy = field(default_factory=HeadRegionPolicy)
     crop_padding: FaceCropPadding = field(default_factory=FaceCropPadding)
     crop_jpeg_quality: int = 95
@@ -660,6 +661,7 @@ class FrameProcessingPipeline:
                 last_face_id_by_tracklet=self._last_face_id_by_tracklet,
                 expected_arcface_model_version=self._config.face_id.expected_arcface_model_version,
                 expected_preprocessing_version=self._config.face_id.expected_preprocessing_version,
+                expected_quality_version=self._config.face_id.expected_quality_version,
                 head_region_policy=self._config.face_id.head_region,
                 crop_padding=self._config.face_id.crop_padding,
             ),

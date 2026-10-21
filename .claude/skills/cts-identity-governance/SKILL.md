@@ -44,6 +44,26 @@ Height, propagated face evidence, raw ArcFace similarity, pending gallery entrie
 track-local appearance prototypes are corroborating or tracking inputs only. They never create
 authority.
 
+"Compatible calibration" is checked in one place,
+`FaceIdentityStage._resolve_calibrated_confidence` (`app/pipeline/stages/face_identity.py`). It
+keeps a face's `calibrated_confidence` only when all of these hold, and otherwise stores `None`:
+
+- `calibration_status == "ready"`;
+- `calibration_profile == "single_frame"` (`SINGLE_FRAME_PROFILE`). An artifact fitted for a
+  multi-frame profile (IR-M09) is never authoritative on a single frame;
+- `face.quality.version == face_id.expected_quality_version` (settings, default `heuristic-v1`).
+  A face without a quality block fails;
+- the ArcFace model and preprocessing versions match when they are configured.
+
+person-id additionally returns `None` for any identity outside the artifact's
+`covered_identities`, so a resident enrolled after the fit has no calibrated confidence until the
+owner recalibrates. Changing the quality scorer means refitting calibration and bumping
+`face_id.expected_quality_version` together. The resolved value is also written to
+`face_observation_stats.calibrated_confidence` (migration 0006) for the face resolution report;
+the stats row never feeds resolution. `FaceIdClient.identify_crops` sends a `CaptureContext`
+(camera, capture time, crop padding, JPEG quality) so person-id can sample faces for household
+calibration; the context carries no identity claim.
+
 When material evidence conflicts and the hierarchy does not resolve it, the effective identity is
 `Unknown`. A temporary unknown is preferable to a confident swap.
 

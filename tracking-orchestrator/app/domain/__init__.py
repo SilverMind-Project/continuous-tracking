@@ -711,6 +711,9 @@ class FaceObservationStat:
     # Face image quality in [0, 1] and its scorer version; None when the service did not score it.
     quality_score: float | None = None
     quality_version: str | None = None
+    # The calibrated confidence the stage would trust for this face; None whenever it would not
+    # (no artifact, version or profile mismatch, or a face that is not recognized).
+    calibrated_confidence: float | None = None
 
 
 @dataclass(frozen=True)

@@ -19,7 +19,13 @@ from ...domain import (
     Identity,
 )
 from ...inference.evidence import FaceEvidence
-from ...inference.face_id_client import CropQueryResult, FaceIdentificationClient, FaceResult
+from ...inference.face_id_client import (
+    SINGLE_FRAME_PROFILE,
+    CaptureContext,
+    CropQueryResult,
+    FaceIdentificationClient,
+    FaceResult,
+)
 from ...observability import metrics as _metrics
 from ...storage.base import GalleryRepository
 from ...storage.face_stats import FaceObservationStatsRepository
@@ -129,6 +135,7 @@ class FaceIdentityStage(FrameStage):
         face_service_version: str = "",
         expected_arcface_model_version: str = "",
         expected_preprocessing_version: str = "",
+        expected_quality_version: str = "heuristic-v1",
         head_region_policy: HeadRegionPolicy | None = None,
         crop_padding: FaceCropPadding | None = None,
     ) -> None:
@@ -145,6 +152,7 @@ class FaceIdentityStage(FrameStage):
         self._face_service_version = face_service_version
         self._expected_arcface_model_version = expected_arcface_model_version
         self._expected_preprocessing_version = expected_preprocessing_version
+        self._expected_quality_version = expected_quality_version
         # Cooldown dict keyed by stable track ID (not ephemeral detection_id).
         # Shared with the pipeline so the pruning interval in frame_pipeline.py
         # can also clear stale entries.
@@ -162,9 +170,15 @@ class FaceIdentityStage(FrameStage):
     def _resolve_calibrated_confidence(self, face: FaceResult) -> float | None:
         """Return calibrated_confidence only when the service reports ready and versions match.
 
-        Any degraded status or version mismatch yields None so the authority gate fails closed.
+        Any degraded status, version mismatch, a calibration profile other than single-frame, or a
+        face-quality scorer other than the one the artifact was fitted on yields None, so the
+        authority gate fails closed.
         """
         if face.calibration_status != "ready":
+            return None
+        if face.calibration_profile != SINGLE_FRAME_PROFILE:
+            return None
+        if face.quality is None or face.quality.version != self._expected_quality_version:
             return None
         if self._expected_arcface_model_version and (
             face.arcface_model_version != self._expected_arcface_model_version
@@ -324,7 +338,16 @@ class FaceIdentityStage(FrameStage):
 
         now = datetime.now(UTC)
         try:
-            crop_face_results = await self._face_id_client.identify_crops(crops, crop_bboxes_norm)
+            crop_face_results = await self._face_id_client.identify_crops(
+                crops,
+                crop_bboxes_norm,
+                CaptureContext(
+                    camera_id=camera_id,
+                    captured_at=captured_at,
+                    crop_pad_top_frac=self._crop_padding.top_frac,
+                    crop_pad_side_frac=self._crop_padding.side_frac,
+                ),
+            )
         except Exception:  # noqa: BLE001
             if sent_ids:
                 for key in sent_ids:
@@ -374,6 +397,7 @@ class FaceIdentityStage(FrameStage):
                         "",
                         captured_at,
                         FaceGateOutcome.DROPPED_NO_DETECTION,
+                        self._resolve_calibrated_confidence(face),
                     )
                     for face in crop_result.faces
                     if face.recognition_state in _RECOGNITION_STATES
@@ -394,7 +418,15 @@ class FaceIdentityStage(FrameStage):
                 if outcome is None:
                     continue
                 stats.append(
-                    _face_stat(face, crop_result, camera_id, detection_id, captured_at, outcome)
+                    _face_stat(
+                        face,
+                        crop_result,
+                        camera_id,
+                        detection_id,
+                        captured_at,
+                        outcome,
+                        self._resolve_calibrated_confidence(face),
+                    )
                 )
                 if outcome is not FaceGateOutcome.EMITTED:
                     continue
@@ -624,6 +656,7 @@ def _face_stat(
     detection_id: str,
     captured_at: datetime,
     outcome: FaceGateOutcome,
+    calibrated_confidence: float | None,
 ) -> FaceObservationStat:
     return FaceObservationStat(
         observed_at=captured_at,
@@ -643,4 +676,5 @@ def _face_stat(
         gate_outcome=outcome,
         quality_score=face.quality.score if face.quality is not None else None,
         quality_version=face.quality.version if face.quality is not None else None,
+        calibrated_confidence=calibrated_confidence,
     )

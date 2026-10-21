@@ -21,6 +21,7 @@ from app.inference.face_id_client import (
     CropQueryResult,
     CropQueryStatus,
     FaceIdentificationClient,
+    FaceQualityReading,
 )
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.stages.face_identity import (
@@ -91,6 +92,8 @@ class _FakeFaceResult:
         arcface_model_version: str = "buffalo_l",
         preprocessing_version: str = "v1",
         recognition_state: str = "recognized",
+        calibration_profile: str = "single_frame",
+        quality_version: str | None = "heuristic-v1",
     ):
         self.person_id = person_id
         self.recognition_state = recognition_state
@@ -107,8 +110,19 @@ class _FakeFaceResult:
         self.face_width_px = 40.0
         self.face_height_px = 48.0
         self.interocular_px: float | None = 18.0
-        # An older service: no face quality score.
-        self.quality = None
+        self.calibration_profile = calibration_profile
+        self.quality = (
+            FaceQualityReading(
+                score=0.6,
+                resolution=0.6,
+                sharpness=0.6,
+                detection=0.6,
+                pitch=1.0,
+                version=quality_version,
+            )
+            if quality_version is not None
+            else None
+        )
         # Centred at (60, 50) px of the 640x480 frame: inside the head region of the default
         # detection box (10, 20, 110, 220).
         self.bbox_normalized = [50 / 640, 40 / 480, 70 / 640, 60 / 480]
@@ -298,7 +312,7 @@ async def test_crossing_forces_face_id_despite_cooldown():
     """Two overlapping detections bypass the cooldown so identities stay consistent."""
     call_count = 0
 
-    async def _mock_identify(crops, bboxes):
+    async def _mock_identify(crops, bboxes, context):
         nonlocal call_count
         call_count += 1
         return [_found(i, _FakeFaceResult(f"person-{i}", 0.85)) for i in range(len(crops))]

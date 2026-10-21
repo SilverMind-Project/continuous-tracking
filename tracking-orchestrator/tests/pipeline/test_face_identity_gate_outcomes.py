@@ -24,6 +24,7 @@ from app.domain import (
     FloorPoint,
 )
 from app.inference.face_id_client import (
+    CaptureContext,
     CropQueryResult,
     CropQueryStatus,
     FaceIdentificationClient,
@@ -90,6 +91,7 @@ class _ScriptedClient(FaceIdentificationClient):
         self,
         crops: list[npt.NDArray[np.uint8]],
         crop_bboxes_norm: list[tuple[float, float, float, float]],
+        context: CaptureContext,
     ) -> list[CropQueryResult]:
         return [
             CropQueryResult(

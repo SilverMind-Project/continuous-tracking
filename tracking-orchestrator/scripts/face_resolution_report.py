@@ -3,8 +3,9 @@
 
 Answers, per camera: how many pixels sit between the eyes of the faces the cameras see, what raw
 similarity recognized faces score, how many recognized faces the face-ID gate discarded (the
-``dropped_min_similarity`` outcome), and how face traffic splits across face-quality bands (the
-service's quality score). Use it to size and place cameras for face recognition.
+``dropped_min_similarity`` outcome), how face traffic splits across face-quality bands (the
+service's quality score), and how often recognized faces reach a calibrated confidence of 0.8.
+Use it to size and place cameras for face recognition.
 
 Read-only. All aggregation runs in SQL. The share of person crops that yielded any face is not in
 this table (rows exist only for faces); read it from the ``cts_face_queries_total`` metric.
@@ -75,6 +76,27 @@ GROUP BY camera_id
 ORDER BY camera_id
 """
 
+# Share of recognized faces whose trusted calibrated confidence reaches this probability, per
+# interocular band: how often each camera's faces can carry identity authority.
+_CALIBRATED_AUTHORITY_MIN = 0.8
+
+_SQL_CALIBRATED_BY_BAND = """
+SELECT camera_id,
+       CASE
+           WHEN interocular_px < 16 THEN 'lt_16px'
+           WHEN interocular_px < 24 THEN '16_to_24px'
+           WHEN interocular_px < 40 THEN '24_to_40px'
+           ELSE 'ge_40px'
+       END                                                         AS band,
+       count(*)                                                    AS recognized,
+       count(*) FILTER (WHERE calibrated_confidence >= $4)         AS calibrated_authoritative
+FROM continuous_tracking.face_observation_stats
+WHERE observed_at >= $1 AND observed_at < $2 AND ($3::text IS NULL OR camera_id = $3)
+  AND recognition_state = 'recognized' AND interocular_px IS NOT NULL
+GROUP BY camera_id, band
+ORDER BY camera_id, band
+"""
+
 # Face quality bands (the service's score in [0, 1]); the lowest band is the traffic whose weight
 # drops most once the resolver weighs evidence by face quality.
 _QUALITY_BANDS = ("lt_0.2", "0.2_to_0.4", "0.4_to_0.6", "ge_0.6")
@@ -132,6 +154,7 @@ async def build_report(
                 "raw_similarity_by_state": {},
                 "dropped_min_similarity": {"faces": 0},
                 "quality_bands": {},
+                "calibrated_recognition_by_band": {},
                 "recognized_by_candidate": {},
             },
         )
@@ -170,6 +193,20 @@ async def build_report(
             band: entry["quality_bands"][band]
             for band in _QUALITY_BANDS
             if band in entry["quality_bands"]
+        }
+
+    for row in await conn.fetch(_SQL_CALIBRATED_BY_BAND, *args, _CALIBRATED_AUTHORITY_MIN):
+        camera(row["camera_id"])["calibrated_recognition_by_band"][row["band"]] = {
+            "recognized": row["recognized"],
+            "share_calibrated_ge_0.8": round(
+                row["calibrated_authoritative"] / row["recognized"], 3
+            ),
+        }
+    for entry in cameras.values():
+        entry["calibrated_recognition_by_band"] = {
+            label: entry["calibrated_recognition_by_band"][label]
+            for label in (_band_label(lo, hi) for lo, hi in _BANDS_PX)
+            if label in entry["calibrated_recognition_by_band"]
         }
 
     for row in await conn.fetch(_SQL_RECOGNIZED_BY_CANDIDATE, *args):
@@ -231,6 +268,14 @@ def render_table(report: dict[str, Any]) -> str:
                     f"{band} n={stats['faces']} iod_p50={stats['interocular_p50']} "
                     f"sim_p50={stats['raw_similarity_p50']}"
                     for band, stats in entry["quality_bands"].items()
+                )
+            )
+        if entry["calibrated_recognition_by_band"]:
+            lines.append(
+                "  recognized faces with calibrated confidence >= 0.8: "
+                + ", ".join(
+                    f"{band} {stats['share_calibrated_ge_0.8']} of {stats['recognized']}"
+                    for band, stats in entry["calibrated_recognition_by_band"].items()
                 )
             )
         if entry["recognized_by_candidate"]:

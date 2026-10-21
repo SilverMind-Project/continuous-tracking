@@ -4,6 +4,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-ambiguous_two_heads",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -21,6 +22,7 @@
    },
    {
     "best_candidate_id": "resident-beta",
+    "calibrated_confidence": null,
     "camera_id": "cam-ambiguous_two_heads",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -57,6 +59,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-beta",
+    "calibrated_confidence": null,
     "camera_id": "cam-candidate_0.30_calibrated",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -93,6 +96,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-beta",
+    "calibrated_confidence": null,
     "camera_id": "cam-candidate_0.30_with_identity",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -115,6 +119,7 @@
   "stats": [
    {
     "best_candidate_id": null,
+    "calibrated_confidence": null,
     "camera_id": "cam-candidate_0.30_without_identity",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -137,6 +142,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-beta",
+    "calibrated_confidence": null,
     "camera_id": "cam-chest_height_face_only",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -173,6 +179,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-beta",
+    "calibrated_confidence": null,
     "camera_id": "cam-neighbour_face_beside_own",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -190,6 +197,7 @@
    },
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-neighbour_face_beside_own",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -216,6 +224,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-recognized_0.35",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -238,6 +247,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-recognized_0.45",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -260,6 +270,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-recognized_0.55",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -296,6 +307,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-recognized_0.55_camera_floor_0.5",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -332,6 +344,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-recognized_0.65",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -354,6 +367,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-recognized_0.65_camera_floor_0.7",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -390,6 +404,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-recognized_0.85",
     "crop_height_px": 345,
     "crop_width_px": 120,
@@ -410,7 +425,7 @@
  "recognized_0.85_calibrated": {
   "anchors": [
    {
-    "calibrated_confidence": 0.91,
+    "calibrated_confidence": null,
     "camera_id": "cam-recognized_0.85_calibrated",
     "detection_id": "det-a",
     "origin": "native",
@@ -426,7 +441,45 @@
   "stats": [
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-recognized_0.85_calibrated",
+    "crop_height_px": 345,
+    "crop_width_px": 120,
+    "det_score": 0.82,
+    "detection_id": "det-a",
+    "face_height_px": 30.0,
+    "face_width_px": 24.0,
+    "interocular_px": 11.0,
+    "observed_at": "2026-10-20T12:00:00+00:00",
+    "outcome": "emitted",
+    "pitch_deg": -8.0,
+    "raw_similarity": 0.85,
+    "recognition_state": "recognized",
+    "yaw_deg": 12.0
+   }
+  ]
+ },
+ "recognized_0.85_calibrated_single_frame_scored": {
+  "anchors": [
+   {
+    "calibrated_confidence": 0.91,
+    "camera_id": "cam-recognized_0.85_calibrated_single_frame_scored",
+    "detection_id": "det-a",
+    "origin": "native",
+    "person_id": "resident-alpha",
+    "quality": 1.0,
+    "recognition_state": "recognized",
+    "score": 0.85,
+    "similarity": 0.85,
+    "tracklet_id": "",
+    "yaw_deg": 12.0
+   }
+  ],
+  "stats": [
+   {
+    "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": 0.91,
+    "camera_id": "cam-recognized_0.85_calibrated_single_frame_scored",
     "crop_height_px": 345,
     "crop_width_px": 120,
     "det_score": 0.82,
@@ -462,6 +515,7 @@
   "stats": [
    {
     "best_candidate_id": "resident-alpha",
+    "calibrated_confidence": null,
     "camera_id": "cam-unrecognized_det_0.9",
     "crop_height_px": 345,
     "crop_width_px": 120,

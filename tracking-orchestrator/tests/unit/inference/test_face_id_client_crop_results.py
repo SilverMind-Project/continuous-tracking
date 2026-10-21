@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import httpx
 import numpy as np
 import pytest
 
 from app.inference.face_id_client import (
+    CaptureContext,
     CropQueryStatus,
     FaceIdentificationClient,
     FaceQualityReading,
+)
+
+_CONTEXT = CaptureContext(
+    camera_id="cam-7",
+    captured_at=datetime(2026, 10, 21, 9, 0, tzinfo=UTC),
+    crop_pad_top_frac=0.15,
+    crop_pad_side_frac=0.1,
 )
 
 _FACE = {
@@ -53,7 +62,7 @@ async def test_each_crop_gets_its_own_status_in_input_order() -> None:
     crops = [_crop(64, 128), _crop(30, 128), _crop(64, 64), _crop(80, 80)]
     boxes = [(0.0, 0.0, 0.5, 0.5)] * 4
 
-    results = await client.identify_crops(crops, boxes)
+    results = await client.identify_crops(crops, boxes, _CONTEXT)
 
     assert [r.crop_index for r in results] == [0, 1, 2, 3]
     assert [r.status for r in results] == [
@@ -81,7 +90,7 @@ async def test_too_small_crop_is_never_sent() -> None:
         return httpx.Response(200, json={"faces": []})
 
     client = await _client(httpx.MockTransport(handler))
-    [result] = await client.identify_crops([_crop(39, 200)], [(0.0, 0.0, 1.0, 1.0)])
+    [result] = await client.identify_crops([_crop(39, 200)], [(0.0, 0.0, 1.0, 1.0)], _CONTEXT)
 
     assert result.status is CropQueryStatus.TOO_SMALL
     assert requests == []
@@ -95,7 +104,7 @@ async def test_geometry_fields_are_parsed_and_bbox_mapped_to_frame() -> None:
         return httpx.Response(200, json={"faces": [_FACE]})
 
     client = await _client(httpx.MockTransport(handler))
-    [result] = await client.identify_crops([_crop(100, 200)], [(0.2, 0.1, 0.4, 0.5)])
+    [result] = await client.identify_crops([_crop(100, 200)], [(0.2, 0.1, 0.4, 0.5)], _CONTEXT)
 
     [face] = result.faces
     assert (face.face_width_px, face.face_height_px, face.interocular_px) == (30.0, 40.0, 14.5)
@@ -110,7 +119,7 @@ async def test_missing_interocular_from_older_service_is_none() -> None:
     client = await _client(
         httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [legacy_face]}))
     )
-    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)])
+    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)], _CONTEXT)
 
     [face] = result.faces
     assert face.interocular_px is None
@@ -121,7 +130,9 @@ async def test_missing_interocular_from_older_service_is_none() -> None:
 @pytest.mark.asyncio
 async def test_disconnected_client_reports_error_for_every_crop() -> None:
     client = FaceIdentificationClient("http://person-id.test")
-    results = await client.identify_crops([_crop(64, 64), _crop(64, 64)], [(0, 0, 1, 1)] * 2)
+    results = await client.identify_crops(
+        [_crop(64, 64), _crop(64, 64)], [(0, 0, 1, 1)] * 2, _CONTEXT
+    )
     assert [r.status for r in results] == [CropQueryStatus.ERROR, CropQueryStatus.ERROR]
 
 
@@ -140,7 +151,7 @@ async def test_crops_are_encoded_at_the_configured_jpeg_quality() -> None:
             "http://person-id.test", transport=httpx.MockTransport(handler), jpeg_quality=quality
         )
         await client.connect()
-        await client.identify_crops([textured], [(0.0, 0.0, 1.0, 1.0)])
+        await client.identify_crops([textured], [(0.0, 0.0, 1.0, 1.0)], _CONTEXT)
         await client.disconnect()
 
     low, high = sizes
@@ -160,7 +171,7 @@ async def test_legacy_confidence_is_ignored_and_raw_similarity_is_read() -> None
     client = await _client(
         httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
     )
-    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)])
+    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)], _CONTEXT)
 
     [parsed] = result.faces
     assert parsed.raw_similarity == 0.52
@@ -174,7 +185,7 @@ async def test_service_without_raw_similarity_falls_back_to_similarity() -> None
     client = await _client(
         httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
     )
-    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)])
+    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)], _CONTEXT)
 
     assert result.faces[0].raw_similarity == 0.61
     await client.disconnect()
@@ -196,7 +207,7 @@ async def test_face_quality_is_parsed_into_a_reading() -> None:
     client = await _client(
         httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
     )
-    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)])
+    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)], _CONTEXT)
 
     assert result.faces[0].quality == FaceQualityReading(**_QUALITY)
     await client.disconnect()
@@ -219,7 +230,43 @@ async def test_absent_or_malformed_quality_is_unmeasured(quality: object) -> Non
     client = await _client(
         httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
     )
-    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)])
+    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)], _CONTEXT)
 
     assert result.faces[0].quality is None
+    await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_request_carries_the_capture_context_and_crop_settings() -> None:
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"faces": []})
+
+    client = FaceIdentificationClient(
+        "http://person-id.test", transport=httpx.MockTransport(handler), jpeg_quality=93
+    )
+    await client.connect()
+    await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)], _CONTEXT)
+    await client.disconnect()
+
+    [body] = bodies
+    assert body["capture_context"] == {
+        "camera_id": "cam-7",
+        "captured_at": "2026-10-21T09:00:00+00:00",
+        "crop_pad_top_frac": 0.15,
+        "crop_pad_side_frac": 0.1,
+        "crop_jpeg_quality": 93,
+    }
+
+
+@pytest.mark.asyncio
+async def test_calibration_profile_is_parsed() -> None:
+    face = _FACE | {"calibration_profile": "single_frame"}
+    client = await _client(
+        httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
+    )
+    [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)], _CONTEXT)
+    assert result.faces[0].calibration_profile == "single_frame"
     await client.disconnect()

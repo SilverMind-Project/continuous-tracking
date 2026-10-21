@@ -75,6 +75,9 @@ face_id:
   # ensuring the authority gate fails closed on model mismatches.
   expected_arcface_model_version: "buffalo_l"
   expected_preprocessing_version: "v1"
+  # Face-quality scorer the calibration artifact was fitted on. A calibrated confidence from any
+  # other scorer, or from a calibration profile other than single_frame, is ignored (fail closed).
+  expected_quality_version: "heuristic-v1"
   # A face is attributed to a person only if its centre lies in the person's head region: the top
   # head_region_height_frac of the person box, widened by head_region_side_margin_frac of the box
   # width on each side. Standing, walking, and seated people keep their face in the top 35%; a

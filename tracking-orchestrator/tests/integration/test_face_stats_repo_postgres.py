@@ -1,4 +1,4 @@
-"""PostgresFaceObservationStatsRepository parity with the InMemory peer, plus migrations 0002-0005.
+"""PostgresFaceObservationStatsRepository parity with the InMemory peer, plus migrations 0002-0006.
 
 Runs against the session testcontainer (migrated schema).
 Marked @pytest.mark.integration: skipped by make check, included by make ci.
@@ -35,6 +35,7 @@ _ROWS = [
     face_stat(3600, "cam-1"),
     face_stat(12, "cam-1", FaceGateOutcome.DROPPED_NOT_IN_HEAD_REGION),
     face_stat(13, "cam-2", FaceGateOutcome.DROPPED_AMBIGUOUS),
+    replace(face_stat(14, "cam-1"), calibrated_confidence=0.875),
 ]
 
 
@@ -101,8 +102,8 @@ async def test_migration_0002_down_then_up(db_pool: asyncpg.Pool) -> None:
         assert await _face_stats_objects(conn) == (True, 1)
 
     try:
-        # 0003, 0004 and 0005 (quality columns) sit on top of 0002.
-        assert await runner.rollback(4) == 4
+        # 0003 to 0006 sit on top of 0002.
+        assert await runner.rollback(5) == 5
         async with db_pool.acquire() as conn:
             assert await _face_stats_objects(conn) == (False, 0)
     finally:
@@ -135,8 +136,8 @@ async def test_migration_0003_widens_and_restores_outcome_check(db_pool: asyncpg
         await _insert_outcome(conn, "dropped_ambiguous")
 
     try:
-        # 0004 and 0005 sit on top of 0003.
-        assert await runner.rollback(3) == 3
+        # 0004 to 0006 sit on top of 0003.
+        assert await runner.rollback(4) == 4
         async with db_pool.acquire() as conn:
             # The down migration removed the row it could no longer represent.
             assert (
@@ -172,8 +173,8 @@ async def test_migration_0004_renames_the_similarity_floor_outcome(db_pool: asyn
             await _insert_outcome(conn, "dropped_min_confidence")
 
     try:
-        # 0005 sits on top of 0004.
-        assert await runner.rollback(2) == 2
+        # 0005 and 0006 sit on top of 0004.
+        assert await runner.rollback(3) == 3
         async with db_pool.acquire() as conn:
             assert await _outcomes(conn) == ["dropped_min_confidence", "emitted"]
             with pytest.raises(asyncpg.CheckViolationError):
@@ -230,7 +231,8 @@ async def test_migration_0005_adds_checked_quality_columns(db_pool: asyncpg.Pool
                 await _insert_quality(conn, score, version)
 
     try:
-        assert await runner.rollback(1) == 1
+        # 0006 sits on top of 0005.
+        assert await runner.rollback(2) == 2
         async with db_pool.acquire() as conn:
             assert not await _has_quality_columns(conn)
             assert (
@@ -244,3 +246,40 @@ async def test_migration_0005_adds_checked_quality_columns(db_pool: asyncpg.Pool
 
     async with db_pool.acquire() as conn:
         assert await _has_quality_columns(conn)
+
+
+@pytest.mark.integration
+async def test_migration_0006_adds_a_checked_calibrated_confidence(db_pool: asyncpg.Pool) -> None:
+    runner = MigrationRunner(db_pool, _MIGRATIONS_DIR)
+
+    async def insert(value: float | None) -> None:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO continuous_tracking.face_observation_stats (
+                    observed_at, camera_id, detection_id, crop_width_px, crop_height_px,
+                    face_width_px, face_height_px, interocular_px, det_score, yaw_deg,
+                    pitch_deg, raw_similarity, recognition_state, best_candidate_id,
+                    gate_outcome, calibrated_confidence
+                ) VALUES ($1, 'cam-1', 'd', 10, 10, 1, 1, NULL, 0.9, 0, 0, 0.5,
+                          'recognized', NULL, 'emitted', $2)
+                """,
+                _T0,
+                value,
+            )
+
+    await insert(0.82)
+    await insert(None)
+    with pytest.raises(asyncpg.CheckViolationError):
+        await insert(1.5)
+    try:
+        assert await runner.rollback(1) == 1
+        async with db_pool.acquire() as conn:
+            assert not await conn.fetchval(
+                """SELECT count(*) > 0 FROM information_schema.columns
+                   WHERE table_schema = 'continuous_tracking'
+                     AND table_name = 'face_observation_stats'
+                     AND column_name = 'calibrated_confidence'"""
+            )
+    finally:
+        await runner.migrate()

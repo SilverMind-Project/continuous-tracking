@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -71,6 +72,27 @@ class FaceResult:
     interocular_px: float | None = None
     # None for a service that does not score face quality, or a malformed reading.
     quality: FaceQualityReading | None = None
+    # Profile of the calibration behind calibrated_confidence ("single_frame"); "" when none.
+    calibration_profile: str = ""
+
+
+# The calibration profile for per-face (single frame) calibrated confidence.
+SINGLE_FRAME_PROFILE = "single_frame"
+
+
+@dataclass(frozen=True)
+class CaptureContext:
+    """Where a crop came from and how it was cut, sent with every identify call.
+
+    person-identification-service samples faces into its calibration set from these calls, and the
+    crop settings shape the similarity distribution it calibrates, so they travel with the crop.
+    """
+
+    camera_id: str
+    # Frame capture time (timezone-aware), not wall clock.
+    captured_at: datetime
+    crop_pad_top_frac: float
+    crop_pad_side_frac: float
 
 
 class CropQueryStatus(StrEnum):
@@ -154,6 +176,7 @@ class FaceIdentificationClient:
         self,
         crops: list[npt.NDArray[np.uint8]],
         crop_bboxes_norm: list[tuple[float, float, float, float]],
+        context: CaptureContext,
     ) -> list[CropQueryResult]:
         """Identify faces in person crops at native crop resolution.
 
@@ -168,6 +191,8 @@ class FaceIdentificationClient:
             crops: RGB uint8 person crops (one per detection).
             crop_bboxes_norm: Normalised person bboxes (x1, y1, x2, y2)
                 in [0, 1] of the original frame, one per crop.
+            context: Camera, capture time, and crop padding of these crops; sent as the
+                request's ``capture_context`` together with this client's JPEG quality.
 
         Returns:
             One ``CropQueryResult`` per input crop, in input order, including
@@ -186,10 +211,19 @@ class FaceIdentificationClient:
             ]
 
         client = self._client
+        capture_context = {
+            "camera_id": context.camera_id,
+            "captured_at": context.captured_at.isoformat(),
+            "crop_pad_top_frac": context.crop_pad_top_frac,
+            "crop_pad_side_frac": context.crop_pad_side_frac,
+            "crop_jpeg_quality": self._jpeg_quality,
+        }
         results: list[CropQueryResult] = []
         crop_with_bboxes = zip(crops, crop_bboxes_norm, strict=True)
         for idx, (crop, crop_bbox_norm) in enumerate(crop_with_bboxes):
-            results.append(await self._identify_one(client, idx, crop, crop_bbox_norm))
+            results.append(
+                await self._identify_one(client, idx, crop, crop_bbox_norm, capture_context)
+            )
 
         logger.debug(
             "Face identification complete (crops)",
@@ -205,6 +239,7 @@ class FaceIdentificationClient:
         idx: int,
         crop: npt.NDArray[np.uint8],
         crop_bbox_norm: tuple[float, float, float, float],
+        capture_context: dict[str, Any],
     ) -> CropQueryResult:
         crop_h, crop_w = crop.shape[:2]
 
@@ -229,7 +264,11 @@ class FaceIdentificationClient:
         try:
             resp = await client.post(
                 f"{self._base_url}/api/v1/identify",
-                json={"image": crop_b64, "save_guest_images": False},
+                json={
+                    "image": crop_b64,
+                    "save_guest_images": False,
+                    "capture_context": capture_context,
+                },
             )
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
@@ -296,6 +335,7 @@ def _parse_face(
         face_height_px=float(face.get("face_height_px", 0.0)),
         interocular_px=float(interocular_raw) if interocular_raw is not None else None,
         quality=_parse_quality(face.get("quality")),
+        calibration_profile=str(face.get("calibration_profile", "")),
     )
 
 

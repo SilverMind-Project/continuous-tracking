@@ -14,12 +14,12 @@ _COLUMNS = """
     observed_at, camera_id, detection_id, crop_width_px, crop_height_px,
     face_width_px, face_height_px, interocular_px, det_score, yaw_deg, pitch_deg,
     raw_similarity, recognition_state, best_candidate_id, gate_outcome,
-    quality_score, quality_version
+    quality_score, quality_version, calibrated_confidence
 """
 
 _SQL_INSERT = f"""
 INSERT INTO continuous_tracking.face_observation_stats ({_COLUMNS})
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 """
 
 _SQL_LIST = f"""
@@ -73,6 +73,7 @@ def _to_args(row: FaceObservationStat) -> tuple[Any, ...]:
         row.gate_outcome.value,
         row.quality_score,
         row.quality_version,
+        row.calibrated_confidence,
     )
 
 
@@ -95,4 +96,7 @@ def _from_record(r: asyncpg.Record) -> FaceObservationStat:
         gate_outcome=FaceGateOutcome(r["gate_outcome"]),
         quality_score=None if r["quality_score"] is None else float(r["quality_score"]),
         quality_version=r["quality_version"],
+        calibrated_confidence=(
+            None if r["calibrated_confidence"] is None else float(r["calibrated_confidence"])
+        ),
     )

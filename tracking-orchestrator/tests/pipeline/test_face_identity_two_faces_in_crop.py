@@ -16,6 +16,7 @@ from prometheus_client import REGISTRY
 
 from app.domain import BoundingBox, Detection, FaceGateOutcome, FloorPoint
 from app.inference.face_id_client import (
+    CaptureContext,
     CropQueryResult,
     CropQueryStatus,
     FaceIdentificationClient,
@@ -63,6 +64,7 @@ class _OneCropClient(FaceIdentificationClient):
         self,
         crops: list[npt.NDArray[np.uint8]],
         crop_bboxes_norm: list[tuple[float, float, float, float]],
+        context: CaptureContext,
     ) -> list[CropQueryResult]:
         [crop] = crops
         return [
@@ -173,6 +175,7 @@ class _CapturingClient(FaceIdentificationClient):
         self,
         crops: list[npt.NDArray[np.uint8]],
         crop_bboxes_norm: list[tuple[float, float, float, float]],
+        context: CaptureContext,
     ) -> list[CropQueryResult]:
         self.crops.extend(crops)
         self.boxes.extend(crop_bboxes_norm)

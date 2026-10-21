@@ -34,9 +34,11 @@ from app.domain import (
     FloorPoint,
 )
 from app.inference.face_id_client import (
+    CaptureContext,
     CropQueryResult,
     CropQueryStatus,
     FaceIdentificationClient,
+    FaceQualityReading,
     FaceResult,
 )
 from app.pipeline.frame_context import FrameContext
@@ -76,6 +78,7 @@ def _face(
     centre: tuple[float, float] = _HEAD,
     calibrated: float | None = None,
     det_score: float = 0.82,
+    quality: FaceQualityReading | None = None,
 ) -> FaceResult:
     """A face as person-identification-service returns it: all three score fields agree."""
     cx, cy = centre
@@ -99,7 +102,18 @@ def _face(
         face_width_px=24.0,
         face_height_px=30.0,
         interocular_px=11.0,
+        quality=quality,
+        calibration_profile="single_frame"
+        if quality is not None and calibrated is not None
+        else "",
     )
+
+
+# A face scored by the scorer the calibration was fitted on, from a single-frame calibration:
+# the only case in which the stage trusts calibrated_confidence.
+_SCORED = FaceQualityReading(
+    score=0.61, resolution=0.7, sharpness=0.8, detection=0.9, pitch=1.0, version="heuristic-v1"
+)
 
 
 @dataclass(frozen=True)
@@ -118,6 +132,10 @@ _CASES = (
     _Case(
         "recognized_0.85_calibrated",
         (_face("recognized", 0.85, "resident-alpha", calibrated=0.91),),
+    ),
+    _Case(
+        "recognized_0.85_calibrated_single_frame_scored",
+        (_face("recognized", 0.85, "resident-alpha", calibrated=0.91, quality=_SCORED),),
     ),
     _Case("recognized_0.55_camera_floor_0.5", (_face("recognized", 0.55, "resident-alpha"),), 0.5),
     _Case("recognized_0.65_camera_floor_0.7", (_face("recognized", 0.65, "resident-alpha"),), 0.7),
@@ -158,6 +176,7 @@ class _ScriptedClient(FaceIdentificationClient):
         self,
         crops: list[npt.NDArray[np.uint8]],
         crop_bboxes_norm: list[tuple[float, float, float, float]],
+        context: CaptureContext,
     ) -> list[CropQueryResult]:
         [crop] = crops
         return [
@@ -236,6 +255,7 @@ def _stat_record(row: FaceObservationStat) -> dict[str, Any]:
         "raw_similarity": row.raw_similarity,
         "recognition_state": row.recognition_state,
         "best_candidate_id": row.best_candidate_id,
+        "calibrated_confidence": row.calibrated_confidence,
         "outcome": _OUTCOME_BEHAVIOR[row.gate_outcome],
     }
 

@@ -32,7 +32,7 @@ _ROWS = [
     _row(0, "cam-1", 10.0),
     _row(1, "cam-1", 20.0),
     _row(2, "cam-1", 30.0, quality_score=0.15),
-    _row(3, "cam-1", 50.0, quality_score=0.8),
+    _row(3, "cam-1", 50.0, quality_score=0.8, calibrated_confidence=0.9),
     _row(4, "cam-1", None, recognition_state="unrecognized", best_candidate_id=None),
     _row(
         5,
@@ -81,6 +81,14 @@ async def test_report_bands_percentiles_and_gate_drops(db_pool: asyncpg.Pool) ->
         "ge_0.6": {"faces": 1, "interocular_p50": 50.0, "raw_similarity_p50": 0.47},
     }
     assert report["cameras"]["cam-2"]["quality_bands"] == {}
+    # Recognized faces with a measured interocular distance, per band (the 18 px face dropped by
+    # the similarity floor is still recognized); only the 50 px face carries 0.9.
+    assert cam1["calibrated_recognition_by_band"] == {
+        "lt_16px": {"recognized": 1, "share_calibrated_ge_0.8": 0.0},
+        "16_to_24px": {"recognized": 2, "share_calibrated_ge_0.8": 0.0},
+        "24_to_40px": {"recognized": 1, "share_calibrated_ge_0.8": 0.0},
+        "ge_40px": {"recognized": 1, "share_calibrated_ge_0.8": 1.0},
+    }
     assert report["cameras"]["cam-2"]["recognized_by_candidate"] == {"resident-beta": 1}
     table = report_script.render_table(report)
     assert "Camera cam-1: 6 faces" in table

@@ -501,6 +501,7 @@ def _build_face_id_config(
         camera_configs=camera_configs,
         expected_arcface_model_version=_optional_str(fi, "expected_arcface_model_version"),
         expected_preprocessing_version=_optional_str(fi, "expected_preprocessing_version"),
+        expected_quality_version=fi.as_str("expected_quality_version"),
         head_region=HeadRegionPolicy(
             head_height_frac=fi.as_float("head_region_height_frac"),
             side_margin_frac=fi.as_float("head_region_side_margin_frac"),
