@@ -105,22 +105,22 @@ message Detection {
 
 // PoseKeypoint is one of the 17 COCO body keypoints.
 message PoseKeypoint {
-  float x = 1;      // horizontal position normalised to bbox crop [0, 1]
-  float y = 2;      // vertical position normalised to bbox crop [0, 1]
-  float score = 3;  // visibility confidence [0, 1]
+  float x = 1; // horizontal position normalised to bbox crop [0, 1]
+  float y = 2; // vertical position normalised to bbox crop [0, 1]
+  float score = 3; // visibility confidence [0, 1]
 }
 
 // TrailPoint is a historical foot-point position in camera-frame coords.
 message TrailPoint {
-  float x = 1;  // normalised horizontal [0, 1]
-  float y = 2;  // normalised vertical [0, 1]
+  float x = 1; // normalised horizontal [0, 1]
+  float y = 2; // normalised vertical [0, 1]
 }
 
 // PosteriorEvidence captures the identity resolver's confidence snapshot.
 message PosteriorEvidence {
-  float top_prob         = 1;  // P(top identity | observations)
-  float top2_prob        = 2;  // P(second-best identity | observations)
-  bool  face_anchor_used = 3;  // true when a face anchor drove the commit
+  float top_prob = 1; // P(top identity | observations)
+  float top2_prob = 2; // P(second-best identity | observations)
+  bool face_anchor_used = 3; // true when a face anchor drove the commit
 }
 
 // BoundingBox in pixel coordinates: top-left origin, width/height positive.

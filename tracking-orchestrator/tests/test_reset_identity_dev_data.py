@@ -237,8 +237,8 @@ class TestMainConfirmationGuard:
 
 # ---------------------------------------------------------------------------
 # Dry-run smoke: no writes happen without --apply.
-# These tests check the argument flow only; actual DB connections are skipped
-# because DATABASE_URL is not set in the unit-test environment.
+# These tests check argument parsing and the SQL builders only; none of them
+# opens a database connection.
 # ---------------------------------------------------------------------------
 
 
@@ -440,34 +440,26 @@ class TestShellEnvGuard:
 
 
 # ---------------------------------------------------------------------------
-# Orphan-FK integration tests (require live CTS DB; skipped by default).
+# Orphan-FK integration tests against a migrated testcontainer database.
 #
 # These tests exercise _check_cts_orphan_fks against the real
 # information_schema so we prove the SQL itself is correct, not just the
-# pure _check_violations helper.
-#
-# Run with:
-#   DATABASE_URL=postgresql://cts_user:change-me-cts-password@localhost:5432/continuous_tracking \
-#   pytest tests/test_reset_identity_dev_data.py -m integration -v
+# pure _check_violations helper. They use the session testcontainer
+# (migrated_postgres_url, every migration applied); they never read
+# DATABASE_URL, which on a workstation names the live household database.
 # ---------------------------------------------------------------------------
-
-_DB_URL_PRESENT = bool(os.environ.get("DATABASE_URL"))
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(
-    not _DB_URL_PRESENT,
-    reason="DATABASE_URL not set; skipped outside dev stack",
-)
 class TestOrphanFkIntegration:
-    """Orphan-FK pre-condition check against the real continuous_tracking schema."""
+    """Orphan-FK pre-condition check against the migrated continuous_tracking schema."""
 
     @pytest.mark.asyncio
-    async def test_full_allowlist_produces_no_violations(self) -> None:
+    async def test_full_allowlist_produces_no_violations(self, migrated_postgres_url: str) -> None:
         """Canonical delete list must pass the orphan-FK pre-condition with zero violations."""
         import asyncpg
 
-        dsn = await rsd._cts_dsn_from_env()
+        dsn = migrated_postgres_url
         conn = await asyncpg.connect(dsn)
         try:
             violations = await rsd._check_cts_orphan_fks(conn, rsd._CTS_DELETE_TABLES)
@@ -478,7 +470,7 @@ class TestOrphanFkIntegration:
             await conn.close()
 
     @pytest.mark.asyncio
-    async def test_existing_tables_partitions_allowlist(self) -> None:
+    async def test_existing_tables_partitions_allowlist(self, migrated_postgres_url: str) -> None:
         """_existing_tables must split the allowlist into present/missing with no loss.
 
         Resilience guarantee: a dev DB lagging the migration head still produces a
@@ -488,7 +480,7 @@ class TestOrphanFkIntegration:
         """
         import asyncpg
 
-        dsn = await rsd._cts_dsn_from_env()
+        dsn = migrated_postgres_url
         conn = await asyncpg.connect(dsn)
         try:
             present, missing = await rsd._existing_tables(
@@ -506,7 +498,7 @@ class TestOrphanFkIntegration:
             await conn.close()
 
     @pytest.mark.asyncio
-    async def test_truncated_allowlist_fires_violation(self) -> None:
+    async def test_truncated_allowlist_fires_violation(self, migrated_postgres_url: str) -> None:
         """Removing world_observations from the allowlist must fire a violation.
 
         Schema fact (0001_init.up.sql line 161):
@@ -519,7 +511,7 @@ class TestOrphanFkIntegration:
         import asyncpg
 
         truncated = tuple(t for t in rsd._CTS_DELETE_TABLES if t != "world_observations")
-        dsn = await rsd._cts_dsn_from_env()
+        dsn = migrated_postgres_url
         conn = await asyncpg.connect(dsn)
         try:
             violations = await rsd._check_cts_orphan_fks(conn, truncated)

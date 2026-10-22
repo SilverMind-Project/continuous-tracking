@@ -14,7 +14,7 @@ PROTO_FILES    := \
 	proto/continuoustracking/v1/signals.proto \
 	proto/continuoustracking/v1/scene.proto
 
-.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence
+.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -24,6 +24,23 @@ venv: ## Create or sync the project venv at tracking-orchestrator/.venv
 
 venv-check: ## Fail if VIRTUAL_ENV is not the project venv
 	@sh scripts/require-venv.sh
+
+# A persistent, pinned uv tool install: `uv tool run` would leave the git hook pointing at an
+# interpreter in uv's cache, and a cache prune would then break every commit.
+PRE_COMMIT_VERSION := 4.7.0
+install-hooks: venv ## Install the git pre-commit hooks (.pre-commit-config.yaml) with a pinned pre-commit
+	$(UV) tool install --quiet pre-commit==$(PRE_COMMIT_VERSION)
+	$$($(UV) tool dir --bin)/pre-commit install
+
+# pip-audit must read the locked requirements: a bare `uvx pip-audit` audits the throwaway
+# environment uvx builds for pip-audit itself and always reports clean. The git-sourced
+# triton-shared and cts-contracts carry no PyPI advisories and no hashes, so they are left out.
+audit: ## Audit tracking-orchestrator's locked Python dependencies for published advisories
+	@req=$$(mktemp); trap 'rm -f "$$req"' EXIT; \
+	cd tracking-orchestrator && $(UV) export --frozen --no-emit-project \
+		--no-emit-package triton-shared --no-emit-package cts-contracts \
+		--extra dev --format requirements-txt > "$$req" && \
+	$(UV) tool run pip-audit --desc --disable-pip -r "$$req"
 
 proto: proto-go proto-py ## Generate protobuf code (Go + Python)
 
@@ -85,8 +102,8 @@ check: venv ## Run the Python quality gate
 	$(MAKE) test
 	@bash scripts/check-env-var-drift.sh
 
-test-integration: venv ## Run integration tests (testcontainer Postgres required)
-	cd tracking-orchestrator && ../$(PY_BIN)/pytest -m integration tests/integration tests/contracts -v
+test-integration: venv ## Run every integration-marked test (testcontainer Postgres required)
+	cd tracking-orchestrator && ../$(PY_BIN)/pytest -m integration tests -v
 
 ci: check-all test-integration ## Authoritative CI gate: full check + integration proofs
 

@@ -36,25 +36,10 @@ jobs:
         run: .venv/bin/lint-imports
 
   python-test:
+    name: Python tests (unit and integration)
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: timescale/timescaledb-ha:pg17
-        env:
-          POSTGRES_USER: cts
-          POSTGRES_PASSWORD: cts
-          POSTGRES_DB: continuous_tracking
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
+    # No service containers: the tests start their own timescaledb-ha:pg18 testcontainer
+    # (tests/conftest.py) and apply migrations through MigrationRunner, the production path.
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -69,13 +54,11 @@ jobs:
         run: |
           test -x .venv/bin/python
           .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
-      - name: Run migrations
-        run: psql -h localhost -U cts -d continuous_tracking -f tracking-orchestrator/migrations/0001_init.sql
-        env:
-          PGPASSWORD: cts
-      - name: Run tests
-        working-directory: tracking-orchestrator
-        run: .venv/bin/pytest tests -v
+      # Same targets as the local gate (make ci), so CI and local runs cannot drift apart.
+      - name: Unit tests
+        run: make test
+      - name: Integration tests
+        run: make test-integration
 
   go-lint:
     runs-on: ubuntu-latest
@@ -89,6 +72,8 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
+          # Pinned to the .pre-commit-config.yaml hook version so local hooks and CI agree.
+          version: v1.63.4
           working-directory: rtsp-ingress
 
   go-test:
@@ -138,9 +123,13 @@ jobs:
       - name: Install tracking-orchestrator
         working-directory: tracking-orchestrator
         run: uv sync --frozen --extra dev
-      - name: pip-audit (Python CVE scan)
-        working-directory: tracking-orchestrator
-        run: uvx pip-audit --desc
+      # `uvx pip-audit` with no arguments audited pip-audit's own throwaway environment and
+      # always passed. `make audit` audits the exported uv.lock. Non-blocking until the
+      # dependency upgrade follow-up lands (the lock carried open advisories on 2026-10-21);
+      # delete continue-on-error once `make audit` is clean.
+      - name: pip-audit (locked Python dependencies)
+        continue-on-error: true
+        run: make audit
 
       # Go: audit rtsp-ingress for known vulnerabilities
       - uses: actions/setup-go@v5

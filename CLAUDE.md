@@ -123,7 +123,7 @@ flowchart TD
 core → domain → storage → services → transport → routers
 ```
 
-Nothing above `storage` may import a concrete `Postgres*` class. Services depend only on `Protocol` interfaces. Import-linter runs at CI and in pre-commit hooks.
+Nothing above `storage` may import a concrete `Postgres*` class. Services depend only on `Protocol` interfaces. Import-linter runs in `make check`, CI, and the pre-commit hooks.
 
 ### Storage: Protocol + InMemory + Postgres triplet
 
@@ -227,7 +227,7 @@ Retroactive revision: when a committed identity is later overturned, an `Identit
 | `mypy` (strict) | Type checking on `domain/`, `storage/`, `services/`, `transport/` |
 | `ruff` | Lint + format |
 | `import-linter` | Layering enforcement |
-| `triton-shared` | Shared Triton client + YOLO/CLIP/Florence pre/post-processing (path dep at `../../triton-shared`) |
+| `triton-shared` | Shared Triton client + YOLO/CLIP/Florence pre/post-processing (git source in `[tool.uv.sources]`, pinned by `uv.lock`) |
 
 Do not introduce `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a **dev-only** dependency.
 
@@ -396,16 +396,13 @@ Run before every PR. CI runs the same checks.
 ```bash
 make check        # Python: ruff check + ruff format --check + mypy + import-linter + pytest (fast local gate)
 make check-all    # Python + Go (golangci-lint + go test -race + go build) + buf lint
-make ci           # Authoritative gate: check-all + integration proofs (requires Docker)
+make ci           # Authoritative gate: check-all + every integration-marked test (requires Docker)
+make install-hooks  # Install the git pre-commit hooks (once per clone)
 ```
 
-**`make ci` is the authoritative gate.** `make check` is the fast local gate; `make check-all` adds Go and proto validation. `make ci` additionally runs `pytest -m integration` which proves C1/C2 (WorldTracker end-to-end) and T5 (PH repository parity) against a testcontainer Postgres. These proofs must pass before merging any change to the tracker or storage layer.
+**`make ci` is the authoritative gate.** `make check` is the fast local gate; `make check-all` adds Go and proto validation. `make ci` additionally runs `make test-integration` (`pytest -m integration tests`), which proves C1/C2 (WorldTracker end-to-end) and T5 (PH repository parity) against a testcontainer Postgres. These proofs must pass before merging any change to the tracker or storage layer. CI's `python-test` job runs the same two targets, `make test` and `make test-integration`, and `tests/contracts/test_ci_workflow_paths.py` fails if the workflow names a file that does not exist.
 
-Install pre-commit hooks (ruff, mypy, golangci-lint, buf):
-
-```bash
-pre-commit install
-```
+The pre-commit hooks (`make install-hooks`: a pinned `uv tool install pre-commit`, then `pre-commit install`) run ruff, ruff format, import-linter, and mypy from the project venv, golangci-lint through `make go-lint`, and buf through the pinned toolchain, so every hook uses the same tool versions as `make check` and CI. No test reads `DATABASE_URL`; integration tests use the session testcontainer.
 
 **Always use the project venv** at `tracking-orchestrator/.venv/`. The Makefile uses it automatically. Sync dependencies with:
 

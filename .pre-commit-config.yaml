@@ -1,28 +1,45 @@
+# Install with `make install-hooks`. Python tools run from the project venv (local hooks), so
+# their versions come from uv.lock and always match `make check` and CI; a remote ruff hook
+# pinned its own older ruff and disagreed with the gate on formatting.
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.0
-    hooks:
-      - id: ruff
-        args: [--fix]
-        files: ^tracking-orchestrator/
-      - id: ruff-format
-        files: ^tracking-orchestrator/
-
-  - repo: https://github.com/golangci/golangci-lint
-    rev: v1.63.4
-    hooks:
-      - id: golangci-lint
-        args: [--config, rtsp-ingress/.golangci.yaml]
-        files: ^rtsp-ingress/
-
   - repo: local
     hooks:
+      - id: ruff
+        name: ruff check (project venv)
+        # --force-exclude: explicitly passed files still honor extend-exclude (app/proto is generated).
+        entry: tracking-orchestrator/.venv/bin/ruff check --fix --force-exclude
+        language: system
+        types: [python]
+        files: ^tracking-orchestrator/
+      - id: ruff-format
+        name: ruff format (project venv)
+        entry: tracking-orchestrator/.venv/bin/ruff format --force-exclude
+        language: system
+        types: [python]
+        files: ^tracking-orchestrator/
+      - id: import-linter
+        name: import-linter (project venv)
+        entry: sh -c 'cd tracking-orchestrator && .venv/bin/lint-imports'
+        language: system
+        pass_filenames: false
+        files: ^tracking-orchestrator/app/
       - id: mypy
         name: mypy (project venv)
         entry: tracking-orchestrator/.venv/bin/mypy
         language: system
         files: ^tracking-orchestrator/.*\.py$
+        # Check the package as a whole, as `make mypy` does; passing the changed files as well
+        # makes mypy see every module twice ("Duplicate module named").
+        pass_filenames: false
         args: ["--config-file", "tracking-orchestrator/pyproject.toml", "tracking-orchestrator/app"]
+      - id: golangci-lint
+        name: golangci-lint (make go-lint, pinned toolchain)
+        # Runs inside the rtsp-ingress module with the version installed by `make go-tools`;
+        # the upstream hook ran at the repository root, outside the Go module.
+        entry: make go-lint
+        language: system
+        pass_filenames: false
+        files: ^rtsp-ingress/
       - id: venv-guard
         name: assert-no-system-pip
         entry: sh scripts/block-stray-python.sh
@@ -35,11 +52,18 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
-
-  - repo: https://github.com/bufbuild/buf
-    rev: v1.50.0
-    hooks:
+      # buf runs inside proto/ with the version installed by `make go-tools` (v1.50.0, the CI
+      # pin). The upstream hooks ran at the repository root and scanned tools/go-mod-cache,
+      # whose test fixtures are deliberately invalid protos.
       - id: buf-format
+        name: buf format (proto/, pinned toolchain)
+        entry: sh -c '. scripts/go-env.sh && cd proto && buf format --diff --exit-code'
+        language: system
+        pass_filenames: false
         files: ^proto/
       - id: buf-lint
+        name: buf lint (make proto-lint, pinned toolchain)
+        entry: make proto-lint
+        language: system
+        pass_filenames: false
         files: ^proto/

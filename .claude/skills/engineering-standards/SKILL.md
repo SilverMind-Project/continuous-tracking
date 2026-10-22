@@ -750,7 +750,13 @@ Note: `detections.global_track_id` and its index are intentionally retained as p
 ```bash
 make check   # Python: ruff check + ruff format --check + mypy + import-linter + pytest
 make check-all   # Python + Go (golangci-lint + go test -race + go build) + buf lint
+make ci      # check-all + make test-integration (every integration-marked test)
 ```
+
+CI's `python-test` job runs `make test` and `make test-integration`, the same targets as the
+local gate. Tests start their own `timescaledb-ha:pg18` testcontainer and apply migrations
+through `MigrationRunner`; no test reads `DATABASE_URL`. Pre-commit hooks (`make install-hooks`)
+call the project venv and the pinned Go and buf toolchain, never separately pinned copies.
 
 ### ruff rules (non-negotiable)
 
