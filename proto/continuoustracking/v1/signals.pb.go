@@ -34,21 +34,23 @@ const (
 	DementiaSignalKind_DEMENTIA_SIGNAL_KIND_FALL_SUSPECTED         DementiaSignalKind = 7
 	DementiaSignalKind_DEMENTIA_SIGNAL_KIND_GAIT_SLOWING           DementiaSignalKind = 8
 	DementiaSignalKind_DEMENTIA_SIGNAL_KIND_AGITATION_INDEX        DementiaSignalKind = 9
+	DementiaSignalKind_DEMENTIA_SIGNAL_KIND_SAME_CLOTHES_SUSPECTED DementiaSignalKind = 10
 )
 
 // Enum value maps for DementiaSignalKind.
 var (
 	DementiaSignalKind_name = map[int32]string{
-		0: "DEMENTIA_SIGNAL_KIND_UNSPECIFIED",
-		1: "DEMENTIA_SIGNAL_KIND_PACING",
-		2: "DEMENTIA_SIGNAL_KIND_SUNDOWNING_INDEX",
-		3: "DEMENTIA_SIGNAL_KIND_BATHROOM_DWELL_ANOMALY",
-		4: "DEMENTIA_SIGNAL_KIND_NIGHTTIME_MOVEMENT",
-		5: "DEMENTIA_SIGNAL_KIND_STILLNESS_ANOMALY",
-		6: "DEMENTIA_SIGNAL_KIND_ABSENCE",
-		7: "DEMENTIA_SIGNAL_KIND_FALL_SUSPECTED",
-		8: "DEMENTIA_SIGNAL_KIND_GAIT_SLOWING",
-		9: "DEMENTIA_SIGNAL_KIND_AGITATION_INDEX",
+		0:  "DEMENTIA_SIGNAL_KIND_UNSPECIFIED",
+		1:  "DEMENTIA_SIGNAL_KIND_PACING",
+		2:  "DEMENTIA_SIGNAL_KIND_SUNDOWNING_INDEX",
+		3:  "DEMENTIA_SIGNAL_KIND_BATHROOM_DWELL_ANOMALY",
+		4:  "DEMENTIA_SIGNAL_KIND_NIGHTTIME_MOVEMENT",
+		5:  "DEMENTIA_SIGNAL_KIND_STILLNESS_ANOMALY",
+		6:  "DEMENTIA_SIGNAL_KIND_ABSENCE",
+		7:  "DEMENTIA_SIGNAL_KIND_FALL_SUSPECTED",
+		8:  "DEMENTIA_SIGNAL_KIND_GAIT_SLOWING",
+		9:  "DEMENTIA_SIGNAL_KIND_AGITATION_INDEX",
+		10: "DEMENTIA_SIGNAL_KIND_SAME_CLOTHES_SUSPECTED",
 	}
 	DementiaSignalKind_value = map[string]int32{
 		"DEMENTIA_SIGNAL_KIND_UNSPECIFIED":            0,
@@ -61,6 +63,7 @@ var (
 		"DEMENTIA_SIGNAL_KIND_FALL_SUSPECTED":         7,
 		"DEMENTIA_SIGNAL_KIND_GAIT_SLOWING":           8,
 		"DEMENTIA_SIGNAL_KIND_AGITATION_INDEX":        9,
+		"DEMENTIA_SIGNAL_KIND_SAME_CLOTHES_SUSPECTED": 10,
 	}
 )
 
@@ -363,7 +366,7 @@ const file_continuoustracking_v1_signals_proto_rawDesc = "" +
 	"\x11algorithm_version\x18\x0e \x01(\x05R\x10algorithmVersion\x12%\n" +
 	"\x0ealgorithm_name\x18\x0f \x01(\tR\ralgorithmName\x12%\n" +
 	"\x0eevidence_grade\x18\x10 \x01(\tR\revidenceGrade\x12.\n" +
-	"\x13algorithm_spec_json\x18\x11 \x01(\tR\x11algorithmSpecJson*\xac\x03\n" +
+	"\x13algorithm_spec_json\x18\x11 \x01(\tR\x11algorithmSpecJson*\xdd\x03\n" +
 	"\x12DementiaSignalKind\x12$\n" +
 	" DEMENTIA_SIGNAL_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bDEMENTIA_SIGNAL_KIND_PACING\x10\x01\x12)\n" +
@@ -374,7 +377,9 @@ const file_continuoustracking_v1_signals_proto_rawDesc = "" +
 	"\x1cDEMENTIA_SIGNAL_KIND_ABSENCE\x10\x06\x12'\n" +
 	"#DEMENTIA_SIGNAL_KIND_FALL_SUSPECTED\x10\a\x12%\n" +
 	"!DEMENTIA_SIGNAL_KIND_GAIT_SLOWING\x10\b\x12(\n" +
-	"$DEMENTIA_SIGNAL_KIND_AGITATION_INDEX\x10\t*\xb3\x01\n" +
+	"$DEMENTIA_SIGNAL_KIND_AGITATION_INDEX\x10\t\x12/\n" +
+	"+DEMENTIA_SIGNAL_KIND_SAME_CLOTHES_SUSPECTED\x10\n" +
+	"*\xb3\x01\n" +
 	"\x16DementiaSignalSeverity\x12(\n" +
 	"$DEMENTIA_SIGNAL_SEVERITY_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dDEMENTIA_SIGNAL_SEVERITY_INFO\x10\x01\x12$\n" +
