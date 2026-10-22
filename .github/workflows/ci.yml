@@ -34,6 +34,9 @@ jobs:
       - name: import-linter
         working-directory: tracking-orchestrator
         run: .venv/bin/lint-imports
+      # The Claude Code hooks committed under .claude/hooks/ (guard, post-edit, stop scan).
+      - name: Claude Code hook tests
+        run: make hooks-test
 
   python-test:
     name: Python tests (unit and integration)

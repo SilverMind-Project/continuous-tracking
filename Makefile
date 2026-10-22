@@ -14,13 +14,16 @@ PROTO_FILES    := \
 	proto/continuoustracking/v1/signals.proto \
 	proto/continuoustracking/v1/scene.proto
 
-.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit
+.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit hooks-test
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 venv: ## Create or sync the project venv at tracking-orchestrator/.venv
 	cd tracking-orchestrator && $(UV) sync --frozen --extra dev
+
+hooks-test: ## Run the Claude Code hook test table (.claude/hooks/tests/run.sh; needs jq)
+	bash .claude/hooks/tests/run.sh
 
 venv-check: ## Fail if VIRTUAL_ENV is not the project venv
 	@sh scripts/require-venv.sh
@@ -100,6 +103,7 @@ check: venv ## Run the Python quality gate
 	$(MAKE) mypy
 	$(MAKE) import-lint
 	$(MAKE) test
+	$(MAKE) hooks-test
 	@bash scripts/check-env-var-drift.sh
 
 test-integration: venv ## Run every integration-marked test (testcontainer Postgres required)

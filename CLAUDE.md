@@ -389,6 +389,23 @@ These rules come from bugs caught during implementation and are non-negotiable.
 
 ---
 
+## Claude Code guardrails
+
+Start sessions in this directory (or `/cd` here): `.claude/settings.json` applies only from the
+session's working directory. It sets `UV_FROZEN=1`, skips the vendored `CLAUDE.md` files under
+`tools/go-mod-cache/`, and runs four hooks from `.claude/hooks/`:
+
+- **Guard:** blocks `pytest` outside `tracking-orchestrator/.venv`.
+- **Post-edit:** an em-dash in an edited `.md` file, a `ruff check` failure in
+  `tracking-orchestrator/`, or a `gofmt` finding in `rtsp-ingress/` comes back as feedback.
+- **Stop:** flags added em-dashes and `uv.lock` churn. It blocks once and never loops.
+- **Session start:** branch, changed files, gates.
+
+Machine-wide guards live in `~/.claude/`. Run any blocked command yourself with `!` if it is
+intended. `make hooks-test` (part of `make check` and CI) runs the hook test table.
+
+---
+
 ## Quality Gate
 
 Run before every PR. CI runs the same checks.
