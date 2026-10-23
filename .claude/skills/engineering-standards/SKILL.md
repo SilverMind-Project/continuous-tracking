@@ -142,7 +142,7 @@ type Manager interface {
 
 ### Constructor injection only
 
-Every dependency is a required constructor parameter. No optional service locators, no `if self._foo is not None` guards that silently skip work, no `getattr(self, "_foo", None)` fallbacks.
+Every dependency is an explicit constructor parameter. No service locators and no `getattr(self, "_foo", None)` fallbacks. A genuinely optional dependency is a keyword argument defaulting to `None` (next section); code that skips work because it is absent logs that once at warning.
 
 ```python
 # RIGHT -- explicit, testable
@@ -310,7 +310,7 @@ Use three groups separated by a blank line, enforced by ruff `I001`:
 2. Third-party (`import asyncpg`, `from pydantic import BaseModel`, ...)
 3. First-party (`from app.domain import ...`, `from .config import ...`)
 
-Never use relative imports across package boundaries. `from ..pipeline.stages import ...` from inside `app/tracking/` is a layering violation that also creates cycles.
+Imports are absolute (`from app.pipeline.stages import ...`), program decision D3; only `__init__.py` re-export blocks may stay relative. EG-M12 converts the existing relative imports and turns on ruff `TID252`. A `..pipeline` import from inside `app/tracking/` is also a layering hazard (see Circular Import Prevention).
 
 ### Wildcard imports are forbidden
 
@@ -722,26 +722,13 @@ reject invalid rows instead of silently coercing them.
 - Post-release migrations must have a correct `downgrade()` that exactly reverses `upgrade()`.
 - Run `alembic check` against the live models to verify no schema drift before committing.
 
-### Verification (no live DB required)
+### Verification
 
-Grep the new baseline to confirm the fold is complete.
-
-```bash
-# CTS: zero hits -- no surviving FK to the removed legacy tables
-grep -nE "REFERENCES (global_tracks|tracklets)" migrations/0001_init.up.sql
-
-# CTS: zero hits -- legacy tables must not be created
-grep -n "CREATE TABLE.*global_tracks\|CREATE TABLE.*tracklets\b" migrations/0001_init.up.sql
-
-# CC: zero hits for superseded index names
-grep -n "ix_person_location_history_global_track_id\|ix_cts_identity_revision_log_gt_applied" alembic/versions/0001_baseline.py
-
-# CC: single head = 0001_baseline, no dangling revision references
-cd cognitive-companion/backend && .venv/bin/alembic heads && .venv/bin/alembic history
-```
-
-Note: `detections.global_track_id` and its index are intentionally retained as plain columns
-(no FK); they carry historical frame-level data and are exempt from the "zero hits" rule.
+A new migration is proven by the integration suite: the session testcontainer applies every
+migration through `MigrationRunner` (`tests/conftest.py`), so `make test-integration` fails on a
+broken up file. Test the down file by hand with `cts-db rollback -n 1` against a scratch database.
+`detections.global_track_id` and its index are intentionally retained as plain columns (no FK);
+they carry historical frame-level data.
 
 ---
 

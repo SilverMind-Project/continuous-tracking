@@ -94,7 +94,7 @@ Returns a frozen `RobustZ(median, mad, modified_z, n)` dataclass.
 | `nighttime_movement` | `transitions >= 5` -> emergency, `>= 3` -> warning | Absolute thresholds meaningful for nighttime safety |
 | `stillness_anomaly` | Cold-start caps emergency -> warning (cannot escalate to emergency without baseline posture context) | Emergency requires both long duration AND lying posture history to confirm |
 | `sundowning_index` | Silent if `today_rate < 0.03`; emit info otherwise | Trend signal; meaningless without enough evening history to compare |
-| `absence` | Emits with fixed severity (90+ min gap is always notable) | Camera coverage context needed only to contextualize, not to gate |
+| `absence` | Emits from `absence_threshold_minutes` with tiers at +60 and +120 min (see the severity table) | Camera coverage context needed only to contextualize, not to gate |
 
 **Trend and experimental signals** must stay silent in cold start (no fallback severity). Acute signals (falls, bathroom, nighttime) may use fallback severity with a cap at warning.
 
@@ -102,7 +102,7 @@ Returns a frozen `RobustZ(median, mad, modified_z, n)` dataclass.
 
 `SignalHysteresis` in `dementia_signals.py` prevents alert fatigue across `run_once` calls:
 
-**`should_emit(identity_id, signal_kind, severity, now, cooldown_minutes) -> bool`**
+**`should_emit(identity_id, signal_kind, severity, now, cooldown_minutes, episode_key="") -> bool`**
 
 Returns True if the signal should be emitted. Internal logic in order:
 
@@ -125,12 +125,22 @@ Returns True if the signal should be emitted. Internal logic in order:
 |----------|-------------------|--------------|
 | `info` | Interesting pattern, no action needed | Mild z-score deviation; cold-start fallback signals |
 | `warning` | Requires attention within hours | Sustained above-baseline behavior; falls-risk posture with long dwell |
-| `emergency` | Act within minutes | Active fall (lying stillness > threshold), long bathroom dwell (z >= 5.0), nighttime movement z >= 4.0 |
+| `emergency` | Act within minutes | The top tier of each kind below |
+
+Tiers per kind, as implemented in `app/trajectory/dementia_signals.py`:
+
+| Kind | With a baseline | Cold start |
+| --- | --- | --- |
+| `pacing` | Absolute rate, always: info; warning above 0.15 transitions per minute; emergency above 0.3 (the z-score is recorded, not used for tiering) | same |
+| `sundowning_index` | z at least `sundowning_z_threshold`: info; z at least 3.0: warning; z at least 4.0: emergency | silent if today's rate is below 0.03, else info |
+| `bathroom_dwell_anomaly` | z at least 4.0: warning; z at least 5.0: emergency; else info | warning when the open dwell reaches `bathroom_absolute_threshold_seconds` (default 2700 s); never emergency |
+| `nighttime_movement` | z at least 3.0: warning; z at least 4.0: emergency; else info | gate, gate+2, gate+4 transitions: info, warning, emergency (`nighttime_transition_threshold`) |
+| `stillness_anomaly` | lying posture: warning, then emergency at `stillness_emergency_minutes` | emergency demoted to warning |
+| `absence` | `absence_threshold_minutes`, +60 min, +120 min: info, warning, emergency | same |
 
 **Rules:**
-- Severity tiers derive from configured thresholds (`SignalConfig`), never hardcoded alongside them. If a threshold changes, the severity mapping changes automatically.
-- `emergency` is reserved for kinds where a caregiver should act within minutes. Currently: `stillness_anomaly` (lying posture) and `bathroom_dwell_anomaly` (z >= 5.0).
-- Trend signals (`sundowning_index`) and experimental kinds cap at `warning`.
+- Severity tiers derive from configured thresholds (`SignalConfig`), never literals in a detector body. The z cut points and pacing rates above are still literals in code; moving them into `SignalConfig` with unchanged defaults is a refactor-only change (EG-M09 PR 3).
+- A new kind declares its tiers in this table and caps cold-start severity at `warning` unless an absolute safety threshold justifies more.
 - Data quality demotion: if `identity_confidence_mean < 0.3` OR `coverage_ratio < 0.1`, `warning` and `emergency` are demoted to `info` before emission. The signal is still emitted (so the upsert records it), but caregiver notifications should filter on severity.
 - Dementia signals may gate on persisted trajectory confidence fields:
   `position_sigma_m`, `primary_camera_id`, `contributing_camera_count`, and
@@ -142,7 +152,7 @@ Returns True if the signal should be emitted. Internal logic in order:
 **UUID5 rule** (from CLAUDE.md):
 
 ```python
-_SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # uuid.NAMESPACE_URL
+_SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # uuid.NAMESPACE_DNS
 
 signal_id = str(uuid.uuid5(_SIGNAL_NS, f"{identity_id}\x00{signal_kind}\x00{window_start.isoformat()}\x00{window_end_str}"))
 ```
@@ -157,7 +167,7 @@ Use `_stable_signal_id(identity_id, signal_kind, window_start, window_end)` -- d
 
 When adding a new `DementiaSignalKind`, update all of these in the same PR:
 
-1. **`DementiaSignalKind` Literal** in `tracking-orchestrator/app/domain/__init__.py` -- add the string value.
+1. **`cts-contracts` first**: add the kind to `DementiaSignalKind` in `cts_contracts/signals.py` (the shared vocabulary repository), then bump the `cts-contracts` pin in both CTS and CC. The CTS `DementiaSignalKind` Literal in `tracking-orchestrator/app/domain/__init__.py` is pinned to it; add the string there too.
 
 2. **`_SIGNAL_SPEC` constant and `AlgorithmSpec`** in `tracking-orchestrator/app/trajectory/signal_specs.py` -- create a module-level `MY_KIND_SPEC` and add it to the `_SIGNAL_SPEC` dict. Fields to fill:
    - `name`: `"my-kind-v1"` (slug + version, incremented when detection logic changes)
@@ -177,9 +187,9 @@ When adding a new `DementiaSignalKind`, update all of these in the same PR:
    ```bash
    grep -rn "my_kind" cognitive-companion/backend/ cognitive-companion/frontend/ -l
    ```
-   Verify the kind string appears in: `signal_config.py` kind list, `signal_narratives.py` (narrative text), `filters/builtin/dementia_signal.py` kind list.
+   Verify the kind string appears in: `cognitive-companion/backend/services/cts/signal_config.py` (`ALL_SIGNAL_KINDS` derives from `cts_contracts`), `cognitive-companion/backend/services/cts/signal_narratives.py` (narrative text), and `cognitive-companion/backend/filters/builtin/dementia_signal.py` (kind list).
 
-7. **CC frontend kind inventories** -- grep for kind arrays and maps in `frontend/src/views/`, `frontend/src/components/pipeline/steps/index.js`, and Tracking panels. Add labels/icons where the surface has a kind-specific map, while preserving the generic unknown-kind fallback.
+7. **CC frontend kind inventories** -- grep for kind arrays and maps in `cognitive-companion/frontend/src/views/`, `cognitive-companion/frontend/src/components/pipeline/steps/index.js`, and Tracking panels. Add labels/icons where the surface has a kind-specific map, while preserving the generic unknown-kind fallback.
 
 8. **Dementia-signals docs table row** in the portal docs if a dementia-signals reference page exists.
 

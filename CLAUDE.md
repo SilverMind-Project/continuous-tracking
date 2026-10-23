@@ -229,7 +229,7 @@ Retroactive revision: when a committed identity is later overturned, an `Identit
 | `import-linter` | Layering enforcement |
 | `triton-shared` | Shared Triton client + YOLO/CLIP/Florence pre/post-processing (git source in `[tool.uv.sources]`, pinned by `uv.lock`) |
 
-Do not introduce `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a **dev-only** dependency.
+Do not introduce `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a **test-only** dependency.
 
 ### Go (`rtsp-ingress/go.mod`)
 
@@ -289,7 +289,7 @@ cts-db status           # show applied / pending
 
 | File | Contents |
 | --- | --- |
-| `0001_init` | Complete baseline schema: all tables, hypertables, indexes, triggers, enums, continuous aggregate, refresh and retention policies. Squashes the prior chain (20+ original migrations, then `0002_gait_and_agitation_schema` through `0009_daily_appearance_profiles`). Drop and recreate the database to migrate from an older chain. |
+| `0001_init` | Frozen baseline schema: all tables, hypertables, indexes, triggers, enums, continuous aggregate, refresh and retention policies. Later changes are numbered pairs on top of it; list them with `ls tracking-orchestrator/migrations`. |
 
 **Lifecycle:** Each atomic change gets its own `NNNN_description.up.sql` / `NNNN_description.down.sql` pair on top of the `0001_init` baseline. Rollbacks are supported. Shape constraints belong in the migration that introduces the column; JSONB columns that the domain treats as objects must have object-shape `CHECK` constraints.
 
@@ -307,11 +307,11 @@ These rules come from bugs caught during implementation and are non-negotiable.
 
 **`datetime.now(UTC)` always.** `from datetime import UTC`. Bare `datetime.now()` produces timezone-naive objects that break TimescaleDB `timestamptz` columns.
 
-**Declare all attributes in `__init__`.** Every attribute must be present in `__init__` with its correct `Optional[T] | None` type, even if set later. Attributes first assigned outside `__init__` cause `AttributeError` and mypy cannot track them.
+**Declare all attributes in `__init__`.** Every attribute must be present in `__init__` with its correct `T | None` type, even if set later. Attributes first assigned outside `__init__` cause `AttributeError` and mypy cannot track them.
 
 **Never mutate frozen dataclasses.** `@dataclass(frozen=True)` raises `FrozenInstanceError` on `instance.attr = value`. For transport metadata (e.g., Redis message IDs) alongside frozen domain objects, maintain a side-channel `dict[int, T]` keyed by `id(obj)`.
 
-**Stable signal IDs.** Dementia signals use `uuid.uuid5(NAMESPACE_DNS, "{identity_id}\x00{signal_kind}\x00{window_start}\x00{window_end}")` so the same detection window always maps to the same UUID. This makes the `ON CONFLICT` upsert idempotent on retry. (Corrected 2026-07-15: this previously read `NAMESPACE_URL`, which does not match `_SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")` in `app/trajectory/dementia_signals.py` and `app/services/identity_rewriter.py` -- that constant is `uuid.NAMESPACE_DNS`.) cognitive-companion's M06 `IdentityRewriter` replicates this derivation in `backend/services/cts/signal_store.py::derive_signal_id`, pinned by a cross-repo golden-vector test on both sides -- change both together if this derivation ever changes.
+**Stable signal IDs.** Dementia signals use `uuid.uuid5(NAMESPACE_DNS, "{identity_id}\x00{signal_kind}\x00{window_start}\x00{window_end}")` so the same detection window always maps to the same UUID. This makes the `ON CONFLICT` upsert idempotent on retry. (Corrected 2026-07-15: this previously read `NAMESPACE_URL`, which does not match `_SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")` in `app/trajectory/dementia_signals.py` and `app/services/identity_rewriter.py` -- that constant is `uuid.NAMESPACE_DNS`.) cognitive-companion's M06 `IdentityRewriter` replicates this derivation in `cognitive-companion/backend/services/cts/signal_store.py::derive_signal_id`, pinned by a cross-repo golden-vector test on both sides -- change both together if this derivation ever changes.
 
 ### SQL correctness
 
@@ -485,31 +485,32 @@ RTSP ingest: go2rtc sidecar
 | TD-007 | Low | Validated by [`docs/identity-path-validation-2026-06.md`](docs/identity-path-validation-2026-06.md): CC face-based location conclusions are redundant when `cts.enabled=true`, but remain the non-CTS reCamera path and the owner of raw sightings/activity capture. Deprecate its identity/location writes behind an explicit CTS-aware boundary; keep non-CTS and non-location responsibilities until their consumers migrate. |
 | TD-008 | Medium | DepthEstimator (`app/inference/depth.py`) is implemented and importable but not wired into the live frame pipeline. It is used only during homography auto-calibration. M7 (Occluded Posture Detection) will wire it into the posture slow-path. Do not connect it to `FrameProcessingPipeline` before M7 is complete. |
 | TD-009 | Low | ReID crop invariant: `_crop_detection()` in `frame_pipeline.py` must always be called before `ReidEmbedder.embed_batch()`. Any refactor that moves or merges these calls must preserve this ordering or the gallery distances become meaningless. |
-| TD-010 | Low | Floor-region visibility fix (Track G): harvest a floor-region polygon from `FloorPlaneFitter` inliers and return it on `/internal/calibration/auto`; CC then projects that boundary (not the image border) for the visibility polygon. Reuses Depth Anything v2 (no new model); non-blocking. Plan: `../cognitive-companion/guided-companion-trackG-floor-geometry.md`. |
+| TD-010 | Low | Floor-region visibility fix (Track G): harvest a floor-region polygon from `FloorPlaneFitter` inliers and return it on `/internal/calibration/auto`; CC then projects that boundary (not the image border) for the visibility polygon. Reuses Depth Anything v2 (no new model); non-blocking. Plan: `/home/sriram/code/nanai/notes/cc/guided-companion/guided-companion-trackG-floor-geometry.md`. |
 
 ### Hardening program (2026-07), resolved
 
 None of the entries above overlap this program; recorded separately so future agents find the
 rationale trail without re-deriving it from the findings program. Full evidence and implementation
-notes live in the referenced `codebase-hardening-*.md` files at the repo root's parent
+notes live in the referenced `codebase-hardening-*.md` files under
+`/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/`
 (`/home/sriram/code/nanai/`).
 
 | Finding | Severity | Description | Resolved in |
 | --- | --- | --- | --- |
-| F1 | P0 | Evidence clock renewed from foreign evidence (`id in distribution` instead of identity match) | `codebase-hardening-m01-evidence-clock-integrity.md` |
-| F2 | P0 | Provenance decisions dropped/never persisted on frames carrying `revises_previous` decisions | `codebase-hardening-m02-provenance-persistence-decoupling.md` |
-| F3 | P0 | Gallery seed identity-mismatch: tracker wrote gallery rows without checking face identity equals PH identity | `codebase-hardening-m04-governed-candidate-creation.md` |
-| F4 | P1 | Seed cap broken in production (Postgres filtered by `operator_verified`; InMemory applied no filter) | `codebase-hardening-m03-gallery-storage-parity.md`, `codebase-hardening-m04-governed-candidate-creation.md` |
-| F5 | P1 | Seeded entries invisible to the resolver's tracklet-keyed query path (`origin_tracklet_id` never written) | `codebase-hardening-m04-governed-candidate-creation.md` |
-| F6 | P1 | Coherence shadow gate inverted; ran the expensive shadow gallery query every frame at the "off" default | `codebase-hardening-m05-resolver-shadow-cost-and-dedup.md` |
-| F7 | P1 | CC `IdentityRewriter` rewrote a PH's entire location history, ignoring the correction range/revision horizon | `codebase-hardening-m06-cc-revision-scoping.md` |
-| F8 | P1 | Signal supersession reused the old `signal_id` on the replacement row instead of re-deriving it | `codebase-hardening-m06-cc-revision-scoping.md` |
-| F9 | P1 | `authority` field carried an identity id instead of an authority-ladder rung (`IdentityAuthority`) | `codebase-hardening-m07-authority-vocabulary.md` |
-| F10 | P2 | Frozen-reconstruction hazard: `PersonHypothesis` fields hand-copied at 10+ sites instead of `dataclasses.replace` | `codebase-hardening-m08-tracker-frozen-reconstruction-refactor.md` |
-| F11 | P2 | Dead code/config: unused repo method, additive-combiner module, M01 scaffolding modules, `min_quality_to_face_lock` | `codebase-hardening-m09-dead-code-and-test-cleanup.md` |
-| F12 | P2 | Meaningless/brittle tests (SQL-substring mocks, dead-combiner tests, the F3 xfail) | `codebase-hardening-m04-governed-candidate-creation.md`, `codebase-hardening-m09-dead-code-and-test-cleanup.md` |
-| F13 | P2 | `ReIDCandidateService` reached into `gallery_repo._pool` directly, bypassing the repository layer | `codebase-hardening-m04-governed-candidate-creation.md` |
-| F14 | P2 | Public docs asserted candidate-creation behavior not yet true of the deployed code | `codebase-hardening-m10-skills-and-docs-truth-up.md` |
+| F1 | P0 | Evidence clock renewed from foreign evidence (`id in distribution` instead of identity match) | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m01-evidence-clock-integrity.md` |
+| F2 | P0 | Provenance decisions dropped/never persisted on frames carrying `revises_previous` decisions | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m02-provenance-persistence-decoupling.md` |
+| F3 | P0 | Gallery seed identity-mismatch: tracker wrote gallery rows without checking face identity equals PH identity | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m04-governed-candidate-creation.md` |
+| F4 | P1 | Seed cap broken in production (Postgres filtered by `operator_verified`; InMemory applied no filter) | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m03-gallery-storage-parity.md`, `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m04-governed-candidate-creation.md` |
+| F5 | P1 | Seeded entries invisible to the resolver's tracklet-keyed query path (`origin_tracklet_id` never written) | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m04-governed-candidate-creation.md` |
+| F6 | P1 | Coherence shadow gate inverted; ran the expensive shadow gallery query every frame at the "off" default | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m05-resolver-shadow-cost-and-dedup.md` |
+| F7 | P1 | CC `IdentityRewriter` rewrote a PH's entire location history, ignoring the correction range/revision horizon | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m06-cc-revision-scoping.md` |
+| F8 | P1 | Signal supersession reused the old `signal_id` on the replacement row instead of re-deriving it | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m06-cc-revision-scoping.md` |
+| F9 | P1 | `authority` field carried an identity id instead of an authority-ladder rung (`IdentityAuthority`) | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m07-authority-vocabulary.md` |
+| F10 | P2 | Frozen-reconstruction hazard: `PersonHypothesis` fields hand-copied at 10+ sites instead of `dataclasses.replace` | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m08-tracker-frozen-reconstruction-refactor.md` |
+| F11 | P2 | Dead code/config: unused repo method, additive-combiner module, M01 scaffolding modules, `min_quality_to_face_lock` | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m09-dead-code-and-test-cleanup.md` |
+| F12 | P2 | Meaningless/brittle tests (SQL-substring mocks, dead-combiner tests, the F3 xfail) | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m04-governed-candidate-creation.md`, `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m09-dead-code-and-test-cleanup.md` |
+| F13 | P2 | `ReIDCandidateService` reached into `gallery_repo._pool` directly, bypassing the repository layer | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m04-governed-candidate-creation.md` |
+| F14 | P2 | Public docs asserted candidate-creation behavior not yet true of the deployed code | `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m10-skills-and-docs-truth-up.md` |
 
 ---
 

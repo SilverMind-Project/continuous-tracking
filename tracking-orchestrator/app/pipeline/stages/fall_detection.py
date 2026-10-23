@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # NAMESPACE_URL
+_SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # NAMESPACE_DNS
 _FALL_KIND: DementiaSignalKind = "fall_suspected"
 _EPISODE_BUCKET_S = 10  # seconds for episode_key bucketing
 

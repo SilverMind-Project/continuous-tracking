@@ -110,7 +110,7 @@ A stage that is computationally expensive but optional (e.g., pose estimation wi
 
 Adding a stage to the wrong position causes the stage to read stale context. When in doubt, check which `FrameContext` fields your stage reads and confirm they are set by a prior stage.
 
-**Durability writes never live in a throttled or lossy stage.** A stage that rate-limits its output (e.g. `PublishStage`'s per-camera `live_publish_max_hz` cap) must contain only presentation-path work; anything that must happen exactly once per tracker round (provenance, audit rows, any row a caregiver-facing read model joins against) gets its own stage ahead of the throttle. `ProvenancePersistStage` runs immediately before `PublishStage` on all three execution routes for exactly this reason: identity-decision persistence is change-gated (`revises_previous` only) but must never additionally be throttle-gated, or a decision landing on a rate-limited frame is silently lost (see `codebase-hardening-m02-provenance-persistence-decoupling.md`). `ReIDCandidateStage` sits between them for the same reason: gallery-candidate creation is audit-visible governance data, so it must not sit behind `PublishStage`'s throttle either (see `codebase-hardening-m04-governed-candidate-creation.md`).
+**Durability writes never live in a throttled or lossy stage.** A stage that rate-limits its output (e.g. `PublishStage`'s per-camera `live_publish_max_hz` cap) must contain only presentation-path work; anything that must happen exactly once per tracker round (provenance, audit rows, any row a caregiver-facing read model joins against) gets its own stage ahead of the throttle. `ProvenancePersistStage` runs immediately before `PublishStage` on all three execution routes for exactly this reason: identity-decision persistence is change-gated (`revises_previous` only) but must never additionally be throttle-gated, or a decision landing on a rate-limited frame is silently lost (see `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m02-provenance-persistence-decoupling.md`). `ReIDCandidateStage` sits between them for the same reason: gallery-candidate creation is audit-visible governance data, so it must not sit behind `PublishStage`'s throttle either (see `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/codebase-hardening-m04-governed-candidate-creation.md`).
 
 ## Cross-camera dedup: how it works and where not to touch it
 
@@ -168,7 +168,7 @@ Fall fixtures carry bbox, keypoints, posture scores, floor speed, motion energy,
 3. Import `MyStage` in `app/pipeline/stages/__init__.py`.
 4. Wire the stage into the `stages` list inside `FrameProcessingPipeline.initialize()` at the correct position.
 5. Add a unit test in `tests/unit/pipeline/stages/test_my_stage.py` with an in-memory `FrameContext`.
-6. If the stage has config knobs, add them to `PipelineConfig` (`app/pipeline/config.py`) with documented defaults.
+6. If the stage has config knobs, add them to `PipelineConfig` (`app/pipeline/frame_pipeline.py`) with documented defaults.
 7. Register a Prometheus counter or histogram if the stage can fail or has measurable latency.
 
 ## Verification commands
