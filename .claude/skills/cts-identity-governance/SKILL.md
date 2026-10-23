@@ -50,7 +50,7 @@ keeps a face's `calibrated_confidence` only when all of these hold, and otherwis
 
 - `calibration_status == "ready"`;
 - `calibration_profile == "single_frame"` (`SINGLE_FRAME_PROFILE`). An artifact fitted for a
-  multi-frame profile (IR-M09) is never authoritative on a single frame;
+  multi-frame profile is never authoritative on a single frame;
 - `face.quality.version == face_id.expected_quality_version` (settings, default `heuristic-v1`).
   A face without a quality block fails;
 - the ArcFace model and preprocessing versions match when they are configured.
@@ -104,7 +104,7 @@ Face scores have four names, and each name means one thing:
   similarity thresholds for compatibility and weak-evidence weighting. `authoritative` is a
   separate determination.
 - ArcFace enrollment is a golden dataset. PH inference, operator identity correction, and ReID
-  review never modify enrollment. Amended by identity-continuity M06: enrollment gains entries
+  review never modify enrollment. Enrollment gains entries
   only via explicit enroll calls or explicit operator naming of a visitor cluster
   (`person-identification-service`'s `VisitorStore.name_cluster`); never automatically. Visitor
   clusters themselves (unmatched face embeddings persisted for cross-visit review) are a
@@ -181,7 +181,7 @@ PH `gallery_mean` and view prototypes are inferred tracking state, not labeled i
 ## ReID gallery lifecycle
 
 Every ReID entry has one explicit state: `pending_review`, `auto_verified`, `operator_verified`, or
-`rejected` (identity-continuity M02 added `auto_verified`). Pending and rejected entries never
+`rejected`. Pending and rejected entries never
 vote, including through caches, fallback queries, or compatibility code; `auto_verified` and
 `operator_verified` vote at their configured trust (`resolver.gallery_auto_verified_trust_multiplier`
 default 1.5, `resolver.gallery_verified_trust_multiplier` default 2.0).
@@ -244,7 +244,7 @@ Preserve the existing PH k-NN posterior and commit thresholds unless a replay-ba
 explicitly changes them.
 
 `app/tracking/identity/gallery_scoring.py` is the only permitted gallery vote scoring
-implementation (identity-continuity M01). Its `score_hits` -> `cap_votes` -> `aggregate_mean` /
+implementation. Its `score_hits` -> `cap_votes` -> `aggregate_mean` /
 `aggregate_max_over_views` pipeline is the single scorer for every gallery query path: the
 per-orientation multiview query, the single-query fallback, and the shadow comparison. A new
 gallery query path must call `score_hits`/`cap_votes`/an existing aggregate function; inline
@@ -256,17 +256,17 @@ hand instead of delegating) is a defect.
   (`resolver.gallery_auto_verified_trust_multiplier`, default 1.5). Do not alter cosine
   similarity.
 - Apply configurable exponential recency decay (`resolver.gallery_recency_half_life_days`,
-  default 2.0 as of identity-continuity M03, shortened from the original 7.0) with no floor.
+  default 2.0) with no floor.
 - Cap or cluster near-duplicate votes by source episode, camera, and orientation.
 - Partition embeddings by model/preprocessing version and query only compatible entries.
 - The schema for per-hit decision provenance (`IdentityDecisionGalleryHit`) exists end to end
   (domain type, Postgres table, repository read/write) but no gallery query path populates it
-  today; `IdentityProvenanceDecision.gallery_hits` is always empty (verified 2026-07-20, M01).
+  today; `IdentityProvenanceDecision.gallery_hits` is always empty.
   `ScoredHit` already carries every field `IdentityDecisionGalleryHit` needs; wiring population
   through `resolve()` into `ProvenancePersistStage` is separate, deferred work, not part of the
   shared scorer.
 
-### Hard vote-age cutoff (identity-continuity M03)
+### Hard vote-age cutoff
 
 `resolver.gallery_vote_max_age_s` (default 43200s/12h; `None`/absent/zero disables it) is a hard
 filter enforced one level below the shared scorer, at `GalleryRepository.search_similar` itself:
@@ -288,11 +288,11 @@ fallback's corpus-building step to build a PH's own query embedding from its rec
 does not take the cutoff. That read describes the PH's own track, not a candidate vote.
 
 The cutoff has a production precondition: it depends on `auto_verified` rows accumulating from
-same-day, calibrated face matches (M02). A 12-hour cutoff with no same-day population starves the
-resolver's ReID vote every morning (V4) -- M02 must be landed and enabled in production, with
-`auto_verified` rows observably accumulating on ordinary days, before relying on the M03 defaults.
+same-day, calibrated face matches. A 12-hour cutoff with no same-day population starves the
+resolver's ReID vote every morning: same-day `auto_verified` promotion must be enabled in
+production, with rows observably accumulating on ordinary days, before relying on these defaults.
 
-## External identity evidence (identity-continuity M09)
+## External identity evidence
 
 `FaceAnchor.origin` distinguishes a same-frame native ArcFace anchor (`"native"`, the default)
 from an anchor matched from cognitive-companion's `cc.identity_assertions` stream
@@ -316,7 +316,7 @@ from an anchor matched from cognitive-companion's `cc.identity_assertions` strea
   (case-normalized, confidence-scaled by `resolver.room_match_confidence_scale`) when no floor
   point exists; an assertion with neither matches nothing, never everything. Proto3 presence
   flags (`has_floor_point`, `has_yaw`, `has_quality`) are authoritative; a value without its
-  flag is absent, never a real (0, 0) position (CC-M28/G15).
+  flag is absent, never a real (0, 0) position.
 - Rollout is shadow-first via `resolver.cc_assertion_mode` (`off | shadow | enabled`, default
   `shadow`): shadow matches and records `cc_assertions_shadow_total{outcome=}` without
   injecting anchors into the resolver; `cc_assertions_matched_total{gate=}` and
@@ -358,11 +358,10 @@ required projections acknowledge the same revision ID.
 
 `resolver.revision_horizon_s` (`identity_resolver.py`, default 600.0) has a mirror on the
 cognitive-companion side: `cts.revision_horizon_s` on `IdentityRewriter`, which bounds automatic
-(range-less) revision supersession of `PersonLocationHistory` and `cts_dementia_signals` rows
-(M06). Change both together; a value drift lets CC rewrite more or less history than the resolver
+(range-less) revision supersession of `PersonLocationHistory` and `cts_dementia_signals` rows. Change both together; a value drift lets CC rewrite more or less history than the resolver
 actually promises.
 
-### Unknown-segment backfill (identity-continuity M04)
+### Unknown-segment backfill
 
 `UnknownBackfillService` (`app/services/unknown_backfill.py`) is the only automatic process that
 may call `IdentityCorrectionService.record_inferred_range`; no other code path is permitted to

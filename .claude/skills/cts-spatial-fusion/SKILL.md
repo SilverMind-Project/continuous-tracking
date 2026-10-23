@@ -1,6 +1,7 @@
 ---
 name: cts-spatial-fusion
 description: Use when changing CTS floor-plane localization, the homography Jacobian, per-observation measurement covariance, cross-camera fusion (dedup), the floor-plane Kalman filter, ZUPT, primary-camera selection, or geometry-aware posture weighting.
+paths: ["**/tracking-orchestrator/app/tracking/**"]
 ---
 
 # CTS Spatial Fusion

@@ -78,6 +78,24 @@ flowchart TD
 
 For overlapping cameras with opposite perspectives (front on A, back on B), CTS does not merge observations (their direct similarity is low); both PHs resolve to the same identity through the multi-view gallery and are linked by a **co-presence record** (`co_presence_links`, written when two open PHs in one overlap group share a committed identity).
 
+### WorldTracker.step: the 10-step loop
+
+Each frame, `WorldTracker.step` (`app/tracking/world/tracker.py`) runs:
+
+```mermaid
+flowchart TD
+  s1["1. Load open PHs, Kalman predict to now"] --> s2
+  s2["2. dedup_observations()\ncollapse cross-camera duplicates"] --> s3
+  s3["3. associate()\nHungarian over cost matrix with gating"] --> s4
+  s4["4. Update matched PHs\nKalman update + EMAs + expand cameras"] --> s5
+  s5["5. Spawn PHs for unmatched obs"] --> s6
+  s6["6. Emit PHContinuationCandidate for nearby closed PHs"] --> s7
+  s7["7. Close unmatched PHs past ph_close_grace_s"] --> s8
+  s8["8. Persist all updated PHs"] --> s9
+  s9["9. Identity resolution"] --> s10
+  s10["10. Build WorldFrameSnapshot per PH"]
+```
+
 ### Home-camera nuances (load-bearing)
 
 - **Uncalibrated cameras get synthetic floor points, not garbage.** `WorldTrackingStage._synthetic_floor_point` maps the bbox centre into a 4 m virtual room inside a per-camera 200 m tile, flagged `calibrated=False`, so the tracker still creates PHs and commits face-based identities. (Before this, uncalibrated detections were filtered out, so there were no PHs and no identities.)
@@ -106,6 +124,41 @@ The multi-view gallery query holds residual mass on UNKNOWN for weak matches, so
 
 `config/settings.yaml` keys are read in `app/main.py` `_build_*` functions via `section(...).as_float("key")` with no default. Deleting a YAML key without removing its `main.py` read crashes startup with `SettingNotFoundError`; adding a key without a read silently ignores it. Treat the YAML key, the `main.py` read, the dataclass field, and the test as one atomic unit.
 
+## rtsp-ingress: go2rtc ingest and camera configuration
+
+### go2rtc sidecar
+
+`rtsp-ingress` does **not** manage RTSP sessions directly. go2rtc owns all RTSP sessions. The flow per camera:
+
+1. `reconciler` fetches the enabled camera list from `GET /api/v1/cts/cameras` on cognitive-companion (polled every 60 s)
+2. `Supervisor.Reconcile()` calls `go2rtc.RegisterStream(ctx, cameraID, rtspURL)` -- idempotent HTTP PUT to go2rtc `/api/streams`; heals go2rtc restarts
+3. `poll.Worker` ticks every `frame_interval_ms` ms and calls `go2rtc.FetchJPEG(ctx, cameraID)` -- HTTP GET `/api/frame.jpeg`
+4. Frame passes motion gate, uploads to MinIO, publishes to `frames.ready`
+
+`rtsp-ingress/config/go2rtc.yaml` has **no `streams:` section** -- all registrations are dynamic. Do not add `gortsplib` or `pion/rtp` to this codebase.
+
+### Camera configuration
+
+All cameras are managed through the cognitive-companion Admin UI (`/admin/cts/cameras`). There is no static camera list in `settings.yaml`.
+
+rtsp-ingress polls `GET /api/v1/cts/cameras` on cognitive-companion every 60 s (configurable via `cognitive_companion.reconcile_interval_s`). The reconciler maps each camera record to a `CameraConfig` and calls `Supervisor.Reconcile()`, which registers/deregisters streams with go2rtc idempotently.
+
+`CameraConfig` fields populated from the API response:
+
+| Field | Source |
+| --- | --- |
+| `ID` | `cts_cameras.id` |
+| `RTSPURL` | `cts_cameras.rtsp_url` -- full RTSP URL stored in the database |
+| `RoomName` | `cts_cameras.location` |
+| `Enabled` | only enabled cameras are included (filtered Go-side) |
+| `FrameIntervalMs` | falls back to `defaults.frame_interval_ms` from settings.yaml |
+| `MotionThreshold` | falls back to `defaults.motion_threshold` |
+| `ReconnectBackoffSeconds` | falls back to `defaults.reconnect_backoff_s` |
+
+rtsp-ingress authenticates to cognitive-companion with the `COGNITIVE_API_KEY` environment variable (sent as `X-API-Key`). The key must have the `cts_ingress` permission defined in `cognitive-companion/config/auth.yaml`. The `CC_INGRESS_API_KEY` env var should hold the same secret on both services.
+
+RTSP credentials are stored in the cognitive-companion database as part of the full RTSP URL. They are never written to any config file on the rtsp-ingress side.
+
 ## How CTS interacts with cognitive-companion (CC)
 
 CC is the consumer and control plane for CTS. CTS does not serve users directly; everything user-facing is in CC. The integration surface is deliberately narrow:
@@ -124,7 +177,7 @@ For everything on the CC side (the rules engine and its seven trigger types, eve
 
 ## Wire contract (CTS to CC)
 
-All Redis Streams carry raw protobuf bytes (no JSON, no base64); clients set `decode_responses=False`. Streams: `frames.ready` (FrameReady), `tracking.events` (TrackingEvent), `tracking.revisions` (IdentityRevision), `tracking.signals` (DementiaSignal), `scene.samples` (SceneSample), `tracking.continuations` (PHContinuationCandidate), and the Tier-2 state-change streams `tracking.presence` (PresenceEvent: appeared / disappeared) and `tracking.dwell` (DwellEvent: started / ended with duration). Proto changes are two-repo changes: edit the `.proto`, regenerate bindings in both repos (`make proto`), and update producers, consumers, and tests together; never reuse field numbers. PH `mean_quality` travels via the IdentitySnapshot proto to the CC `PersonLocationEnvelope` `quality` field; do not recompute quality on the CC side.
+Redis Streams carry raw protobuf bytes (no JSON, no base64); clients set `decode_responses=False`. Protobuf streams: `frames.ready` (FrameReady), `tracking.events` (TrackingEvent), `tracking.revisions` (IdentityRevision), `tracking.signals` (DementiaSignal), and `scene.samples` (SceneSample). Two streams are exceptions that publish one Redis field per value instead of a protobuf message: `tracking.continuations` (PHContinuationCandidate fields) and `tracking.room_transitions`. `PresenceEvent` (`tracking.presence`) and `DwellEvent` (`tracking.dwell`) are declared in `proto/` with settings keys and metrics, but nothing publishes them today. Proto changes are two-repo changes: edit the `.proto`, regenerate bindings in both repos (`make proto`), and update producers, consumers, and tests together; never reuse field numbers. PH `mean_quality` travels via the IdentitySnapshot proto to the CC `PersonLocationEnvelope` `quality` field; do not recompute quality on the CC side.
 
 **Two-tier event model.** `tracking.events` is a high-rate live feed for the UI only, throttled per camera by `live_publish_max_hz` (default 3 Hz; inference still runs every frame). The Tier-2 streams (`tracking.transitions`/room transitions, `tracking.presence`, `tracking.dwell`, `tracking.revisions`, `tracking.signals`) are emitted only on semantic state changes, so the CC rule-trigger rate is a function of human activity, not frame rate times camera count. Raising the inference poll rate to improve tracking no longer increases CC rule load. The CTS-side publish policy is implemented; the CC-side consumer migration (rules triggering off Tier-2 rather than per-frame) is specified for a later effort .
 

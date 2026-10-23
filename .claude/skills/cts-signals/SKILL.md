@@ -1,6 +1,7 @@
 ---
 name: cts-signals
 description: Use when adding or modifying a CTS dementia signal, detector, baseline, robust z-score rule, hysteresis behavior, severity policy, AlgorithmSpec, protobuf kind, CC plumbing, or signal test.
+paths: ["**/tracking-orchestrator/app/trajectory/**", "**/proto/**"]
 ---
 
 # CTS Signals
@@ -139,7 +140,7 @@ Tiers per kind, as implemented in `app/trajectory/dementia_signals.py`:
 | `absence` | `absence_threshold_minutes`, +60 min, +120 min: info, warning, emergency | same |
 
 **Rules:**
-- Severity tiers derive from configured thresholds (`SignalConfig`), never literals in a detector body. The z cut points and pacing rates above are still literals in code; moving them into `SignalConfig` with unchanged defaults is a refactor-only change (EG-M09 PR 3).
+- Severity tiers derive from configured thresholds (`SignalConfig`), never literals in a detector body. The z cut points and pacing rates above are still literals in code; moving them into `SignalConfig` with unchanged defaults is a refactor-only change.
 - A new kind declares its tiers in this table and caps cold-start severity at `warning` unless an absolute safety threshold justifies more.
 - Data quality demotion: if `identity_confidence_mean < 0.3` OR `coverage_ratio < 0.1`, `warning` and `emergency` are demoted to `info` before emission. The signal is still emitted (so the upsert records it), but caregiver notifications should filter on severity.
 - Dementia signals may gate on persisted trajectory confidence fields:

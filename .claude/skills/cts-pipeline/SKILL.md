@@ -1,6 +1,7 @@
 ---
 name: cts-pipeline
 description: Use when changing CTS frame-pipeline stages, execution paths, tracker-round side effects, batching behavior, or replay fixture formats.
+paths: ["**/tracking-orchestrator/app/pipeline/**"]
 ---
 
 # CTS Pipeline
@@ -130,15 +131,15 @@ There are two fixture families at different replay altitudes:
 | Fall sequence | Header plus `FallFrameInput` rows as JSON Lines in `tests/fixtures/fall_sequences/*.jsonl` | `tests/integration/test_fall_sequences.py::_load_fixture`; replayed through `FallFeatureExtractor` and `FallDetector`. `scripts/calibrate_fall_thresholds.py` has a matching calibration loader | `scripts/synthesize_fall_sequence.py` |
 
 World-tracker fixture observations carry `calibrated`, optional `face_anchor`, `orientation`,
-`orientation_confidence`, `floor_cov_random`, `footpoint_reliable`, and (from M09) `floor_residual_m`.
-Their truth sidecars carry person labels per detection plus expected events; M09 fixtures also carry
+`orientation_confidence`, `floor_cov_random`, `footpoint_reliable`, and `floor_residual_m`.
+Their truth sidecars carry person labels per detection plus expected events; the fusion acceptance fixtures also carry
 scenario-specific extra fields (e.g., `truth_position_mm`, `cam_b_dropout_at_step`, `truth_trajectory_mm`,
 `posture_truth`, `per_camera_posture_scores`). These proofs bypass the full frame pipeline, so they do
 not exercise MinIO, Triton, detection, face/pose inference, stage ordering, or the three execution routes.
 
 Fall fixtures carry bbox, keypoints, posture scores, floor speed, motion energy, timing, room metadata, and a required expectation (`detect`, `no-detect`, or `warning-max`). They exist separately because `WorldObservation` replay cannot exercise `FallDetectionStage` inputs.
 
-**M09 acceptance fixtures (five scenarios, committed 2026-06-18):**
+**Fusion acceptance fixtures (five scenarios):**
 
 | Fixture | Scenario | Key truth sidecar extras |
 |---|---|---|
@@ -148,7 +149,7 @@ Fall fixtures carry bbox, keypoints, posture scores, floor speed, motion energy,
 | `posture_disagreement_four_camera` | 4 cameras (LEFT/RIGHT/BACK/FRONT); 3 sitting, 1 standing; geometry-aware fusion should output sitting | `posture_truth`, `per_camera_posture_scores` |
 | `moving_then_stop` | Walk 20 frames at 0.30 m/s then stop for 40 frames; ZUPT engages at stop | `truth_trajectory_mm`, `walk_end_step`, `truth_stop_pos_mm` |
 
-**M09 measurement harness:** `tests/integration/_fusion_metrics.py` provides `run_replay()` and `compute_eigen_ratio()`.
+**Fusion measurement harness:** `tests/integration/_fusion_metrics.py` provides `run_replay()` and `compute_eigen_ratio()`.
 `run_replay(steps, legacy_mode=True)` strips `floor_cov_random` (forces isotropic) and sets `zupt_consecutive_frames=99999`
 (disables ZUPT); TEST-ONLY toggle. Gate tests live in `tests/integration/test_fusion_acceptance.py` (6 tests,
 `@pytest.mark.integration`, use `InMemoryPHRepository`, no Postgres required).
