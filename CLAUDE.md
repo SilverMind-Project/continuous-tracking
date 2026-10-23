@@ -88,6 +88,18 @@ Siblings: `../cognitive-companion/` (BFF, its own CLAUDE.md), `../triton-shared/
 - Use the project venv at `tracking-orchestrator/.venv/`, never system Python. Markdown has no
   em-dashes.
 
+## Cross-repository contracts
+
+- **Proto:** editing `proto/` is a two-repo change; `make proto` writes the CTS and CC bindings,
+  and every producer and consumer in both repositories changes in the same change set.
+- **Settings coupling:** `resolver.revision_horizon_s` is mirrored by CC `cts.revision_horizon_s`;
+  change both together.
+- **Face wire contract:** `tracking-orchestrator/app/inference/face_id_client.py` consumes
+  person-identification-service `POST /api/v1/identify`; a `FaceDetection` field change lands in
+  both repositories together.
+- **Configuration:** CC owns cameras, rooms, and the floor plan; CTS reads them only through
+  `app/services/cc_config_sync.py`.
+
 ## Claude Code guardrails
 
 Start sessions in this directory (or `/cd` here): `.claude/settings.json` applies only from the

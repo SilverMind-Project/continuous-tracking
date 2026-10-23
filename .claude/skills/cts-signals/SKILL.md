@@ -6,7 +6,7 @@ paths: ["**/tracking-orchestrator/app/trajectory/**", "**/proto/**"]
 
 # CTS Signals
 
-This skill makes "add or modify a dementia signal" a recipe. Nine protobuf kinds are active: `pacing`, `sundowning_index`, `bathroom_dwell_anomaly`, `nighttime_movement`, `stillness_anomaly`, `absence`, `fall_suspected`, `gait_slowing`, and `agitation_index`.
+This skill makes "add or modify a dementia signal" a recipe. Ten protobuf kinds are active: `pacing`, `sundowning_index`, `bathroom_dwell_anomaly`, `nighttime_movement`, `stillness_anomaly`, `absence`, `gait_slowing`, and `agitation_index` (computed by `DementiaSignalWorker`), `fall_suspected` (`FallDetectionStage`, `app/pipeline/stages/fall_detection.py`), and `same_clothes_suspected` (`AppearanceEvaluator`, `app/trajectory/appearance_profile.py`, always `info`, off by default under `hygiene.same_clothes.enabled`).
 
 ## The golden rule
 
