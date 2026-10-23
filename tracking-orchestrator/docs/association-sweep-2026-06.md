@@ -1,4 +1,4 @@
-# Association Parameter Sweep — June 2026
+# Association Parameter Sweep (June 2026)
 
 **Generated:** 2026-06-12  
 **Harness:** `scripts/sweep_association.py`  
@@ -19,7 +19,7 @@ uv run python scripts/sweep_association.py --grid scripts/grids/default.yaml --o
   `tests/fixtures/frame_replays/` (see `scripts/synthesize_replay_fixture.py`)
 - **Ground truth:** per-fixture `*.truth.json` sidecars (detection_id → true person label)
 - **Params swept:** `gate_chi2`, `alpha_geo`, `alpha_app`, `observation_noise_m`,
-  `ph_close_grace_s` — 144 admissible combinations (after filtering `alpha_geo + alpha_app > 1`)
+  `ph_close_grace_s`: 144 admissible combinations (after filtering `alpha_geo + alpha_app > 1`)
 - **Total runs:** 1 440 (144 combos × 10 fixtures)
 - **Elapsed:** 6.3 s on the dev box (DGX H100)
 
@@ -52,7 +52,7 @@ The dominant differentiator is **`ph_close_grace_s`**:
 
 `gate_chi2` (5.99 / 9.21 / 13.82) and the alpha weights show no measurable
 difference on these synthetic fixtures.  The cost matrix patterns are
-geometrically unambiguous — all three gates produce identical associations.
+geometrically unambiguous: all three gates produce identical associations.
 Differentiating gate sensitivity requires live-camera diversity not available
 in the current fixture suite.
 
@@ -85,7 +85,7 @@ The three fixtures scoring < 1.0 all involve occlusion gaps where PH closes and 
 ## Conclusion: keep current constants
 
 The shipped constants (`gate_chi2=9.21`, `alpha_geo=0.5`, `alpha_app=0.4`,
-`observation_noise_m=0.25`, `ph_close_grace_s=5.0`) are **safe** — zero
+`observation_noise_m=0.25`, `ph_close_grace_s=5.0`) are **safe**: zero
 contamination across all fixtures.
 
 **One change is recommended as a follow-up:**

@@ -15,9 +15,9 @@ touching services.
 
 Every persistent resource gets three artifacts:
 
-1. A `Protocol` in `storage/base.py` — the contract services depend on.
-2. An `InMemory*` class in the same file — fast, zero-dependency, used in unit tests.
-3. A `Postgres*` class in `storage/postgres/` — the production implementation.
+1. A `Protocol` in `storage/base.py`: the contract services depend on.
+2. An `InMemory*` class in the same file: fast, zero-dependency, used in unit tests.
+3. A `Postgres*` class in `storage/postgres/`: the production implementation.
 
 Services import only the `Protocol`. Import-linter enforces the layering contract
 (`core → domain → storage → services → transport → routers`). Nothing above `storage` may
@@ -34,7 +34,7 @@ Rules:
 
 1. All repository methods are `async`.
 2. Return domain types, never raw DB rows.
-3. `Protocol` carries no state — it is a pure structural interface.
+3. `Protocol` carries no state: it is a pure structural interface.
 4. `InMemory` implementations use plain `dict` / `list`; they never touch a DB.
 5. `Postgres*` classes receive only an `asyncpg.Pool`; they hold no other state.
 
@@ -54,7 +54,7 @@ type Manager interface {
 Rules:
 
 1. Accept interfaces, return concrete types (Go convention).
-2. Never pass raw Redis clients across package boundaries — wrap them.
+2. Never pass raw Redis clients across package boundaries; wrap them.
 3. Define interfaces in the **consumer** package, not the provider package.
 
 ---
@@ -67,21 +67,21 @@ All entries are pinned in `tracking-orchestrator/pyproject.toml`. Do not add alt
 | --- | --- |
 | `fastapi` | HTTP router and dependency injection for service entrypoints |
 | `pydantic v2` | Validation and parsing at all external boundaries (HTTP, config, Redis payloads) |
-| `asyncpg` | Async Postgres driver; use `$1..$N` positional params — never `%s` or `?` |
+| `asyncpg` | Async Postgres driver; use `$1..$N` positional params, never `%s` or `?` |
 | `redis[hiredis]` | Async Redis Streams client; use consumer groups and XACK |
 | `aiobotocore` | Async S3-compatible client for MinIO frame storage |
-| `structlog` | Structured, JSON-renderable logging — no `logging.getLogger` |
+| `structlog` | Structured, JSON-renderable logging, no `logging.getLogger` |
 | `numpy` | Frame data and embedding arithmetic |
-| `opencv-python-headless` | Image preprocessing — `cv2.resize(INTER_LINEAR)` for letterbox and crop resizing in all inference modules |
+| `opencv-python-headless` | Image preprocessing: `cv2.resize(INTER_LINEAR)` for letterbox and crop resizing in all inference modules |
 | `scipy` | Hungarian assignment (`linear_sum_assignment`) for tracking |
 | `protobuf` | Message contracts for cross-service transport; generated bindings committed in `app/proto/` |
-| `prometheus-client` | Metrics exposition (`/metrics`) — use the global registry |
+| `prometheus-client` | Metrics exposition (`/metrics`); use the global registry |
 | `pytest` + `pytest-asyncio` | Test runner; all repository tests are `async def` |
 | `mypy` (strict) | Type checking on `domain/`, `storage/`, `services/`, `transport/` |
 | `ruff` | Lint + format (replaces flake8, isort, black) |
 | `import-linter` | Enforces layering contract at CI time |
 
-Do not introduce `aiohttp`, `celery`, or `psycopg2` — the approved stack covers all current
+Do not introduce `aiohttp`, `celery`, or `psycopg2`; the approved stack covers all current
 requirements without them.
 
 `httpx` is permitted as a **test-only** dependency (included in `[project.optional-dependencies] dev`).
@@ -102,7 +102,7 @@ All entries are declared in `rtsp-ingress/go.mod`.
 | `golang.org/x/image` | Image format decoding used in media processing |
 | `gopkg.in/yaml.v3` | Config file parsing |
 
-**RTSP ingest uses go2rtc as a sidecar — not gortsplib.** rtsp-ingress registers/deregisters
+**RTSP ingest uses go2rtc as a sidecar, not gortsplib.** rtsp-ingress registers/deregisters
 streams via go2rtc's HTTP API (`internal/go2rtc/client.go`) and polls `/api/frame.jpeg` for
 frames. Do not add `bluenviron/gortsplib` or `pion/rtp` to the Go module.
 
@@ -110,7 +110,7 @@ frames. Do not add `bluenviron/gortsplib` or `pion/rtp` to the Go module.
 
 ## Redis Stream Wire Format
 
-**All Redis Streams carry raw protobuf bytes — no JSON, no base64.**
+**All Redis Streams carry raw protobuf bytes: no JSON, no base64.**
 
 Use `transport/codec.py` (`encode` / `decode`) for all publish and consume operations. Each stream
 carries one named field whose value is `Message.SerializeToString()` output:
@@ -126,7 +126,7 @@ carries one named field whose value is `Message.SerializeToString()` output:
 Rules:
 
 1. Redis clients must set `decode_responses=False` so binary payloads round-trip unchanged.
-2. No codec discriminator field — consumers know the message type from the stream they subscribe to.
+2. No codec discriminator field: consumers know the message type from the stream they subscribe to.
 3. Do not introduce a dual-codec shim; the protobuf-only path is the sole wire format.
 
 ---
@@ -135,7 +135,7 @@ Rules:
 
 ### Python
 
-1. Unit tests mock at the `Protocol` boundary — inject `InMemoryTrackingRepository` directly.
+1. Unit tests mock at the `Protocol` boundary: inject `InMemoryTrackingRepository` directly.
    Never mock `asyncpg.Pool` or Redis connections in unit tests.
 2. All test functions that touch a repository are `async def` and decorated with
    `@pytest.mark.asyncio` (or `asyncio_mode = "auto"` in `pyproject.toml`).
@@ -145,15 +145,15 @@ Rules:
    constructing the same frozen dataclass inline across many test functions.
 5. Tests verify behavior through the public API of the class under test. Never access private
    `_attributes` directly to assert state.
-6. Triton calls are mocked via `TritonClientProtocol` — all inference tests run without a GPU.
+6. Triton calls are mocked via `TritonClientProtocol`: all inference tests run without a GPU.
 
 ### Go
 
 1. Prefer table-driven tests (`t.Run`) for functions with multiple input/output cases.
 2. Inject interfaces in constructors so tests can replace the real implementation.
 3. Always run with `-race`: `go test -race ./...`. This is a hard CI gate.
-4. HTTP handler tests use `httptest.NewRecorder()` — no live server required.
-5. go2rtc calls are tested with an `httptest.Server` serving mock responses — do not test against
+4. HTTP handler tests use `httptest.NewRecorder()`; no live server required.
+5. go2rtc calls are tested with an `httptest.Server` serving mock responses; do not test against
    a live go2rtc instance in unit tests.
 
 ---
@@ -161,7 +161,7 @@ Rules:
 ## Security at Boundaries
 
 1. **Validate at entry points only.** Use Pydantic v2 models for HTTP request bodies, Redis
-   message payloads, and config files. Internal domain objects are frozen dataclasses — they
+   message payloads, and config files. Internal domain objects are frozen dataclasses; they
    carry no validation overhead and must already be valid when constructed.
 
 2. **Parameterized SQL, always.** asyncpg requires `$1..$N`; never build SQL strings with
@@ -193,7 +193,7 @@ Rules:
 ### Go
 
 1. Wrap errors with context: `fmt.Errorf("streams: register %q: %w", cfg.ID, err)`.
-2. Check every error — `go vet` will flag unchecked error returns.
+2. Check every error: `go vet` will flag unchecked error returns.
 3. Use `context.Context` as the first parameter of every function that does I/O; respect
    cancellation via `ctx.Err()`.
 
@@ -207,7 +207,7 @@ All timestamps are timezone-aware. In Python:
 from datetime import UTC, datetime
 
 now = datetime.now(UTC)          # correct
-now = datetime.now()             # WRONG — naive, breaks TimescaleDB timestamptz
+now = datetime.now()             # WRONG: naive, breaks TimescaleDB timestamptz
 ```
 
 In Go, use `time.Now().UTC()` for all timestamps written to Redis or Postgres.
@@ -216,7 +216,7 @@ In Go, use `time.Now().UTC()` for all timestamps written to Redis or Postgres.
 
 ## Structured Logging
 
-Python — use `structlog`, never `print` or `logging.getLogger`:
+Python: use `structlog`, never `print` or `logging.getLogger`:
 
 ```python
 from structlog import get_logger
@@ -226,7 +226,7 @@ logger.info("tracklet created", tracklet_id=tid, camera_id=cam)
 logger.exception("frame processing failed", camera_id=frame.camera_id)
 ```
 
-Go — use `zap.L()` (global) or inject `*zap.Logger` via constructor:
+Go: use `zap.L()` (global) or inject `*zap.Logger` via constructor:
 
 ```go
 zap.L().Info("stream registered", zap.String("stream_id", cfg.ID))
@@ -247,7 +247,7 @@ log line where they are known. This enables log-based correlation across service
   entropy histogram, identity commits, inference latency histograms, gallery size gauge,
   active tracklet gauge.
 - OpenTelemetry tracing across Redis Streams boundaries is deferred until a collector target
-  exists — do not add OTel spans prematurely.
+  exists; do not add OTel spans prematurely.
 
 ---
 

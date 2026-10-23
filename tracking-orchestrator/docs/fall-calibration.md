@@ -57,7 +57,7 @@ fall_detection:
 **Specificity (no-detect + warning-max, by confirmed escalation):** 100.0% (7/7)
 
 "Confirmed escalation" means `is_escalatable() = True` when `post_event_motion_nu_s`
-is non-None — i.e., the 2-second post-event motion window has closed and the person
+is non-None, i.e., the 2-second post-event motion window has closed and the person
 remains immobile.  The posture-proxy branch (when the window is still open) can fire
 earlier but is not counted as a confirmed emergency for calibration purposes.
 
@@ -72,7 +72,7 @@ discriminate between threshold choices.
 
 ### Positive: fall_slump_slow
 
-This is the "hard case" — a two-phase slump with only a ~0.92 hps peak rate.  At the
+This is the "hard case": a two-phase slump with only a ~0.92 hps peak rate.  At the
 shipped 0.8 threshold it detects at warning.  Post-event motion (0.095 nu/s > 0.05
 stillness floor) prevents confirmed escalation to emergency.
 

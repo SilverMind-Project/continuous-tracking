@@ -34,24 +34,24 @@ R_obs = J · Σ_px · Jᵀ + R_cal
 J      = analytic Jacobian of the homography projection at the footpoint (m/px).
 Σ_px   = base_px² · I, inflated when the footpoint is unreliable and scaled by
          detection confidence / crop quality.
-R_cal  = (k_cal · floor_residual_m)² · I  — per-camera systematic-bias term.
+R_cal  = (k_cal · floor_residual_m)² · I   (per-camera systematic-bias term).
 ```
 
-The Jacobian makes the error ellipse stretch **along the viewing ray** for oblique/far cameras —
+The Jacobian makes the error ellipse stretch **along the viewing ray** for oblique/far cameras:
 this is the whole point of the anisotropic model; a scalar σ throws it away.
 
 **Footpoint reliability.** The footpoint (bbox bottom-centre) is only valid when the feet
 contact the floor in view. Inflate `Σ_px` steeply when: ankle keypoints are not visible in the
-pose result, OR the bbox touches the image edge (truncation). Do not silently drop — inflate.
+pose result, OR the bbox touches the image edge (truncation). Do not silently drop; inflate.
 
 ## Cross-camera fusion: random vs systematic split (CRITICAL)
 
 Information-form fusion `R*⁻¹ = Σ Rᵢ⁻¹` is identical to N sequential Kalman updates: it shrinks
 covariance ~1/N. That is correct ONLY for the **random** part (`J·Σ_px·Jᵀ`, independent detector
-noise). It is WRONG for the **systematic** part (`R_cal` — each camera has a fixed calibration
+noise). It is WRONG for the **systematic** part (`R_cal`: each camera has a fixed calibration
 offset that does not average toward truth). If you fuse `R_cal` away, the filter goes
 overconfident and the fused point JUMPS by the inter-camera bias whenever the visible camera set
-changes — reproducing the bug.
+changes, reproducing the bug.
 
 Rule: fuse only the random term, then add a non-shrinking bias floor:
 
@@ -76,7 +76,7 @@ R*   = ( Σ (J Σ_px Jᵀ)ᵢ⁻¹ )⁻¹  +  R_bias_floor
 
 ## Primary-camera selection
 
-Position is always inverse-covariance fused across cameras — never single-camera. But each PH
+Position is always inverse-covariance fused across cameras, never single-camera. But each PH
 has ONE *primary camera* (for the displayed crop/keyframe and room fallback), chosen by the
 best view-quality (footpoint reliability + crop/face quality) and **stabilized with hysteresis**
 (switch only when another camera is clearly better for N frames). Lives in the tracker; uses the

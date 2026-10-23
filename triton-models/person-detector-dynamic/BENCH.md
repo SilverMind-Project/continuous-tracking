@@ -32,14 +32,14 @@ done
 
 | Model | Batch | Throughput (infer/s) | p50 latency (ms) | p95 latency (ms) | GPU util (%) |
 | --- | --- | --- | --- | --- | --- |
-| person-detector (static) | 1 | — | — | — | — |
-| person-detector (static) | 2 | — | — | — | — |
-| person-detector (static) | 4 | — | — | — | — |
-| person-detector (static) | 8 | — | — | — | — |
-| person-detector-dynamic | 1 | — | — | — | — |
-| person-detector-dynamic | 2 | — | — | — | — |
-| person-detector-dynamic | 4 | — | — | — | — |
-| person-detector-dynamic | 8 | — | — | — | — |
+| person-detector (static) | 1 | n/a | n/a | n/a | n/a |
+| person-detector (static) | 2 | n/a | n/a | n/a | n/a |
+| person-detector (static) | 4 | n/a | n/a | n/a | n/a |
+| person-detector (static) | 8 | n/a | n/a | n/a | n/a |
+| person-detector-dynamic | 1 | n/a | n/a | n/a | n/a |
+| person-detector-dynamic | 2 | n/a | n/a | n/a | n/a |
+| person-detector-dynamic | 4 | n/a | n/a | n/a | n/a |
+| person-detector-dynamic | 8 | n/a | n/a | n/a | n/a |
 
 ## Occupancy analysis
 

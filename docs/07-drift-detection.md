@@ -6,7 +6,7 @@ A fixed camera is considered "drifted" when its physical position has changed
 (been bumped, accidentally rotated, or repositioned) since its last homography
 calibration was committed.  Because the homography maps image pixels to
 floor-plan coordinates, even a small positional change degrades all
-localization for that camera — tracked positions will be offset, cross-camera
+localization for that camera: tracked positions will be offset, cross-camera
 deduplication may fail, and dwell-time calculations become inaccurate.
 
 Today there is no automatic signal that a camera has moved.  This feature adds
@@ -72,7 +72,7 @@ When drift is detected:
 
 The operator then chooses whether to recalibrate.  The UI provides a
 **"Re-run Auto-Calibration"** CTA that goes through the same operator-reviewed
-auto-calibration flow — the operator must review and commit the
+auto-calibration flow; the operator must review and commit the
 draft before it becomes active.  No silent homography mutations occur.
 
 ---

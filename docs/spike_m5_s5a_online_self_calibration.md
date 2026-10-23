@@ -1,6 +1,6 @@
 # Spike S5a: Online Self-Calibration from Corresponded Tracks
 
-**Status**: Evaluation memo only — not a committed feature.
+**Status**: Evaluation memo only, not a committed feature.
 
 ## Objective
 

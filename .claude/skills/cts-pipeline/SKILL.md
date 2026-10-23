@@ -110,7 +110,7 @@ A stage that is computationally expensive but optional (e.g., pose estimation wi
 
 Adding a stage to the wrong position causes the stage to read stale context. When in doubt, check which `FrameContext` fields your stage reads and confirm they are set by a prior stage.
 
-**Durability writes never live in a throttled or lossy stage.** A stage that rate-limits its output (e.g. `PublishStage`'s per-camera `live_publish_max_hz` cap) must contain only presentation-path work; anything that must happen exactly once per tracker round — provenance, audit rows, any row a caregiver-facing read model joins against — gets its own stage ahead of the throttle. `ProvenancePersistStage` runs immediately before `PublishStage` on all three execution routes for exactly this reason: identity-decision persistence is change-gated (`revises_previous` only) but must never additionally be throttle-gated, or a decision landing on a rate-limited frame is silently lost (see `codebase-hardening-m02-provenance-persistence-decoupling.md`). `ReIDCandidateStage` sits between them for the same reason: gallery-candidate creation is audit-visible governance data, so it must not sit behind `PublishStage`'s throttle either (see `codebase-hardening-m04-governed-candidate-creation.md`).
+**Durability writes never live in a throttled or lossy stage.** A stage that rate-limits its output (e.g. `PublishStage`'s per-camera `live_publish_max_hz` cap) must contain only presentation-path work; anything that must happen exactly once per tracker round (provenance, audit rows, any row a caregiver-facing read model joins against) gets its own stage ahead of the throttle. `ProvenancePersistStage` runs immediately before `PublishStage` on all three execution routes for exactly this reason: identity-decision persistence is change-gated (`revises_previous` only) but must never additionally be throttle-gated, or a decision landing on a rate-limited frame is silently lost (see `codebase-hardening-m02-provenance-persistence-decoupling.md`). `ReIDCandidateStage` sits between them for the same reason: gallery-candidate creation is audit-visible governance data, so it must not sit behind `PublishStage`'s throttle either (see `codebase-hardening-m04-governed-candidate-creation.md`).
 
 ## Cross-camera dedup: how it works and where not to touch it
 
@@ -150,7 +150,7 @@ Fall fixtures carry bbox, keypoints, posture scores, floor speed, motion energy,
 
 **M09 measurement harness:** `tests/integration/_fusion_metrics.py` provides `run_replay()` and `compute_eigen_ratio()`.
 `run_replay(steps, legacy_mode=True)` strips `floor_cov_random` (forces isotropic) and sets `zupt_consecutive_frames=99999`
-(disables ZUPT) — TEST-ONLY toggle. Gate tests live in `tests/integration/test_fusion_acceptance.py` (6 tests,
+(disables ZUPT); TEST-ONLY toggle. Gate tests live in `tests/integration/test_fusion_acceptance.py` (6 tests,
 `@pytest.mark.integration`, use `InMemoryPHRepository`, no Postgres required).
 
 **Fixture ownership rule.** A fixture-format change must update the generator, every loader or calibration reader for that family, round-trip or compatibility tests, regenerated committed fixtures, and this skill in one PR. Do not hand-edit generated fixture payloads.

@@ -16,14 +16,14 @@ services are healthy at baseline.
 
 ## Top-line dashboards
 
-- `cts_frame_end_to_end_latency_ms` p99 by camera — budget 450 ms.
-- `cts_tracking_events_published_total` rate by camera — should track
+- `cts_frame_end_to_end_latency_ms` p99 by camera: budget 450 ms.
+- `cts_tracking_events_published_total` rate by camera: should track
   motion-gate output of `cts_frames_consumed_total`.
-- `cts_identity_revisions_total` rate by reason — sustained > 2/min is
+- `cts_identity_revisions_total` rate by reason: sustained > 2/min is
   a smell (see runbook entry below).
-- `cts_posterior_entropy_bits` p95 — > 2.5 bits sustained means the
+- `cts_posterior_entropy_bits` p95: > 2.5 bits sustained means the
   resolver is undecided; investigate face-ID outages or gallery drift.
-- Redis Streams `XLEN frames.ready` minus consumer last-delivered ID —
+- Redis Streams `XLEN frames.ready` minus consumer last-delivered ID:
   primary backpressure signal.
 
 ## Common incidents
@@ -84,7 +84,7 @@ curl -s http://localhost:8000/metrics | grep cts_triton_inference_latency_ms
 If Triton is the dominant stage, scale Triton's batch_size down (improves
 tail latency at the cost of throughput) or bring up a second Triton
 replica behind a model-instance group. If the dominant stage is the
-identity resolver, investigate gallery size — beyond ~5k rows the HNSW
+identity resolver, investigate gallery size; beyond ~5k rows the HNSW
 search tail starts climbing; tune `ef_search` or prune older rows.
 
 ### 4. Redis Streams consumer lag

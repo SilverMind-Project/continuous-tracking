@@ -66,5 +66,5 @@ guaranteed in every reviewer's environment.
    values for new fields.
 
 `buf breaking` enforces wire compatibility per the WIRE rule set; the
-schema package is `continuoustracking.v1` and is frozen — bump to
+schema package is `continuoustracking.v1` and is frozen; bump to
 `v2` if a breaking change is required.

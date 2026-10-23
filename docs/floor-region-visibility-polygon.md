@@ -4,7 +4,7 @@
 
 The visibility polygon for a camera is derived by projecting boundary points through the
 homography matrix (pixel → floor-plan metres). Without a floor-region mask, the projection
-samples the full image border — including wall pixels above the floor line. Walls are not on
+samples the full image border, including wall pixels above the floor line. Walls are not on
 the floor plane, so the homography produces geometrically incorrect floor-plan coordinates for
 them. This contaminates the visibility polygon with large "shadow" regions that do not
 correspond to walkable floor.
@@ -16,7 +16,7 @@ floor using Depth Anything v2 + RANSAC. The `floor_region_polygon()` function in
 `app/calibration/floor_plane.py` converts that segmentation into a polygon:
 
 1. Extract RANSAC inlier pixel coordinates (`FloorPlaneResult.sample_indices[inlier_mask]`).
-2. Keep only points in the lower `region_fraction` (default 0.9) of the image height — this
+2. Keep only points in the lower `region_fraction` (default 0.9) of the image height; this
    filters out near-ceiling inliers from very wide-angle or high-mounted cameras.
 3. Build a concave hull via `shapely.concave_hull(ratio=0.3)`, which correctly handles
    L-shaped floors; falls back to `cv2.convexHull` on degenerate input.
@@ -24,14 +24,14 @@ floor using Depth Anything v2 + RANSAC. The `floor_region_polygon()` function in
 5. Normalise: output is `[[x_norm, y_norm], ...]` in **image space [0, 1]**.
 
 The polygon is returned in the `/internal/calibration/auto` response field
-`floor_region_polygon`. It is **not** persisted CTS-side and **not** encoded in protobuf —
+`floor_region_polygon`. It is **not** persisted CTS-side and **not** encoded in protobuf;
 only the CC BFF consumes it.
 
 ### Coordinate spaces (non-negotiable)
 
 | Space | Units | Description |
 |---|---|---|
-| `floor_region_polygon` | normalised image [0, 1] | `[col/image_w, row/image_h]` — x is column, y is row |
+| `floor_region_polygon` | normalised image [0, 1] | `[col/image_w, row/image_h]`; x is column, y is row |
 | `visibility_polygon` | normalised floor-plan [0, 1] | `[x_m / fp_width_m, y_m / fp_height_m]` |
 | Floor-plan metres | m | intermediate; passed through homography |
 
@@ -53,9 +53,9 @@ Added in Alembic migration `0011_floor_region`.
 
 Endpoints:
 
-- `POST /api/v1/cts/calibration/auto/{camera_id}` — auto-cal stores the polygon as a side
+- `POST /api/v1/cts/calibration/auto/{camera_id}`: auto-cal stores the polygon as a side
   effect (source `"depth_auto"`) without committing the homography draft.
-- `POST /api/v1/cts/calibration/floor_region/{camera_id}` — operator endpoint that accepts a
+- `POST /api/v1/cts/calibration/floor_region/{camera_id}`: operator endpoint that accepts a
   polygon in normalised image [0, 1] coordinates and an optional `source` (`"manual"` default,
   `"depth_auto"` accepted). If the camera already has a committed homography the visibility
   polygon is recomputed immediately.
@@ -93,5 +93,5 @@ to radial lens distortion. Sampling only at polygon vertices would miss the curv
 |---|---|
 | `tracking-orchestrator/tests/test_floor_region.py` | Concave hull, convex fallback, axis order, region_fraction filter, None on < 3 inliers |
 | `cognitive-companion/backend/tests/unit/services/test_cts_visibility.py` | Wall exclusion, backward-compat fallback, edge densification, degenerate input |
-| `cognitive-companion/backend/tests/routers/test_cts_calibration.py` — `TestFloorRegionEndpoint` | auto-cal stores polygon; manual save persists source; coord validation; `_refresh_visibility_polygon` uses stored polygon |
-| `cognitive-companion/frontend/tests/views/CTSCalibrationView.spec.js` — floor-region suite | `floorRegionDraft` populated from auto-cal; `saveFloorRegion` calls service; `discardFloorRegion` clears draft; `onCameraChange` clears draft |
+| `cognitive-companion/backend/tests/routers/test_cts_calibration.py`: `TestFloorRegionEndpoint` | auto-cal stores polygon; manual save persists source; coord validation; `_refresh_visibility_polygon` uses stored polygon |
+| `cognitive-companion/frontend/tests/views/CTSCalibrationView.spec.js`: floor-region suite | `floorRegionDraft` populated from auto-cal; `saveFloorRegion` calls service; `discardFloorRegion` clears draft; `onCameraChange` clears draft |

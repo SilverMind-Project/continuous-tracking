@@ -15,14 +15,14 @@ triton-models/
 │   ├── config.pbtxt          Triton config (NVIDIA: CUDA EP)
 │   ├── config.pbtxt.intel    Triton config (Intel Arc: OpenVINO EP)
 │   └── 1/
-│       ├── model.onnx        FP32 ONNX — 95 MB
-│       └── model_qdq.onnx    QDQ ONNX — ~24 MB  ← active
+│       ├── model.onnx        FP32 ONNX, 95 MB
+│       └── model_qdq.onnx    QDQ ONNX, ~24 MB  ← active
 ├── clip-vision/              CLIP ViT-L/14 vision encoder (ONNX Runtime)
 │   ├── config.pbtxt
 │   ├── config.pbtxt.intel
 │   └── 1/
-│       ├── model.onnx        FP32 ONNX — 1,160 MB
-│       └── model_qdq.onnx    QDQ ONNX — ~293 MB  ← active
+│       ├── model.onnx        FP32 ONNX, 1,160 MB
+│       └── model_qdq.onnx    QDQ ONNX, ~293 MB  ← active
 ├── florence-2/               Florence-2-large scene description (Python BLS orchestrator)
 │   ├── config.pbtxt
 │   ├── config.pbtxt.intel
@@ -43,14 +43,14 @@ triton-models/
 │   ├── config.pbtxt
 │   ├── config.pbtxt.intel
 │   └── 1/
-│       ├── model.onnx        FP32 ONNX — 107 MB
-│       └── model_qdq.onnx    QDQ ONNX — ~29 MB  ← active
+│       ├── model.onnx        FP32 ONNX, 107 MB
+│       └── model_qdq.onnx    QDQ ONNX, ~29 MB  ← active
 ├── pose-rtmpose/             RTMPose-m 2D pose estimation (ONNX Runtime)
 │   ├── config.pbtxt
 │   ├── config.pbtxt.intel
 │   └── 1/
-│       ├── model.onnx        FP32 ONNX — 52 MB
-│       └── model_qdq.onnx    QDQ ONNX — ~13 MB  ← active
+│       ├── model.onnx        FP32 ONNX, 52 MB
+│       └── model_qdq.onnx    QDQ ONNX, ~13 MB  ← active
 ├── face-detector-scrfd/      Buffalo_L SCRFD detector (FP32 ONNX)
 ├── face-recognition-arcface/ Buffalo_L ArcFace embeddings (FP32 ONNX)
 ├── face-landmark-2d106/      Buffalo_L 106-point landmarks (FP32 ONNX)
@@ -81,7 +81,7 @@ Large ONNX files are managed through Git LFS.
 |-------|-------------|--------|------|-----|-------|--------|
 | YOLO26L | `person-detector` | ONNX Runtime | 95 MB | **~24 MB** | `images` [N,3,640,640] | `output0` [N,300,6] NMS-free |
 | CLIP ViT-L/14 | `clip-vision` | ONNX Runtime | 1,160 MB | **~293 MB** | `input` [N,3,224,224] | `output` [N,768] |
-| Florence-2-large | `florence-2` | Python (BLS) | — | **~794 MB** | `pixel_values` [1,3,H,W] + `input_ids` [1,seq] | `output_ids` [1,max_len] |
+| Florence-2-large | `florence-2` | Python (BLS) | n/a | **~794 MB** | `pixel_values` [1,3,H,W] + `input_ids` [1,seq] | `output_ids` [1,max_len] |
 | Swin-Tiny ReID | `reid-solider` | ONNX Runtime | 107 MB | **~29 MB** | `input` [N,3,384,128] | `output` [N,768] |
 | RTMPose-m | `pose-rtmpose` | ONNX Runtime | 52 MB | **~13 MB** | `input` [N,3,256,192] | `simcc_x` [N,17,384], `simcc_y` [N,17,512] |
 | SCRFD | `face-detector-scrfd` | ONNX Runtime | 16.9 MB | Jetson repo | `input.1` [1,3,640,640] | 9 detection heads |
@@ -89,7 +89,7 @@ Large ONNX files are managed through Git LFS.
 | 2D landmarks | `face-landmark-2d106` | ONNX Runtime | 5.0 MB | Jetson repo | `data` [1,3,192,192] | `fc1` [1,212] |
 | 3D landmarks | `face-landmark-3d68` | ONNX Runtime | 143.6 MB | Jetson repo | `data` [1,3,192,192] | `fc1` [1,3309] |
 | Gender/age | `face-attribute-genderage` | ONNX Runtime | 1.3 MB | Jetson repo | `data` [1,3,96,96] | `fc1` [1,3] |
-| embeddinggemma-300m | `embeddinggemma-300m` | ONNX Runtime | **1,230 MB** | — | `input_ids` [N,2048], `attention_mask` [N,2048] | `sentence_embedding` [N,768] |
+| embeddinggemma-300m | `embeddinggemma-300m` | ONNX Runtime | **1,230 MB** | n/a | `input_ids` [N,2048], `attention_mask` [N,2048] | `sentence_embedding` [N,768] |
 
 The full-precision Buffalo_L files were copied from
 `person-identification-service/data/models/models/buffalo_l`, which matches the
@@ -137,12 +137,12 @@ attribute gates used for NVIDIA.
 
 ## Setup
 
-### Step 1 — select GPU vendor config
+### Step 1: select GPU vendor config
 
 Run once on each target machine before starting Triton:
 
 ```bash
-# NVIDIA (default — skip if config.pbtxt files are already correct)
+# NVIDIA (default; skip if config.pbtxt files are already correct)
 python triton-models/scripts/configure_gpu.py --vendor nvidia
 
 # Intel Arc
@@ -151,7 +151,7 @@ python triton-models/scripts/configure_gpu.py --vendor intel
 
 This is idempotent: re-running with the same vendor is safe.
 
-### Step 2 — generate model files
+### Step 2: generate model files
 
 All locally-exported models use QDQ quantization for production. Each model has
 an FP32 `.onnx` file and a QDQ `model_qdq.onnx` file. Triton loads the QDQ
@@ -223,7 +223,7 @@ generation loop. All heavy computation runs on GPU via Triton's ONNX Runtime
 backend (CUDA EP for NVIDIA, OpenVINO EP for Intel Arc).
 
 Sub-model directories with `config.pbtxt` files are required alongside the
-main `florence-2` model directory — Triton registers them as independent models.
+main `florence-2` model directory; Triton registers them as independent models.
 The NVIDIA/Intel config swap (`configure_gpu.py`) applies to all five
 Florence-2 directories.
 
@@ -254,7 +254,7 @@ full SOLIDER-REID pipeline with proper weights.
 
 ```bash
 # Export FP32 ONNX from official MMPose checkpoint
-# Requires Python 3.11 venv with mmpose stack — see script header for setup.
+# Requires Python 3.11 venv with mmpose stack; see script header for setup.
 python triton-models/scripts/export_pose.py
 
 # Quantize to QDQ
@@ -282,7 +282,7 @@ uv run --with huggingface_hub \
 
 FP32 model from `onnx-community/embeddinggemma-300m-ONNX`. Uses FP32 for
 maximum portability across ONNX Runtime versions and GPU vendors. No export
-or quantization step needed — the model is downloaded directly. The ONNX model
+or quantization step needed; the model is downloaded directly. The ONNX model
 uses external data (`.onnx` graph + `.onnx_data` weights); both files must be
 present in the model version directory.
 
@@ -293,7 +293,7 @@ Client-side: tokenization + L2 normalization via
 Used by the **Knowledge Repository** RAG pipeline in cognitive-companion for
 document chunk embedding and senior query vector search.
 
-### Step 3 — start Triton and verify
+### Step 3: start Triton and verify
 
 ```bash
 # Build and start the custom Triton image

@@ -18,10 +18,10 @@ code shows the wall problem is real in **exactly one place**, and the runtime is
 
 | Mechanism | Location | Wall-contaminated? |
 |---|---|---|
-| Homography fit | `app/calibration/homography.py::compute_homography` | No — fits H from only the picked point correspondences; unpicked pixels (walls) never enter. |
-| Person localization | `app/tracking/floor_projector.py::project` | No — projects the footpoint (feet on the floor plane). |
-| Room/zone containment | `app/tracking/world/helpers.py::is_in_any_room_polygon` | No — floor-meter point-in-polygon; the camera image never enters. |
-| Visibility/coverage polygon | CC `backend/services/cts_visibility.py` | **Yes** — projects the 4 image edges (mostly walls) through H. Used only by CC adjacency inference + UI; zero CTS runtime usage. |
+| Homography fit | `app/calibration/homography.py::compute_homography` | No: fits H from only the picked point correspondences; unpicked pixels (walls) never enter. |
+| Person localization | `app/tracking/floor_projector.py::project` | No: projects the footpoint (feet on the floor plane). |
+| Room/zone containment | `app/tracking/world/helpers.py::is_in_any_room_polygon` | No: floor-meter point-in-polygon; the camera image never enters. |
+| Visibility/coverage polygon | CC `backend/services/cts_visibility.py` | **Yes**: projects the 4 image edges (mostly walls) through H. Used only by CC adjacency inference + UI; zero CTS runtime usage. |
 
 So the **jitter and posture disagreement are NOT a wall/homography bug.** They are a
 **multi-camera sensor-fusion gap**: the system never models per-observation measurement
@@ -49,12 +49,12 @@ CC's live map plots the Kalman mean carried on the `TrackingEvent` snapshot
 
 `GlobalPostureTracker._fuse` (`app/trajectory/posture.py`) already has the mature
 *structure* position lacks (per-camera snapshots, 10 s staleness expiry, weighted fuse,
-hysteresis) — but it weights only by `keypoint_confidence`, **not** view geometry. A
+hysteresis), but it weights only by `keypoint_confidence`, **not** view geometry. A
 camera viewing a person head-on/overhead can have a confident skeleton yet a
 foreshortened, wrong posture and drag the fused result.
 
 **Unifying insight:** one per-observation view-geometry descriptor feeds position R,
-posture weight, and primary-camera selection. One concept, three thin consumers — this
+posture weight, and primary-camera selection. One concept, three thin consumers; this
 is the "reduce branching" backbone.
 
 ---
@@ -91,14 +91,14 @@ J      = ∂(floor_xy)/∂(pixel_xy) at the footpoint, from the homography H (an
 R_cal  = isotropic term from floor_residual_m (per-camera systematic bias).
 ```
 
-Cross-camera fusion in dedup becomes **information-form** — but only the *random* part
+Cross-camera fusion in dedup becomes **information-form**, but only the *random* part
 may shrink with more cameras. **Critical:** information-form fusion (`Σ Rᵢ⁻¹`) is
 mathematically identical to N sequential Kalman updates, so it shrinks R* ~1/N. That is
 correct for the **random** part (`J·Σ_px·Jᵀ`, independent detector noise) but **wrong for
-the systematic part** (`R_cal` — each camera has a *fixed* calibration offset that does
+the systematic part** (`R_cal`: each camera has a *fixed* calibration offset that does
 not average toward truth). If `R_cal` is fused away, the filter becomes overconfident
 (lags real motion) and the fused point jumps by the inter-camera bias difference whenever
-the visible camera set changes — reproducing the very symptom we are fixing.
+the visible camera set changes, reproducing the very symptom we are fixing.
 
 Therefore fuse only the random term, then add a non-shrinking bias floor:
 
@@ -110,7 +110,7 @@ where `R_bias_floor` is derived from the cluster's calibration residuals (e.g. t
 max/representative per-camera `R_cal`, NOT the inverse-sum). The representative carries
 `(x*, R*)`; the Kalman update consumes the matrix `R*`. The association/dedup grouping
 gates should use the same uncertainty (Mahalanobis with R) where they currently use
-residual-widened Euclidean distance — fold in, single path.
+residual-widened Euclidean distance; fold in, single path.
 
 ### Stabilized primary camera
 
@@ -134,32 +134,32 @@ cameras while leaving fused position, covariance, and lifecycle logic unchanged.
 Fusion track is independent of the visibility/drift track; they can
 proceed in parallel. Each milestone ships its docs page.
 
-- **M1 — Observation model foundation.** `ObservationGeometry` frozen descriptor +
+- **M1: Observation model foundation.** `ObservationGeometry` frozen descriptor +
   `observation_model.py` pure functions: footpoint Jacobian, Σ_px, `R_obs`,
   posture-view weight, primary-camera score. Unit tests (no Triton/DB). → docs pages 1, 3.
-- **M2 — Wire it to observations.** `FloorProjector.project` returns `(FloorPoint, cov)`;
+- **M2: Wire it to observations.** `FloorProjector.project` returns `(FloorPoint, cov)`;
   `WorldObservation` gains `floor_cov` + footpoint-reliability fields; the
   detection/pose pipeline stage assembles the descriptor (needs ankle-keypoint
   visibility + bbox-truncation). Depends M1.
-- **M3 — Matrix-R Kalman + information-form dedup.** `kalman.update` / gating take a 2×2
+- **M3: Matrix-R Kalman + information-form dedup.** `kalman.update` / gating take a 2×2
   R; `dedup` fuses via inverse-covariance mean carrying `R*`. **Must implement the
   random-vs-systematic split: fuse only `J·Σ_px·Jᵀ`, add the non-shrinking
-  `R_bias_floor` after fusion** (see §2) — otherwise the dot gets worse (overconfident,
+  `R_bias_floor` after fusion** (see §2); otherwise the dot gets worse (overconfident,
   jumps on camera-set changes), not better. Depends M1, M2. → docs 4.
-- **M4 — ZUPT stationarity.** Adaptive zero-velocity treatment. Depends M3. → docs 4.
-- **M5 — Geometry-aware posture fusion.** Suitability weight + orientation + resolve
+- **M4: ZUPT stationarity.** Adaptive zero-velocity treatment. Depends M3. → docs 4.
+- **M5: Geometry-aware posture fusion.** Suitability weight + orientation + resolve
   margin in `GlobalPostureTracker`. Depends M1. → docs 5.
-- **M6 — Stabilized primary-camera selection.** Hysteresis-smoothed primary for snapshot
+- **M6: Stabilized primary-camera selection.** Hysteresis-smoothed primary for snapshot
   `camera_id` / keyframe / room fallback. Depends M1.
-- **M7 — Persistence.** `person_trajectories` confidence fields folded into `0001_init`;
+- **M7: Persistence.** `person_trajectories` confidence fields folded into `0001_init`;
   repo + `TrajectoryWriter` + snapshot plumbing. Depends M2, M3, M6.
-- **M8 — Acceptance fixtures + CI gates.** Replay fixtures: stationary-person position
+- **M8: Acceptance fixtures + CI gates.** Replay fixtures: stationary-person position
   variance ↓ (target threshold TBD from baseline), moving-person lag no-regression,
   posture cross-camera agreement ↑, and a **slow-shuffle-gait fixture (~0.2–0.4 m/s) with
-  a "not clamped by ZUPT" assertion** — dementia patients shuffle slowly and that motion
+  a "not clamped by ZUPT" assertion**: dementia patients shuffle slowly and that motion
   feeds pacing/wandering/stillness signals; ZUPT thresholds (D4) must be tuned against
   this dangerous middle case. Old-vs-new comparison harness. Depends M3–M6.
-- **M9 — Floor-region polygon + visibility (Track G).** CTS: `floor_region_polygon(...)`
+- **M9: Floor-region polygon + visibility (Track G).** CTS: `floor_region_polygon(...)`
   from depth inliers; return it from `/internal/calibration/auto`. CC: store on
   `cts_cameras`, project the floor-region boundary in `compute_visibility_from_homography`,
   operator confirm/edit. Independent. → docs 6.
@@ -176,14 +176,14 @@ visibility polygon. Docs ride each milestone; finalizes.
 
 ### Open verification items (resolve during implementation, not blockers)
 
-- Confirm whether any protobuf/wire field is needed. Expectation: **no** — `camera_id`
+- Confirm whether any protobuf/wire field is needed. Expectation: **no**: `camera_id`
   already exists on the event (we only change its meaning to "primary"), `position_sigma_m`
   already on the snapshot; persistence fields are CTS-internal. Verify before assuming.
 - Set concrete acceptance thresholds for M8 from a measured baseline run.
 - Define R for **uncalibrated / synthetic floor points** (the `_synthetic_floor_point`
   path has no homography, so no Jacobian). They already bypass the geometric dedup pass
   (gated on `floor_point.calibrated`), but the matrix-R Kalman update still runs and needs
-  some R — use a large fixed default so they contribute little. Specify in M3.
+  some R; use a large fixed default so they contribute little. Specify in M3.
 
 ---
 
@@ -194,7 +194,7 @@ visibility polygon. Docs ride each milestone; finalizes.
   visibility-polygon bug), not for the fit or footpoint localization.
 - Multi-sensor fusion best practice: weight each measurement by its covariance
   (inverse-variance / information filter); do not pre-average then trust equally.
-  Propagate pixel covariance through the projection Jacobian for an anisotropic R —
+  Propagate pixel covariance through the projection Jacobian for an anisotropic R:
   oblique/far cameras have error elongated along the view ray. (This is exactly D3.)
 - Floor/wall separation for the coverage polygon: depth-plane fitting (already in CTS)
   or 2D semantic segmentation (SAM/FloorSAM) back-projected. We reuse depth inliers (D9).
@@ -204,6 +204,6 @@ visibility polygon. Docs ride each milestone; finalizes.
 Key sources:
 - NVIDIA, "Simplifying Camera Calibration to Enhance AI-powered Multi-Camera Tracking" (2024).
 - "Homography-based ground plane detection using a single on-board camera."
-- FloorSAM: SAM-guided floorplan reconstruction (2025) — considered and rejected for CTS (D9).
-- "Methodology for Automatically Detecting PTZ CCTV Camera Drift" (MDPI, 2024) — SSIM drift.
+- FloorSAM: SAM-guided floorplan reconstruction (2025): considered and rejected for CTS (D9).
+- "Methodology for Automatically Detecting PTZ CCTV Camera Drift" (MDPI, 2024): SSIM drift.
 ```
