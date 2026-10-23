@@ -96,4 +96,7 @@ bin/
 .claude/settings.local.json
 .qwen/
 .kiro/
-.agents/
+# .agents/skills is a tracked symlink to .claude/skills (one copy of the skills for tools that
+# read .agents/); anything else under .agents/ stays local.
+.agents/*
+!.agents/skills
