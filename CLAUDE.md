@@ -414,7 +414,8 @@ Run before every PR. CI runs the same checks.
 make check        # Python: ruff check + ruff format --check + mypy + import-linter + pytest (fast local gate)
 make check-all    # Python + Go (golangci-lint + go test -race + go build) + buf lint
 make ci           # Authoritative gate: check-all + every integration-marked test (requires Docker)
-make install-hooks  # Install the git pre-commit hooks (once per clone)
+make install-hooks  # Install the git pre-commit hooks (once per clone; includes the em-dash check)
+make check-md       # Markdown has no em-dashes (also in make check and CI)
 ```
 
 **`make ci` is the authoritative gate.** `make check` is the fast local gate; `make check-all` adds Go and proto validation. `make ci` additionally runs `make test-integration` (`pytest -m integration tests`), which proves C1/C2 (WorldTracker end-to-end) and T5 (PH repository parity) against a testcontainer Postgres. These proofs must pass before merging any change to the tracker or storage layer. CI's `python-test` job runs the same two targets, `make test` and `make test-integration`, and `tests/contracts/test_ci_workflow_paths.py` fails if the workflow names a file that does not exist.

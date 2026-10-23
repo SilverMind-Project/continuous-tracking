@@ -40,6 +40,11 @@ repos:
         language: system
         pass_filenames: false
         files: ^rtsp-ingress/
+      - id: no-em-dash
+        name: no em-dashes in markdown
+        entry: scripts/check-no-em-dash.sh
+        language: system
+        types: [markdown]
       - id: venv-guard
         name: assert-no-system-pip
         entry: sh scripts/block-stray-python.sh

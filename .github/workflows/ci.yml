@@ -37,6 +37,8 @@ jobs:
       # The Claude Code hooks committed under .claude/hooks/ (guard, post-edit, stop scan).
       - name: Claude Code hook tests
         run: make hooks-test
+      - name: Markdown has no em-dashes
+        run: make check-md
 
   python-test:
     name: Python tests (unit and integration)
