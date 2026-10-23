@@ -583,9 +583,9 @@ class DementiaSignalWorker:
             now=now,
         )
 
-        if rate > 0.3:
+        if rate > self._cfg.pacing_emergency_rate_per_min:
             severity: DementiaSignalSeverity = "emergency"
-        elif rate > 0.15:
+        elif rate > self._cfg.pacing_warning_rate_per_min:
             severity = "warning"
         else:
             severity = "info"
@@ -643,8 +643,9 @@ class DementiaSignalWorker:
         transition_count / max(observed_points, 1).  Today's local date is excluded.
 
         Compared via robust_z (modified z-score using median/MAD).
-        Severity: z >= 4.0 -> emergency, z >= 3.0 -> warning, z >= sundowning_z_threshold -> info.
-        Cold start (fewer than min_baseline_n prior evenings): emit info only when rate >= 0.03.
+        Severity: z >= sundowning_emergency_z -> emergency, z >= sundowning_warning_z -> warning,
+        z >= sundowning_z_threshold -> info. Cold start (fewer than min_baseline_n prior evenings):
+        emit info only when rate >= sundowning_cold_start_min_rate.
         """
         if len(window) < 2:
             return []
@@ -683,15 +684,15 @@ class DementiaSignalWorker:
         severity: DementiaSignalSeverity
         if z_score_result.z_score is None:
             # Cold start: emit info only when rate is clearly elevated.
-            if today_rate < 0.03:
+            if today_rate < self._cfg.sundowning_cold_start_min_rate:
                 return []
             severity = "info"
         else:
             if z_score_result.z_score < self._cfg.sundowning_z_threshold:
                 return []
-            if z_score_result.z_score >= 4.0:
+            if z_score_result.z_score >= self._cfg.sundowning_emergency_z:
                 severity = "emergency"
-            elif z_score_result.z_score >= 3.0:
+            elif z_score_result.z_score >= self._cfg.sundowning_warning_z:
                 severity = "warning"
             else:
                 severity = "info"
@@ -783,7 +784,7 @@ class DementiaSignalWorker:
                         identity_id, "bathroom_dwell_anomaly", episode_key=""
                     )
                     return []
-                severity_val = _bathroom_severity(z_result.z_score)
+                severity_val = _bathroom_severity(z_result.z_score, self._cfg)
                 z_score_val = z_result.z_score
                 baseline_val = z_result.baseline
 
@@ -809,7 +810,7 @@ class DementiaSignalWorker:
                 return []
             z_score_val = (current_dur - mean_dur) / std_dur
             baseline_val = mean_dur
-            severity = _bathroom_severity(z_score_val)
+            severity = _bathroom_severity(z_score_val, self._cfg)
 
         # Hysteresis. Bathroom fires at most once per run (one eval per identity per run).
         kind: DementiaSignalKind = "bathroom_dwell_anomaly"
@@ -886,19 +887,18 @@ class DementiaSignalWorker:
         )
 
         if z_score_result.z_score is not None:
-            if z_score_result.z_score >= 4.0:
+            if z_score_result.z_score >= self._cfg.nighttime_emergency_z:
                 severity: DementiaSignalSeverity = "emergency"
-            elif z_score_result.z_score >= 3.0:
+            elif z_score_result.z_score >= self._cfg.nighttime_warning_z:
                 severity = "warning"
             else:
                 severity = "info"
         else:
             # Cold start: flat tiers anchored to the configured gate so info is reachable.
-            # Tiers: info at gate, warning at gate+2, emergency at gate+4.
             gate = self._cfg.nighttime_transition_threshold
-            if night_transitions >= gate + 4:
+            if night_transitions >= gate + self._cfg.nighttime_cold_start_emergency_extra:
                 severity = "emergency"
-            elif night_transitions >= gate + 2:
+            elif night_transitions >= gate + self._cfg.nighttime_cold_start_warning_extra:
                 severity = "warning"
             else:
                 severity = "info"
@@ -1100,11 +1100,10 @@ class DementiaSignalWorker:
             return []
 
         # Severity derived from configurable threshold so info is always reachable.
-        # Tiers: info at threshold, warning at threshold+60, emergency at threshold+120.
         threshold = self._cfg.absence_threshold_minutes
-        if gap_minutes >= threshold + 120:
+        if gap_minutes >= threshold + self._cfg.absence_emergency_extra_minutes:
             severity: DementiaSignalSeverity = "emergency"
-        elif gap_minutes >= threshold + 60:
+        elif gap_minutes >= threshold + self._cfg.absence_warning_extra_minutes:
             severity = "warning"
         else:
             severity = "info"
@@ -1125,7 +1124,10 @@ class DementiaSignalWorker:
                 observed = hour_data.observed_minutes
                 expected_absence_prior = round(1.0 - min(observed / hour_window, 1.0), 3)
                 # If person is frequently absent at this hour, demote severity.
-                if expected_absence_prior > 0.5 and severity != "info":
+                if (
+                    expected_absence_prior > self._cfg.absence_prior_demotion_frac
+                    and severity != "info"
+                ):
                     severity = "info" if severity == "warning" else "warning"
 
         # Hysteresis. Absence fires at most once per run (one eval per identity per run).
@@ -1223,7 +1225,12 @@ class DementiaSignalWorker:
             (baseline_median - recent_median) / baseline_median if baseline_median > 0 else 0.0
         )
         severity: DementiaSignalSeverity = (
-            "warning" if (pct_decline > 0.20 or recent_median < 0.6) else "info"
+            "warning"
+            if (
+                pct_decline > self._cfg.gait_slowing_warning_decline_frac
+                or recent_median < self._cfg.gait_slowing_warning_speed_m_s
+            )
+            else "info"
         )
 
         kind: DementiaSignalKind = "gait_slowing"
@@ -1571,10 +1578,10 @@ class DementiaSignalWorker:
         return None
 
 
-def _bathroom_severity(z_score: float) -> DementiaSignalSeverity:
-    if z_score >= 5.0:
+def _bathroom_severity(z_score: float, cfg: SignalConfig) -> DementiaSignalSeverity:
+    if z_score >= cfg.bathroom_emergency_z:
         return "emergency"
-    if z_score >= 4.0:
+    if z_score >= cfg.bathroom_warning_z:
         return "warning"
     return "info"
 
@@ -1610,6 +1617,9 @@ class SignalConfig:
     # Per-kind cooldown overrides (minutes). Kinds not listed use cooldown_minutes.
     # gait_slowing: 7 days; a daily re-page about a monthly trend is noise.
     gait_slowing_cooldown_minutes: int = 10080
+    # gait_slowing is warning (else info) above this fractional decline or below this speed.
+    gait_slowing_warning_decline_frac: float = 0.20
+    gait_slowing_warning_speed_m_s: float = 0.6
     # agitation_index: transient bursts are excluded by onset debounce;
     # 120 min prevents re-alerting after a resolved episode.
     agitation_cooldown_minutes: int = 120
@@ -1617,8 +1627,16 @@ class SignalConfig:
     pacing_room_threshold: int = 8
     pacing_window_minutes: int = 30
     pacing_min_obs_density: float = 0.5
+    # Severity tiers on the absolute transition rate (transitions per observed minute).
+    pacing_warning_rate_per_min: float = 0.15
+    pacing_emergency_rate_per_min: float = 0.3
     # Nighttime movement: 3 transitions is one bathroom round trip plus one more.
     nighttime_transition_threshold: int = 3
+    # Severity tiers: robust z with a baseline; transitions above the gate on a cold start.
+    nighttime_warning_z: float = 3.0
+    nighttime_emergency_z: float = 4.0
+    nighttime_cold_start_warning_extra: int = 2
+    nighttime_cold_start_emergency_extra: int = 4
     # Stillness: 60 min avoids alerting on desk work, reading, or television.
     stillness_threshold_minutes: int = 60
     stillness_emergency_minutes: int = 120
@@ -1637,13 +1655,25 @@ class SignalConfig:
     # Bathroom
     bathroom_z_threshold: float = 3.5
     bathroom_z_threshold_night: float = 4.0
+    # Severity tiers on the robust z once the day or night gate has passed.
+    bathroom_warning_z: float = 4.0
+    bathroom_emergency_z: float = 5.0
     # 45 min cold-start fallback accommodates constipation before a baseline exists.
     bathroom_absolute_threshold_seconds: int = 2700
     # Sundowning
     sundowning_z_threshold: float = 2.5
     sundowning_min_evening_minutes: int = 30
+    # Severity tiers on the robust z; a cold start emits info only above this evening rate.
+    sundowning_warning_z: float = 3.0
+    sundowning_emergency_z: float = 4.0
+    sundowning_cold_start_min_rate: float = 0.03
     # Absence: cameras do not cover every room, so normal gaps should not alert.
     absence_threshold_minutes: int = 90
+    # Severity tiers: minutes past absence_threshold_minutes.
+    absence_warning_extra_minutes: int = 60
+    absence_emergency_extra_minutes: int = 120
+    # Demote one tier when the person is historically absent at this hour more than this fraction.
+    absence_prior_demotion_frac: float = 0.5
     # Phase 4 scalability
     baseline_cache_ttl_minutes: int = 60
     max_concurrent_identities: int = 4

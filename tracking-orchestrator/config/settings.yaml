@@ -172,6 +172,30 @@ signal:
   baseline_cache_ttl_minutes: 60
   max_concurrent_identities: 4
   incremental_enabled: true
+  # Severity tiers per kind (see the cts-signals skill severity table).
+  # Pacing: absolute transitions per observed minute.
+  pacing_warning_rate_per_min: 0.15
+  pacing_emergency_rate_per_min: 0.3
+  # Sundowning: robust z cut points; cold start emits info only above this rate.
+  sundowning_warning_z: 3.0
+  sundowning_emergency_z: 4.0
+  sundowning_cold_start_min_rate: 0.03
+  # Bathroom dwell: robust z cut points after the day/night gate.
+  bathroom_warning_z: 4.0
+  bathroom_emergency_z: 5.0
+  # Nighttime movement: robust z cut points; cold start uses transitions above the gate.
+  nighttime_warning_z: 3.0
+  nighttime_emergency_z: 4.0
+  nighttime_cold_start_warning_extra: 2
+  nighttime_cold_start_emergency_extra: 4
+  # Absence: minutes past absence_threshold_minutes.
+  absence_warning_extra_minutes: 60
+  absence_emergency_extra_minutes: 120
+  # Demote absence one tier when historically absent at this hour more than this fraction.
+  absence_prior_demotion_frac: 0.5
+  # Gait slowing: warning above this fractional decline or below this speed (m/s).
+  gait_slowing_warning_decline_frac: 0.20
+  gait_slowing_warning_speed_m_s: 0.6
 
 # Agitation index signal (Milestone 4)
 #

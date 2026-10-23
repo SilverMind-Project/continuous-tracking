@@ -90,7 +90,7 @@ Returns a frozen `RobustZ(median, mad, modified_z, n)` dataclass.
 
 | Kind | Cold-start behavior | Rationale |
 |------|---------------------|-----------|
-| `pacing` | `rate >= 0.3 tpm` -> emergency, `>= 0.15` -> warning (absolute thresholds) | Acute/visible; caregiver needs immediate notification even without history |
+| `pacing` | `rate > 0.3 tpm` -> emergency, `> 0.15` -> warning (absolute thresholds) | Acute/visible; caregiver needs immediate notification even without history |
 | `bathroom_dwell_anomaly` | `duration >= 2700 s (45 min)` -> emit; severity capped at warning | 45 min is an unambiguous fall/medical concern independent of baseline |
 | `nighttime_movement` | `transitions >= 5` -> emergency, `>= 3` -> warning | Absolute thresholds meaningful for nighttime safety |
 | `stillness_anomaly` | Cold-start caps emergency -> warning (cannot escalate to emergency without baseline posture context) | Emergency requires both long duration AND lying posture history to confirm |
@@ -137,10 +137,11 @@ Tiers per kind, as implemented in `app/trajectory/dementia_signals.py`:
 | `bathroom_dwell_anomaly` | z at least 4.0: warning; z at least 5.0: emergency; else info | warning when the open dwell reaches `bathroom_absolute_threshold_seconds` (default 2700 s); never emergency |
 | `nighttime_movement` | z at least 3.0: warning; z at least 4.0: emergency; else info | gate, gate+2, gate+4 transitions: info, warning, emergency (`nighttime_transition_threshold`) |
 | `stillness_anomaly` | lying posture: warning, then emergency at `stillness_emergency_minutes` | emergency demoted to warning |
-| `absence` | `absence_threshold_minutes`, +60 min, +120 min: info, warning, emergency | same |
+| `absence` | `absence_threshold_minutes`, +60 min, +120 min: info, warning, emergency; demoted one tier when historically absent at this hour more than half the time | same |
+| `gait_slowing` | warning when the decline exceeds 20% or the recent median is below 0.6 m/s, else info | silent (needs 10 baseline and 10 recent days) |
 
 **Rules:**
-- Severity tiers derive from configured thresholds (`SignalConfig`), never literals in a detector body. The z cut points and pacing rates above are still literals in code; moving them into `SignalConfig` with unchanged defaults is a refactor-only change.
+- Severity tiers derive from configured thresholds (`SignalConfig`, read from the `signal:` block of `config/settings.yaml`), never literals in a detector body. Every cut point above is a field (for example `sundowning_warning_z`, `pacing_emergency_rate_per_min`, `absence_warning_extra_minutes`); `tests/unit/trajectory/test_signal_severity_config.py` pins the defaults, so changing one is a behavior change that updates this table in the same commit.
 - A new kind declares its tiers in this table and caps cold-start severity at `warning` unless an absolute safety threshold justifies more.
 - Data quality demotion: if `identity_confidence_mean < 0.3` OR `coverage_ratio < 0.1`, `warning` and `emergency` are demoted to `info` before emission. The signal is still emitted (so the upsert records it), but caregiver notifications should filter on severity.
 - Dementia signals may gate on persisted trajectory confidence fields:
