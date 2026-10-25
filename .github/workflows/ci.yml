@@ -75,7 +75,7 @@ jobs:
       - name: Pin GOTOOLCHAIN
         run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           # Pinned to the .pre-commit-config.yaml hook version so local hooks and CI agree.
           version: v1.63.4
