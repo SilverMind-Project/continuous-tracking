@@ -8,7 +8,7 @@ require (
 	github.com/SilverMind-Project/continuous-tracking/proto v0.0.0-00010101000000-000000000000
 	github.com/minio/minio-go/v7 v7.0.98
 	github.com/prometheus/client_golang v1.23.2
-	github.com/redis/go-redis/v9 v9.18.0
+	github.com/redis/go-redis/v9 v9.22.0
 	go.uber.org/zap v1.27.1
 	golang.org/x/image v0.24.0
 	google.golang.org/protobuf v1.36.11
@@ -18,7 +18,6 @@ require (
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
