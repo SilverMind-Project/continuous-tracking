@@ -8,9 +8,9 @@ from returning on face types and face thresholds:
   never a bare ``confidence`` (``calibrated_confidence`` is a probability and keeps its name).
 - No ``.confidence`` attribute access on a face-typed name in ``app/`` (AST walk over accesses
   whose base name ends with ``anchor``, ``fa``, ``face`` or ``evidence``).
-- No old threshold or settings name in ``app/`` or ``config/settings.yaml``. The one exception is
-  cognitive-companion's ``face_id_min_confidence`` camera field, decoded at a single boundary in
-  ``app/main.py``.
+- No old threshold or settings name in ``app/`` or ``config/settings.yaml``, including
+  cognitive-companion's old camera field name ``face_id_min_confidence``: CC now sends
+  ``face_id_min_raw_similarity``, and no reader of the old name survives.
 """
 
 from __future__ import annotations
@@ -44,9 +44,6 @@ _OLD_NAMES = (
     "DROPPED_MIN_CONFIDENCE",
     "dropped_min_confidence",
 )
-# The cognitive-companion camera payload still names its field face_id_min_confidence; CTS
-# decodes it into FaceIdCameraConfig.min_raw_similarity here and nowhere else.
-_CC_BOUNDARY = ("app/main.py", "face_id_min_confidence", 1)
 
 
 def _field_names(cls: type) -> set[str]:
@@ -110,7 +107,6 @@ def test_no_confidence_access_on_face_names() -> None:
 
 
 def test_old_face_threshold_names_are_gone() -> None:
-    boundary_file, boundary_name, boundary_count = _CC_BOUNDARY
     violations: list[str] = []
     for path in [*sorted(_APP.rglob("*.py")), _SETTINGS]:
         if "proto" in path.parts:
@@ -118,11 +114,7 @@ def test_old_face_threshold_names_are_gone() -> None:
         rel = path.relative_to(_PROJECT_ROOT).as_posix()
         text = path.read_text()
         for name in _OLD_NAMES:
-            count = text.count(name)
-            if rel == boundary_file and name == boundary_name:
-                if count != boundary_count:
-                    violations.append(f"{rel}: {name} x{count}, expected x{boundary_count}")
-            elif count:
+            if count := text.count(name):
                 violations.append(f"{rel}: {name} x{count}")
     assert not violations, "old face vocabulary found:\n" + "\n".join(violations)
 

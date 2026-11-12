@@ -82,8 +82,8 @@ Face scores have four names, and each name means one thing:
   `face_id.min_raw_similarity`, `resolver.face_commit_min_similarity`,
   `resolver.contradiction_face_similarity`, `world_tracker.face_conflict_min_similarity`). Only a
   calibrated probability is called a confidence. `tests/contracts/test_face_vocabulary_names.py`
-  keeps the old names out of `app/` and `config/settings.yaml`; cognitive-companion's camera field
-  `face_id_min_confidence` is decoded once, in `app/main.py`.
+  keeps the old names out of `app/` and `config/settings.yaml`, including cognitive-companion's
+  old camera field `face_id_min_confidence` (CC sends `face_id_min_raw_similarity`).
 - Persist raw cosine similarity and calibrated confidence as different fields.
 - Raw similarity is never presented or consumed as probability.
 - Face image quality comes only from person-identification-service (`FaceResult.quality`,

@@ -160,9 +160,9 @@ async def _fetch_cc_camera_configs(
 ) -> dict[str, FaceIdCameraConfig]:
     """Fetch per-camera face-id configs from cognitive-companion's camera API.
 
-    CC is the primary source for per-camera face-id settings (enabled flag and similarity floor).
-    CC's camera field for the floor keeps its historical "confidence" name; this function is the
-    one place it is decoded, into ``FaceIdCameraConfig.min_raw_similarity``.
+    CC is the primary source for per-camera face-id settings: the enabled flag and an optional
+    raw-similarity floor (``face_id_min_raw_similarity``, usually unset). A CC that predates the
+    field sends no floor, which is the same as "no per-camera floor".
     """
     try:
         cameras: list[dict[str, Any]] = await client.get("/api/v1/cts/cameras")
@@ -177,7 +177,7 @@ async def _fetch_cc_camera_configs(
         if not cam_id or not isinstance(enabled, bool):
             logger.warning("Skipped malformed CC camera config", camera=cam)
             continue
-        min_raw_similarity = cam.get("face_id_min_confidence")
+        min_raw_similarity = cam.get("face_id_min_raw_similarity")
         cfgs[str(cam_id)] = FaceIdCameraConfig(
             enabled=enabled,
             min_raw_similarity=(
