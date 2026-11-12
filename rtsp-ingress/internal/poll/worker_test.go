@@ -16,6 +16,7 @@ import (
 	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/config"
 	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/motion"
 	"github.com/SilverMind-Project/continuous-tracking/rtsp-ingress/internal/poll"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -368,5 +369,168 @@ func TestWorker_ImageDimensionsInMeta(t *testing.T) {
 		if int(m.Width) != W || int(m.Height) != H {
 			t.Errorf("dimensions: got %dx%d, want %dx%d", m.Width, m.Height, W, H)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Backoff after consecutive failures
+// ---------------------------------------------------------------------------
+
+// fakeClock is a manually advanced clock, safe to read from the worker goroutine.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// switchableFetcher fails until healthy is set, then serves a valid JPEG.
+type switchableFetcher struct {
+	count   atomic.Int64
+	healthy atomic.Bool
+	data    []byte
+}
+
+func (f *switchableFetcher) FetchJPEG(_ context.Context, _ string) ([]byte, error) {
+	f.count.Add(1)
+	if f.healthy.Load() {
+		return f.data, nil
+	}
+	return nil, errors.New("connection reset by peer")
+}
+
+// backoffCam gives each test its own camera id so the per-camera gauge starts clean.
+func backoffCam(id string) config.CameraConfig {
+	cam := makeCam(2)
+	cam.ID = id
+	cam.ReconnectBackoffSeconds = 2
+	cam.ReconnectBackoffMaxSeconds = 60
+	return cam
+}
+
+// waitForBackoff waits until the worker has scheduled its retry after a failure: it sets the
+// gauge only after computing the retry time, so advancing the clock earlier would race it.
+func waitForBackoff(t *testing.T, cameraID string, seconds float64) {
+	t.Helper()
+	waitFor(t, "the retry to be scheduled", func() bool {
+		return backoffGauge(t, cameraID) == seconds
+	})
+}
+
+// backoffGauge reads rtsp_camera_backoff_seconds for one camera from the default registry.
+func backoffGauge(t *testing.T, cameraID string) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != "rtsp_camera_backoff_seconds" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "camera_id" && label.GetValue() == cameraID {
+					return metric.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// waitFor polls cond for up to three seconds (polls are slow under -race).
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestWorker_BacksOffAfterAFailedFetch(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	fetcher := &switchableFetcher{}
+	cam := backoffCam("cam-backoff")
+	w := poll.NewWorker(cam, fetcher, motion.New(cam.MotionThreshold), &fakePublisher{}, zap.NewNop(),
+		poll.WithClock(clock.Now))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	// The first failure schedules a retry 2 s later; with the clock frozen no tick may fetch.
+	waitForBackoff(t, cam.ID, 2)
+	time.Sleep(50 * time.Millisecond) // about 25 ticks
+	if got := fetcher.count.Load(); got != 1 {
+		t.Fatalf("fetched %d times while backing off, want 1", got)
+	}
+
+	// After 2 s it retries once, and the second failure doubles the wait to 4 s.
+	clock.Advance(2 * time.Second)
+	waitForBackoff(t, cam.ID, 4)
+	if got := fetcher.count.Load(); got != 2 {
+		t.Fatalf("fetched %d times by the first retry, want 2", got)
+	}
+	clock.Advance(3 * time.Second)
+	time.Sleep(50 * time.Millisecond)
+	if got := fetcher.count.Load(); got != 2 {
+		t.Fatalf("retried after 3 s of a 4 s backoff (%d fetches)", got)
+	}
+	clock.Advance(time.Second)
+	waitFor(t, "the second retry", func() bool { return fetcher.count.Load() == 3 })
+}
+
+func TestWorker_RecoveryRestoresTheFrameRate(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	fetcher := &switchableFetcher{data: solidJPEG(t, 64, 48, color.Gray{Y: 100})}
+	cam := backoffCam("cam-recovery")
+	w := poll.NewWorker(cam, fetcher, motion.New(cam.MotionThreshold), &fakePublisher{}, zap.NewNop(),
+		poll.WithClock(clock.Now))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	waitForBackoff(t, cam.ID, 2)
+	fetcher.healthy.Store(true)
+	clock.Advance(2 * time.Second)
+
+	// One good frame resets the backoff, so polling continues with the clock still frozen; a
+	// worker still backing off would stop at 2 fetches. (Decoding is slow under -race, so the
+	// bar is a few fetches, not the full tick rate.)
+	waitFor(t, "polling to resume", func() bool { return fetcher.count.Load() >= 5 })
+	waitForBackoff(t, cam.ID, 0)
+}
+
+func TestWorker_TruncatedFramesBackOffLikeFetchErrors(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	fetcher := &fakeFetcher{data: []byte{0xff, 0xd8, 0xff}} // a JPEG cut off mid-header
+	cam := backoffCam("cam-truncated")
+	w := poll.NewWorker(cam, fetcher, motion.New(cam.MotionThreshold), &fakePublisher{}, zap.NewNop(),
+		poll.WithClock(clock.Now))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	waitForBackoff(t, cam.ID, 2)
+	time.Sleep(50 * time.Millisecond)
+	if got := fetcher.callCount(); got != 1 {
+		t.Fatalf("fetched %d times after a truncated frame, want 1", got)
 	}
 }

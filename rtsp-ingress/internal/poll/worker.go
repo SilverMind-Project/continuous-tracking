@@ -34,14 +34,31 @@ type Publisher interface {
 
 // Worker polls go2rtc at a fixed interval, gates on motion, and publishes
 // motion-bearing frames to MinIO + Redis Streams.
+//
+// Every fetch makes go2rtc open (or reuse) an RTSP session to the camera, so a camera that keeps
+// failing is retried at a widening interval rather than on every tick: the first retry waits
+// ReconnectBackoffSeconds, each further consecutive failure doubles the wait, capped at
+// ReconnectBackoffMaxSeconds, and one good frame resets it. Without this a dead or refusing
+// camera receives a new session attempt every frame interval, indefinitely.
 type Worker struct {
 	cam         config.CameraConfig
 	fetcher     JPEGFetcher
 	gate        *motion.Gate
 	pub         Publisher
 	log         *zap.Logger
+	now         func() time.Time
 	seq         int64
 	lastPublish time.Time
+	failures    int       // consecutive failed fetch or decode attempts
+	retryAt     time.Time // no fetch before this instant while failures > 0
+}
+
+// Option customizes a Worker.
+type Option func(*Worker)
+
+// WithClock replaces the wall clock the backoff schedule reads (tests advance a fake clock).
+func WithClock(now func() time.Time) Option {
+	return func(w *Worker) { w.now = now }
 }
 
 // NewWorker creates a Worker for the given camera.
@@ -51,14 +68,66 @@ func NewWorker(
 	gate *motion.Gate,
 	pub Publisher,
 	log *zap.Logger,
+	opts ...Option,
 ) *Worker {
-	return &Worker{
+	w := &Worker{
 		cam:     cam,
 		fetcher: fetcher,
 		gate:    gate,
 		pub:     pub,
 		log:     log,
+		now:     time.Now,
 	}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w
+}
+
+// backoffDelay is the wait after the current run of consecutive failures.
+func (w *Worker) backoffDelay() time.Duration {
+	initial := time.Duration(w.cam.ReconnectBackoffSeconds * float64(time.Second))
+	maxDelay := time.Duration(w.cam.ReconnectBackoffMaxSeconds * float64(time.Second))
+	if maxDelay < initial {
+		maxDelay = initial
+	}
+	delay := initial
+	for i := 1; i < w.failures && delay < maxDelay; i++ {
+		delay *= 2
+	}
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	return delay
+}
+
+// recordFailure schedules the next attempt and logs once per attempt; while backing off,
+// attempts (and so log lines) are at most one per backoff interval.
+func (w *Worker) recordFailure(event string, err error) {
+	metrics.FetchErrorsTotal.WithLabelValues(w.cam.ID).Inc()
+	w.failures++
+	delay := w.backoffDelay()
+	w.retryAt = w.now().Add(delay)
+	metrics.CameraBackoffSeconds.WithLabelValues(w.cam.ID).Set(delay.Seconds())
+	w.log.Warn(event,
+		zap.String("camera_id", w.cam.ID),
+		zap.Error(err),
+		zap.Int("consecutive_failures", w.failures),
+		zap.Duration("retry_in", delay),
+	)
+}
+
+func (w *Worker) recordSuccess() {
+	if w.failures == 0 {
+		return
+	}
+	w.log.Info("fetch_recovered",
+		zap.String("camera_id", w.cam.ID),
+		zap.Int("failed_attempts", w.failures),
+	)
+	w.failures = 0
+	w.retryAt = time.Time{}
+	metrics.CameraBackoffSeconds.WithLabelValues(w.cam.ID).Set(0)
 }
 
 // Run polls go2rtc until ctx is cancelled.
@@ -77,20 +146,24 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) poll(ctx context.Context) {
-	jpegBytes, err := w.fetcher.FetchJPEG(ctx, w.cam.ID)
-	if err != nil {
-		metrics.FetchErrorsTotal.WithLabelValues(w.cam.ID).Inc()
-		w.log.Warn("fetch_failed", zap.String("camera_id", w.cam.ID), zap.Error(err))
+	if w.failures > 0 && w.now().Before(w.retryAt) {
 		return
 	}
 
-	// Decode JPEG once for the motion gate.
-	img, err := jpeg.Decode(bytes.NewReader(jpegBytes))
+	jpegBytes, err := w.fetcher.FetchJPEG(ctx, w.cam.ID)
 	if err != nil {
-		metrics.FetchErrorsTotal.WithLabelValues(w.cam.ID).Inc()
-		w.log.Warn("jpeg_decode_failed", zap.String("camera_id", w.cam.ID), zap.Error(err))
+		w.recordFailure("fetch_failed", err)
 		return
 	}
+
+	// Decode JPEG once for the motion gate. go2rtc answers a frame request with a truncated body
+	// when the camera drops the session, so a decode failure is a failed fetch too.
+	img, err := jpeg.Decode(bytes.NewReader(jpegBytes))
+	if err != nil {
+		w.recordFailure("jpeg_decode_failed", err)
+		return
+	}
+	w.recordSuccess()
 
 	// Apply per-camera rotation between decode and motion gate so every
 	// downstream consumer sees a single canonical orientation.  The

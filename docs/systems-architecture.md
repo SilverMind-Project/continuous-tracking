@@ -132,7 +132,7 @@ The multi-view gallery query holds residual mass on UNKNOWN for weak matches, so
 
 1. `reconciler` fetches the enabled camera list from `GET /api/v1/cts/cameras` on cognitive-companion (polled every 60 s)
 2. `Supervisor.Reconcile()` calls `go2rtc.RegisterStream(ctx, cameraID, rtspURL)` -- idempotent HTTP PUT to go2rtc `/api/streams`; heals go2rtc restarts
-3. `poll.Worker` ticks every `frame_interval_ms` ms and calls `go2rtc.FetchJPEG(ctx, cameraID)` -- HTTP GET `/api/frame.jpeg`
+3. `poll.Worker` ticks every `frame_interval_ms` ms and calls `go2rtc.FetchJPEG(ctx, cameraID)` -- HTTP GET `/api/frame.jpeg`. Each fetch can make go2rtc open an RTSP session, so after a failed fetch (or a truncated frame) the worker waits `reconnect_backoff_s`, doubling per consecutive failure up to `reconnect_backoff_max_s`, and resets on the first good frame. `rtsp_camera_backoff_seconds{camera_id}` shows the current wait (0 while healthy); a failing camera logs one `fetch_failed`/`jpeg_decode_failed` per attempt and `fetch_recovered` when it returns
 4. Frame passes motion gate, uploads to MinIO, publishes to `frames.ready`
 
 `rtsp-ingress/config/go2rtc.yaml` has **no `streams:` section** -- all registrations are dynamic. Do not add `gortsplib` or `pion/rtp` to this codebase.
@@ -153,7 +153,8 @@ rtsp-ingress polls `GET /api/v1/cts/cameras` on cognitive-companion every 60 s (
 | `Enabled` | only enabled cameras are included (filtered Go-side) |
 | `FrameIntervalMs` | falls back to `defaults.frame_interval_ms` from settings.yaml |
 | `MotionThreshold` | falls back to `defaults.motion_threshold` |
-| `ReconnectBackoffSeconds` | falls back to `defaults.reconnect_backoff_s` |
+| `ReconnectBackoffSeconds` | falls back to `defaults.reconnect_backoff_s` (first retry delay after a failed fetch) |
+| `ReconnectBackoffMaxSeconds` | falls back to `defaults.reconnect_backoff_max_s` (cap on the doubling retry delay) |
 
 rtsp-ingress authenticates to cognitive-companion with the `COGNITIVE_API_KEY` environment variable (sent as `X-API-Key`). The key must have the `cts_ingress` permission defined in `cognitive-companion/config/auth.yaml`. The `CC_INGRESS_API_KEY` env var should hold the same secret on both services.
 

@@ -18,6 +18,13 @@ var (
 		prometheus.CounterOpts{Name: "rtsp_fetch_errors_total"},
 		[]string{"camera_id"},
 	)
+	CameraBackoffSeconds = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "rtsp_camera_backoff_seconds",
+			Help: "Current retry delay after consecutive frame-fetch failures; 0 while healthy.",
+		},
+		[]string{"camera_id"},
+	)
 	Go2RTCRegistrationErrorsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{Name: "rtsp_go2rtc_registration_errors_total"},
 		[]string{"camera_id"},

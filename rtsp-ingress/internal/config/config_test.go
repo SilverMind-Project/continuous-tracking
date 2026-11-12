@@ -156,3 +156,28 @@ func loadFromYAMLBytes(data []byte) (Config, error) {
 	cfg.normalize()
 	return cfg, nil
 }
+
+func TestReconnectBackoffDefaultsAndValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.CameraDefaults.ReconnectBackoffSeconds != 2 || cfg.CameraDefaults.ReconnectBackoffMaxSeconds != 60 {
+		t.Fatalf("backoff defaults: got %v..%v, want 2..60",
+			cfg.CameraDefaults.ReconnectBackoffSeconds, cfg.CameraDefaults.ReconnectBackoffMaxSeconds)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("default config should validate: %v", err)
+	}
+
+	cfg.CameraDefaults.ReconnectBackoffMaxSeconds = 1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a backoff cap below the initial delay must be rejected")
+	}
+
+	var fromYAML Config = DefaultConfig()
+	if err := yaml.Unmarshal([]byte("defaults:\n  reconnect_backoff_max_s: 30\n"), &fromYAML); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if fromYAML.CameraDefaults.ReconnectBackoffMaxSeconds != 30 {
+		t.Errorf("reconnect_backoff_max_s from YAML: got %v, want 30",
+			fromYAML.CameraDefaults.ReconnectBackoffMaxSeconds)
+	}
+}

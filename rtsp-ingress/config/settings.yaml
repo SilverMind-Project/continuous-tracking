@@ -30,7 +30,11 @@ cognitive_companion:
 defaults:
   frame_interval_ms: 200
   motion_threshold: 0.02
+  # A camera whose frames fail is retried after reconnect_backoff_s, doubling per consecutive
+  # failure up to reconnect_backoff_max_s, instead of every frame tick: each fetch makes go2rtc
+  # open a new RTSP session, and a camera that is down must not be flooded with them.
   reconnect_backoff_s: 2.0
+  reconnect_backoff_max_s: 60.0
   # static_sample_interval_s forces a frame publish at least every N seconds
   # even when the motion gate reports no change.  Use this to capture static
   # presence (sitting, sleeping) for downstream analysis.  0 disables it.

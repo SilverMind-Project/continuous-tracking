@@ -155,6 +155,9 @@ func (r *Reconciler) fetchCameras(ctx context.Context) ([]config.CameraConfig, e
 		if cc.ReconnectBackoffSeconds <= 0 {
 			cc.ReconnectBackoffSeconds = r.defaults.ReconnectBackoffSeconds
 		}
+		if cc.ReconnectBackoffMaxSeconds <= 0 {
+			cc.ReconnectBackoffMaxSeconds = r.defaults.ReconnectBackoffMaxSeconds
+		}
 		if cc.StaticSampleIntervalS <= 0 {
 			cc.StaticSampleIntervalS = r.defaults.StaticSampleIntervalS
 		}
