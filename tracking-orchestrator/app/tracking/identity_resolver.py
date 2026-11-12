@@ -1269,15 +1269,108 @@ class IdentityResolver:
     @staticmethod
     def _has_recognized_face(entity: IdentityResolvableEntity, anchors: list[FaceAnchor]) -> bool:
         """Whether any recognized anchor in ``anchors`` belongs to this entity."""
-        entity_obs_ids = set(entity.observation_ids)
         return any(
             fa.recognition_state == "recognized"
-            and (
-                fa.tracklet_id in entity_obs_ids
-                or fa.tracklet_id == entity.entity_id
-                or fa.detection_id in entity_obs_ids
-            )
+            for fa in IdentityResolver._entity_anchors(entity, anchors)
+        )
+
+    @staticmethod
+    def _entity_anchors(
+        entity: IdentityResolvableEntity, anchors: list[FaceAnchor]
+    ) -> list[FaceAnchor]:
+        """The anchors that belong to this entity."""
+        entity_obs_ids = set(entity.observation_ids)
+        return [
+            fa
             for fa in anchors
+            if fa.tracklet_id in entity_obs_ids
+            or fa.tracklet_id == entity.entity_id
+            or fa.detection_id in entity_obs_ids
+        ]
+
+    def _counterfactual_identity(
+        self,
+        entity: IdentityResolvableEntity,
+        face_anchors: list[FaceAnchor],
+        face_evidence: list[FaceEvidence],
+        prior: PosteriorDist,
+        reid_likelihood: PosteriorDist,
+        height_likelihood: PosteriorDist,
+        captured_at: datetime,
+        entity_quality: float,
+        *,
+        calibrated: bool,
+        face_quality_mode: FaceQualityMode,
+    ) -> str | None:
+        """The identity ``_commit`` would decide from these anchors, purely for measurement.
+
+        Same order as ``_commit``: ArcFace authority, then the likelihood (calibrated or not),
+        then commit evidence under the same rule, with its own contradiction. Compared with the
+        live decision before the duplicate guard, which applies identically to both.
+        """
+        authority = self._check_arcface_authority(entity, face_anchors)
+        if authority == "CONFLICT":
+            return None
+        if authority is not None:
+            return authority
+        face, best = self._from_face_anchors(
+            entity,
+            face_anchors,
+            face_evidence,
+            face_quality_mode=face_quality_mode,
+            calibrated=calibrated,
+        )
+        posterior = self._combine(prior, face, reid_likelihood, height_likelihood)
+        evidence_ids = collect_evidence_identity_ids(
+            entity_obs_ids=frozenset(entity.observation_ids),
+            entity_id=entity.entity_id,
+            face_anchors=face_anchors,
+            face_evidence=face_evidence,
+            reid_likelihood=reid_likelihood,
+            calibrated_faces_only=calibrated,
+        )
+        return self._evaluate_commit(
+            entity,
+            posterior,
+            face,
+            reid_likelihood,
+            captured_at,
+            entity_quality,
+            contradicted=self._contradicted(entity, posterior, face, best),
+            enable_sticky_maintenance=self._config.enable_sticky_maintenance,
+            enforce_quality_gate=self._config.enable_quality_gate,
+            enforce_flip_debounce=self._config.enable_flip_debounce,
+            evidence_identity_ids=evidence_ids,
+        ).new_id
+
+    @staticmethod
+    def _record_shadow_outcome(
+        entity: IdentityResolvableEntity,
+        *,
+        live_identity_id: str | None,
+        shadow_identity_id: str | None,
+        feature: Literal["calibrated_face"],
+    ) -> None:
+        """Count how a shadow decision compares with live; log each disagreement for review."""
+        if shadow_identity_id == live_identity_id:
+            outcome = "agrees"
+        elif live_identity_id is None:
+            outcome = "would_commit_new"
+        elif shadow_identity_id is None:
+            outcome = "would_become_unknown"
+        else:
+            outcome = "would_change_identity"
+        metrics.metrics.cts_face_shadow_outcomes_total.labels(outcome=outcome).inc()
+        if outcome == "agrees":
+            return
+        metrics.metrics.identity_shadow_mismatch_total.labels(feature=feature).inc()
+        # The rollout review reads these events to judge each disagreement against keyframes.
+        logger.info(
+            f"{feature}_shadow_mismatch",
+            entity_id=entity.entity_id,
+            outcome=outcome,
+            live_identity_id=live_identity_id,
+            shadow_identity_id=shadow_identity_id,
         )
 
     def _shadow_calibrated_face(
@@ -1297,67 +1390,25 @@ class IdentityResolver:
         """Decide this entity as the "calibrated" policy would, purely for measurement.
 
         ``face_anchors`` are the live anchors plus the shadow-only ones the stage emitted below
-        the legacy floor. The calibrated side runs in ``_commit``'s order (ArcFace authority, then
-        the calibrated likelihood, then commit evidence under calibrated rules, with its own
-        contradiction) and is compared with the live decision, before the duplicate guard, which
-        applies identically to both.
+        the legacy floor.
         """
-        authority = self._check_arcface_authority(entity, face_anchors)
-        shadow_identity_id: str | None
-        if authority == "CONFLICT":
-            shadow_identity_id = None
-        elif authority is not None:
-            shadow_identity_id = authority
-        else:
-            shadow_face, shadow_best = self._from_face_anchors(
-                entity,
-                face_anchors,
-                face_evidence,
-                face_quality_mode=face_quality_mode,
-                calibrated=True,
-            )
-            shadow_posterior = self._combine(prior, shadow_face, reid_likelihood, height_likelihood)
-            shadow_evidence_ids = collect_evidence_identity_ids(
-                entity_obs_ids=frozenset(entity.observation_ids),
-                entity_id=entity.entity_id,
-                face_anchors=face_anchors,
-                face_evidence=face_evidence,
-                reid_likelihood=reid_likelihood,
-                calibrated_faces_only=True,
-            )
-            shadow_identity_id = self._evaluate_commit(
-                entity,
-                shadow_posterior,
-                shadow_face,
-                reid_likelihood,
-                captured_at,
-                entity_quality,
-                contradicted=self._contradicted(entity, shadow_posterior, shadow_face, shadow_best),
-                enable_sticky_maintenance=self._config.enable_sticky_maintenance,
-                enforce_quality_gate=self._config.enable_quality_gate,
-                enforce_flip_debounce=self._config.enable_flip_debounce,
-                evidence_identity_ids=shadow_evidence_ids,
-            ).new_id
-
-        if shadow_identity_id == live_identity_id:
-            outcome = "agrees"
-        elif live_identity_id is None:
-            outcome = "would_commit_new"
-        elif shadow_identity_id is None:
-            outcome = "would_become_unknown"
-        else:
-            outcome = "would_change_identity"
-        metrics.metrics.cts_face_shadow_outcomes_total.labels(outcome=outcome).inc()
-        if outcome == "agrees":
-            return
-        metrics.metrics.identity_shadow_mismatch_total.labels(feature="calibrated_face").inc()
-        # The rollout review reads these events to judge each disagreement against keyframes.
-        logger.info(
-            "calibrated_face_shadow_mismatch",
-            entity_id=entity.entity_id,
-            outcome=outcome,
+        shadow_identity_id = self._counterfactual_identity(
+            entity,
+            face_anchors,
+            face_evidence,
+            prior,
+            reid_likelihood,
+            height_likelihood,
+            captured_at,
+            entity_quality,
+            calibrated=True,
+            face_quality_mode=face_quality_mode,
+        )
+        self._record_shadow_outcome(
+            entity,
             live_identity_id=live_identity_id,
             shadow_identity_id=shadow_identity_id,
+            feature="calibrated_face",
         )
 
     def _direct_face_similarity(
