@@ -291,6 +291,25 @@ def _effective_distance_gate_m(
     return min(widened, cfg.dedup_max_distance_ceiling_m)
 
 
+_RECOGNITION_STATE_RANK = {"recognized": 2, "candidate": 1, "unrecognized": 0}
+
+
+def _face_rank(anchor: FaceAnchor) -> tuple[int, float, float]:
+    """Order face anchors from strongest to weakest identity evidence.
+
+    Recognition state first: an unrecognized marker's match score is a face detection score, not a
+    similarity, so comparing it with a recognized face's similarity is meaningless. Within one
+    state a calibrated face outranks any face without a calibrated confidence (a resident outside
+    the calibration artifact's coverage), because a calibrated probability and a raw cosine
+    similarity are on different scales; the match score breaks the remaining ties.
+    """
+    return (
+        _RECOGNITION_STATE_RANK.get(anchor.recognition_state, 0),
+        -1.0 if anchor.calibrated_confidence is None else anchor.calibrated_confidence,
+        anchor.match_score,
+    )
+
+
 def _build_representative(
     best: WorldObservation,
     cluster: list[WorldObservation],
@@ -304,7 +323,7 @@ def _build_representative(
     already scaled Σ_px in M01; it does NOT weight the fusion directly here.
 
     Embedding: taken from the best (highest-quality) observation unchanged.
-    Face anchor: highest-confidence face anchor in the cluster.
+    Face anchor: the cluster's strongest face by ``_face_rank``.
     active_cameras: the representative carries camera_id; the tracker adds all
                     cameras from cluster_map during PH update.
 
@@ -313,13 +332,9 @@ def _build_representative(
     Mixed clusters (some calibrated, some not): only calibrated members with
     floor_cov_random contribute to fusion; uncalibrated members are skipped.
     """
-    # Best face anchor in the cluster.
-    best_face = best.face_anchor
-    for obs in cluster:
-        if obs.face_anchor is not None and (
-            best_face is None or obs.face_anchor.match_score > best_face.match_score
-        ):
-            best_face = obs.face_anchor
+    # Best face anchor in the cluster; the best observation's own anchor wins ties.
+    cluster_faces = [obs.face_anchor for obs in (best, *cluster) if obs.face_anchor is not None]
+    best_face = max(cluster_faces, key=_face_rank) if cluster_faces else None
 
     # Gather calibrated members that carry a random covariance.
     fuseable = [
