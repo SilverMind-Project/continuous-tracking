@@ -91,7 +91,7 @@ def compute_contradiction(
         and best_face_confidence >= config.contradiction_face_similarity
         and face_likelihood.distribution
     ):
-        face_top = max(face_likelihood.distribution, key=face_likelihood.distribution.__getitem__)
+        face_top, _ = face_likelihood.top_identity()
         if face_top != "UNKNOWN" and face_top != prev_id:
             return True
 
@@ -165,7 +165,7 @@ def collect_evidence_identity_ids(
             ids.add(fa.person_id)
 
     if reid_likelihood.distribution:
-        top_id, top_score = max(reid_likelihood.distribution.items(), key=lambda kv: kv[1])
+        top_id, top_score = reid_likelihood.top_identity()
         if top_id != "UNKNOWN" and top_score > 0.3:
             ids.add(top_id)
 

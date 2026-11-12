@@ -6,12 +6,10 @@ two-camera scenario that exercises each face-evidence path whose names a vocabul
 touches (``tests/characterization/_resolver_golden.py``). A refactor must leave the golden file
 byte-identical.
 
-Known pre-existing nondeterminism, frozen rather than fixed here: when the posterior is an exact
-tie (prior-only frames over two enrolled identities), ``PosteriorDist.top_identity`` breaks the
-tie by dict insertion order, which follows set iteration in ``combine_posteriors`` and therefore
-``PYTHONHASHSEED``. Only the provenance field ``inferred_identity_id`` of uncommitted frames is
-affected; committed identities are not. The scenarios therefore run in a subprocess with
-``PYTHONHASHSEED=0``.
+Exact posterior ties (prior-only frames over two enrolled identities) are broken by identity id
+(``PosteriorDist.ranked``), so the record does not depend on ``PYTHONHASHSEED``; the
+reproducibility test runs the scenarios under two different hash seeds to keep it that way. The
+scenarios run in a subprocess so each run starts from a fresh interpreter.
 
 Regenerate only for an intended behavior change:
 ``CTS_REGENERATE_GOLDEN=1 pytest tests/characterization/test_resolver_decisions_golden.py``.
@@ -31,8 +29,11 @@ _ROOT = Path(__file__).resolve().parents[2]
 _GOLDEN = _ROOT / "tests" / "fixtures" / "characterization" / "resolver_decisions_golden.json"
 
 
-def _run_scenarios(hash_seed: str = "0") -> str:
-    env = {**os.environ, "PYTHONHASHSEED": hash_seed, "PERSON_ID_SERVICE_URL": "http://pid.test"}
+def _run_scenarios(hash_seed: str | None = None) -> str:
+    env = {**os.environ, "PERSON_ID_SERVICE_URL": "http://pid.test"}
+    env.pop("PYTHONHASHSEED", None)
+    if hash_seed is not None:
+        env["PYTHONHASHSEED"] = hash_seed
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "record.json"
         subprocess.run(
@@ -57,8 +58,8 @@ def test_resolver_decisions_match_golden() -> None:
 
 
 def test_golden_is_reproducible_and_not_vacuous() -> None:
-    first = _run_scenarios()
-    assert first == _run_scenarios()
+    first = _run_scenarios(hash_seed="1")
+    assert first == _run_scenarios(hash_seed="2")
     synthetic: list[dict[str, Any]] = json.loads(first)["synthetic_face_paths"]
     identities = {
         s["identity_id"] for step in synthetic for s in step["snapshots"] if s["identity_id"]

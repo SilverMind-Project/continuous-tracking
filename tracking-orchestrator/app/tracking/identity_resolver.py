@@ -2200,7 +2200,7 @@ class IdentityResolver:
 
         # ReID evidence (top match from gallery).
         if reid_likelihood.distribution:
-            top_reid, top_score = max(reid_likelihood.distribution.items(), key=lambda x: x[1])
+            top_reid, top_score = reid_likelihood.top_identity()
             if top_reid != "UNKNOWN" and top_score > 0.3:
                 items.append(
                     IdentityEvidence.reid(

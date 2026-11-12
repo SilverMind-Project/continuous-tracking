@@ -2,9 +2,8 @@
 
 Run as ``python -m tests.characterization._resolver_golden OUT.json`` from
 ``tracking-orchestrator/``; it writes the scenario record as canonical JSON to ``OUT.json`` (stdout
-is left to logging). The test runs it in a subprocess with a fixed ``PYTHONHASHSEED`` because
-identity ties are broken by dict order today (see that test's docstring), and the golden must be
-reproducible.
+is left to logging). The test runs it in a subprocess so every run starts from a fresh
+interpreter; the record does not depend on ``PYTHONHASHSEED`` (see that test's docstring).
 """
 
 from __future__ import annotations

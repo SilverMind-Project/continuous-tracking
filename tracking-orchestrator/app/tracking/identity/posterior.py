@@ -64,8 +64,10 @@ def combine_posteriors(
         n = len(dist.distribution)
         return 1.0 / (n + 1)
 
+    # Sorted so the combined distribution's key order, and anything that iterates it, does not
+    # depend on set iteration order (and so on PYTHONHASHSEED).
     combined: dict[str, float] = {}
-    for ident in all_ids:
+    for ident in sorted(all_ids):
         fw = _w(face, ident)
         if ident in face.distribution:
             fw = fw * face_weight_multiplier

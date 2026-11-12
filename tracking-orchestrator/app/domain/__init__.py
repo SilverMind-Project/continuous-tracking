@@ -742,18 +742,30 @@ class PosteriorDist:
                 {k: v / total for k, v in self.distribution.items()},
             )
 
+    def ranked(self) -> list[tuple[str, float]]:
+        """Return (identity_id, probability) pairs, most probable first, in a total order.
+
+        Exact ties are broken by identity id with ``UNKNOWN`` last, never by dict insertion order:
+        insertion order follows set iteration upstream and so ``PYTHONHASHSEED``, which would make
+        a tied decision differ between processes. Losing ties keeps ``UNKNOWN`` from winning a
+        prior-only frame by accident; a tie still has zero margin and cannot commit.
+        """
+        return sorted(
+            self.distribution.items(),
+            key=lambda item: (-item[1], item[0] == "UNKNOWN", item[0]),
+        )
+
     def top_identity(self) -> tuple[str, float]:
-        """Return (identity_id, probability) of the top candidate.
+        """Return (identity_id, probability) of the top candidate, ties broken as in ``ranked``.
 
         Returns ('UNKNOWN', 0.0) for empty distributions.
         """
         if not self.distribution:
             return "UNKNOWN", 0.0
-        top_id = max(self.distribution, key=self.distribution.__getitem__)
-        return top_id, self.distribution[top_id]
+        return self.ranked()[0]
 
     def top_with_margin(self) -> tuple[tuple[str, float], float]:
-        """Return ((top_id, prob), margin_to_second).
+        """Return ((top_id, prob), margin_to_second), ties broken as in ``ranked``.
 
         The margin is the difference between the top and second-highest
         probabilities. Used by the commit rule.
@@ -762,7 +774,7 @@ class PosteriorDist:
         """
         if not self.distribution:
             return ("UNKNOWN", 0.0), 0.0
-        sorted_probs = sorted(self.distribution.items(), key=lambda x: x[1], reverse=True)
+        sorted_probs = self.ranked()
         top_id, top_prob = sorted_probs[0]
         margin = top_prob - sorted_probs[1][1] if len(sorted_probs) > 1 else 1.0
         return (top_id, top_prob), margin
