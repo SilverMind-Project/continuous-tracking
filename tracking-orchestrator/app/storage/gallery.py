@@ -69,6 +69,13 @@ class GalleryRepository(ABC):
     async def list_identities(self, active_only: bool = True) -> list[Identity]:
         """List all identities."""
 
+    async def purge_identity(self, identity_id: str) -> bool:
+        """Purge an unenrolled identity and all of its gallery/anchor references.
+
+        Returns True if the identity existed and was removed, False otherwise.
+        """
+        return False
+
     @abstractmethod
     async def upsert_gallery_entry(self, entry: GalleryEmbedding) -> str:
         """Store or update a gallery embedding. Returns the identity ID."""
@@ -328,6 +335,25 @@ class InMemoryGalleryRepository(GalleryRepository):
         if active_only:
             identities = [identity for identity in identities if identity.is_active]
         return identities
+
+    async def purge_identity(self, identity_id: str) -> bool:
+        existed = self._identities.pop(identity_id, None) is not None
+        entry_ids = [
+            eid for eid, entry in self._entries.items() if entry.identity_id == identity_id
+        ]
+        for eid in entry_ids:
+            self._entries.pop(eid, None)
+        cand_ids = [
+            cid
+            for cid, cand in self._candidates.items()
+            if cand.identity_id == identity_id
+            or cand.proposed_identity_id == identity_id
+            or cand.effective_identity_id == identity_id
+        ]
+        for cid in cand_ids:
+            self._candidates.pop(cid, None)
+            self._events.pop(cid, None)
+        return existed
 
     async def upsert_gallery_entry(self, entry: GalleryEmbedding) -> str:
         self._entries[entry.gallery_entry_id] = entry

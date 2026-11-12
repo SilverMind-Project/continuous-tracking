@@ -227,6 +227,10 @@ class Metrics:
     cc_assertions_rejected_total: Counter  # label: reason
     cc_assertions_shadow_total: Counter  # label: outcome (would_name_unknown|agrees|disagrees)
 
+    # ---- identity roster reconciliation ----
+    # labels: mode (shadow|enabled), action (bounded RosterAction set)
+    identity_roster_reconcile_total: Counter
+
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
     """Create a :class:`Metrics` bound to *registry*.
@@ -772,6 +776,12 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Invariant breach: a prior-only maintenance decision advanced "
             "independent identity evidence time to the current frame. Must stay "
             "zero; any increment pages.",
+        ),
+        identity_roster_reconcile_total=_counter(
+            "cts_identity_roster_reconcile_total",
+            "Identity roster reconciliation against person-identification-service enrollment, "
+            "by mode and action (registered, retired, gallery_rejected, ph_cleared, skipped_*).",
+            ["mode", "action"],
         ),
         reid_candidate_rejected_total=_counter(
             "cts_reid_candidate_rejected_total",

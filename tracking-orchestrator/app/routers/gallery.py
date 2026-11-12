@@ -28,6 +28,7 @@ from ..storage.base import GalleryRepository, InMemoryGalleryRepository
 
 if TYPE_CHECKING:
     from ..inference.reid_embedder import ReidEmbedder
+    from ..services.identity_roster_sync import IdentityRosterSyncService
 
 logger = get_logger(__name__)
 
@@ -43,6 +44,7 @@ router = APIRouter(tags=["gallery-internal"])
 class _GalleryContext:
     gallery_repo: GalleryRepository
     reid_embedder: ReidEmbedder | None = field(default=None)
+    roster_sync: IdentityRosterSyncService | None = field(default=None)
 
 
 _ctx: _GalleryContext = _GalleryContext(gallery_repo=InMemoryGalleryRepository())
@@ -55,10 +57,15 @@ def get_context() -> _GalleryContext:
 def set_context(
     gallery_repo: GalleryRepository,
     reid_embedder: ReidEmbedder | None = None,
+    roster_sync: IdentityRosterSyncService | None = None,
 ) -> None:
     """Override with production repository and embedder (called from lifespan)."""
     global _ctx
-    _ctx = _GalleryContext(gallery_repo=gallery_repo, reid_embedder=reid_embedder)
+    _ctx = _GalleryContext(
+        gallery_repo=gallery_repo,
+        reid_embedder=reid_embedder,
+        roster_sync=roster_sync,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -137,3 +144,27 @@ async def add_crop_to_gallery(
         identity_id=identity_id,
         gallery_entry_id=gallery_entry.gallery_entry_id,
     )
+
+
+@router.delete("/internal/gallery/identities/{identity_id}")
+async def purge_gallery_identity(
+    identity_id: str,
+    ctx: _GalleryContext = Depends(get_context),
+) -> dict[str, object]:
+    """Purge an unenrolled identity and all associated anchors/gallery rows."""
+    if ctx.roster_sync is not None:
+        removed = await ctx.roster_sync.purge_identity(identity_id)
+    else:
+        removed = await ctx.gallery_repo.purge_identity(identity_id)
+    return {"purged": removed}
+
+
+@router.post("/internal/gallery/identities/sync")
+async def sync_gallery_identities(
+    ctx: _GalleryContext = Depends(get_context),
+) -> dict[str, int]:
+    """Reconcile CTS identities against the enrolled household roster."""
+    if ctx.roster_sync is None:
+        return {"upserted": 0, "purged": 0}
+    upserted, purged = await ctx.roster_sync.sync_once()
+    return {"upserted": upserted, "purged": purged}

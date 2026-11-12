@@ -129,7 +129,7 @@ class PostgresPHRepository:
                     $14, $15::jsonb, $16, $17
                 )
                 ON CONFLICT (ph_id) DO UPDATE SET
-                    closed_at = COALESCE(EXCLUDED.closed_at, ph.closed_at),
+                    closed_at = EXCLUDED.closed_at,
                     last_seen_at = GREATEST(EXCLUDED.last_seen_at, ph.last_seen_at),
                     last_seen_camera = EXCLUDED.last_seen_camera,
                     observation_count = EXCLUDED.observation_count,

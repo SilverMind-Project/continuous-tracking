@@ -168,6 +168,36 @@ class FaceIdentificationClient:
             await self._client.aclose()
             self._client = None
 
+    async def list_enrolled_members(self) -> list[tuple[str, str]] | None:
+        """Fetch the active enrolled member roster from person-identification-service.
+
+        Returns a list of ``(person_id, display_name)`` tuples on HTTP 200, or
+        ``None`` when disconnected or when the upstream request fails so callers
+        never confuse a transient outage with an empty enrollment roster.
+        """
+        if self._client is None:
+            return None
+        url = f"{self._base_url}/api/v1/members"
+        try:
+            response = await self._client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("face_id_members_fetch_failed", error=str(exc))
+            return None
+        raw_members = payload.get("members") if isinstance(payload, dict) else None
+        if not isinstance(raw_members, list):
+            return None
+        members: list[tuple[str, str]] = []
+        for item in raw_members:
+            if not isinstance(item, dict):
+                continue
+            pid = str(item.get("person_id") or "").strip()
+            name = str(item.get("name") or pid).strip()
+            if pid:
+                members.append((pid, name))
+        return members
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------

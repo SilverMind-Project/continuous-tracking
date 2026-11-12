@@ -679,11 +679,12 @@ class WorldTracker:
 
             # Attempt PH revival before spawning new (same-camera + cross-camera).
             revival_candidate: PersonHypothesis | None = None
+            available_closed = [c for c in _recent_closed if c.ph_id not in revived_ph_ids]
 
             if cfg.enable_ph_revival:
                 revival_candidate = select_revival_candidate(
                     obs,
-                    _recent_closed,
+                    available_closed,
                     obs.captured_at,
                     cfg,
                     enable_cross_camera=cfg.enable_cross_camera_revival,
@@ -693,7 +694,7 @@ class WorldTracker:
                 # Shadow: compute revival candidate to measure what it would catch.
                 shadow_candidate = select_revival_candidate(
                     obs,
-                    _recent_closed,
+                    available_closed,
                     obs.captured_at,
                     cfg,
                     enable_cross_camera=False,
@@ -706,7 +707,7 @@ class WorldTracker:
                 if _topology_edges:
                     shadow_cc = select_revival_candidate(
                         obs,
-                        _recent_closed,
+                        available_closed,
                         obs.captured_at,
                         cfg,
                         enable_cross_camera=True,

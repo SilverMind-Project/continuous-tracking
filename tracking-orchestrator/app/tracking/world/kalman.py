@@ -106,11 +106,23 @@ def predict(
 
     predicted_cov = F @ state.covariance @ F.T + Q
 
-    # Cap covariance trace to prevent unbounded growth across long gaps.
+    # Cap covariance trace to prevent unbounded growth across long gaps while
+    # preserving positive semi-definiteness via congruence scaling (D @ P @ D).
     pos_trace = float(predicted_cov[0, 0] + predicted_cov[1, 1])
     if pos_trace > _POSITION_TRACE_CAP:
         scale = _POSITION_TRACE_CAP / pos_trace
+        sqrt_scale = math.sqrt(scale)
         predicted_cov[0:2, 0:2] *= scale
+        predicted_cov[0:2, 2:4] *= sqrt_scale
+        predicted_cov[2:4, 0:2] *= sqrt_scale
+
+    vel_trace = float(predicted_cov[2, 2] + predicted_cov[3, 3])
+    if vel_trace > _POSITION_TRACE_CAP:
+        vscale = _POSITION_TRACE_CAP / vel_trace
+        sqrt_vscale = math.sqrt(vscale)
+        predicted_cov[2:4, 2:4] *= vscale
+        predicted_cov[0:2, 2:4] *= sqrt_vscale
+        predicted_cov[2:4, 0:2] *= sqrt_vscale
 
     return KalmanState(mean=predicted_mean, covariance=predicted_cov, updated_at=now)
 
@@ -218,11 +230,14 @@ def mahalanobis2_position(
     )
     y = z - H @ state.mean
     S = H @ state.covariance @ H.T + R  # noqa: N806
+    det = float(S[0, 0] * S[1, 1] - S[0, 1] * S[1, 0])
+    if S[0, 0] <= 0.0 or S[1, 1] <= 0.0 or det <= 1e-12:
+        return math.inf
     try:
         x = np.linalg.solve(S, y)
     except np.linalg.LinAlgError:
         return math.inf
     d2 = float(y @ x)
-    if not math.isfinite(d2):
+    if not math.isfinite(d2) or d2 < 0.0:
         return math.inf
     return d2

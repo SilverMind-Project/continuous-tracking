@@ -1040,13 +1040,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         set_gait_context(gait_daily_repo=gait_daily_repo)
 
     if gallery_repo is not None:
-        gallery_router_mod.set_context(gallery_repo=gallery_repo, reid_embedder=reid_embedder)
+        from .services.identity_roster_sync import IdentityRosterSyncService
+        from .services.reid_review_service import ReIDReviewService
+
+        roster_sync_service = IdentityRosterSyncService(
+            gallery_repo=gallery_repo,
+            members_source=_pipeline._face_id_client if _pipeline is not None else None,
+            identity_resolver=_pipeline._identity_resolver if _pipeline is not None else None,
+            interval_s=60.0,
+        )
+        await roster_sync_service.start()
+        app.state.identity_roster_sync = roster_sync_service
+
+        gallery_router_mod.set_context(
+            gallery_repo=gallery_repo,
+            reid_embedder=reid_embedder,
+            roster_sync=roster_sync_service,
+        )
 
         # ReID review queue: governed approve/relabel/reject over the gallery.
         # active_model_versions is left unconfigured (None) for now: model
         # incompatibility is surfaced once a current-version list is wired here.
-        from .services.reid_review_service import ReIDReviewService
-
         reid_review_service = ReIDReviewService(
             gallery_repo,
             storage_client=_frame_fetcher,
@@ -1092,6 +1106,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _ph_maintenance = getattr(app.state, "ph_maintenance", None)
     if _ph_maintenance is not None:
         await _ph_maintenance.stop()
+
+    # Stop identity roster sync.
+    _roster_sync = getattr(app.state, "identity_roster_sync", None)
+    if _roster_sync is not None:
+        await _roster_sync.stop()
 
     # Stop CC assertion subscriber.
     if cc_assertion_subscriber is not None:

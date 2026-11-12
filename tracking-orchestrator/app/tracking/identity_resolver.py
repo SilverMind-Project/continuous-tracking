@@ -447,6 +447,12 @@ class IdentityResolver:
         # Revision rate limiter: global_track_id -> list of revision timestamps
         self._revision_log: dict[str, list[datetime]] = defaultdict(list)
 
+    def invalidate_identity_cache(self) -> None:
+        """Invalidate the cached enrolled-identity roster and gallery cache."""
+        self._identities_loaded_at = None
+        if self._gallery_cache is not None:
+            self._gallery_cache.invalidate()
+
     async def resolve(
         self,
         hypotheses: Sequence[IdentityResolvableEntity],

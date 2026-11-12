@@ -387,3 +387,31 @@ def test_fusion_symmetric_cameras_return_shared_position() -> None:
 def test_fuse_information_form_empty_raises() -> None:
     with pytest.raises(ValueError, match="no valid"):
         fuse_information_form([], [], _iso_cov(0.1))
+
+
+def test_predict_trace_cap_preserves_psd_and_gates_distant_obs() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.tracking.world.kalman import (
+        initialize,
+        isotropic_cov,
+        mahalanobis2_position,
+        predict,
+        update,
+    )
+
+    t0 = datetime(2026, 11, 11, 12, 0, 0, tzinfo=UTC)
+    ks = initialize(10.0, 20.0, 0.3, 0.5, t0)
+    # Repeated long-gap predictions that trigger _POSITION_TRACE_CAP
+    for i in range(1, 20):
+        ks = predict(ks, t0 + timedelta(seconds=i * 5.0), 1.5, 3.0)
+        eigs = np.linalg.eigvalsh(ks.covariance)
+        assert float(eigs.min()) >= -1e-9
+
+    # Updating after long gap must not explode state mean or produce negative Mahalanobis
+    obs_r = isotropic_cov(0.5)
+    ks_updated = update(ks, 10.5, 20.5, obs_r)
+    assert abs(float(ks_updated.mean[0]) - 10.5) < 5.0
+    assert abs(float(ks_updated.mean[1]) - 20.5) < 5.0
+    d2_far = mahalanobis2_position(ks_updated, 30000.0, 20000.0, obs_r)
+    assert d2_far > 1000.0

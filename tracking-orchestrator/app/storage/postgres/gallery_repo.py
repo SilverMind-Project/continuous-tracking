@@ -220,6 +220,207 @@ class PostgresGalleryRepository(GalleryRepository):
             for row in rows
         ]
 
+    async def purge_identity(self, identity_id: str) -> bool:
+        async with self._pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.person_hypotheses
+                SET current_identity_id = NULL,
+                    current_identity_committed_at = NULL
+                WHERE current_identity_id = $1
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                DELETE FROM continuous_tracking.identity_revision_jobs
+                WHERE correction_id IN (
+                    SELECT correction_id
+                    FROM continuous_tracking.identity_corrections
+                    WHERE target_identity_id = $1
+                )
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.identity_revision_ranges
+                SET supersedes_range_id = NULL,
+                    superseded_by_range_id = NULL
+                WHERE supersedes_range_id IN (
+                    SELECT range_id
+                    FROM continuous_tracking.identity_revision_ranges
+                    WHERE effective_identity_id = $1
+                       OR correction_id IN (
+                           SELECT correction_id
+                           FROM continuous_tracking.identity_corrections
+                           WHERE target_identity_id = $1
+                       )
+                )
+                OR superseded_by_range_id IN (
+                    SELECT range_id
+                    FROM continuous_tracking.identity_revision_ranges
+                    WHERE effective_identity_id = $1
+                       OR correction_id IN (
+                           SELECT correction_id
+                           FROM continuous_tracking.identity_corrections
+                           WHERE target_identity_id = $1
+                       )
+                )
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                DELETE FROM continuous_tracking.identity_revision_ranges
+                WHERE effective_identity_id = $1
+                   OR correction_id IN (
+                       SELECT correction_id
+                       FROM continuous_tracking.identity_corrections
+                       WHERE target_identity_id = $1
+                   )
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.identity_corrections
+                SET compensates_correction_id = NULL
+                WHERE compensates_correction_id IN (
+                    SELECT correction_id
+                    FROM continuous_tracking.identity_corrections
+                    WHERE target_identity_id = $1
+                )
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                DELETE FROM continuous_tracking.identity_corrections
+                WHERE target_identity_id = $1
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                DELETE FROM continuous_tracking.identity_decision_gallery_hits
+                WHERE identity_id = $1
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                DELETE FROM continuous_tracking.identity_evidence_items
+                WHERE source_identity_id = $1
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.identity_decisions
+                SET inferred_identity_id = CASE
+                        WHEN inferred_identity_id = $1 THEN NULL
+                        ELSE inferred_identity_id
+                    END,
+                    effective_identity_id = CASE
+                        WHEN effective_identity_id = $1 THEN NULL
+                        ELSE effective_identity_id
+                    END
+                WHERE inferred_identity_id = $1
+                   OR effective_identity_id = $1
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.keyframe_bbox_annotations
+                SET identity_id = NULL
+                WHERE identity_id = $1
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.tagged_keyframes
+                SET annotations = COALESCE(
+                    (
+                        SELECT jsonb_agg(
+                            CASE
+                                WHEN elem->>'identity_id' = $1
+                                THEN jsonb_set(elem, '{identity_id}', 'null'::jsonb)
+                                ELSE elem
+                            END
+                        )
+                        FROM jsonb_array_elements(annotations) AS elem
+                    ),
+                    '[]'::jsonb
+                )
+                WHERE annotations @> jsonb_build_array(jsonb_build_object('identity_id', $1::text))
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                "DELETE FROM continuous_tracking.dementia_signals_daily WHERE identity_id = $1",
+                identity_id,
+            )
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.face_observation_stats
+                SET best_candidate_id = NULL
+                WHERE best_candidate_id = $1
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                DELETE FROM continuous_tracking.gallery_review_events
+                WHERE entry_id IN (
+                    SELECT id
+                    FROM continuous_tracking.reid_gallery
+                    WHERE identity_id = $1
+                       OR proposed_identity_id = $1
+                       OR effective_identity_id = $1
+                )
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.reid_gallery
+                SET supersedes_id = NULL,
+                    superseded_by_id = NULL
+                WHERE supersedes_id IN (
+                    SELECT id
+                    FROM continuous_tracking.reid_gallery
+                    WHERE identity_id = $1
+                       OR proposed_identity_id = $1
+                       OR effective_identity_id = $1
+                )
+                OR superseded_by_id IN (
+                    SELECT id
+                    FROM continuous_tracking.reid_gallery
+                    WHERE identity_id = $1
+                       OR proposed_identity_id = $1
+                       OR effective_identity_id = $1
+                )
+                """,
+                identity_id,
+            )
+            await conn.execute(
+                """
+                DELETE FROM continuous_tracking.reid_gallery
+                WHERE identity_id = $1
+                   OR proposed_identity_id = $1
+                   OR effective_identity_id = $1
+                """,
+                identity_id,
+            )
+            result = await conn.execute(
+                "DELETE FROM continuous_tracking.identities WHERE identity_id = $1",
+                identity_id,
+            )
+        return str(result) == "DELETE 1"
+
     async def upsert_gallery_entry(self, entry: GalleryEmbedding) -> str:
         embedding_str = _embedding_to_pgvector(entry.embedding)
         identity_id = entry.identity_id if entry.identity_id else None
