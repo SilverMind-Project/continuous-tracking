@@ -107,6 +107,10 @@ Face scores have four names, and each name means one thing:
   emitted and how they weigh; under `calibrated` a face weighs by its calibrated confidence, a face
   without one is capped and only corroborates, and `shadow_only` anchors never reach a live
   decision. Read `reference/calibrated-face-evidence.md` before changing face emission or weighting.
+- A face template (several faces of one PH, `aggregation="template"`) is always weighed and gated
+  as calibrated evidence, grants authority only when its member faces agree, never enters
+  association, contradiction, the duplicate bypass, or propagation, and its embeddings stay in
+  memory. Read `reference/face-templates.md` before changing templates.
 - ArcFace enrollment is a golden dataset. PH inference, operator identity correction, and ReID
   review never modify enrollment. Enrollment gains entries
   only via explicit enroll calls or explicit operator naming of a visitor cluster

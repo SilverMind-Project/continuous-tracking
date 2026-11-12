@@ -518,10 +518,16 @@ class IdentityResolver:
             self._identities = {ident.identity_id: ident for ident in enrolled}
             self._identities_loaded_at = now_dt
 
-        # Shadow-only anchors feed the calibrated shadow evaluation and nothing else: from here on
-        # every live path (propagation, likelihood, authority, the evidence sets, duplicate
-        # ranking) sees only the live anchors.
-        shadow_face_anchors = [fa for fa in new_face_anchors if fa.shadow_only]
+        # Shadow-only anchors feed their shadow evaluation and nothing else: from here on every
+        # live path (propagation, likelihood, authority, the evidence sets, duplicate ranking)
+        # sees only the live anchors. Frame anchors below the legacy floor feed the calibrated
+        # shadow; face templates in shadow mode feed the template shadow.
+        shadow_face_anchors = [
+            fa for fa in new_face_anchors if fa.shadow_only and fa.aggregation != "template"
+        ]
+        template_shadow_anchors = [
+            fa for fa in new_face_anchors if fa.shadow_only and fa.aggregation == "template"
+        ]
         new_face_anchors = [fa for fa in new_face_anchors if not fa.shadow_only]
         policy = self._config.face_evidence_policy
         live_calibrated = policy == "calibrated"
@@ -693,6 +699,27 @@ class IdentityResolver:
                     entity_quality,
                     live_identity_id=decision.identity_id,
                     face_quality_mode=live_quality_mode,
+                )
+            # Template shadow: the live decision again with this round's shadow templates added.
+            entity_templates = self._entity_anchors(entity, template_shadow_anchors)
+            if entity_templates:
+                counterfactual = self._counterfactual_identity(
+                    entity,
+                    augmented_anchors + entity_templates,
+                    augmented_evidence,
+                    prior,
+                    reid_likelihood,
+                    height_likelihood,
+                    captured_at,
+                    entity_quality,
+                    calibrated=live_calibrated,
+                    face_quality_mode=live_quality_mode,
+                )
+                self._record_shadow_outcome(
+                    entity,
+                    live_identity_id=decision.identity_id,
+                    shadow_identity_id=counterfactual,
+                    feature="face_template",
                 )
             # Attach evidence summary.
             ep = EvidencePosterior(
@@ -992,6 +1019,10 @@ class IdentityResolver:
                 continue
             if fa.calibrated_confidence is None or fa.calibrated_confidence < threshold:
                 continue
+            # A template whose member faces were recognized as someone else votes, but never
+            # decides on its own.
+            if not fa.authority_eligible:
+                continue
             prev_best = qualifying.get(fa.person_id, 0.0)
             if fa.calibrated_confidence > prev_best:
                 qualifying[fa.person_id] = fa.calibrated_confidence
@@ -1117,18 +1148,22 @@ class IdentityResolver:
             return ev.source if ev and ev.source else "direct"
 
         def _likelihood(fa: FaceAnchor) -> float:
+            # A face template is always weighed as calibrated evidence: averaging several faces
+            # inflates raw similarity, so the raw-similarity heuristic does not transfer to it.
             return self._recognized_face_likelihood(
                 fa,
                 source=_source(fa),
                 face_quality_mode=face_quality_mode,
-                calibrated=calibrated,
+                calibrated=calibrated or fa.aggregation == "template",
             )
 
+        best: FaceAnchor | None = None
         # --- Recognized anchors ---
         if recognized_anchors:
-            # Use the strongest recognized anchor. Calibrated weighting ranks by the likelihood
-            # itself, because a calibrated probability and a raw similarity are different scales.
-            if calibrated:
+            # Use the strongest recognized anchor. Calibrated weighting (and any template, which is
+            # always weighed calibrated) ranks by the likelihood itself, because a calibrated
+            # probability and a raw similarity are different scales.
+            if calibrated or any(fa.aggregation == "template" for fa in recognized_anchors):
                 best = max(recognized_anchors, key=_likelihood)
             else:
                 best = max(
@@ -1137,7 +1172,9 @@ class IdentityResolver:
                         fa.match_score * self._effective_face_quality(fa, face_quality_mode)
                     ),
                 )
-            best_recognized_conf = best.match_score
+            # The best face's raw similarity feeds the raw-threshold contradiction check; a
+            # template's similarity is not on that scale, so a template reports none.
+            best_recognized_conf = best.match_score if best.aggregation != "template" else None
             p_face = _likelihood(best)
 
             if best.person_id:
@@ -1206,8 +1243,14 @@ class IdentityResolver:
         # - Unrecognized-only: all remainder → UNKNOWN (no positive evidence).
         # - Calibrated weighting with no calibrated recognized anchor: the face is
         #   corroboration only, so its remainder goes to UNKNOWN like a candidate's.
-        spread_remainder = bool(recognized_anchors) and (
-            not calibrated or any(fa.calibrated_confidence is not None for fa in recognized_anchors)
+        # - A face template without a calibrated confidence: corroboration only, likewise.
+        spread_remainder = (
+            best is not None
+            and (
+                not calibrated
+                or any(fa.calibrated_confidence is not None for fa in recognized_anchors)
+            )
+            and not (best.aggregation == "template" and best.calibrated_confidence is None)
         )
         if likelihood:
             total_face = sum(likelihood.values())
@@ -1349,7 +1392,7 @@ class IdentityResolver:
         *,
         live_identity_id: str | None,
         shadow_identity_id: str | None,
-        feature: Literal["calibrated_face"],
+        feature: Literal["calibrated_face", "face_template"],
     ) -> None:
         """Count how a shadow decision compares with live; log each disagreement for review."""
         if shadow_identity_id == live_identity_id:
@@ -1360,7 +1403,12 @@ class IdentityResolver:
             outcome = "would_become_unknown"
         else:
             outcome = "would_change_identity"
-        metrics.metrics.cts_face_shadow_outcomes_total.labels(outcome=outcome).inc()
+        counter = (
+            metrics.metrics.cts_face_shadow_outcomes_total
+            if feature == "calibrated_face"
+            else metrics.metrics.cts_face_template_shadow_outcomes_total
+        )
+        counter.labels(outcome=outcome).inc()
         if outcome == "agrees":
             return
         metrics.metrics.identity_shadow_mismatch_total.labels(feature=feature).inc()
@@ -1451,6 +1499,7 @@ class IdentityResolver:
                 for fa in face_anchors
                 if fa.recognition_state == "recognized"
                 and fa.origin != "cc_assertion"
+                and fa.aggregation != "template"
                 and fa.person_id == identity_id
                 and (fa.tracklet_id in matched_ids or fa.detection_id in entity_obs_ids)
             ),
@@ -2421,6 +2470,16 @@ class IdentityResolver:
                             quality=fe.quality,
                         )
                     )
+                elif fe.source == "template":
+                    items.append(
+                        IdentityEvidence.face_template(
+                            identity_id=fe.person_id,
+                            confidence=fe.match_score,
+                            tracklet_id=fe.tracklet_id,
+                            captured_at=fe.captured_at,
+                            calibrated_confidence=fe.calibrated_confidence,
+                        )
+                    )
                 elif fe.source == "cc_assertion":
                     # Distinct source  so the replay
                     # evaluator and reid-disagreement metrics can segment
@@ -2488,12 +2547,21 @@ class IdentityResolver:
         if not face_evidence:
             return []
 
+        # Template evidence is matched to its template by detection id and kept out of the tracklet
+        # map, so it never stands in for a PH's frame evidence.
         ev_by_tracklet: dict[str, FaceEvidence] = {
-            fe.tracklet_id: fe for fe in face_evidence if fe.tracklet_id
+            fe.tracklet_id: fe for fe in face_evidence if fe.tracklet_id and fe.source != "template"
+        }
+        template_ev: dict[str, FaceEvidence] = {
+            fe.detection_id: fe for fe in face_evidence if fe.source == "template"
         }
 
         result: list[FaceEvidence] = []
         for fa in augmented_anchors:
+            if fa.aggregation == "template":
+                if fa.detection_id in template_ev:
+                    result.append(template_ev[fa.detection_id])
+                continue
             if fa.tracklet_id in ev_by_tracklet:
                 result.append(ev_by_tracklet[fa.tracklet_id])
             else:
@@ -2549,7 +2617,9 @@ class IdentityResolver:
         evidenced_entity_ids: set[str] = set()
         best_anchor_by_entity: dict[str, FaceAnchor] = {}
         for fa in face_anchors:
-            if fa.recognition_state != "recognized":
+            # A template is several faces of one PH, not a face seen this frame: it neither
+            # propagates nor marks its PH as face-evidenced for propagation.
+            if fa.recognition_state != "recognized" or fa.aggregation == "template":
                 continue
             src_entity = entity_by_obs.get(fa.tracklet_id) or entity_by_id.get(fa.tracklet_id)
             if src_entity is None:

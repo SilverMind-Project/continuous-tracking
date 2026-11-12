@@ -10,7 +10,9 @@ so this client is stateless: ``identify_crops`` sends one HTTP POST per crop.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+import binascii
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -74,10 +76,58 @@ class FaceResult:
     quality: FaceQualityReading | None = None
     # Profile of the calibration behind calibrated_confidence ("single_frame"); "" when none.
     calibration_profile: str = ""
+    # The face's ArcFace embedding (unit length, 512 values) when the call asked for it, for face
+    # templates. Biometric data: held in memory only, never logged (excluded from repr) or
+    # persisted. None when not requested or malformed.
+    embedding: npt.NDArray[np.float32] | None = field(default=None, repr=False, compare=False)
+    embedding_model_version: str = ""
 
 
 # The calibration profile for per-face (single frame) calibrated confidence.
 SINGLE_FRAME_PROFILE = "single_frame"
+# The calibration profile for aggregated face templates (/match-template).
+TEMPLATE_PROFILE = "template"
+EMBEDDING_DIM = 512
+_F16_LE = np.dtype("<f2")
+
+
+@dataclass(frozen=True)
+class TemplateMember:
+    """One face sent to ``/match-template``: its embedding (never logged) and its quality."""
+
+    embedding: npt.NDArray[np.float32] = field(repr=False, compare=False)
+    quality: FaceQualityReading
+
+
+@dataclass(frozen=True)
+class TemplateQualityReading:
+    """Template quality features: person-id's means over the three best members by score."""
+
+    score: float
+    resolution: float
+    sharpness: float
+
+
+@dataclass(frozen=True)
+class TemplateMatchResult:
+    """person-identification-service's verdict on a face template (several faces of one PH)."""
+
+    person_id: str
+    recognition_state: str
+    best_candidate_id: str | None
+    # Raw cosine similarity of the template to the nearest / second-nearest centroid.
+    raw_similarity: float
+    second_best_similarity: float | None
+    member_count: int
+    aggregator_version: str
+    quality: TemplateQualityReading
+    # Face-quality scorer version of the members.
+    quality_version: str
+    # Calibrated probability from the template-profile artifact; None without one.
+    calibrated_confidence: float | None
+    # "template" when a template artifact is loaded, "" otherwise.
+    calibration_profile: str
+    calibration_status: str
 
 
 @dataclass(frozen=True)
@@ -207,6 +257,8 @@ class FaceIdentificationClient:
         crops: list[npt.NDArray[np.uint8]],
         crop_bboxes_norm: list[tuple[float, float, float, float]],
         context: CaptureContext,
+        *,
+        return_embedding: bool = False,
     ) -> list[CropQueryResult]:
         """Identify faces in person crops at native crop resolution.
 
@@ -223,6 +275,8 @@ class FaceIdentificationClient:
                 in [0, 1] of the original frame, one per crop.
             context: Camera, capture time, and crop padding of these crops; sent as the
                 request's ``capture_context`` together with this client's JPEG quality.
+            return_embedding: Ask the service for each face's embedding (face templates);
+                parsed into ``FaceResult.embedding`` and never logged.
 
         Returns:
             One ``CropQueryResult`` per input crop, in input order, including
@@ -252,7 +306,9 @@ class FaceIdentificationClient:
         crop_with_bboxes = zip(crops, crop_bboxes_norm, strict=True)
         for idx, (crop, crop_bbox_norm) in enumerate(crop_with_bboxes):
             results.append(
-                await self._identify_one(client, idx, crop, crop_bbox_norm, capture_context)
+                await self._identify_one(
+                    client, idx, crop, crop_bbox_norm, capture_context, return_embedding
+                )
             )
 
         logger.debug(
@@ -270,6 +326,7 @@ class FaceIdentificationClient:
         crop: npt.NDArray[np.uint8],
         crop_bbox_norm: tuple[float, float, float, float],
         capture_context: dict[str, Any],
+        return_embedding: bool,
     ) -> CropQueryResult:
         crop_h, crop_w = crop.shape[:2]
 
@@ -298,6 +355,7 @@ class FaceIdentificationClient:
                     "image": crop_b64,
                     "save_guest_images": False,
                     "capture_context": capture_context,
+                    "return_embedding": return_embedding,
                 },
             )
             resp.raise_for_status()
@@ -319,6 +377,117 @@ class FaceIdentificationClient:
             if (face := _parse_face(raw, crop_w, crop_h, crop_bbox_norm)) is not None
         )
         return _result(CropQueryStatus.FACE_FOUND if faces else CropQueryStatus.NO_FACE, faces)
+
+    async def match_template(
+        self, members: Sequence[TemplateMember], embedding_model_version: str
+    ) -> TemplateMatchResult | None:
+        """Match several faces of one person as a template (``POST /api/v1/match-template``).
+
+        Returns None when disconnected, on any HTTP error (including a 422 contract rejection),
+        or for a malformed response; the caller counts and moves on. No side effects upstream.
+        """
+        if self._client is None:
+            return None
+        body = {
+            "members": [
+                {
+                    "embedding_f16_b64": _encode_embedding(m.embedding),
+                    "quality": {
+                        "score": m.quality.score,
+                        "resolution": m.quality.resolution,
+                        "sharpness": m.quality.sharpness,
+                        "detection": m.quality.detection,
+                        "pitch": m.quality.pitch,
+                        "version": m.quality.version,
+                    },
+                }
+                for m in members
+            ],
+            "embedding_model_version": embedding_model_version,
+        }
+        try:
+            resp = await self._client.post(f"{self._base_url}/api/v1/match-template", json=body)
+            resp.raise_for_status()
+            return _parse_template_match(resp.json())
+        except httpx.HTTPStatusError as exc:
+            code = _error_code(exc.response)
+            logger.warning(
+                "face_template_match_rejected",
+                status_code=exc.response.status_code,
+                code=code,
+                member_count=len(members),
+            )
+            return None
+        except httpx.HTTPError:
+            logger.warning("face_template_match_http_error", member_count=len(members))
+            return None
+        except (KeyError, TypeError, ValueError):
+            logger.warning("face_template_match_malformed_response", member_count=len(members))
+            return None
+
+
+def _error_code(response: httpx.Response) -> str | None:
+    """The structured ``detail.code`` of an error response, when it has one."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if isinstance(detail, dict) and isinstance(detail.get("code"), str):
+        return str(detail["code"])
+    return None
+
+
+def _parse_template_match(data: dict[str, Any]) -> TemplateMatchResult:
+    """Map the service's response; raises KeyError/TypeError/ValueError when malformed."""
+    quality = data["template_quality"]
+    calibrated = data.get("calibrated_confidence")
+    second = data.get("second_best_similarity")
+    return TemplateMatchResult(
+        person_id=str(data["person_id"]),
+        recognition_state=str(data["recognition_state"]),
+        best_candidate_id=data.get("best_candidate_id"),
+        raw_similarity=float(data["raw_similarity"]),
+        second_best_similarity=float(second) if second is not None else None,
+        member_count=int(data["member_count"]),
+        aggregator_version=str(data["aggregator_version"]),
+        quality=TemplateQualityReading(
+            score=float(quality["score"]),
+            resolution=float(quality["resolution"]),
+            sharpness=float(quality["sharpness"]),
+        ),
+        quality_version=str(data["quality_version"]),
+        calibrated_confidence=float(calibrated) if calibrated is not None else None,
+        calibration_profile=str(data.get("calibration_profile", "")),
+        calibration_status=str(data.get("calibration_status", "degraded_missing")),
+    )
+
+
+def _encode_embedding(embedding: npt.NDArray[np.float32]) -> str:
+    """The wire form person-id expects: 512 little-endian float16 values, base64."""
+    vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
+    if vector.shape != (EMBEDDING_DIM,):
+        raise ValueError(f"embedding must have {EMBEDDING_DIM} values")
+    return base64.b64encode(vector.astype(_F16_LE).tobytes()).decode("ascii")
+
+
+def _decode_embedding(encoded: Any) -> npt.NDArray[np.float32] | None:
+    """Decode the service's embedding; None (logged without content) when malformed."""
+    if not isinstance(encoded, str):
+        return None
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        logger.warning("face_embedding_malformed", reason="base64")
+        return None
+    if len(raw) != EMBEDDING_DIM * _F16_LE.itemsize:
+        logger.warning("face_embedding_malformed", reason="length")
+        return None
+    vector = np.frombuffer(raw, dtype=_F16_LE).astype(np.float32)
+    if not np.all(np.isfinite(vector)):
+        logger.warning("face_embedding_malformed", reason="non_finite")
+        return None
+    return vector
 
 
 def _parse_face(
@@ -366,6 +535,8 @@ def _parse_face(
         interocular_px=float(interocular_raw) if interocular_raw is not None else None,
         quality=_parse_quality(face.get("quality")),
         calibration_profile=str(face.get("calibration_profile", "")),
+        embedding=_decode_embedding(face.get("embedding_f16_b64")),
+        embedding_model_version=str(face.get("embedding_model_version") or ""),
     )
 
 

@@ -36,6 +36,9 @@ p = min(_p_face(match_score, effective_quality), uncalibrated_face_max_likelihoo
 - When no relevant recognized anchor carries a calibrated confidence, the face remainder `1 - p`
   goes to `UNKNOWN` instead of spreading across every enrolled identity.
 
+Face templates (`reference/face-templates.md`) take the calibrated branch under every policy,
+because a template's raw similarity is inflated by averaging.
+
 ## Corroboration only
 
 Under `calibrated`, `collect_evidence_identity_ids(..., calibrated_faces_only=True)` admits a face

@@ -14,6 +14,7 @@ from app.config import Settings
 from app.main import (
     _build_appearance_settings,
     _build_face_id_config,
+    _build_face_template_policy,
     _build_resolver_config,
     _build_sampler_config,
     _build_signal_config,
@@ -21,6 +22,7 @@ from app.main import (
 )
 from app.pipeline.frame_pipeline import FaceIdConfig, PipelineConfig
 from app.sampling.keyframe_sampler import SamplerConfig
+from app.tracking.identity.face_template_buffer import FaceTemplatePolicy
 from app.tracking.identity_resolver import ResolverConfig
 from app.tracking.world.config import WorldTrackerConfig
 from app.trajectory.appearance_profile import AppearanceSettings
@@ -111,6 +113,10 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
         data["resolver"]["uncalibrated_face_max_likelihood"]
     )
     assert ResolverConfig().uncalibrated_face_max_likelihood == pytest.approx(0.55)
+    # Face templates ship off (they make HTTP calls), and every setting matches the dataclass.
+    templates = _build_face_template_policy(settings)
+    assert templates.mode == data["face_templates"]["mode"] == "off"
+    assert templates == FaceTemplatePolicy()
     assert world_tracker.dedup_residual_coeff_k == pytest.approx(1.0)
     assert world_tracker.dedup_max_distance_ceiling_m == pytest.approx(1.5)
     assert world_tracker.zupt_speed_enter_m_s == pytest.approx(0.12)
@@ -164,6 +170,7 @@ def test_no_dead_settings() -> None:
         "signal": _build_signal_config,
         "sampler": _build_sampler_config,
         "face_id": _build_face_id_config,
+        "face_templates": _build_face_template_policy,
     }
     for section, builder in builder_by_section.items():
         source = inspect.getsource(builder)
@@ -180,6 +187,7 @@ def test_no_dead_settings() -> None:
         SignalConfig: _build_signal_config,
         SamplerConfig: _build_sampler_config,
         FaceIdConfig: _build_face_id_config,
+        FaceTemplatePolicy: _build_face_template_policy,
     }
     externally_supplied = {
         (FaceIdConfig, "camera_configs"),

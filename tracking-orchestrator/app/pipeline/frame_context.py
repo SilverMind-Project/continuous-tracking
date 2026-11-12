@@ -33,6 +33,7 @@ if TYPE_CHECKING:
         PoseEvidence,
     )
     from ..inference.schemas import DetectionBox, Embedding, PoseResult
+    from ..tracking.identity.face_template_buffer import BufferedFace
     from ..trajectory.posture import PostureScores
     from ..transport.redis_streams import FrameReady
 
@@ -97,6 +98,10 @@ class FrameContext:
     # from ``face_anchors`` so no live consumer (association, gallery minting, ReID cadence,
     # evidence records) can see them; WorldTrackingStage forwards them to identity resolution only.
     shadow_face_anchors: list[FaceAnchor] = field(default_factory=list)
+    # Faces attributed to a person, with their embeddings, for per-PH face templates (only when
+    # face templates are on). Biometric data: WorldTrackingStage hands them to the template
+    # service after association; nothing logs or persists them.
+    face_template_faces: list[BufferedFace] = field(default_factory=list)
 
     # --- Stage: world_tracking resolve output ---
     outcome_decisions: list[IdentityDecision] = field(default_factory=list)

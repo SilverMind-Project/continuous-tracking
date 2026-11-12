@@ -33,6 +33,12 @@ class EnrolledMembersSource(Protocol):
     async def list_enrolled_members(self) -> list[tuple[str, str]] | None: ...
 
 
+class FaceTemplateIdentityReset(Protocol):
+    """Drops in-memory face templates tied to an identity (the face template service)."""
+
+    def reset_identity(self, identity_id: str) -> None: ...
+
+
 class IdentityRosterSyncService:
     """Reconciles CTS identities with the enrolled household roster."""
 
@@ -43,9 +49,12 @@ class IdentityRosterSyncService:
         *,
         identity_resolver: IdentityResolver | None = None,
         gallery_cache: GalleryCache | None = None,
+        face_templates: FaceTemplateIdentityReset | None = None,
         interval_s: float = 60.0,
     ) -> None:
         self._gallery_repo = gallery_repo
+        # Face templates hold faces recognized as the purged identity; they go with it.
+        self._face_templates = face_templates
         self._members_source = members_source
         self._identity_resolver = identity_resolver
         self._gallery_cache = gallery_cache
@@ -57,6 +66,7 @@ class IdentityRosterSyncService:
         removed = await self._gallery_repo.purge_identity(identity_id)
         if removed:
             self._invalidate_caches()
+            self._reset_face_templates(identity_id)
             logger.info("identity_purged_from_roster")
         return removed
 
@@ -102,6 +112,7 @@ class IdentityRosterSyncService:
                     ident.identity_id not in enrolled_ids
                     and await self._gallery_repo.purge_identity(ident.identity_id)
                 ):
+                    self._reset_face_templates(ident.identity_id)
                     purged += 1
 
         if upserted > 0 or purged > 0:
@@ -113,6 +124,10 @@ class IdentityRosterSyncService:
                 enrolled_count=len(enrolled_ids),
             )
         return (upserted, purged)
+
+    def _reset_face_templates(self, identity_id: str) -> None:
+        if self._face_templates is not None:
+            self._face_templates.reset_identity(identity_id)
 
     def _invalidate_caches(self) -> None:
         if self._identity_resolver is not None:

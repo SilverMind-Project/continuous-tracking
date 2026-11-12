@@ -25,6 +25,7 @@ from structlog import get_logger
 from .config import SettingNotFoundError, Settings, SettingsSection, settings
 from .domain import FaceEvidencePolicy, OverlapGroup
 from .observability.logging_config import configure_logging
+from .tracking.identity.face_template_buffer import FaceTemplateMode, FaceTemplatePolicy
 
 # Configure structlog before any logger is first used.
 configure_logging(settings.as_str("logging.level"))
@@ -536,6 +537,22 @@ def _build_face_id_config(
     )
 
 
+def _build_face_template_policy(s: Settings) -> FaceTemplatePolicy:
+    ft = s.section("face_templates")
+    return FaceTemplatePolicy(
+        # FaceTemplatePolicy validates the value; the cast only narrows the type for mypy.
+        mode=cast(FaceTemplateMode, ft.as_str("mode")),
+        top_k=ft.as_int("top_k"),
+        min_faces=ft.as_int("min_faces"),
+        min_face_quality=ft.as_float("min_face_quality"),
+        max_age_s=ft.as_float("max_age_s"),
+        outlier_min_similarity=ft.as_float("outlier_min_similarity"),
+        trigger_cooldown_s=ft.as_float("trigger_cooldown_s"),
+        max_concurrency=ft.as_int("max_concurrency"),
+        max_in_flight=ft.as_int("max_in_flight"),
+    )
+
+
 # Module-level asyncpg pool so shutdown can close it.
 _pool: Any = None  # asyncpg.Pool | None
 _triton_client: TritonGrpcClient | None = None
@@ -586,6 +603,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         signal_interval_s=settings.as_int("signal.interval_s"),
         fall_detection=_build_fall_detection_config(settings),
         face_id=_build_face_id_config(settings, face_id_camera_configs),
+        face_templates=_build_face_template_policy(settings),
         max_concurrent_frames=settings.as_int("pipeline.max_concurrent_frames"),
         shutdown_timeout=settings.as_float("pipeline.shutdown_timeout_s"),
         pose_enabled=settings.as_bool("triton.pose_enabled"),
@@ -1031,8 +1049,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Route the PH inspector and batch correction endpoints through the same
     # service so every correction writes an effective revision range.
     from .routers.ph import set_correction_service as set_ph_correction_service
+    from .routers.ph import set_face_template_reset
 
     set_ph_correction_service(correction_service)
+    set_face_template_reset(_pipeline.face_templates)
     set_live_context(
         ph_repo=deps_ph_repo,  # type: ignore[arg-type]
         keyframe_repo=keyframe_repo,
@@ -1053,6 +1073,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             gallery_repo=gallery_repo,
             members_source=_pipeline._face_id_client if _pipeline is not None else None,
             identity_resolver=_pipeline._identity_resolver if _pipeline is not None else None,
+            face_templates=_pipeline.face_templates if _pipeline is not None else None,
             interval_s=60.0,
         )
         await roster_sync_service.start()

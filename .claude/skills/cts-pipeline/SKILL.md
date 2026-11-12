@@ -41,6 +41,7 @@ Current orchestration side effects are placed as follows:
 | Camera-row seeding | `_process_frame_direct` calls `_ensure_camera_row` before `_process_frame` | `_handle_batch` calls `_ensure_camera_row` before each `_process_frame` | The round loop calls `_ensure_camera_row` before each context enters `_pre_world_runner` |
 | Success ACK and latency log | `_process_frame_direct` after `_process_frame` | `_handle_batch` after each `_process_frame` | `_process_post_world_context` after `_post_world_runner` |
 | Failure metrics | `_process_frame_direct` increments `frames_failed_total` | `_handle_batch` increments `frames_failed_total` | Fetch, detector, pre-world, world, and post-world failure branches increment `frames_failed_total` |
+| Face template buffer feed | `WorldTrackingStage.run` delegates to `run_many`, which feeds it (`reference/face-template-buffer.md`) | Same, through `_process_frame` | `world_tracking_stage.run_many` feeds it once per round |
 
 `_begin_tracker_round` is the required chokepoint for work that must happen exactly once before world tracking, such as invalidating the per-round `GalleryCache`. Any new route that can reach `WorldTrackingStage` must call it. Do not add a cache invalidation directly to an individual stage.
 
@@ -92,6 +93,7 @@ The list is configuration-dependent. A conditional stage must name its enabling 
 | `world_snapshots`, `outcome_decisions`, `committed_ids`, `det_to_ph`, `active_ph_ids`, `new_revisions`, `ph_born_at_by_id` | `WorldTrackingStage._populate_context` | `DetectionBackfillStage`, `ClosePHStage`, `TrajectoryStage`, `RevisionsStage`, `PublishStage` (there is no single `world_tracker_result` field; the result is fanned out into these named fields) |
 | `face_anchors`, `_face_evidence` | `FaceIdentityStage` | `WorldTrackingStage` |
 | `shadow_face_anchors` | `FaceIdentityStage` (only under `face_id.evidence_policy: shadow`) | `WorldTrackingStage`, which forwards them to identity resolution only (never to association or any other stage) |
+| `face_template_faces` | `FaceIdentityStage` (only while `face_templates.mode` is not `off`) | `WorldTrackingStage`, which feeds them to the per-PH face template buffer after association (`reference/face-template-buffer.md`); embeddings, never logged or persisted |
 | `event_time` | Initialized at context creation | All stages (do not use `datetime.now(UTC)` inside a stage unless you specifically need wall-clock time) |
 
 **Context ownership rule.** Each field has one producing stage. No stage may overwrite a field produced by another stage. Shared logic between two stages becomes a small service injected into both.

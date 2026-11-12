@@ -147,6 +147,10 @@ def collect_evidence_identity_ids(
       propagated, external) corroborates through the likelihood but is never
       evidence, so it can neither establish nor switch an identity nor advance
       the clock. ReID qualifies as before.
+    - A face template (``aggregation == "template"``) always follows the
+      ``calibrated_faces_only`` rule, whatever the policy: its raw similarity is
+      inflated by averaging, so only its template-profile calibrated confidence
+      makes it evidence.
     """
     ev_by_detection: dict[str, FaceEvidence] = {
         fe.detection_id: fe for fe in face_evidence if fe.detection_id
@@ -163,7 +167,7 @@ def collect_evidence_identity_ids(
         )
         if not matched or not fa.person_id or fa.person_id == "unknown":
             continue
-        if calibrated_faces_only and (
+        if (calibrated_faces_only or fa.aggregation == "template") and (
             fa.recognition_state != "recognized" or fa.calibrated_confidence is None
         ):
             continue

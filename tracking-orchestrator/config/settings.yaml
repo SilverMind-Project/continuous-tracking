@@ -109,6 +109,37 @@ face_id:
   # measurable gain on an already lossy source.
   crop_jpeg_quality: 95
 
+# Per-PH face templates: the best faces seen on one tracked person, matched together by
+# person-identification-service, so several small faces of a walking person can identify them when
+# none can alone. A template is always weighed as calibrated evidence: before a template
+# calibration artifact is deployed (person-id calibration.template_artifact_path) it is capped and
+# only corroborates. Embeddings are held in memory only, never logged or stored.
+face_templates:
+  # "off": no embeddings requested and no template requests. "shadow": templates are matched and a
+  # decision with them is counted in cts_face_template_shadow_outcomes_total (log event
+  # face_template_shadow_mismatch) without changing live decisions. "enabled": templates are live
+  # evidence. Turn on "shadow" only after deploying the template artifact; flip to "enabled" after
+  # 7 days when reviewed would_commit_new cases name the wrong person at most 2% of the time.
+  mode: "off"
+  # Best faces kept per tracked person, by person-id quality score.
+  top_k: 8
+  # Faces a person needs before a template request; with the 5 s face-id cooldown one camera
+  # supplies about three faces in max_age_s.
+  min_faces: 3
+  # Faces below this person-id quality score never join a template.
+  min_face_quality: 0.15
+  # Faces leave the buffer this many seconds after capture: as long as the tracker's revival
+  # window, so a person briefly hidden keeps their faces.
+  max_age_s: 15.0
+  # A face whose cosine to the buffer's mean embedding is below this is rejected as another
+  # person's: different people's ArcFace embeddings sit near 0, the same person's well above.
+  outlier_min_similarity: 0.25
+  # Minimum seconds between two template requests for one person.
+  trigger_cooldown_s: 2.0
+  # Concurrent template requests, and requests in flight at all (further ones are dropped).
+  max_concurrency: 2
+  max_in_flight: 16
+
 # Dementia signal computation
 #
 # Threshold rationale (all values are evidence-based):

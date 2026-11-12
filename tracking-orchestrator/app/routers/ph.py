@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from structlog import get_logger
@@ -64,6 +64,16 @@ _revision_publisher: object | None = None  # RevisionPublisher
 _correction_service: Any | None = None  # IdentityCorrectionService
 
 
+class FaceTemplateReset(Protocol):
+    """Drops a PH's in-memory face template (the face template service)."""
+
+    def reset_ph(self, ph_id: str) -> None: ...
+
+
+# None while face templates are off.
+_face_templates: FaceTemplateReset | None = None
+
+
 def set_ph_repository(repo: PHRepositoryProtocol) -> None:
     global _repo, _correction_service
     _repo = repo
@@ -76,6 +86,20 @@ def set_revision_publisher(publisher: object) -> None:
     """Inject RevisionPublisher for manual correction publishing."""
     global _revision_publisher
     _revision_publisher = publisher
+
+
+def set_face_template_reset(face_templates: FaceTemplateReset | None) -> None:
+    """Inject the face template service so operator edits drop templates built before them."""
+    global _face_templates
+    _face_templates = face_templates
+
+
+def _reset_face_templates(*ph_ids: str) -> None:
+    """A merged, split, or corrected PH's buffered faces may belong to someone else now."""
+    if _face_templates is None:
+        return
+    for ph_id in ph_ids:
+        _face_templates.reset_ph(ph_id)
 
 
 def set_correction_service(service: object) -> None:
@@ -254,6 +278,7 @@ async def merge_phs(
             detail={"code": "ph.merge.invalid", "message": str(exc)},
         ) from exc
     metrics.cts_ph_merges_total.labels(actor="operator").inc()
+    _reset_face_templates(body.source_ph_id, body.target_ph_id)
     await _publish_manual_revision(revision, "manual_merge")
     return MergeResponse(
         revision=RevisionResponse.from_domain(revision, kind="manual_merge"),
@@ -300,6 +325,7 @@ async def batch_merge_phs(
             detail={"code": "ph.batch_merge.invalid", "message": str(exc)},
         ) from exc
     metrics.cts_ph_merges_total.labels(actor="operator").inc(len(revisions))
+    _reset_face_templates(*body.source_ph_ids, body.target_ph_id)
     for revision in revisions:
         await _publish_manual_revision(revision, "manual_merge")
     return BatchMergeResponse(
@@ -337,6 +363,7 @@ async def batch_correct(
             detail={"code": "ph.batch_correct.invalid", "message": str(exc)},
         ) from exc
     metrics.cts_ph_corrections_total.labels(actor="batch").inc(len(results))
+    _reset_face_templates(*(item.ph_id for item in body.corrections))
     return BatchCorrectResponse(
         revisions=[_revision_response_from_result(r, kind="manual_correct") for r in results],
         applied=len(results),
@@ -520,6 +547,7 @@ async def correct_identity(
             detail={"code": "ph.correct.invalid", "message": str(exc)},
         ) from exc
     metrics.cts_ph_corrections_total.labels(actor="operator").inc()
+    _reset_face_templates(ph_id)
     return CorrectIdentityResponse(
         revision=_revision_response_from_result(result, kind="manual_correct"),
     )
@@ -554,6 +582,7 @@ async def split_ph(
             detail={"code": "ph.split.invalid", "message": msg},
         ) from exc
     metrics.cts_ph_splits_total.labels(actor="operator").inc()
+    _reset_face_templates(original_id, new_id)
     # Publish a split revision (same stream as automatic corrections).
     split_revision = IdentityRevision(
         revision_id=f"manual-split-{original_id}-{new_id}",

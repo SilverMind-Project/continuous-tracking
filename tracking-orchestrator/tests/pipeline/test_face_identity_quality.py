@@ -70,6 +70,8 @@ class _OneFaceClient(FaceIdentificationClient):
         crops: list[npt.NDArray[np.uint8]],
         crop_bboxes_norm: list[tuple[float, float, float, float]],
         context: CaptureContext,
+        *,
+        return_embedding: bool = False,
     ) -> list[CropQueryResult]:
         [crop] = crops
         return [

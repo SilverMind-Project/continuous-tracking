@@ -30,6 +30,7 @@ from ...inference.face_id_client import (
 from ...observability import metrics as _metrics
 from ...storage.base import GalleryRepository
 from ...storage.face_stats import FaceObservationStatsRepository
+from ...tracking.identity.face_template_buffer import BufferedFace
 from ..crops import FaceCropPadding, crop_detection_from_bbox, face_crop_box
 from ..face_attribution import FaceAttribution, HeadRegionPolicy, assign_face_to_person
 from ..frame_context import FrameContext
@@ -140,9 +141,13 @@ class FaceIdentityStage(FrameStage):
         head_region_policy: HeadRegionPolicy | None = None,
         crop_padding: FaceCropPadding | None = None,
         evidence_policy: FaceEvidencePolicy = "legacy",
+        collect_template_faces: bool = False,
     ) -> None:
         self._face_id_client = face_id_client
         self._evidence_policy: FaceEvidencePolicy = evidence_policy
+        # Face templates on: ask person-id for embeddings and hand attributed faces to the
+        # per-PH template buffer through ctx.face_template_faces.
+        self._collect_template_faces = collect_template_faces
         # Production values come from settings.yaml face_id.* via app/main.py; the defaults
         # exist for tests that do not exercise attribution or padding.
         self._head_region_policy = head_region_policy or HeadRegionPolicy()
@@ -283,7 +288,11 @@ class FaceIdentityStage(FrameStage):
         if not eligible_crops:
             return
 
-        ctx.face_anchors, ctx.shadow_face_anchors = await self._identify_faces_from_crops(
+        (
+            ctx.face_anchors,
+            ctx.shadow_face_anchors,
+            ctx.face_template_faces,
+        ) = await self._identify_faces_from_crops(
             crops=eligible_crops,
             crop_detections=eligible_detections,
             face_boxes=eligible_face_boxes,
@@ -319,18 +328,19 @@ class FaceIdentityStage(FrameStage):
         camera_id: str,
         captured_at: datetime,
         sent_ids: set[str] | None = None,
-    ) -> tuple[list[FaceAnchor], list[FaceAnchor]]:
-        """Identify faces in the crops; return (live anchors, shadow-only anchors).
+    ) -> tuple[list[FaceAnchor], list[FaceAnchor], list[BufferedFace]]:
+        """Identify faces in the crops; return (live anchors, shadow-only anchors, template faces).
 
         Shadow-only anchors exist only under the "shadow" evidence policy and are kept out of the
-        live list so nothing but the resolver's shadow evaluation can read them.
+        live list so nothing but the resolver's shadow evaluation can read them. Template faces
+        exist only while face templates are on.
         """
         if self._face_id_client is None or not crops:
-            return [], []
+            return [], [], []
 
         cam_cfg = self._get_face_id_config(camera_id)
         if not cam_cfg.enabled:
-            return [], []
+            return [], [], []
 
         # Normalized coordinates of the padded crops actually sent, so face boxes map back to
         # frame space correctly.
@@ -355,6 +365,7 @@ class FaceIdentityStage(FrameStage):
                     crop_pad_top_frac=self._crop_padding.top_frac,
                     crop_pad_side_frac=self._crop_padding.side_frac,
                 ),
+                return_embedding=self._collect_template_faces,
             )
         except Exception:  # noqa: BLE001
             if sent_ids:
@@ -365,7 +376,7 @@ class FaceIdentityStage(FrameStage):
                 camera_id=camera_id,
                 crop_count=len(crops),
             )
-            return [], []
+            return [], [], []
 
         if sent_ids:
             for key in sent_ids:
@@ -378,6 +389,7 @@ class FaceIdentityStage(FrameStage):
 
         face_anchors: list[FaceAnchor] = []
         shadow_anchors: list[FaceAnchor] = []
+        template_faces: list[BufferedFace] = []
         stats: list[FaceObservationStat] = []
         recognized_count = 0
         candidate_count = 0
@@ -426,6 +438,10 @@ class FaceIdentityStage(FrameStage):
                 )
                 if outcome is None:
                     continue
+                if self._collect_template_faces and outcome in _TEMPLATE_OUTCOMES:
+                    template_face = self._template_face(face, detection_id, camera_id, captured_at)
+                    if template_face is not None:
+                        template_faces.append(template_face)
                 stats.append(
                     _face_stat(
                         face,
@@ -543,7 +559,33 @@ class FaceIdentityStage(FrameStage):
             _metrics.metrics.cts_face_anchors_total.labels(recognition_state="unrecognized").inc(
                 unrecognized_count
             )
-        return face_anchors, shadow_anchors
+        return face_anchors, shadow_anchors, template_faces
+
+    def _template_face(
+        self, face: FaceResult, detection_id: str, camera_id: str, captured_at: datetime
+    ) -> BufferedFace | None:
+        """The face as a template member, or None without an embedding or a trusted quality.
+
+        Fails closed like calibration: a face with no quality score, or one from a scorer other
+        than the expected version, never enters a template.
+        """
+        if face.embedding is None or face.quality is None:
+            return None
+        if face.quality.version != self._expected_quality_version:
+            return None
+        return BufferedFace(
+            detection_id=detection_id,
+            camera_id=camera_id,
+            captured_at=captured_at,
+            embedding=face.embedding,
+            quality=face.quality,
+            det_score=face.det_score,
+            yaw_deg=face.yaw_deg,
+            single_frame_person_id=(
+                face.person_id if face.recognition_state == "recognized" else None
+            ),
+            embedding_model_version=face.embedding_model_version,
+        )
 
     def _attribute_faces(
         self,
@@ -640,6 +682,17 @@ _RECOGNITION_STATES = frozenset({"recognized", "candidate", "unrecognized"})
 
 # Outcomes for which the stage builds an anchor; any other outcome builds none.
 _ANCHOR_OUTCOMES = frozenset({FaceGateOutcome.EMITTED, FaceGateOutcome.EMITTED_SHADOW_ONLY})
+# Outcomes of a face that is the person's own: these may join the PH's face template whatever
+# the evidence policy, because a template's weak members are exactly the faces the single-face
+# floor drops. Faces outside the head region or in an ambiguous crop never join.
+_TEMPLATE_OUTCOMES = frozenset(
+    {
+        FaceGateOutcome.EMITTED,
+        FaceGateOutcome.EMITTED_SHADOW_ONLY,
+        FaceGateOutcome.DROPPED_MIN_SIMILARITY,
+        FaceGateOutcome.DROPPED_NO_CANDIDATE,
+    }
+)
 
 
 def _gate_outcome(

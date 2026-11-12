@@ -675,6 +675,14 @@ class FaceAnchor:
     # the resolver's shadow evaluation and never reach live evidence; delete the field with the
     # "shadow" policy once "calibrated" is live.
     shadow_only: bool = False
+    # "frame": one face seen in one frame. "template": several faces of one PH matched together
+    # by person-id; a template is always weighed and gated as calibrated evidence (its raw
+    # similarity is inflated by averaging) and never enters association, contradiction, the
+    # duplicate-guard bypass, or propagation.
+    aggregation: str = "frame"
+    # False when this anchor may vote but must not grant ArcFace authority (a template whose member
+    # faces were recognized as someone other than the template's identity).
+    authority_eligible: bool = True
 
 
 # How FaceIdentityStage emits recognized faces and how the resolver weighs them. "legacy": faces

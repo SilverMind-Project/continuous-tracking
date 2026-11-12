@@ -70,6 +70,7 @@ from ..pipeline.types import (
 )
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
 from ..services.camera_room_map import CameraRoomMap, RoomPolygonMap
+from ..services.face_templates import FaceTemplateService
 from ..services.identity_correction_service import IdentityCorrectionService
 from ..services.identity_rewriter import (
     IdentityRewriter,
@@ -111,6 +112,7 @@ from ..storage.face_stats import (
 )
 from ..tracking.floor_projector import FloorProjector
 from ..tracking.identity.candidate_eligibility import CandidatePolicy
+from ..tracking.identity.face_template_buffer import FaceTemplatePolicy
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
 from ..tracking.world.config import WorldTrackerConfig
@@ -261,6 +263,8 @@ class PipelineConfig:
 
     # --- Face ID ---
     face_id: FaceIdConfig = field(default_factory=FaceIdConfig)
+    # Per-PH face templates (settings face_templates.*); mode "off" builds nothing.
+    face_templates: FaceTemplatePolicy = field(default_factory=FaceTemplatePolicy)
 
     # --- Keyframe sampling ---
     sampler: SamplerConfig = field(default_factory=SamplerConfig)
@@ -348,6 +352,7 @@ class FrameProcessingPipeline:
         self._stop_event = asyncio.Event()
         # Face identification (via person-identification-service)
         self._face_id_client: FaceIdentificationClient | None = None
+        self._face_templates: FaceTemplateService | None = None
         # Per-tracklet face ID cooldown.  Each tracklet independently throttled
         # so a newly-appeared person gets an immediate call even when another
         # person in the same camera was recently identified.
@@ -613,6 +618,12 @@ class FrameProcessingPipeline:
                 jpeg_quality=self._config.face_id.crop_jpeg_quality,
             )
             await self._face_id_client.connect()
+            if self._config.face_templates.mode != "off":
+                self._face_templates = FaceTemplateService(
+                    self._config.face_templates,
+                    self._face_id_client,
+                    expected_quality_version=self._config.face_id.expected_quality_version,
+                )
 
         # ---- Build the stage runner (order matters) ----
         fetch_stage = FetchStage(frame_fetcher=self._frame_fetcher)
@@ -637,6 +648,7 @@ class FrameProcessingPipeline:
             room_match_confidence_scale=self._config.resolver.room_match_confidence_scale,
             cc_assertion_default_quality=self._config.resolver.cc_assertion_default_quality,
             cc_assertion_default_yaw_deg=self._config.resolver.cc_assertion_default_yaw_deg,
+            face_templates=self._face_templates,
         )
 
         # Named stage groups — replace fragile integer slices so adding
@@ -670,6 +682,7 @@ class FrameProcessingPipeline:
                 face_id_cooldown_s=self._config.face_id.cooldown_s,
                 face_id_min_raw_similarity=self._config.face_id.min_raw_similarity,
                 evidence_policy=self._config.face_id.evidence_policy,
+                collect_template_faces=self._face_templates is not None,
                 face_id_camera_configs=self._config.face_id.camera_configs,
                 last_face_id_by_tracklet=self._last_face_id_by_tracklet,
                 expected_arcface_model_version=self._config.face_id.expected_arcface_model_version,
@@ -806,6 +819,11 @@ class FrameProcessingPipeline:
         self._frame_semaphore = asyncio.Semaphore(max(1, self._config.max_concurrent_frames))
         logger.info("Pipeline started")
 
+    @property
+    def face_templates(self) -> FaceTemplateService | None:
+        """The per-PH face template service, or None while face templates are off."""
+        return self._face_templates
+
     async def stop(self) -> None:
         """Stop the pipeline and wait for tasks to complete."""
         self._running = False
@@ -840,6 +858,9 @@ class FrameProcessingPipeline:
 
         if self._ph_continuation_publisher:
             await self._ph_continuation_publisher.disconnect()
+
+        if self._face_templates is not None:
+            await self._face_templates.stop()
 
         if self._face_id_client:
             await self._face_id_client.disconnect()

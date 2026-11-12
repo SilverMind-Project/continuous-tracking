@@ -22,6 +22,7 @@ from ...domain import (
 )
 from ...inference.evidence import FaceEvidence
 from ...observability import metrics as _metrics
+from ...services.face_templates import FaceTemplateService
 from ...tracking.floor_projector import FloorProjector
 from ...tracking.world.config import WorldTrackerConfig
 from ...tracking.world.observation_model import (
@@ -114,8 +115,11 @@ class WorldTrackingStage(FrameStage):
         room_match_confidence_scale: float = 0.8,
         cc_assertion_default_quality: float = 0.5,
         cc_assertion_default_yaw_deg: float = 60.0,
+        face_templates: FaceTemplateService | None = None,
     ) -> None:
         self._tracker = tracker
+        # None while face_templates.mode is off: no template anchors, no buffer.
+        self._face_templates = face_templates
         self._config = config or WorldTrackerConfig()
         self._live_config = live_config
         self._enabled = enabled
@@ -197,6 +201,13 @@ class WorldTrackingStage(FrameStage):
         # Shadow-only faces reach identity resolution, which keeps them out of every live decision,
         # and nothing else: never association, dedup, or the observation records.
         shadow_face_anchors = [fa for ctx in contexts for fa in ctx.shadow_face_anchors]
+        # Face templates finished since the last round reach identity resolution only, like the
+        # shadow faces: a multi-frame aggregate never enters association or dedup.
+        template_anchors, template_evidence = (
+            self._face_templates.pending_anchors(batch_time)
+            if self._face_templates is not None
+            else ([], [])
+        )
 
         result = await self._tracker.step(
             observations=observations_with_faces,
@@ -204,10 +215,20 @@ class WorldTrackingStage(FrameStage):
             room_polygons=room_polygons,
             camera_room_map=camera_room_map,
             room_names=room_names,
-            face_anchors=all_face_anchors + shadow_face_anchors,
-            face_evidence=face_evidence or None,
+            face_anchors=all_face_anchors + shadow_face_anchors + template_anchors,
+            face_evidence=(face_evidence + template_evidence) or None,
             low_band_observations=low_band_observations or None,
         )
+
+        # Every execution path reaches the tracker through this method, so feeding the template
+        # buffer here is the per-round side effect for all of them.
+        if self._face_templates is not None:
+            self._face_templates.after_round(
+                faces=[face for ctx in contexts for face in ctx.face_template_faces],
+                det_to_ph=result.det_to_ph,
+                committed={d.ph_id: d.identity_id for d in result.identity_decisions},
+                now=batch_time,
+            )
 
         if self._cc_assertion_mode == "shadow" and cc_face_anchors:
             self._record_cc_assertion_shadow_outcomes(cc_face_anchors, result)

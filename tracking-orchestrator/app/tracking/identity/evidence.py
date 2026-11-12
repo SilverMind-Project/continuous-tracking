@@ -28,6 +28,9 @@ class EvidenceSource(StrEnum):
     OPERATOR = "operator"
     ASSOCIATION_HINT = "association_hint"
     CC_ASSERTION = "cc_assertion"
+    # Several faces of one PH matched together; recorded for provenance. Whether it counted as
+    # evidence is the resolver's calibrated-template rule, not this source.
+    FACE_TEMPLATE = "face_template"
 
 
 # Evidence sources that can justify a new identity assignment.
@@ -148,6 +151,33 @@ class IdentityEvidence:
             quality=quality,
             captured_at=captured_at,
             tracklet_id=tracklet_id,
+        )
+
+    @classmethod
+    def face_template(
+        cls,
+        identity_id: str,
+        confidence: float,
+        tracklet_id: str,
+        captured_at: datetime,
+        calibrated_confidence: float | None,
+    ) -> IdentityEvidence:
+        """Create provenance for a face template (several faces of one PH, matched together).
+
+        ``confidence`` is the template's raw similarity, kept for compatibility with the other
+        sources; ``calibrated_confidence`` (template profile) rides in the metadata.
+        """
+        return cls(
+            source=EvidenceSource.FACE_TEMPLATE,
+            identity_id=identity_id,
+            confidence=confidence,
+            captured_at=captured_at,
+            tracklet_id=tracklet_id,
+            metadata=(
+                {"calibrated_confidence": calibrated_confidence}
+                if calibrated_confidence is not None
+                else {}
+            ),
         )
 
     @classmethod

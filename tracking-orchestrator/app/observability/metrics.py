@@ -167,6 +167,13 @@ class Metrics:
     cts_face_attribution_total: Counter
     cts_face_anchor_duplicate_detection_total: Counter
     cts_face_shadow_outcomes_total: Counter
+    cts_face_template_requests_total: Counter
+    cts_face_template_buffer_size: Histogram
+    cts_face_template_outliers_total: Counter
+    cts_face_template_latency_seconds: Histogram
+    cts_face_template_authority_blocked_total: Counter
+    cts_face_template_shadow_outcomes_total: Counter
+    cts_face_template_results_discarded_total: Counter
 
     # ---- Cross-camera & co-presence ----
     world_tracker_shadow_cross_camera_revival_total: Counter
@@ -680,6 +687,46 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         cts_face_anchor_duplicate_detection_total=_counter(
             "cts_face_anchor_duplicate_detection_total",
             "Face anchors that collided on one detection_id; the weaker match was dropped.",
+        ),
+        cts_face_template_requests_total=_counter(
+            "cts_face_template_requests_total",
+            "Face template match requests to person-identification-service, by result "
+            "(recognized, candidate, unrecognized, error, dropped_in_flight_limit).",
+            ["result"],
+        ),
+        cts_face_template_buffer_size=_hist(
+            "cts_face_template_buffer_size",
+            "Faces held for a PH's face template after a tracker round, per PH with faces.",
+            buckets=(1, 2, 3, 4, 5, 6, 8, 12, 16),
+        ),
+        cts_face_template_outliers_total=_counter(
+            "cts_face_template_outliers_total",
+            "Faces kept out of a PH's template because they did not resemble its other faces "
+            "(a likely association swap).",
+        ),
+        cts_face_template_latency_seconds=_hist(
+            "cts_face_template_latency_seconds",
+            "Wall time of one face template match request, including queueing for a slot.",
+            buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5),
+        ),
+        cts_face_template_authority_blocked_total=_counter(
+            "cts_face_template_authority_blocked_total",
+            "Recognized face templates that may vote but cannot grant ArcFace authority, by reason "
+            "(member_disagreement, uncalibrated).",
+            ["reason"],
+        ),
+        cts_face_template_shadow_outcomes_total=_counter(
+            "cts_face_template_shadow_outcomes_total",
+            "Per-PH decisions with a face template under face_templates.mode shadow, by how the "
+            "decision with the template compares with live (agrees, would_commit_new, "
+            "would_change_identity, would_become_unknown).",
+            ["outcome"],
+        ),
+        cts_face_template_results_discarded_total=_counter(
+            "cts_face_template_results_discarded_total",
+            "Face template results never applied, by reason (stale_after_reset, expired, "
+            "not_identifying).",
+            ["reason"],
         ),
         cts_face_shadow_outcomes_total=_counter(
             "cts_face_shadow_outcomes_total",

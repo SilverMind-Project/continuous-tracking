@@ -87,3 +87,36 @@ async def test_sync_once_does_not_purge_on_upstream_failure_or_empty_roster() ->
     )
     assert await empty_service.sync_once() == (0, 0)
     assert len(await repo.list_identities(active_only=False)) == 1
+
+
+class _RecordingTemplates:
+    def __init__(self) -> None:
+        self.reset: list[str] = []
+
+    def reset_identity(self, identity_id: str) -> None:
+        self.reset.append(identity_id)
+
+
+@pytest.mark.asyncio
+async def test_purging_an_identity_drops_its_face_templates() -> None:
+    repo = InMemoryGalleryRepository()
+    now = datetime.now(UTC)
+    for identity_id in ("alice", "bob", "stale"):
+        await repo.upsert_identity(
+            Identity(identity_id=identity_id, display_name=identity_id, enrolled_at=now)
+        )
+    templates = _RecordingTemplates()
+    service = IdentityRosterSyncService(
+        gallery_repo=repo,
+        members_source=_StubMembersSource([("alice", "Alice"), ("bob", "Bob")]),
+        face_templates=templates,
+    )
+
+    await service.sync_once()
+    assert templates.reset == ["stale"]
+
+    assert await service.purge_identity("bob") is True
+    assert templates.reset == ["stale", "bob"]
+    # Nothing purged, nothing reset.
+    assert await service.purge_identity("nobody") is False
+    assert templates.reset == ["stale", "bob"]

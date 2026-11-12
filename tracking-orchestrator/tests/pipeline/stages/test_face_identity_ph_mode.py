@@ -315,7 +315,7 @@ async def test_crossing_forces_face_id_despite_cooldown():
     """Two overlapping detections bypass the cooldown so identities stay consistent."""
     call_count = 0
 
-    async def _mock_identify(crops, bboxes, context):
+    async def _mock_identify(crops, bboxes, context, *, return_embedding=False):
         nonlocal call_count
         call_count += 1
         return [_found(i, _FakeFaceResult(f"person-{i}", 0.85)) for i in range(len(crops))]

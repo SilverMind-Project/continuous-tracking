@@ -65,6 +65,8 @@ class _OneCropClient(FaceIdentificationClient):
         crops: list[npt.NDArray[np.uint8]],
         crop_bboxes_norm: list[tuple[float, float, float, float]],
         context: CaptureContext,
+        *,
+        return_embedding: bool = False,
     ) -> list[CropQueryResult]:
         [crop] = crops
         return [
@@ -177,6 +179,8 @@ class _CapturingClient(FaceIdentificationClient):
         crops: list[npt.NDArray[np.uint8]],
         crop_bboxes_norm: list[tuple[float, float, float, float]],
         context: CaptureContext,
+        *,
+        return_embedding: bool = False,
     ) -> list[CropQueryResult]:
         self.crops.extend(crops)
         self.boxes.extend(crop_bboxes_norm)
