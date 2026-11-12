@@ -63,6 +63,7 @@ _GLOBAL_FLOOR = 0.6
 # Behavior names for the gate outcomes, independent of the enum member names.
 _OUTCOME_BEHAVIOR = {
     FaceGateOutcome.EMITTED: "emitted",
+    FaceGateOutcome.EMITTED_SHADOW_ONLY: "shadow_only_below_similarity_floor",
     FaceGateOutcome.DROPPED_MIN_SIMILARITY: "below_similarity_floor",
     FaceGateOutcome.DROPPED_NO_CANDIDATE: "candidate_without_identity",
     FaceGateOutcome.DROPPED_NO_DETECTION: "no_detection",
@@ -267,6 +268,7 @@ async def _run_case(case: _Case) -> dict[str, Any]:
         face_stats_repo=repo,
         face_id_client=_ScriptedClient(case),
         face_id_min_raw_similarity=_GLOBAL_FLOOR,
+        evidence_policy="legacy",
         face_id_camera_configs={
             camera_id: FaceIdCameraConfig(enabled=True, min_raw_similarity=case.camera_floor)
         },

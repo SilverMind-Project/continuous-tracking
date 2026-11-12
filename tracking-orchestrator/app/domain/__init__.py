@@ -670,12 +670,28 @@ class FaceAnchor:
     # two are combined.
     face_quality: float | None = None
     face_quality_version: str = ""
+    # Rollout scaffolding for the face evidence policy: True for a recognized face that only the
+    # "shadow" policy emits (below the legacy raw-similarity floor). Such anchors travel only to
+    # the resolver's shadow evaluation and never reach live evidence; delete the field with the
+    # "shadow" policy once "calibrated" is live.
+    shadow_only: bool = False
+
+
+# How FaceIdentityStage emits recognized faces and how the resolver weighs them. "legacy": faces
+# below the raw-similarity floor are dropped and recognized faces weigh by the tanh heuristic.
+# "shadow": live behaves as "legacy" while a calibrated evaluation is measured alongside.
+# "calibrated": every recognized face is emitted and weighs by its calibrated confidence, or by a
+# capped heuristic as corroboration only when it has none.
+FaceEvidencePolicy = Literal["legacy", "shadow", "calibrated"]
+FACE_EVIDENCE_POLICIES: tuple[FaceEvidencePolicy, ...] = ("legacy", "shadow", "calibrated")
 
 
 class FaceGateOutcome(StrEnum):
     """What FaceIdentityStage did with one face returned by person-identification-service."""
 
     EMITTED = "emitted"
+    # Recognized below the legacy floor; emitted only to the shadow evaluation.
+    EMITTED_SHADOW_ONLY = "emitted_shadow_only"
     DROPPED_MIN_SIMILARITY = "dropped_min_similarity"
     DROPPED_NO_CANDIDATE = "dropped_no_candidate"
     DROPPED_NO_DETECTION = "dropped_no_detection"

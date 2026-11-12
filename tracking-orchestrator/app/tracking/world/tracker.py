@@ -390,7 +390,9 @@ class WorldTracker:
             room_polygons: room_id → list of (x_m, y_m) vertices.
             room_names: room_id → display name for polygon-derived rooms.
             camera_room_map: camera_id → room_name fallback.
-            face_anchors: flat list of FaceAnchors for identity resolution.
+            face_anchors: flat list of FaceAnchors for identity resolution only. It may contain
+                ``shadow_only`` anchors, which the resolver keeps out of every live decision;
+                nothing else in the tracker reads this list.
 
         Returns:
             WorldTrackerResult with updated PHs, snapshots, and continuations.

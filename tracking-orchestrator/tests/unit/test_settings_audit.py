@@ -102,6 +102,15 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resolver.face_quality_mode == data["resolver"]["face_quality_mode"] == "shadow"
     assert ResolverConfig().face_quality_mode == "off"
     assert resolver.face_quality_missing_default == pytest.approx(0.5)
+    # One YAML key drives both face emission and resolver weighting; it ships in shadow while the
+    # dataclass defaults stay legacy so a bare config keeps today's behavior.
+    assert face_id.evidence_policy == data["face_id"]["evidence_policy"] == "shadow"
+    assert resolver.face_evidence_policy == face_id.evidence_policy
+    assert FaceIdConfig().evidence_policy == ResolverConfig().face_evidence_policy == "legacy"
+    assert resolver.uncalibrated_face_max_likelihood == pytest.approx(
+        data["resolver"]["uncalibrated_face_max_likelihood"]
+    )
+    assert ResolverConfig().uncalibrated_face_max_likelihood == pytest.approx(0.55)
     assert world_tracker.dedup_residual_coeff_k == pytest.approx(1.0)
     assert world_tracker.dedup_max_distance_ceiling_m == pytest.approx(1.5)
     assert world_tracker.zupt_speed_enter_m_s == pytest.approx(0.12)

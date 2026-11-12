@@ -21,7 +21,9 @@ from structlog import get_logger
 
 from ..calibration.state import calibration_state
 from ..domain import (
+    FACE_EVIDENCE_POLICIES,
     CameraConfig,
+    FaceEvidencePolicy,
     Identity,
     OverlapGroup,
 )
@@ -170,6 +172,16 @@ class FaceIdConfig:
     head_region: HeadRegionPolicy = field(default_factory=HeadRegionPolicy)
     crop_padding: FaceCropPadding = field(default_factory=FaceCropPadding)
     crop_jpeg_quality: int = 95
+    # Which recognized faces become evidence; ``app/main.py`` passes the same value to the
+    # resolver so emission and weighting cannot disagree.
+    evidence_policy: FaceEvidencePolicy = "legacy"
+
+    def __post_init__(self) -> None:
+        if self.evidence_policy not in FACE_EVIDENCE_POLICIES:
+            raise ValueError(
+                f"face_id.evidence_policy must be one of {FACE_EVIDENCE_POLICIES}, "
+                f"got {self.evidence_policy!r}"
+            )
 
 
 @dataclass
@@ -657,6 +669,7 @@ class FrameProcessingPipeline:
                 gallery_repo=self._gallery_repo,
                 face_id_cooldown_s=self._config.face_id.cooldown_s,
                 face_id_min_raw_similarity=self._config.face_id.min_raw_similarity,
+                evidence_policy=self._config.face_id.evidence_policy,
                 face_id_camera_configs=self._config.face_id.camera_configs,
                 last_face_id_by_tracklet=self._last_face_id_by_tracklet,
                 expected_arcface_model_version=self._config.face_id.expected_arcface_model_version,

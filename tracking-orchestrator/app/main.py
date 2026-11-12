@@ -23,7 +23,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from structlog import get_logger
 
 from .config import SettingNotFoundError, Settings, SettingsSection, settings
-from .domain import OverlapGroup
+from .domain import FaceEvidencePolicy, OverlapGroup
 from .observability.logging_config import configure_logging
 
 # Configure structlog before any logger is first used.
@@ -272,6 +272,10 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         # ResolverConfig validates the value; the cast only narrows the type for mypy.
         face_quality_mode=cast(FaceQualityMode, r.as_str("face_quality_mode")),
         face_quality_missing_default=r.as_float("face_quality_missing_default"),
+        # The same key FaceIdConfig.evidence_policy reads, so face emission and resolver weighting
+        # cannot disagree. ResolverConfig validates it; the cast only narrows the type for mypy.
+        face_evidence_policy=cast(FaceEvidencePolicy, s.as_str("face_id.evidence_policy")),
+        uncalibrated_face_max_likelihood=r.as_float("uncalibrated_face_max_likelihood"),
     )
 
 
@@ -527,6 +531,8 @@ def _build_face_id_config(
             side_frac=fi.as_float("crop_pad_side_frac"),
         ),
         crop_jpeg_quality=fi.as_int("crop_jpeg_quality"),
+        # FaceIdConfig validates the value; the cast only narrows the type for mypy.
+        evidence_policy=cast(FaceEvidencePolicy, fi.as_str("evidence_policy")),
     )
 
 

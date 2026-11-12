@@ -108,3 +108,30 @@ async def test_report_camera_filter_and_empty_window(db_pool: asyncpg.Pool) -> N
     assert list(only_cam2["cameras"]) == ["cam-2"]
     assert empty["cameras"] == {}
     assert "No face observations" in report_script.render_table(empty)
+
+
+@pytest.mark.integration
+async def test_report_counts_faces_only_the_calibrated_policy_would_emit(
+    db_pool: asyncpg.Pool,
+) -> None:
+    shadow_rows = [
+        _row(
+            10, "cam-3", 20.0, raw_similarity=0.44, gate_outcome=FaceGateOutcome.EMITTED_SHADOW_ONLY
+        ),
+        _row(
+            11, "cam-3", 22.0, raw_similarity=0.56, gate_outcome=FaceGateOutcome.EMITTED_SHADOW_ONLY
+        ),
+        _row(12, "cam-3", 30.0),
+    ]
+    await PostgresFaceObservationStatsRepository(db_pool).append_many(shadow_rows)
+
+    async with db_pool.acquire() as conn:
+        report = await report_script.build_report(conn, T0, T0 + timedelta(hours=1), "cam-3")
+
+    cam3 = report["cameras"]["cam-3"]
+    assert cam3["emitted_shadow_only"]["faces"] == 2
+    assert cam3["emitted_shadow_only"]["p50"] == 0.5
+    assert cam3["dropped_min_similarity"] == {"faces": 0}
+    assert "recognized faces only the calibrated policy would emit: 2" in (
+        report_script.render_table(report)
+    )

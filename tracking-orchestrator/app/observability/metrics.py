@@ -166,6 +166,7 @@ class Metrics:
     cts_face_stats_write_failures_total: Counter
     cts_face_attribution_total: Counter
     cts_face_anchor_duplicate_detection_total: Counter
+    cts_face_shadow_outcomes_total: Counter
 
     # ---- Cross-camera & co-presence ----
     world_tracker_shadow_cross_camera_revival_total: Counter
@@ -679,6 +680,13 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         cts_face_anchor_duplicate_detection_total=_counter(
             "cts_face_anchor_duplicate_detection_total",
             "Face anchors that collided on one detection_id; the weaker match was dropped.",
+        ),
+        cts_face_shadow_outcomes_total=_counter(
+            "cts_face_shadow_outcomes_total",
+            "Per-PH decisions with a recognized face under the shadow face evidence policy, by "
+            "how the calibrated policy's decision compares with live (agrees, would_commit_new, "
+            "would_change_identity, would_become_unknown).",
+            ["outcome"],
         ),
         # ---- Cross-camera and co-presence ----
         world_tracker_shadow_cross_camera_revival_total=_counter(

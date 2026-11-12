@@ -39,7 +39,9 @@ if TYPE_CHECKING:
     from ..pipeline.gallery_cache import GalleryCache
 
 from ..domain import (
+    FACE_EVIDENCE_POLICIES,
     FaceAnchor,
+    FaceEvidencePolicy,
     GalleryEmbedding,
     Identity,
     IdentityDecision,
@@ -357,6 +359,13 @@ class ResolverConfig:
             )
         if not 0.0 <= self.face_quality_missing_default <= 1.0:
             raise ValueError("resolver.face_quality_missing_default must be in [0, 1]")
+        if self.face_evidence_policy not in FACE_EVIDENCE_POLICIES:
+            raise ValueError(
+                f"face evidence policy must be one of {FACE_EVIDENCE_POLICIES}, "
+                f"got {self.face_evidence_policy!r}"
+            )
+        if not 0.0 <= self.uncalibrated_face_max_likelihood <= 1.0:
+            raise ValueError("resolver.uncalibrated_face_max_likelihood must be in [0, 1]")
 
     # --- Cross-GT face propagation ---
     # Minimum gallery cosine similarity for propagating a face-confirmed identity
@@ -391,6 +400,20 @@ class ResolverConfig:
     # Maximum span (seconds) a backfill may relabel backward from the commit,
     # regardless of how much earlier the PH's Unknown history extends.
     backfill_max_range_s: float = 14400.0
+
+    # --- Face evidence policy ---
+    # Set from face_id.evidence_policy (app/main.py), the same value FaceIdentityStage emits by,
+    # so emission and weighting cannot disagree. "legacy": a recognized face weighs by _p_face.
+    # "shadow": live as "legacy", plus a calibrated evaluation per PH that only counts outcomes.
+    # "calibrated": a recognized face weighs by its calibrated confidence; a face without one
+    # weighs by _p_face capped at uncalibrated_face_max_likelihood and, like every face that is
+    # not a calibrated recognized one, corroborates only (never commit or clock evidence).
+    face_evidence_policy: FaceEvidencePolicy = "legacy"
+    # Cap on the likelihood weight of a recognized face without a calibrated confidence (a
+    # resident outside the calibration artifact's coverage, a propagated or external anchor).
+    # Below the 0.80 authority threshold and close to an even bet, so it can tip a posterior that
+    # other evidence already supports but cannot carry one alone.
+    uncalibrated_face_max_likelihood: float = 0.55
 
 
 class IdentityResolver:
@@ -495,6 +518,14 @@ class IdentityResolver:
             self._identities = {ident.identity_id: ident for ident in enrolled}
             self._identities_loaded_at = now_dt
 
+        # Shadow-only anchors feed the calibrated shadow evaluation and nothing else: from here on
+        # every live path (propagation, likelihood, authority, the evidence sets, duplicate
+        # ranking) sees only the live anchors.
+        shadow_face_anchors = [fa for fa in new_face_anchors if fa.shadow_only]
+        new_face_anchors = [fa for fa in new_face_anchors if not fa.shadow_only]
+        policy = self._config.face_evidence_policy
+        live_calibrated = policy == "calibrated"
+
         # Propagate face anchors from face-evidenced entities to similar adjacent
         # entities that share the same physical space but weren't merged by the
         # cross-camera associator.
@@ -511,7 +542,11 @@ class IdentityResolver:
                 "enabled" if self._config.face_quality_mode == "enabled" else "off"
             )
             face_likelihood, best_face_conf = self._from_face_anchors(
-                entity, augmented_anchors, augmented_evidence, face_quality_mode=live_quality_mode
+                entity,
+                augmented_anchors,
+                augmented_evidence,
+                face_quality_mode=live_quality_mode,
+                calibrated=live_calibrated,
             )
             reid_likelihood = await self._from_gallery(entity)
             height_likelihood = self._from_height(entity, ph_heights or {})
@@ -534,6 +569,7 @@ class IdentityResolver:
                 face_anchors=augmented_anchors,
                 face_evidence=augmented_evidence,
                 reid_likelihood=reid_likelihood,
+                calibrated_faces_only=live_calibrated,
             )
 
             # Shared "live" evaluation for both shadow comparisons below, computed
@@ -629,6 +665,7 @@ class IdentityResolver:
                     captured_at,
                     entity_quality,
                     commit_evidence_ids,
+                    calibrated=live_calibrated,
                 )
             decision = self._commit(
                 entity,
@@ -641,6 +678,22 @@ class IdentityResolver:
                 arcface_authority=arcface_authority,
                 evidence_identity_ids=commit_evidence_ids,
             )
+            # Calibrated-policy shadow: pure CPU over this frame's anchors, so not sample-gated.
+            if policy == "shadow" and self._has_recognized_face(
+                entity, augmented_anchors + shadow_face_anchors
+            ):
+                self._shadow_calibrated_face(
+                    entity,
+                    augmented_anchors + shadow_face_anchors,
+                    augmented_evidence,
+                    prior,
+                    reid_likelihood,
+                    height_likelihood,
+                    captured_at,
+                    entity_quality,
+                    live_identity_id=decision.identity_id,
+                    face_quality_mode=live_quality_mode,
+                )
             # Attach evidence summary.
             ep = EvidencePosterior(
                 distribution=posterior.distribution,
@@ -667,6 +720,7 @@ class IdentityResolver:
                 face_evidence=face_evidence or [],
                 reid_likelihood=reid_likelihood,
                 recognized_only=True,
+                calibrated_faces_only=live_calibrated,
             )
             has_qualifying_evidence = (
                 decision.identity_id is not None and decision.identity_id in clock_identity_ids
@@ -994,12 +1048,18 @@ class IdentityResolver:
         face_evidence: list[FaceEvidence] | None = None,
         *,
         face_quality_mode: FaceQualityMode = "off",
+        calibrated: bool = False,
     ) -> tuple[PosteriorDist, float | None]:
         """Build likelihood from face anchors associated with this entity.
 
         ``face_quality_mode`` is "off" or "enabled" here (the caller resolves "shadow"); it only
         changes the quality each recognized anchor is weighed with, via
         :meth:`_effective_face_quality`.
+
+        ``calibrated`` selects the calibrated face weighting (:meth:`_recognized_face_likelihood`):
+        the strongest recognized anchor is the one with the largest likelihood, and when no
+        recognized anchor carries a calibrated confidence the remainder goes to UNKNOWN, as for
+        candidate-only evidence, instead of spreading over every identity.
 
         Three recognition states are handled distinctly:
         - recognized: (strong positive via p_face).
@@ -1052,36 +1112,33 @@ class IdentityResolver:
         likelihood: dict[str, float] = {}
         best_recognized_conf: float | None = None
 
+        def _source(fa: FaceAnchor) -> str:
+            ev = ev_by_detection.get(fa.detection_id)
+            return ev.source if ev and ev.source else "direct"
+
+        def _likelihood(fa: FaceAnchor) -> float:
+            return self._recognized_face_likelihood(
+                fa,
+                source=_source(fa),
+                face_quality_mode=face_quality_mode,
+                calibrated=calibrated,
+            )
+
         # --- Recognized anchors ---
         if recognized_anchors:
-            # Use the strongest recognized anchor.
-            best = max(
-                recognized_anchors,
-                key=lambda fa: fa.match_score * self._effective_face_quality(fa, face_quality_mode),
-            )
-            best_recognized_conf = best.match_score
-
-            # Determine evidence source for weight multiplier.
-            ev = ev_by_detection.get(best.detection_id)
-            source = ev.source if ev and ev.source else "direct"
-            weight_mult = (
-                self._config.propagated_face_weight_multiplier if source == "propagated" else 1.0
-            )
-            # External evidence grade: a cross-fleet
-            # spatial match is weaker association than a same-frame native
-            # anchor. Real yaw/quality still flow through frontality/_p_face
-            # below like any native anchor.
-            if best.origin == "cc_assertion":
-                weight_mult *= self._config.cc_assertion_likelihood_scale
-
-            frontality = self._frontality_factor(best.yaw_deg)
-            p_face = (
-                self._p_face(
-                    best.match_score, self._effective_face_quality(best, face_quality_mode)
+            # Use the strongest recognized anchor. Calibrated weighting ranks by the likelihood
+            # itself, because a calibrated probability and a raw similarity are different scales.
+            if calibrated:
+                best = max(recognized_anchors, key=_likelihood)
+            else:
+                best = max(
+                    recognized_anchors,
+                    key=lambda fa: (
+                        fa.match_score * self._effective_face_quality(fa, face_quality_mode)
+                    ),
                 )
-                * weight_mult
-                * frontality
-            )
+            best_recognized_conf = best.match_score
+            p_face = _likelihood(best)
 
             if best.person_id:
                 likelihood[best.person_id] = p_face
@@ -1091,9 +1148,9 @@ class IdentityResolver:
                 entity_id=entity.entity_id,
                 person_id=best.person_id,
                 confidence=round(best.match_score, 3),
-                source=source,
-                weight_multiplier=weight_mult,
-                frontality_factor=round(frontality, 3),
+                source=_source(best),
+                likelihood=round(p_face, 4),
+                calibrated=calibrated,
                 anchor_count=len(relevant_anchors),
             )
 
@@ -1147,11 +1204,16 @@ class IdentityResolver:
         #   best_candidate_id only.  Put remainder into UNKNOWN so other identities
         #   don't get spurious support from a grey-zone face.
         # - Unrecognized-only: all remainder → UNKNOWN (no positive evidence).
+        # - Calibrated weighting with no calibrated recognized anchor: the face is
+        #   corroboration only, so its remainder goes to UNKNOWN like a candidate's.
+        spread_remainder = bool(recognized_anchors) and (
+            not calibrated or any(fa.calibrated_confidence is not None for fa in recognized_anchors)
+        )
         if likelihood:
             total_face = sum(likelihood.values())
             remainder = max(0.0, 1.0 - total_face)
             if remainder > 0:
-                if recognized_anchors:
+                if spread_remainder:
                     candidates = list(self._identities.keys())
                     if candidates:
                         per_id = remainder / (len(candidates) + 1)
@@ -1162,10 +1224,141 @@ class IdentityResolver:
                     else:
                         likelihood["UNKNOWN"] = likelihood.get("UNKNOWN", 0.0) + remainder
                 else:
-                    # Candidate-only or unrecognized-only: remainder → UNKNOWN.
+                    # Candidate-only, unrecognized-only, or uncalibrated under calibrated
+                    # weighting: remainder → UNKNOWN.
                     likelihood["UNKNOWN"] = likelihood.get("UNKNOWN", 0.0) + remainder
 
         return PosteriorDist(likelihood), best_recognized_conf
+
+    def _recognized_face_likelihood(
+        self,
+        anchor: FaceAnchor,
+        *,
+        source: str,
+        face_quality_mode: FaceQualityMode,
+        calibrated: bool,
+    ) -> float:
+        """Likelihood weight of one recognized face anchor; the only place either weighting lives.
+
+        Legacy weighting is the uncalibrated ``_p_face`` heuristic of the match score and the
+        effective quality. Calibrated weighting uses the calibrated confidence directly: it already
+        is P(same identity | similarity, quality), so applying ``_p_face`` again would transform a
+        probability twice, and quality is already one of its fitted features. A face without a
+        calibrated confidence keeps ``_p_face`` but is capped at
+        ``uncalibrated_face_max_likelihood``. Frontality applies in both, because yaw is not a
+        calibration feature, and so do the evidence-path multipliers for propagated and external
+        anchors.
+        """
+        weight_mult = (
+            self._config.propagated_face_weight_multiplier if source == "propagated" else 1.0
+        )
+        # A cross-fleet spatial match is weaker association than a same-frame native anchor.
+        if anchor.origin == "cc_assertion":
+            weight_mult *= self._config.cc_assertion_likelihood_scale
+        frontality = self._frontality_factor(anchor.yaw_deg)
+        if calibrated and anchor.calibrated_confidence is not None:
+            base = anchor.calibrated_confidence
+        else:
+            base = self._p_face(
+                anchor.match_score, self._effective_face_quality(anchor, face_quality_mode)
+            )
+            if calibrated:
+                base = min(base, self._config.uncalibrated_face_max_likelihood)
+        return base * weight_mult * frontality
+
+    @staticmethod
+    def _has_recognized_face(entity: IdentityResolvableEntity, anchors: list[FaceAnchor]) -> bool:
+        """Whether any recognized anchor in ``anchors`` belongs to this entity."""
+        entity_obs_ids = set(entity.observation_ids)
+        return any(
+            fa.recognition_state == "recognized"
+            and (
+                fa.tracklet_id in entity_obs_ids
+                or fa.tracklet_id == entity.entity_id
+                or fa.detection_id in entity_obs_ids
+            )
+            for fa in anchors
+        )
+
+    def _shadow_calibrated_face(
+        self,
+        entity: IdentityResolvableEntity,
+        face_anchors: list[FaceAnchor],
+        face_evidence: list[FaceEvidence],
+        prior: PosteriorDist,
+        reid_likelihood: PosteriorDist,
+        height_likelihood: PosteriorDist,
+        captured_at: datetime,
+        entity_quality: float,
+        *,
+        live_identity_id: str | None,
+        face_quality_mode: FaceQualityMode,
+    ) -> None:
+        """Decide this entity as the "calibrated" policy would, purely for measurement.
+
+        ``face_anchors`` are the live anchors plus the shadow-only ones the stage emitted below
+        the legacy floor. The calibrated side runs in ``_commit``'s order (ArcFace authority, then
+        the calibrated likelihood, then commit evidence under calibrated rules, with its own
+        contradiction) and is compared with the live decision, before the duplicate guard, which
+        applies identically to both.
+        """
+        authority = self._check_arcface_authority(entity, face_anchors)
+        shadow_identity_id: str | None
+        if authority == "CONFLICT":
+            shadow_identity_id = None
+        elif authority is not None:
+            shadow_identity_id = authority
+        else:
+            shadow_face, shadow_best = self._from_face_anchors(
+                entity,
+                face_anchors,
+                face_evidence,
+                face_quality_mode=face_quality_mode,
+                calibrated=True,
+            )
+            shadow_posterior = self._combine(prior, shadow_face, reid_likelihood, height_likelihood)
+            shadow_evidence_ids = collect_evidence_identity_ids(
+                entity_obs_ids=frozenset(entity.observation_ids),
+                entity_id=entity.entity_id,
+                face_anchors=face_anchors,
+                face_evidence=face_evidence,
+                reid_likelihood=reid_likelihood,
+                calibrated_faces_only=True,
+            )
+            shadow_identity_id = self._evaluate_commit(
+                entity,
+                shadow_posterior,
+                shadow_face,
+                reid_likelihood,
+                captured_at,
+                entity_quality,
+                contradicted=self._contradicted(entity, shadow_posterior, shadow_face, shadow_best),
+                enable_sticky_maintenance=self._config.enable_sticky_maintenance,
+                enforce_quality_gate=self._config.enable_quality_gate,
+                enforce_flip_debounce=self._config.enable_flip_debounce,
+                evidence_identity_ids=shadow_evidence_ids,
+            ).new_id
+
+        if shadow_identity_id == live_identity_id:
+            outcome = "agrees"
+        elif live_identity_id is None:
+            outcome = "would_commit_new"
+        elif shadow_identity_id is None:
+            outcome = "would_become_unknown"
+        else:
+            outcome = "would_change_identity"
+        metrics.metrics.cts_face_shadow_outcomes_total.labels(outcome=outcome).inc()
+        if outcome == "agrees":
+            return
+        metrics.metrics.identity_shadow_mismatch_total.labels(feature="calibrated_face").inc()
+        # The rollout review reads these events to judge each disagreement against keyframes.
+        logger.info(
+            "calibrated_face_shadow_mismatch",
+            entity_id=entity.entity_id,
+            outcome=outcome,
+            live_identity_id=live_identity_id,
+            shadow_identity_id=shadow_identity_id,
+        )
 
     def _direct_face_similarity(
         self,
@@ -1244,6 +1437,8 @@ class IdentityResolver:
         captured_at: datetime,
         entity_quality: float,
         evidence_identity_ids: frozenset[str],
+        *,
+        calibrated: bool,
     ) -> None:
         """Evaluate this entity with quality-weighted face evidence, purely for measurement.
 
@@ -1252,7 +1447,7 @@ class IdentityResolver:
         each side is evaluated with its own contradiction, exactly as the live commit does.
         """
         shadow_face, shadow_best_face_conf = self._from_face_anchors(
-            entity, face_anchors, face_evidence, face_quality_mode="enabled"
+            entity, face_anchors, face_evidence, face_quality_mode="enabled", calibrated=calibrated
         )
         if (
             shadow_face.distribution == face_likelihood.distribution

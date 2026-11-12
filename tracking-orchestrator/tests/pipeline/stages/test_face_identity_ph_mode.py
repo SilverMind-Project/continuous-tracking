@@ -228,6 +228,7 @@ async def test_ph_mode_emits_face_anchor_with_detection_id():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -257,6 +258,7 @@ async def test_cooldown_fires_when_track_position_unchanged():
         face_id_client=client,
         face_id_cooldown_s=5.0,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -289,6 +291,7 @@ async def test_new_position_bypasses_cooldown():
         face_id_client=client,
         face_id_cooldown_s=60.0,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -325,6 +328,7 @@ async def test_crossing_forces_face_id_despite_cooldown():
         face_id_client=client,
         face_id_cooldown_s=60.0,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -365,6 +369,7 @@ async def test_disappeared_track_pruned_from_cooldown_dict():
         face_id_client=client,
         face_id_cooldown_s=60.0,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -394,6 +399,7 @@ async def test_low_confidence_face_dropped():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -415,6 +421,7 @@ async def test_face_evidence_includes_detection_id_in_ph_mode():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
     )
 
@@ -455,6 +462,7 @@ async def test_raw_similarity_0_95_with_null_calibrated_cannot_satisfy_authority
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
         expected_arcface_model_version="buffalo_l",
         expected_preprocessing_version="v1",
@@ -494,6 +502,7 @@ async def test_calibrated_confidence_0_85_propagates_to_anchor():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
         expected_arcface_model_version="buffalo_l",
         expected_preprocessing_version="v1",
@@ -531,6 +540,7 @@ async def test_version_mismatch_nullifies_calibrated_confidence():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
         expected_arcface_model_version="buffalo_l",
         expected_preprocessing_version="v1",
@@ -566,6 +576,7 @@ async def test_calibrated_confidence_propagates_to_face_evidence():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
         expected_arcface_model_version="buffalo_l",
         expected_preprocessing_version="v1",
@@ -601,6 +612,7 @@ async def test_candidate_anchor_never_carries_calibrated_confidence():
         face_stats_repo=InMemoryFaceObservationStatsRepository(),
         face_id_client=client,
         face_id_min_raw_similarity=0.5,
+        evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
         expected_arcface_model_version="buffalo_l",
         expected_preprocessing_version="v1",

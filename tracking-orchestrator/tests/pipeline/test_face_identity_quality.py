@@ -89,6 +89,7 @@ async def _run(face: FaceResult) -> tuple[FrameContext, InMemoryFaceObservationS
         face_stats_repo=repo,
         face_id_client=_OneFaceClient(face),
         face_id_min_raw_similarity=0.6,
+        evidence_policy="legacy",
         face_id_camera_configs={_CAMERA: FaceIdCameraConfig(enabled=True)},
     )
     frame = FrameReady(

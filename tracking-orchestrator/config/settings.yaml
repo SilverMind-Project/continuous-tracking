@@ -59,16 +59,28 @@ minio:
   secure: false
 
 # Face identification via person-identification-service (ArcFace)
-# Per-camera overrides (enabled/disabled, min_confidence) are fetched from
+# Per-camera overrides (face_id_enabled, face_id_min_raw_similarity) are fetched from
 # cognitive-companion at startup.
 face_id:
   url: "${PERSON_ID_SERVICE_URL}"
   cooldown_s: 5.0
   timeout_s: 2.0
-  # Face-ID emission gate: recognized faces whose raw ArcFace cosine similarity is below this
-  # floor are dropped before becoming face anchors. Resolver face_commit_min_similarity is the
-  # stricter identity-lock gate after an anchor exists.
+  # Face-ID emission gate under the "legacy" evidence policy: recognized faces whose raw ArcFace
+  # cosine similarity is below this floor are dropped before becoming face anchors. Resolver
+  # face_commit_min_similarity is the stricter identity-lock gate after an anchor exists.
   min_raw_similarity: 0.6
+  # Which recognized faces become evidence and how the resolver weighs them (one key for both).
+  # "legacy": faces below min_raw_similarity are dropped; recognized faces weigh by the tanh
+  # heuristic. "calibrated": every recognized face is emitted (a per-camera floor from CC still
+  # applies) and weighs by its calibrated confidence; a face without one (a resident outside the
+  # calibration artifact's coverage) weighs at most resolver.uncalibrated_face_max_likelihood and
+  # only corroborates other evidence. "shadow": live as "legacy", and the faces only "calibrated"
+  # would emit are evaluated alongside; outcomes are counted in cts_face_shadow_outcomes_total
+  # (log event calibrated_face_shadow_mismatch). Flip to "calibrated" only with a ready
+  # calibration artifact covering the residents, after 7 days of shadow, when reviewed
+  # would_change_identity cases are 90% or more correct and reviewed would_commit_new cases name
+  # the wrong person at most 2% of the time. Rollback is setting "legacy".
+  evidence_policy: shadow
   enabled: true
   # M10: expected calibration versions. calibrated_confidence is set to None
   # when the person-id response carries a different model or preprocessing version,
@@ -489,6 +501,10 @@ resolver:
   # Face quality assumed for a native face whose service sent no score, outside "off" mode.
   # Conservative (same posture as cc_assertion_default_quality), never 1.0.
   face_quality_missing_default: 0.5
+  # Under face_id.evidence_policy "calibrated", the most a recognized face without a calibrated
+  # confidence can weigh. Below the 0.80 authority threshold and near an even bet, so it can tip a
+  # posterior other evidence already supports but cannot carry one alone.
+  uncalibrated_face_max_likelihood: 0.55
 
 # Governed ReID gallery candidate creation (M04). The only pipeline write
 # path into reid_gallery: ReIDCandidateStage -> create_review_candidate,

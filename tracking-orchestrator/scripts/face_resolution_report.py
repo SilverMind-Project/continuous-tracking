@@ -3,7 +3,9 @@
 
 Answers, per camera: how many pixels sit between the eyes of the faces the cameras see, what raw
 similarity recognized faces score, how many recognized faces the face-ID gate discarded (the
-``dropped_min_similarity`` outcome), how face traffic splits across face-quality bands (the
+``dropped_min_similarity`` outcome), how many only the "calibrated" face evidence policy would emit
+(the ``emitted_shadow_only`` outcome, recorded while the policy is "shadow"), how face traffic
+splits across face-quality bands (the
 service's quality score), and how often recognized faces reach a calibrated confidence of 0.8.
 Use it to size and place cameras for face recognition.
 
@@ -71,10 +73,13 @@ SELECT camera_id, count(*) AS faces,
        percentile_cont(0.9) WITHIN GROUP (ORDER BY raw_similarity) AS p90
 FROM continuous_tracking.face_observation_stats
 WHERE observed_at >= $1 AND observed_at < $2 AND ($3::text IS NULL OR camera_id = $3)
-  AND gate_outcome = 'dropped_min_similarity'
+  AND gate_outcome = $4
 GROUP BY camera_id
 ORDER BY camera_id
 """
+
+# Recognized-face outcomes the report counts per camera, with their raw-similarity spread.
+_GATE_OUTCOMES_REPORTED = ("dropped_min_similarity", "emitted_shadow_only")
 
 # Share of recognized faces whose trusted calibrated confidence reaches this probability, per
 # interocular band: how often each camera's faces can carry identity authority.
@@ -153,6 +158,7 @@ async def build_report(
                 "interocular_band_share": None,
                 "raw_similarity_by_state": {},
                 "dropped_min_similarity": {"faces": 0},
+                "emitted_shadow_only": {"faces": 0},
                 "quality_bands": {},
                 "calibrated_recognition_by_band": {},
                 "recognized_by_candidate": {},
@@ -176,11 +182,9 @@ async def build_report(
             **_percentiles(row),
         }
 
-    for row in await conn.fetch(_SQL_GATE_DROPS, *args):
-        camera(row["camera_id"])["dropped_min_similarity"] = {
-            "faces": row["faces"],
-            **_percentiles(row),
-        }
+    for outcome in _GATE_OUTCOMES_REPORTED:
+        for row in await conn.fetch(_SQL_GATE_DROPS, *args, outcome):
+            camera(row["camera_id"])[outcome] = {"faces": row["faces"], **_percentiles(row)}
 
     for row in await conn.fetch(_SQL_QUALITY_BANDS, *args):
         camera(row["camera_id"])["quality_bands"][row["band"]] = {
@@ -252,15 +256,20 @@ def render_table(report: dict[str, Any]) -> str:
                 f"  raw similarity [{state}] (n={stats['faces']}): "
                 f"p10={stats['p10']} p50={stats['p50']} p90={stats['p90']}"
             )
-        drops = entry["dropped_min_similarity"]
-        lines.append(
-            f"  recognized faces dropped by the min-similarity gate: {drops['faces']}"
-            + (
-                f" (raw similarity p10={drops['p10']} p50={drops['p50']} p90={drops['p90']})"
-                if drops["faces"]
-                else ""
+        for outcome, label in (
+            ("dropped_min_similarity", "recognized faces dropped by the min-similarity gate"),
+            ("emitted_shadow_only", "recognized faces only the calibrated policy would emit"),
+        ):
+            counted = entry[outcome]
+            lines.append(
+                f"  {label}: {counted['faces']}"
+                + (
+                    f" (raw similarity p10={counted['p10']} p50={counted['p50']} "
+                    f"p90={counted['p90']})"
+                    if counted["faces"]
+                    else ""
+                )
             )
-        )
         if entry["quality_bands"]:
             lines.append(
                 "  face quality bands: "

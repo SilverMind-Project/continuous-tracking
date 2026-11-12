@@ -116,6 +116,7 @@ def collect_evidence_identity_ids(
     face_evidence: Sequence[FaceEvidence],
     reid_likelihood: PosteriorDist,
     recognized_only: bool = False,
+    calibrated_faces_only: bool = False,
 ) -> frozenset[str]:
     """Return identity IDs with real (non-smoothed) face or ReID support this frame.
 
@@ -140,6 +141,12 @@ def collect_evidence_identity_ids(
       commit eligibility (``recognized_only`` False) — the whole point of
       admitting it into the posterior is that it can drive a commit; only the
       30s authority clock is denied to it.
+    - ``calibrated_faces_only`` (the "calibrated" face evidence policy): a face
+      anchor qualifies only when it is recognized and carries a calibrated
+      confidence. Every other face (candidate, recognized without calibration,
+      propagated, external) corroborates through the likelihood but is never
+      evidence, so it can neither establish nor switch an identity nor advance
+      the clock. ReID qualifies as before.
     """
     ev_by_detection: dict[str, FaceEvidence] = {
         fe.detection_id: fe for fe in face_evidence if fe.detection_id
@@ -155,6 +162,10 @@ def collect_evidence_identity_ids(
             or fa.detection_id in entity_obs_ids
         )
         if not matched or not fa.person_id or fa.person_id == "unknown":
+            continue
+        if calibrated_faces_only and (
+            fa.recognition_state != "recognized" or fa.calibrated_confidence is None
+        ):
             continue
         if fa.recognition_state == "recognized":
             ev = ev_by_detection.get(fa.detection_id)

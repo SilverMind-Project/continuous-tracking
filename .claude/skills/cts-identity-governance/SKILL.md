@@ -103,6 +103,10 @@ Face scores have four names, and each name means one thing:
 - Existing `recognized`, `candidate`, and `unrecognized` states may continue to use raw
   similarity thresholds for compatibility and weak-evidence weighting. `authoritative` is a
   separate determination.
+- `face_id.evidence_policy` (`legacy`, `shadow`, `calibrated`) decides which recognized faces are
+  emitted and how they weigh; under `calibrated` a face weighs by its calibrated confidence, a face
+  without one is capped and only corroborates, and `shadow_only` anchors never reach a live
+  decision. Read `reference/calibrated-face-evidence.md` before changing face emission or weighting.
 - ArcFace enrollment is a golden dataset. PH inference, operator identity correction, and ReID
   review never modify enrollment. Enrollment gains entries
   only via explicit enroll calls or explicit operator naming of a visitor cluster

@@ -103,8 +103,11 @@ class FaceIdCameraConfig:
 
     If *enabled* is False, face identification is skipped entirely for
     this camera (e.g. top-down surveillance cameras where faces are
-    never visible).  If *min_raw_similarity* is not None it overrides the
-    global ``face_id.min_raw_similarity`` floor for this camera.
+    never visible). *min_raw_similarity* is an optional raw-similarity floor
+    for recognized faces on this camera. Under the "legacy" face evidence
+    policy it overrides the global ``face_id.min_raw_similarity``; under
+    "calibrated" it is the only floor, and None means none beyond the face
+    service's own recognition threshold.
     """
 
     enabled: bool = True

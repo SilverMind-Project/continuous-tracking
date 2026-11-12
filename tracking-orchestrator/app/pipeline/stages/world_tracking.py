@@ -194,6 +194,9 @@ class WorldTrackingStage(FrameStage):
             self._build_cc_assertion_evidence(cc_face_anchors) if inject_cc_anchors else []
         )
         observations_with_faces = self._attach_face_anchors(observations, all_face_anchors)
+        # Shadow-only faces reach identity resolution, which keeps them out of every live decision,
+        # and nothing else: never association, dedup, or the observation records.
+        shadow_face_anchors = [fa for ctx in contexts for fa in ctx.shadow_face_anchors]
 
         result = await self._tracker.step(
             observations=observations_with_faces,
@@ -201,7 +204,7 @@ class WorldTrackingStage(FrameStage):
             room_polygons=room_polygons,
             camera_room_map=camera_room_map,
             room_names=room_names,
-            face_anchors=all_face_anchors,
+            face_anchors=all_face_anchors + shadow_face_anchors,
             face_evidence=face_evidence or None,
             low_band_observations=low_band_observations or None,
         )

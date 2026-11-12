@@ -135,3 +135,45 @@ async def test_duplicate_anchors_on_one_detection_keep_the_stronger_match() -> N
     assert face.person_id == "alice"
     after = REGISTRY.get_sample_value("cts_face_anchor_duplicate_detection_total") or 0.0
     assert after - before == 1
+
+
+@pytest.mark.asyncio
+async def test_shadow_only_face_reaches_identity_resolution_but_never_an_observation() -> None:
+    captured: dict[str, Any] = {}
+
+    async def _step(
+        *, observations: list[WorldObservation], face_anchors: list[FaceAnchor], **_kw: Any
+    ) -> WorldTrackerResult:
+        captured["observations"] = observations
+        captured["face_anchors"] = face_anchors
+        return WorldTrackerResult(updated_phs=[], snapshots=[], continuations=[])
+
+    tracker = MagicMock()
+    tracker.step = AsyncMock(side_effect=_step)
+    stage = WorldTrackingStage(
+        tracker=tracker,
+        live_config=LiveConfigHolder(CameraRoomMap(), RoomPolygonMap()),
+        cc_assertion_mode="off",
+    )
+    live = _anchor("alice", "det-a", 0.8)
+    shadow = FaceAnchor(
+        person_id="bob",
+        match_score=0.55,
+        similarity=0.55,
+        detection_id="det-b",
+        camera_id="cam-1",
+        captured_at=_NOW,
+        recognition_state="recognized",
+        shadow_only=True,
+    )
+    ctx = _ctx([live])
+    ctx.shadow_face_anchors = [shadow]
+
+    await stage.run_many([ctx])
+
+    by_det = _by_detection(captured["observations"])
+    assert by_det["det-b"].face_anchor is None
+    vectors = _unpack_observations(captured["observations"])
+    assert "bob" not in vectors.face_person_ids
+    # Identity resolution receives it, flagged, so the resolver can keep it to its shadow.
+    assert captured["face_anchors"] == [live, shadow]

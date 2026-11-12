@@ -117,6 +117,7 @@ async def _run(faces: tuple[FaceResult, ...]) -> tuple[FrameContext, list[FaceGa
         face_stats_repo=repo,
         face_id_client=_OneCropClient(faces),
         face_id_min_raw_similarity=0.6,
+        evidence_policy="legacy",
         face_id_camera_configs={_CAMERA: FaceIdCameraConfig(enabled=True)},
     )
     ctx = _ctx()

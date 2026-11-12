@@ -14,6 +14,7 @@ from ...domain import (
     BoundingBox,
     Detection,
     FaceAnchor,
+    FaceEvidencePolicy,
     FaceGateOutcome,
     FaceObservationStat,
     Identity,
@@ -138,8 +139,10 @@ class FaceIdentityStage(FrameStage):
         expected_quality_version: str = "heuristic-v1",
         head_region_policy: HeadRegionPolicy | None = None,
         crop_padding: FaceCropPadding | None = None,
+        evidence_policy: FaceEvidencePolicy = "legacy",
     ) -> None:
         self._face_id_client = face_id_client
+        self._evidence_policy: FaceEvidencePolicy = evidence_policy
         # Production values come from settings.yaml face_id.* via app/main.py; the defaults
         # exist for tests that do not exercise attribution or padding.
         self._head_region_policy = head_region_policy or HeadRegionPolicy()
@@ -280,7 +283,7 @@ class FaceIdentityStage(FrameStage):
         if not eligible_crops:
             return
 
-        ctx.face_anchors = await self._identify_faces_from_crops(
+        ctx.face_anchors, ctx.shadow_face_anchors = await self._identify_faces_from_crops(
             crops=eligible_crops,
             crop_detections=eligible_detections,
             face_boxes=eligible_face_boxes,
@@ -316,13 +319,18 @@ class FaceIdentityStage(FrameStage):
         camera_id: str,
         captured_at: datetime,
         sent_ids: set[str] | None = None,
-    ) -> list[FaceAnchor]:
+    ) -> tuple[list[FaceAnchor], list[FaceAnchor]]:
+        """Identify faces in the crops; return (live anchors, shadow-only anchors).
+
+        Shadow-only anchors exist only under the "shadow" evidence policy and are kept out of the
+        live list so nothing but the resolver's shadow evaluation can read them.
+        """
         if self._face_id_client is None or not crops:
-            return []
+            return [], []
 
         cam_cfg = self._get_face_id_config(camera_id)
         if not cam_cfg.enabled:
-            return []
+            return [], []
 
         # Normalized coordinates of the padded crops actually sent, so face boxes map back to
         # frame space correctly.
@@ -357,7 +365,7 @@ class FaceIdentityStage(FrameStage):
                 camera_id=camera_id,
                 crop_count=len(crops),
             )
-            return []
+            return [], []
 
         if sent_ids:
             for key in sent_ids:
@@ -368,13 +376,8 @@ class FaceIdentityStage(FrameStage):
                 camera_id=camera_id, result=crop_result.status.value
             ).inc()
 
-        min_raw_similarity = (
-            cam_cfg.min_raw_similarity
-            if cam_cfg.min_raw_similarity is not None
-            else self._face_id_min_raw_similarity
-        )
-
         face_anchors: list[FaceAnchor] = []
+        shadow_anchors: list[FaceAnchor] = []
         stats: list[FaceObservationStat] = []
         recognized_count = 0
         candidate_count = 0
@@ -414,7 +417,13 @@ class FaceIdentityStage(FrameStage):
             )
             for face, attribution in zip(crop_result.faces, attributions, strict=True):
                 state = face.recognition_state
-                outcome = _gate_outcome(face, min_raw_similarity, attribution)
+                outcome = _gate_outcome(
+                    face,
+                    attribution,
+                    self._evidence_policy,
+                    global_min_raw_similarity=self._face_id_min_raw_similarity,
+                    camera_min_raw_similarity=cam_cfg.min_raw_similarity,
+                )
                 if outcome is None:
                     continue
                 stats.append(
@@ -428,7 +437,7 @@ class FaceIdentityStage(FrameStage):
                         self._resolve_calibrated_confidence(face),
                     )
                 )
-                if outcome is not FaceGateOutcome.EMITTED:
+                if outcome not in _ANCHOR_OUTCOMES:
                     continue
 
                 # Recorded as measured; whether it weighs the evidence is the resolver's
@@ -437,24 +446,28 @@ class FaceIdentityStage(FrameStage):
                 face_quality_version = face.quality.version if face.quality is not None else ""
 
                 if state == "recognized":
-                    face_anchors.append(
-                        FaceAnchor(
-                            person_id=face.person_id,
-                            match_score=face.raw_similarity,
-                            tracklet_id="",
-                            detection_id=detection_id,
-                            camera_id=camera_id,
-                            captured_at=now,
-                            recognition_state="recognized",
-                            similarity=face.raw_similarity,
-                            yaw_deg=face.yaw_deg,
-                            det_score=face.det_score,
-                            face_quality=face_quality,
-                            face_quality_version=face_quality_version,
-                            calibrated_confidence=self._resolve_calibrated_confidence(face),
-                        )
+                    shadow_only = outcome is FaceGateOutcome.EMITTED_SHADOW_ONLY
+                    anchor = FaceAnchor(
+                        person_id=face.person_id,
+                        match_score=face.raw_similarity,
+                        tracklet_id="",
+                        detection_id=detection_id,
+                        camera_id=camera_id,
+                        captured_at=now,
+                        recognition_state="recognized",
+                        similarity=face.raw_similarity,
+                        yaw_deg=face.yaw_deg,
+                        det_score=face.det_score,
+                        face_quality=face_quality,
+                        face_quality_version=face_quality_version,
+                        calibrated_confidence=self._resolve_calibrated_confidence(face),
+                        shadow_only=shadow_only,
                     )
-                    recognized_count += 1
+                    if shadow_only:
+                        shadow_anchors.append(anchor)
+                    else:
+                        face_anchors.append(anchor)
+                        recognized_count += 1
 
                 elif state == "candidate":
                     # Weak positive for the best candidate (grey zone).
@@ -530,7 +543,7 @@ class FaceIdentityStage(FrameStage):
             _metrics.metrics.cts_face_anchors_total.labels(recognition_state="unrecognized").inc(
                 unrecognized_count
             )
-        return face_anchors
+        return face_anchors, shadow_anchors
 
     def _attribute_faces(
         self,
@@ -625,16 +638,31 @@ class FaceIdentityStage(FrameStage):
 
 _RECOGNITION_STATES = frozenset({"recognized", "candidate", "unrecognized"})
 
+# Outcomes for which the stage builds an anchor; any other outcome builds none.
+_ANCHOR_OUTCOMES = frozenset({FaceGateOutcome.EMITTED, FaceGateOutcome.EMITTED_SHADOW_ONLY})
+
 
 def _gate_outcome(
-    face: FaceResult, min_raw_similarity: float, attribution: FaceAttribution
+    face: FaceResult,
+    attribution: FaceAttribution,
+    policy: FaceEvidencePolicy,
+    *,
+    global_min_raw_similarity: float,
+    camera_min_raw_similarity: float | None,
 ) -> FaceGateOutcome | None:
     """Decide what the stage does with one face; None for a state the service never defines.
 
-    Only the one face attributed to the person can become evidence: a face outside the person's
-    head region belongs to someone else, and every face of an ambiguous crop is dropped.
-    Recognized faces below the raw-similarity floor are dropped; candidates without a nearest
-    enrolled identity cannot name anyone and are dropped; everything else becomes an anchor.
+    Attribution comes first and does not depend on the policy: a face outside the person's head
+    region belongs to someone else, every face of an ambiguous crop is dropped, and neither ever
+    becomes evidence, not even in shadow. Candidates without a nearest enrolled identity cannot
+    name anyone and are dropped.
+
+    The raw-similarity floor applies to recognized faces only and depends on the policy. "legacy"
+    drops a face below the camera's floor, or the global floor when the camera sets none.
+    "calibrated" applies only a camera floor (an operator escape hatch for a bad camera); with
+    none, the service's own recognition threshold is the only floor, because the resolver weighs
+    the face by its calibrated confidence instead. "shadow" drops what "calibrated" would drop and
+    marks a face that only "calibrated" would emit as shadow-only.
     """
     if face.recognition_state not in _RECOGNITION_STATES:
         return None
@@ -642,10 +670,26 @@ def _gate_outcome(
         return FaceGateOutcome.DROPPED_AMBIGUOUS
     if attribution is FaceAttribution.NO_FACE_IN_HEAD_REGION:
         return FaceGateOutcome.DROPPED_NOT_IN_HEAD_REGION
-    if face.recognition_state == "recognized" and face.raw_similarity < min_raw_similarity:
-        return FaceGateOutcome.DROPPED_MIN_SIMILARITY
     if face.recognition_state == "candidate" and face.best_candidate_id is None:
         return FaceGateOutcome.DROPPED_NO_CANDIDATE
+    if face.recognition_state != "recognized":
+        return FaceGateOutcome.EMITTED
+
+    legacy_floor = (
+        camera_min_raw_similarity
+        if camera_min_raw_similarity is not None
+        else global_min_raw_similarity
+    )
+    below_legacy = face.raw_similarity < legacy_floor
+    below_calibrated = (
+        camera_min_raw_similarity is not None and face.raw_similarity < camera_min_raw_similarity
+    )
+    if policy == "legacy":
+        return FaceGateOutcome.DROPPED_MIN_SIMILARITY if below_legacy else FaceGateOutcome.EMITTED
+    if below_calibrated:
+        return FaceGateOutcome.DROPPED_MIN_SIMILARITY
+    if policy == "shadow" and below_legacy:
+        return FaceGateOutcome.EMITTED_SHADOW_ONLY
     return FaceGateOutcome.EMITTED
 
 

@@ -154,6 +154,7 @@ def _stage(repo: object) -> FaceIdentityStage:
         face_stats_repo=repo,  # type: ignore[arg-type]
         face_id_client=_ScriptedClient(),
         face_id_min_raw_similarity=0.6,
+        evidence_policy="legacy",
         face_id_camera_configs={_CAMERA: FaceIdCameraConfig(enabled=True)},
     )
 

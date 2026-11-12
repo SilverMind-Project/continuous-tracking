@@ -93,6 +93,10 @@ class FrameContext:
     # --- Stage: face_id ---
     face_anchors: list[FaceAnchor] = field(default_factory=list)
     _face_evidence: list[FaceEvidence] = field(default_factory=list)
+    # Anchors only the "shadow" face evidence policy emits (``FaceAnchor.shadow_only``). Kept apart
+    # from ``face_anchors`` so no live consumer (association, gallery minting, ReID cadence,
+    # evidence records) can see them; WorldTrackingStage forwards them to identity resolution only.
+    shadow_face_anchors: list[FaceAnchor] = field(default_factory=list)
 
     # --- Stage: world_tracking resolve output ---
     outcome_decisions: list[IdentityDecision] = field(default_factory=list)
