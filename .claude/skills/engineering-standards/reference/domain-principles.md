@@ -77,6 +77,9 @@ by parts availability, so vendor specifics must never leak past one adapter boun
   integration tests run against it; no test requires physical hardware.
 - Physical placement (camera pose, anchor position, mount height) is site configuration in the
   shared floor-plan frame, owned by CC and synced through `cc_config_sync`, never hard-coded.
+- Privacy zones are CC configuration too. CTS holds them only in memory, so it restores them from
+  CC before processing the first frame and re-applies them on every sync poll; a push from CC
+  (`POST /internal/calibration/privacy_zones`) only makes a change take effect sooner.
 
 ### Caches with temporal contracts
 

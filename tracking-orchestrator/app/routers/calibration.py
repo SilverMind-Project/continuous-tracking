@@ -598,7 +598,8 @@ async def get_status() -> CalibrationStatusResponse:
     return CalibrationStatusResponse(
         cameras_with_homography=len(state.homographies),
         homography_camera_ids=sorted(state.homographies),
-        cameras_with_privacy_zones=len(state.privacy_zones),
+        # A camera whose zones were cleared keeps an empty entry; it has no zones.
+        cameras_with_privacy_zones=sum(1 for zones in state.privacy_zones.values() if zones),
         adjacency_edge_count=len(state.adjacency_edges),
         last_reload_at=state.last_reload_at,
         adjacency_edges=edges,

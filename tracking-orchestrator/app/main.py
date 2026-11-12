@@ -950,6 +950,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await calibration_state.set_adjacency(edges)
         logger.info("Restored adjacency edges from CC", edge_count=len(edges))
 
+    # Privacy zones live only in memory; load them before the first frame so a restart never
+    # tracks people inside an excluded zone. CCConfigSyncService keeps them current afterwards.
+    from .services.cc_config_sync import restore_privacy_zones
+
+    zone_count = await restore_privacy_zones(cc_client, calibration_state)
+    logger.info("Restored privacy zones from CC", zone_count=zone_count)
+
     await _pipeline.start()
 
     # CC config sync service (camera-to-room map + homography sync).

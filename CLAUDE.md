@@ -97,8 +97,9 @@ Siblings: `../cognitive-companion/` (BFF, its own CLAUDE.md), `../triton-shared/
 - **Face wire contract:** `tracking-orchestrator/app/inference/face_id_client.py` consumes
   person-identification-service `POST /api/v1/identify`; a `FaceDetection` field change lands in
   both repositories together.
-- **Configuration:** CC owns cameras, rooms, and the floor plan; CTS reads them only through
-  `app/services/cc_config_sync.py`.
+- **Configuration:** CC owns cameras, rooms, the floor plan, and privacy zones; CTS reads them
+  only through `app/services/cc_config_sync.py` (privacy zones arrive as each camera's
+  `privacy_zones` in `GET /api/v1/cts/cameras` and are restored before the pipeline starts).
 
 ## Claude Code guardrails
 

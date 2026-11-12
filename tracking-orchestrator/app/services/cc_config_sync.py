@@ -1,7 +1,9 @@
-"""Polls cognitive-companion for camera, room, and homography state.
+"""Polls cognitive-companion for camera, room, homography, and privacy-zone state.
 
 Replaces the static ``settings.yaml.camera_room_map`` and makes CC the
-single source of truth for calibration data.
+single source of truth for calibration data. Privacy zones live only in
+:class:`CalibrationState` memory, so they are restored from CC before the
+pipeline starts (:func:`restore_privacy_zones`) and re-applied on every poll.
 """
 
 from __future__ import annotations
@@ -9,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, Final, NoReturn, get_args
 
 from structlog import get_logger
 from tenacity import (
@@ -20,9 +22,9 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from ..calibration.state import CalibrationState
+from ..calibration.state import CalibrationState, PrivacyZoneConfig
 from ..calibration.validator import validate_homography
-from ..domain import TransitZone
+from ..domain import PrivacyPolicy, TransitZone
 from ..observability import metrics as _m
 from ..services.camera_room_map import (
     CameraRoomBinding,
@@ -32,7 +34,13 @@ from ..services.camera_room_map import (
 )
 from ..services.transit_zone_map import TransitZoneBinding, TransitZoneMap
 
+if TYPE_CHECKING:
+    from ..services.cc_client import CognitiveCompanionClient
+
 logger = get_logger(__name__)
+
+_PRIVACY_POLICIES: Final[frozenset[str]] = frozenset(get_args(PrivacyPolicy))
+_CAMERAS_PATH: Final = "/api/v1/cts/cameras"
 
 
 def _log_fetch_retry(retry_state: RetryCallState) -> None:
@@ -124,9 +132,112 @@ def _optional_matrix3(data: dict[str, Any], key: str, *, context: str) -> list[l
     return matrix
 
 
+def _privacy_polygon(value: Any, *, context: str) -> list[list[float]]:
+    points = _require_list(value, context=context)
+    if len(points) < 3:
+        raise CCConfigSyncContractError(f"{context} needs at least 3 points")
+    polygon: list[list[float]] = []
+    for index, point_raw in enumerate(points):
+        point = _require_list(point_raw, context=f"{context}[{index}]")
+        if len(point) != 2:
+            raise CCConfigSyncContractError(f"{context}[{index}] must be [x, y]")
+        x = _require_number(point[0], context=f"{context}[{index}][0]")
+        y = _require_number(point[1], context=f"{context}[{index}][1]")
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+            raise CCConfigSyncContractError(f"{context}[{index}] must be normalized to [0, 1]")
+        polygon.append([x, y])
+    return polygon
+
+
+def _privacy_zones(cam: dict[str, Any], *, context: str) -> list[PrivacyZoneConfig] | None:
+    """Parse one camera's ``privacy_zones``; ``None`` when CC predates the field."""
+    if "privacy_zones" not in cam:
+        return None
+    zones_context = f"{context}.privacy_zones"
+    zones: list[PrivacyZoneConfig] = []
+    for index, zone_raw in enumerate(_require_list(cam["privacy_zones"], context=zones_context)):
+        zone_context = f"{zones_context}[{index}]"
+        zone = _require_mapping(zone_raw, context=zone_context)
+        policy = _require_non_empty_str(zone, "policy", context=zone_context)
+        if policy not in _PRIVACY_POLICIES:
+            raise CCConfigSyncContractError(f"{zone_context}.policy {policy!r} is not a policy")
+        name = zone.get("name", "")
+        if not isinstance(name, str):
+            raise CCConfigSyncContractError(f"{zone_context}.name must be a string")
+        zones.append(
+            PrivacyZoneConfig(
+                zone_id=_require_non_empty_str(zone, "zone_id", context=zone_context),
+                polygon=_privacy_polygon(zone.get("polygon"), context=f"{zone_context}.polygon"),
+                policy=policy,
+                name=name,
+                enabled=_require_bool(zone, "enabled", context=zone_context),
+            )
+        )
+    return zones
+
+
+async def apply_privacy_zones(cameras: list[Any], calibration_state: CalibrationState) -> bool:
+    """Make *calibration_state* hold exactly the privacy zones CC lists for each camera.
+
+    Every camera's zones are validated before any is applied, so a malformed zone raises
+    :class:`CCConfigSyncContractError` and leaves the zones in force untouched rather than
+    dropping a privacy mask. A camera no longer listed loses its zones. Returns ``False``, and
+    changes nothing, when CC predates the ``privacy_zones`` field.
+    """
+    parsed: dict[str, list[PrivacyZoneConfig]] = {}
+    for index, cam_raw in enumerate(cameras):
+        context = f"{_CAMERAS_PATH}[{index}]"
+        cam = _require_mapping(cam_raw, context=context)
+        camera_id = _require_non_empty_str(cam, "id", context=context)
+        zones = _privacy_zones(cam, context=context)
+        if zones is None:
+            return False
+        parsed[camera_id] = zones
+
+    for camera_id in set(calibration_state.privacy_zones) - set(parsed):
+        parsed[camera_id] = []
+    for camera_id, zones in parsed.items():
+        if calibration_state.privacy_zones.get(camera_id, []) == zones:
+            continue
+        await calibration_state.set_privacy_zones(camera_id, zones)
+        logger.info(
+            "cc_config_sync_privacy_zones_applied",
+            camera_id=camera_id,
+            zone_count=len(zones),
+        )
+    return True
+
+
+async def restore_privacy_zones(
+    client: CognitiveCompanionClient, calibration_state: CalibrationState
+) -> int:
+    """Load every camera's privacy zones from CC before the pipeline processes a frame.
+
+    Zones live only in memory, so without this a restart would track people inside zones the
+    operator excluded until the first config poll. Raises ``RuntimeError`` when CC cannot be read
+    or returns malformed zones, so the orchestrator does not start without them. Returns the
+    number of zones restored.
+    """
+    try:
+        cameras = await client.get(_CAMERAS_PATH)
+    except Exception as exc:  # any transport failure means startup must stop
+        logger.exception("privacy_zones_restore_fetch_failed")
+        raise RuntimeError("Failed to fetch privacy zones from CC") from exc
+    try:
+        applied = await apply_privacy_zones(
+            _require_list(cameras, context=_CAMERAS_PATH), calibration_state
+        )
+    except CCConfigSyncContractError as exc:
+        raise RuntimeError(f"CC returned malformed privacy zones: {exc}") from exc
+    if not applied:
+        logger.warning("privacy_zones_restore_unavailable", reason="cc_predates_privacy_zones")
+        return 0
+    return sum(len(zones) for zones in calibration_state.privacy_zones.values())
+
+
 class CCConfigSyncService:
     """Background task that polls CC every *poll_interval_s* and applies
-    camera→room bindings and homography matrices atomically."""
+    camera→room bindings, homography matrices, and privacy zones atomically."""
 
     def __init__(
         self,
@@ -150,6 +261,7 @@ class CCConfigSyncService:
         self._fetch_retry_initial_s = fetch_retry_initial_s
         self._fetch_retry_max_s = fetch_retry_max_s
         self._stop_event = asyncio.Event()
+        self._warned_privacy_zones_unavailable = False
 
     async def run(self) -> None:
         """Run the poll loop until stopped."""
@@ -182,7 +294,15 @@ class CCConfigSyncService:
 
     async def _poll_validated(self, now: datetime) -> None:
         """Apply one CC sync poll after clearing stale maps on contract failures."""
-        cameras = _require_list(await self._fetch_cameras(), context="/api/v1/cts/cameras")
+        cameras = _require_list(await self._fetch_cameras(), context=_CAMERAS_PATH)
+
+        # Privacy first: a later homography rejection skips the rest of a camera's loop body.
+        if (
+            not await apply_privacy_zones(cameras, self._calibration_state)
+            and not self._warned_privacy_zones_unavailable
+        ):
+            self._warned_privacy_zones_unavailable = True
+            logger.warning("cc_config_sync_privacy_zones_unavailable")
 
         bindings: list[CameraRoomBinding] = []
 

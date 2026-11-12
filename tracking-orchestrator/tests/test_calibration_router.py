@@ -124,6 +124,20 @@ def test_post_privacy_zones_accepted(client: TestClient):
     assert status_resp.json()["cameras_with_privacy_zones"] == 1
 
 
+def test_cleared_privacy_zones_are_not_counted(client: TestClient):
+    client.post(
+        "/internal/calibration/privacy_zones",
+        json={"camera_id": "cam-2", "zones": [VALID_ZONE]},
+    )
+    client.post(
+        "/internal/calibration/privacy_zones",
+        json={"camera_id": "cam-2", "zones": []},
+    )
+
+    status_resp = client.get("/internal/calibration/status")
+    assert status_resp.json()["cameras_with_privacy_zones"] == 0
+
+
 def test_post_privacy_zones_invalid_policy_rejected(client: TestClient):
     zone = {**VALID_ZONE, "policy": "delete_everything"}
     resp = client.post(
