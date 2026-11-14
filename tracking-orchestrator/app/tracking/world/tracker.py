@@ -48,7 +48,7 @@ from ..orientation import update_view_prototypes
 from .appearance_policy import AppearanceDecision, evaluate_appearance_update
 from .association import associate
 from .config import WorldTrackerConfig
-from .dedup import _finalize_singleton, dedup_observations
+from .dedup import DedupMergeStats, _finalize_singleton, dedup_observations
 from .helpers import (
     is_in_any_room_polygon,
     position_sigma_m,
@@ -433,12 +433,17 @@ class WorldTracker:
 
         # 2. Build observation lists; run cross-camera dedup before association.
         raw_observations = observations  # keep original for cluster expansion
+        dedup_stats = DedupMergeStats()
         observations, cluster_map = dedup_observations(
-            raw_observations, cfg, overlap_groups=self._overlap_groups or None
+            raw_observations, cfg, overlap_groups=self._overlap_groups or None, stats=dedup_stats
         )
 
-        # Emit dedup metrics.
+        # Emit dedup metrics (primary pass only; the low-band pass is not an agreement sample).
         m = _metrics.metrics
+        for distance_m in dedup_stats.floor_pair_distances_m:
+            m.worldtracker_dedup_pair_distance_m.observe(distance_m)
+        if dedup_stats.group_appearance_pairs:
+            m.worldtracker_group_appearance_dedup_total.inc(dedup_stats.group_appearance_pairs)
         for _rep_id, src_ids in cluster_map.items():
             if len(src_ids) > 1:
                 m.worldtracker_observations_deduped_total.inc(len(src_ids) - 1)

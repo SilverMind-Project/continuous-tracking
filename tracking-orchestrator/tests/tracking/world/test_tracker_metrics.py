@@ -51,11 +51,14 @@ async def test_dedup_counter_increments_once_per_collapsed_observation(monkeypat
     fake_closed = MagicMock()
     fake_rejected = MagicMock()
     fake_shadow = MagicMock()
+    fake_pair_distance = MagicMock()
 
     class _FakeMetrics:
         worldtracker_observations_deduped_total = fake_deduped
         worldtracker_dedup_clusters_total = fake_clusters
         worldtracker_observation_missing_floorpoint_total = fake_missing
+        worldtracker_dedup_pair_distance_m = fake_pair_distance
+        worldtracker_group_appearance_dedup_total = MagicMock()
         world_tracker_ph_spawned_total = fake_spawned
         world_tracker_ph_closed_total = fake_closed
         world_tracker_spawn_rejected_out_of_room_total = fake_rejected
@@ -85,6 +88,7 @@ async def test_dedup_counter_increments_once_per_collapsed_observation(monkeypat
 
     fake_deduped.inc.assert_called_once_with(1)
     fake_clusters.inc.assert_called_once()
+    fake_pair_distance.observe.assert_called_once_with(pytest.approx(0.05))
 
 
 @pytest.mark.asyncio
@@ -99,11 +103,14 @@ async def test_missing_floorpoint_counter_increments(monkeypatch):
     fake_closed = MagicMock()
     fake_rejected = MagicMock()
     fake_shadow = MagicMock()
+    fake_pair_distance = MagicMock()
 
     class _FakeMetrics:
         worldtracker_observations_deduped_total = fake_deduped
         worldtracker_dedup_clusters_total = fake_clusters
         worldtracker_observation_missing_floorpoint_total = fake_missing
+        worldtracker_dedup_pair_distance_m = fake_pair_distance
+        worldtracker_group_appearance_dedup_total = MagicMock()
         world_tracker_ph_spawned_total = fake_spawned
         world_tracker_ph_closed_total = fake_closed
         world_tracker_spawn_rejected_out_of_room_total = fake_rejected

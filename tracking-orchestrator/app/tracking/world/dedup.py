@@ -15,7 +15,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -54,11 +54,29 @@ class DedupCluster:
     sources: tuple[str, ...]  # detection_ids of all cluster members
 
 
+@dataclass
+class DedupMergeStats:
+    """What one ``dedup_observations`` call merged, for the caller to report as metrics.
+
+    A per-call accumulator, not a domain object: the dedup pass stays free of the metrics
+    registry, and the caller decides which pass (primary or low-band) it measures.
+
+    ``floor_pair_distances_m`` holds one distance per pair of calibrated observations from
+    different cameras that passed every floor-distance gate. Only pairs inside the gate are
+    recorded, so the values measure agreement among merged pairs; a pair farther apart than
+    the gate is a split, which the one-PH-per-person check observes instead.
+    """
+
+    floor_pair_distances_m: list[float] = field(default_factory=list)
+    group_appearance_pairs: int = 0
+
+
 def dedup_observations(
     observations: list[WorldObservation],
     cfg: WorldTrackerConfig,
     *,
     overlap_groups: list[OverlapGroup] | None = None,
+    stats: DedupMergeStats | None = None,
 ) -> tuple[list[WorldObservation], dict[str, tuple[str, ...]]]:
     """Collapse same-floor, cross-camera observations into one representative each.
 
@@ -68,6 +86,8 @@ def dedup_observations(
              ``dedup_require_no_face_conflict``, ``face_conflict_min_similarity``, and
              group-appearance keys.
         overlap_groups: declared overlap groups for group-appearance dedup.
+        stats: when given, receives the distance of every merged floor pair and the number of
+            merged group-appearance pairs.
 
     Returns:
         (deduped_observations, cluster_map) where:
@@ -123,10 +143,16 @@ def dedup_observations(
             ):
                 continue
             _union(i, j)
+            if stats is not None:
+                stats.floor_pair_distances_m.append(dist)
 
     # Group-appearance dedup for uncalibrated cameras in declared overlap groups.
     if cfg.enable_group_appearance_dedup and overlap_groups:
-        _group_appearance_dedup_pass(observations, cfg, overlap_groups, _find, _union, n)
+        merged_pairs = _group_appearance_dedup_pass(
+            observations, cfg, overlap_groups, _find, _union, n
+        )
+        if stats is not None:
+            stats.group_appearance_pairs += merged_pairs
 
     # Build clusters from the union-find roots.
     clusters: dict[int, list[int]] = {}
@@ -201,8 +227,10 @@ def _group_appearance_dedup_pass(
     _find: Callable[[int], int],
     _union: Callable[[int, int], None],
     n: int,
-) -> None:
+) -> int:
     """Apply appearance-based dedup for uncalibrated observations in overlap groups.
+
+    Returns the number of observation pairs merged.
 
     Within each declared overlap group, uncalibrated observations from different
     cameras are merged when their appearance similarity clears the threshold and
@@ -215,6 +243,7 @@ def _group_appearance_dedup_pass(
         for cam_id in group.camera_ids:
             camera_to_group.setdefault(cam_id, group.group_id)
 
+    merged_pairs = 0
     for i in range(n):
         obs_i = observations[i]
         if obs_i.floor_point.calibrated:
@@ -247,6 +276,7 @@ def _group_appearance_dedup_pass(
                 continue
 
             _union(i, j)
+            merged_pairs += 1
             logger.debug(
                 "group_appearance_dedup_merged",
                 camera_i=obs_i.camera_id,
@@ -254,6 +284,7 @@ def _group_appearance_dedup_pass(
                 group_id=group_id_i,
                 sim=round(sim, 3),
             )
+    return merged_pairs
 
 
 def _finalize_singleton(obs: WorldObservation, k_cal: float) -> WorldObservation:

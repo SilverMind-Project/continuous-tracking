@@ -111,7 +111,7 @@ class Metrics:
     homography_warning_total: Counter
 
     # ---- Calibration and transit metrics -----------------------------------
-    uncalibrated_detection_total: Counter
+    worldtracker_observations_by_calibration_total: Counter  # labels: camera_id, calibrated
     transit_event_published_total: Counter
     transit_event_unknown_identity_total: Counter
     transit_zones_loaded: Gauge
@@ -154,6 +154,7 @@ class Metrics:
     worldtracker_observations_deduped_total: Counter
     worldtracker_dedup_clusters_total: Counter
     worldtracker_observation_missing_floorpoint_total: Counter
+    worldtracker_dedup_pair_distance_m: Histogram
 
     # ---- association integrity (primary pass only) -----------------
     worldtracker_association_rejections_total: Counter  # label: reason
@@ -409,13 +410,13 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             ["reason", "camera_id"],
         ),
         # ---- Calibration and transit metrics ------------------------------------
-        uncalibrated_detection_total=_counter(
-            "cts_uncalibrated_detection_total",
+        worldtracker_observations_by_calibration_total=_counter(
+            "cts_worldtracker_observations_by_calibration_total",
             (
-                "Detections projected via synthetic floor point because the source camera "
-                "lacks a valid homography."
+                "World observations built per camera, split by whether the floor point came from "
+                "a homography (calibrated=true) or the per-camera virtual room (calibrated=false)."
             ),
-            ["camera_id"],
+            ["camera_id", "calibrated"],
         ),
         transit_event_published_total=_counter(
             "cts_transit_event_published_total",
@@ -555,6 +556,14 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         worldtracker_observation_missing_floorpoint_total=_counter(
             "cts_worldtracker_observation_missing_floorpoint_total",
             "Observations skipped from dedup weighting due to missing calibrated floor point.",
+        ),
+        worldtracker_dedup_pair_distance_m=_hist(
+            "cts_worldtracker_dedup_pair_distance_m",
+            (
+                "Floor distance between two calibrated observations from different cameras that "
+                "the floor-distance dedup pass merged: the cross-camera agreement measurement."
+            ),
+            buckets=(0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5),
         ),
         # ---- association integrity (emitted from the primary pass only) ----
         worldtracker_association_rejections_total=_counter(
@@ -784,7 +793,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         ),
         worldtracker_group_appearance_dedup_total=_counter(
             "cts_worldtracker_group_appearance_dedup_total",
-            "Group-appearance dedup clusters formed.",
+            "Uncalibrated observation pairs merged by appearance inside a declared overlap group.",
         ),
         worldtracker_copresence_links_total=_counter(
             "cts_worldtracker_copresence_links_total",

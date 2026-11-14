@@ -90,6 +90,15 @@ def _synthetic_floor_point(
     return FloorPoint(x_mm=int(x_m * 1000), y_mm=int(y_m * 1000), calibrated=False)
 
 
+def _record_calibration_split(camera_id: str, *, calibrated: int, uncalibrated: int) -> None:
+    """Count one frame's observations by floor-point source (homography or virtual room)."""
+    counter = _metrics.metrics.worldtracker_observations_by_calibration_total
+    if calibrated:
+        counter.labels(camera_id=camera_id, calibrated="true").inc(calibrated)
+    if uncalibrated:
+        counter.labels(camera_id=camera_id, calibrated="false").inc(uncalibrated)
+
+
 class WorldTrackingStage(FrameStage):
     """Pipeline stage that runs the world-coordinate person tracker.
 
@@ -151,10 +160,12 @@ class WorldTrackingStage(FrameStage):
         for ctx in contexts:
             frame_observations, uncalibrated_count = self._build_observations(ctx)
             observations.extend(frame_observations)
+            _record_calibration_split(
+                ctx.frame.camera_id,
+                calibrated=len(frame_observations) - uncalibrated_count,
+                uncalibrated=uncalibrated_count,
+            )
             if uncalibrated_count:
-                _metrics.metrics.uncalibrated_detection_total.labels(
-                    camera_id=ctx.frame.camera_id
-                ).inc(uncalibrated_count)
                 logger.debug(
                     "world_tracking_synthetic_floor_points",
                     camera_id=ctx.frame.camera_id,
