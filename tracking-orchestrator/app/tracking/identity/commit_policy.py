@@ -169,6 +169,43 @@ def collect_evidence_identity_ids(
     return frozenset(ids)
 
 
+def identity_evidence_time(
+    *,
+    identity_id: str,
+    round_time: datetime,
+    entity_obs_ids: frozenset[str],
+    entity_id: str,
+    face_anchors: Sequence[FaceAnchor],
+    face_evidence: Sequence[FaceEvidence],
+    reid_likelihood: PosteriorDist,
+    recognized_only: bool = False,
+    calibrated_faces_only: bool = False,
+) -> datetime | None:
+    """Return the capture time of the newest evidence that names *identity_id*, or None.
+
+    Uses exactly the predicate of ``collect_evidence_identity_ids`` with the same flags, so an
+    identity is in that set if and only if this returns a time. A frame anchor or a ReID vote is
+    this round's evidence (``round_time``). A face template is as old as its newest member face
+    (``FaceAnchor.captured_at``): a template matched in the background and applied rounds later
+    must not make the identity look freshly observed.
+    """
+    times = [
+        fa.captured_at if fa.aggregation == "template" else round_time
+        for fa in _evidence_face_anchors(
+            entity_obs_ids=entity_obs_ids,
+            entity_id=entity_id,
+            face_anchors=face_anchors,
+            face_evidence=face_evidence,
+            recognized_only=recognized_only,
+            calibrated_faces_only=calibrated_faces_only,
+        )
+        if fa.person_id == identity_id
+    ]
+    if _reid_evidence_identity(reid_likelihood) == identity_id:
+        times.append(round_time)
+    return max(times, default=None)
+
+
 def _evidence_face_anchors(
     *,
     entity_obs_ids: frozenset[str],

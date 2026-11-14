@@ -1564,10 +1564,12 @@ async def _resolve_identities(
     for decision in outcome.decisions:
         if decision.identity_id is not None:
             if decision.evidence_backed:
+                # Evidence age runs from the newest contributing face, which for a face template
+                # can be older than this round; the commit itself happens now.
                 await ph_repo.evidence_backed_commit(
                     ph_id=decision.ph_id,
                     identity_id=decision.identity_id,
-                    evidence_at=now,
+                    evidence_at=decision.evidence_at or now,
                     committed_at=now,
                 )
             else:

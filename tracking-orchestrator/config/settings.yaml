@@ -129,8 +129,9 @@ face_templates:
   min_faces: 3
   # Faces below this person-id quality score never join a template.
   min_face_quality: 0.15
-  # Faces leave the buffer this many seconds after capture: as long as the tracker's revival
-  # window, so a person briefly hidden keeps their faces.
+  # Faces leave the buffer this many seconds after capture: as long as
+  # world_tracker.ph_close_grace_s, so a person briefly hidden keeps their faces. A PH revived later
+  # than that (up to world_tracker.revive_max_age_s) starts with an empty buffer, by design.
   max_age_s: 15.0
   # A face whose cosine to the buffer's mean embedding is below this is rejected as another
   # person's: different people's ArcFace embeddings sit near 0, the same person's well above.

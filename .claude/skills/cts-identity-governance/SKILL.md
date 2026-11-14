@@ -127,7 +127,9 @@ Face scores have four names, and each name means one thing:
 ## Temporal prior
 
 - The prior window is configurable; the household default is 30 seconds.
-- Age is measured from the last independent qualifying evidence, never from the last resolver
+- Age is measured from the capture time of the newest contributing evidence
+  (`IdentityDecision.evidence_at`: this round for a frame face or ReID vote, the newest member face
+  for a face template); never from the last resolver
   evaluation or persistence write.
 - Prior-only maintenance must not refresh that timestamp.
 - Height and propagated face evidence must not refresh it.

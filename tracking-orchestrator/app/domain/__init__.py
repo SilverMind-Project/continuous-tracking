@@ -853,6 +853,10 @@ class IdentityDecision:
     last_independent_evidence_at_unix_ns: int = 0
     config_hash: str = ""
     model_set_version: str = ""
+    # Capture time of the newest evidence behind an evidence-backed commit (this round for a frame
+    # face or ReID vote, the newest member face for a template); None when the decision commits
+    # nothing on evidence. The repository stores it as the PH's independent-evidence time.
+    evidence_at: datetime | None = None
 
 
 @dataclass(frozen=True)

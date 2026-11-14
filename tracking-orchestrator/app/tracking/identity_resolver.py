@@ -58,6 +58,7 @@ from .identity.commit_policy import (
     CommitEvaluation,
     collect_evidence_identity_ids,
     compute_contradiction,
+    identity_evidence_time,
 )
 from .identity.commit_policy import (
     evaluate_commit as _evaluate_commit_pure,
@@ -752,6 +753,17 @@ class IdentityResolver:
             has_qualifying_evidence = (
                 decision.identity_id is not None and decision.identity_id in clock_identity_ids
             )
+            evidence_at = self._commit_evidence_time(
+                entity,
+                decision,
+                evidence_backed=decision.evidence_backed and has_qualifying_evidence,
+                round_time=captured_at,
+                entity_obs_ids=entity_obs_ids,
+                face_anchors=new_face_anchors,
+                face_evidence=face_evidence or [],
+                reid_likelihood=reid_likelihood,
+                calibrated_faces_only=live_calibrated,
+            )
             # Use the *original* anchors/evidence (pre-propagation) so the
             # duplicate-guard bypass only trusts a PH's own direct face — a
             # propagated anchor for another person must never grant the bypass.
@@ -783,6 +795,7 @@ class IdentityResolver:
                 last_independent_evidence_at_unix_ns=decision.last_independent_evidence_at_unix_ns,
                 config_hash=decision.config_hash,
                 model_set_version=decision.model_set_version,
+                evidence_at=evidence_at,
             )
             pending_decisions.append(
                 _PendingIdentityDecision(
@@ -980,7 +993,52 @@ class IdentityResolver:
             ),
             evidence_backed=False,
             authority=str(IdentityAuthority.NONE),
+            evidence_at=None,
         )
+
+    @staticmethod
+    def _commit_evidence_time(
+        entity: IdentityResolvableEntity,
+        decision: IdentityDecision,
+        *,
+        evidence_backed: bool,
+        round_time: datetime,
+        entity_obs_ids: frozenset[str],
+        face_anchors: list[FaceAnchor],
+        face_evidence: list[FaceEvidence],
+        reid_likelihood: PosteriorDist,
+        calibrated_faces_only: bool,
+    ) -> datetime | None:
+        """Return the independent-evidence time an evidence-backed commit stores, else None.
+
+        The time is the capture time of the newest clock evidence naming the decided identity
+        (``identity_evidence_time`` over the same anchors and flags as the clock gate), so a face
+        template applied after its faces does not extend the maintenance window. The clock never
+        moves backwards for an identity the PH already holds: an older template arriving after a
+        newer face keeps the newer time.
+        """
+        if not evidence_backed or decision.identity_id is None:
+            return None
+        evidence_at = identity_evidence_time(
+            identity_id=decision.identity_id,
+            round_time=round_time,
+            entity_obs_ids=entity_obs_ids,
+            entity_id=entity.entity_id,
+            face_anchors=face_anchors,
+            face_evidence=face_evidence,
+            reid_likelihood=reid_likelihood,
+            recognized_only=True,
+            calibrated_faces_only=calibrated_faces_only,
+        )
+        previous = entity.last_independent_identity_evidence_at
+        if (
+            evidence_at is not None
+            and previous is not None
+            and entity.current_identity_id == decision.identity_id
+            and previous > evidence_at
+        ):
+            return previous
+        return evidence_at
 
     # ------------------------------------------------------------------
     # ArcFace authority

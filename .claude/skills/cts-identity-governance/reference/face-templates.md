@@ -25,8 +25,9 @@ in an ambiguous crop never join. A face joins only with an embedding and a quali
 
 ## Lifecycle and resets
 
-- Faces leave `max_age_s` (15 s, the revival window) after capture; closing a PH is not a reset,
-  so a revived PH keeps its faces.
+- Faces leave `max_age_s` (15 s, the same as `world_tracker.ph_close_grace_s`) after capture;
+  closing a PH is not a reset, so a PH revived within that time keeps its faces. A PH revived
+  later (up to `world_tracker.revive_max_age_s`, 30 s) starts with an empty buffer, by design.
 - A PH's buffer resets when its committed identity changes to a different identity, on an operator
   merge, batch merge, split, correct, or batch correct (`routers/ph.py`), and when an identity is
   purged (`IdentityRosterSyncService`). Every reset invalidates the tickets issued before it, so a
@@ -55,9 +56,12 @@ provenance only), `match_score` = template raw similarity, `face_quality` = the 
   identity (`FaceAnchor.authority_eligible`); otherwise it votes but cannot decide.
   `cts_face_template_authority_blocked_total{reason}` counts `member_disagreement` and
   `uncalibrated`.
-- Known limitation: a template applied in a later round is committed with that round's time as its
-  evidence time, so it can extend the maintenance window by up to `max_age_s` past its newest real
-  face. Carry the newest member's capture time into the evidence timestamp before `enabled`.
+- Evidence time: a template is as old as its newest member face (`FaceAnchor.captured_at`), not
+  the round that applies it. `IdentityResolver` sets `IdentityDecision.evidence_at` from
+  `identity_evidence_time` (`app/tracking/identity/commit_policy.py`), and
+  `_resolve_identities` stores it as `last_independent_identity_evidence_at`, so a late template
+  never extends the maintenance window; `current_identity_committed_at` is still the round. The
+  clock never moves backwards for an identity the PH already holds.
 - Shadow: template anchors are `shadow_only` and feed their own evaluation (the live decision
   again with the templates added), counted in `cts_face_template_shadow_outcomes_total`; they never
   enter the calibrated-policy shadow. Like it, the outcome counts are a lower bound on the Unknown
