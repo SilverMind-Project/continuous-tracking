@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-from app.domain import FaceAnchor, FloorPoint, PersonHypothesis
+from app.domain import FloorPoint, PersonHypothesis
 from app.inference.schemas import DetectionBox
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.reid_policy import AdaptiveReidConfig, ReidNeedPolicy
@@ -39,7 +39,6 @@ _FRAME = FrameReady(
 def _ctx(
     dets: list[DetectionBox] | None = None,
     floor_points: dict[int, FloorPoint] | None = None,
-    face_anchors: list[FaceAnchor] | None = None,
 ) -> FrameContext:
     ctx = FrameContext(frame=_FRAME, event_time=_T0, capture_time=_T0)
     ctx.image = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -48,7 +47,6 @@ def _ctx(
     ctx.raw_detections = dets or []
     ctx._detection_ids = {i: f"det-{i}" for i in range(len(ctx.raw_detections))}
     ctx._floor_points_by_index = floor_points or {}
-    ctx.face_anchors = face_anchors or []
     return ctx
 
 
@@ -190,7 +188,6 @@ async def test_single_resident_steady_state_skips() -> None:
     ctx2.raw_detections = [_det()]
     ctx2._detection_ids = {0: "det-0"}
     ctx2._floor_points_by_index = {0: _fp(1000)}
-    ctx2.face_anchors = []
 
     await stage_inner.run(ctx2)
     reid.embed_batch.assert_not_called()
@@ -200,36 +197,6 @@ async def test_single_resident_steady_state_skips() -> None:
 # ---------------------------------------------------------------------------
 # Test 3: recognized face anchor always embeds
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_face_anchor_frame_embeds() -> None:
-    """Recognized face anchor overrides steady-state skip."""
-    reid = _fake_reid()
-    ph = _ph("ph-1", x_m=1.0)
-    tracker = _fake_tracker([ph])
-
-    policy = ReidNeedPolicy(config=_live_policy(), prior_maintenance_max_age_s=120.0)
-    policy._last_embed_at_by_ph = {"ph-1": _T0 - timedelta(seconds=2)}
-
-    stage = InferenceStage(
-        reid_embedder=reid,
-        reid_policy=policy,
-        world_tracker=tracker,
-    )
-    anchor = FaceAnchor(
-        person_id="alice",
-        camera_id="cam-1",
-        detection_id="det-0",
-        recognition_state="recognized",
-        match_score=0.92,
-        captured_at=_T0,
-    )
-    ctx = _ctx(dets=[_det()], floor_points={0: _fp(1000)}, face_anchors=[anchor])
-    await stage.run(ctx)
-
-    reid.embed_batch.assert_called_once()
-    assert len(ctx.embeddings) == 1
 
 
 # ---------------------------------------------------------------------------

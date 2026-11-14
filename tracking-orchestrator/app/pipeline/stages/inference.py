@@ -77,7 +77,6 @@ class InferenceStage(FrameStage):
                 detections=detections,
                 floor_points=ctx._floor_points_by_index,
                 open_phs=open_phs,
-                face_anchors=ctx.face_anchors,
                 camera_id=ctx.frame.camera_id,
                 now=ctx.event_time,
             )

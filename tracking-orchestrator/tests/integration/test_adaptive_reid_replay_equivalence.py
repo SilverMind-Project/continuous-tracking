@@ -165,7 +165,6 @@ def test_skip_rate_single_resident() -> None:
             detections=[det],
             floor_points={0: fp},
             open_phs=[ph],
-            face_anchors=[],
             camera_id="cam-1",
             now=now,
         )

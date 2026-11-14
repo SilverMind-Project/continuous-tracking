@@ -11,7 +11,7 @@ from typing import NamedTuple
 
 import pytest
 
-from app.domain import FaceAnchor, FloorPoint, PersonHypothesis
+from app.domain import FloorPoint, PersonHypothesis
 from app.inference.schemas import DetectionBox
 from app.pipeline.reid_policy import AdaptiveReidConfig, ReidNeedPolicy
 
@@ -75,17 +75,6 @@ def _ph(
     )
 
 
-def _face_anchor(recognized: bool = True) -> FaceAnchor:
-    return FaceAnchor(
-        person_id="alice" if recognized else "",
-        camera_id="cam-1",
-        detection_id="det-1",
-        recognition_state="recognized" if recognized else "unrecognized",
-        match_score=0.9 if recognized else 0.1,
-        captured_at=_T0,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Parametrized truth table
 # ---------------------------------------------------------------------------
@@ -96,7 +85,6 @@ class _Case(NamedTuple):
     detections: list[DetectionBox]
     floor_points: dict[int, FloorPoint]
     open_phs: list[PersonHypothesis]
-    face_anchors: list[FaceAnchor]
     camera_id: str
     now: datetime
     last_embed_at: dict[str, datetime]
@@ -111,38 +99,11 @@ _CASES: list[_Case] = [
         detections=[_det(), _det(x1=0.6)],
         floor_points={0: _fp(1000), 1: _fp(3000)},
         open_phs=[_ph("ph-1", 1.0, 1.0), _ph("ph-2", 3.0, 1.0)],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={},
         expected_embed=True,
         expected_reason_contains="multi_detect",
-    ),
-    # 2. Single detection, recognized face anchor → embed for gallery seeding.
-    _Case(
-        label="face_anchor",
-        detections=[_det()],
-        floor_points={0: _fp(1000)},
-        open_phs=[_ph("ph-1", 1.0, 1.0)],
-        face_anchors=[_face_anchor(recognized=True)],
-        camera_id="cam-1",
-        now=_T0,
-        last_embed_at={"ph-1": _T0 - timedelta(seconds=2)},  # fresh, but face anchor overrides
-        expected_embed=True,
-        expected_reason_contains="face_anchor",
-    ),
-    # 3. Single detection, unrecognized face anchor → not a trigger.
-    _Case(
-        label="unrecognized_anchor_does_not_trigger",
-        detections=[_det()],
-        floor_points={0: _fp(1000)},
-        open_phs=[_ph("ph-1", 1.0, 1.0)],
-        face_anchors=[_face_anchor(recognized=False)],
-        camera_id="cam-1",
-        now=_T0,
-        last_embed_at={"ph-1": _T0 - timedelta(seconds=2)},
-        expected_embed=False,
-        expected_reason_contains="steady_state",
     ),
     # 4. Single detection, no floor point → embed (can't check proximity).
     _Case(
@@ -150,7 +111,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={},  # no floor point
         open_phs=[_ph("ph-1", 1.0, 1.0)],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={},
@@ -163,7 +123,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={0: _fp(1000)},  # det at (1m,1m)
         open_phs=[_ph("ph-1", 5.0, 5.0)],  # PH far away
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={},
@@ -176,7 +135,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={0: _fp(1000)},  # det at (1m,1m)
         open_phs=[_ph("ph-1", 1.0, 1.0), _ph("ph-2", 1.2, 1.2)],  # both near
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={},
@@ -189,7 +147,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={0: _fp(1000)},
         open_phs=[_ph("ph-1", 1.0, 1.0, identity_id=None, committed_at=None)],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={},
@@ -202,7 +159,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={0: _fp(1000)},
         open_phs=[_ph("ph-1", 1.0, 1.0, identity_id="alice", committed_at=None)],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={},
@@ -223,7 +179,6 @@ _CASES: list[_Case] = [
                 committed_at=_T0 - timedelta(seconds=_PRIOR_MAINTENANCE_S - _REFRESH_S + 1),
             )
         ],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={"ph-1": _T0 - timedelta(seconds=2)},
@@ -236,7 +191,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={0: _fp(1000)},
         open_phs=[_ph("ph-1", 1.0, 1.0)],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={},  # never embedded
@@ -249,7 +203,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={0: _fp(1000)},
         open_phs=[_ph("ph-1", 1.0, 1.0)],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={"ph-1": _T0 - timedelta(seconds=_REFRESH_S)},
@@ -262,7 +215,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={0: _fp(1000)},
         open_phs=[_ph("ph-1", 1.0, 1.0)],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={"ph-1": _T0 - timedelta(seconds=_REFRESH_S - 1)},
@@ -275,7 +227,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={0: _fp(1000)},  # det at (1m, 1m)
         open_phs=[_ph("ph-1", 1.0 + _PROXIMITY_M, 1.0)],  # exactly at gate
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={"ph-1": _T0 - timedelta(seconds=_REFRESH_S - 1)},
@@ -288,7 +239,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={0: _fp(1000)},  # det at (1m, 1m)
         open_phs=[_ph("ph-1", 1.0 + _PROXIMITY_M + 0.01, 1.0)],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
         last_embed_at={},
@@ -301,7 +251,6 @@ _CASES: list[_Case] = [
         detections=[_det()],
         floor_points={0: _fp(1000)},
         open_phs=[_ph("ph-1", 1.0, 1.0)],
-        face_anchors=[],
         camera_id="cam-overlap",
         now=_T0,
         last_embed_at={"ph-1": _T0 - timedelta(seconds=_REFRESH_S - 1)},
@@ -327,7 +276,6 @@ def test_policy_truth_table(case: _Case) -> None:
         detections=case.detections,
         floor_points=case.floor_points,
         open_phs=case.open_phs,
-        face_anchors=case.face_anchors,
         camera_id=case.camera_id,
         now=case.now,
     )
@@ -362,7 +310,6 @@ def test_steady_state_after_record_embed() -> None:
         detections=[_det()],
         floor_points={0: _fp(1000)},
         open_phs=[ph],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0,
     )
@@ -375,7 +322,6 @@ def test_steady_state_after_record_embed() -> None:
         detections=[_det()],
         floor_points={0: _fp(1000)},
         open_phs=[ph],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0 + timedelta(seconds=_REFRESH_S - 1),
     )
@@ -393,7 +339,6 @@ def test_prune_closed_phs() -> None:
         detections=[_det()],
         floor_points={0: _fp(1000)},
         open_phs=[_ph("ph-1", 1.0, 1.0)],
-        face_anchors=[],
         camera_id="cam-1",
         now=_T0 + timedelta(seconds=2),
     )

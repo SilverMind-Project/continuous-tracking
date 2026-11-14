@@ -57,7 +57,7 @@ ArcFace authority is unchanged: calibrated confidence of at least
 Under `shadow`, a recognized face below the legacy floor becomes a `FaceAnchor` with
 `shadow_only=True` and outcome `emitted_shadow_only` (migration 0007). The stage writes it to
 `FrameContext.shadow_face_anchors`, never to `face_anchors`, and builds no `FaceEvidence` for it,
-so association, dedup, gallery minting (`ReIDCandidateStage`), ReID cadence, and evidence records
+so association, dedup, gallery minting (`ReIDCandidateStage`), and evidence records
 cannot see it. `WorldTrackingStage` appends it to the face list it passes to `WorldTracker.step`
 for identity resolution only, and `IdentityResolver.resolve` removes it from the live list before
 propagation. It is therefore excluded from authority, the evidence clock, both evidence sets,

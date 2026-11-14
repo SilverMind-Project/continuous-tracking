@@ -10,7 +10,9 @@ Skip condition (steady-state only):
   that PH has a committed identity that is not approaching expiry,
   and we embedded for it less than refresh_interval_s ago.
 
-Every other case triggers embedding.
+Every other case triggers embedding. Gallery seeding needs no rule of its own: a detection
+with no open PH nearby, or whose PH is past the refresh interval, is always embedded. The policy
+runs before face identification, so this frame's faces are not available to it.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 
-from ..domain import FaceAnchor, FloorPoint, PersonHypothesis
+from ..domain import FloorPoint, PersonHypothesis
 from ..inference.schemas import DetectionBox
 
 
@@ -59,7 +61,6 @@ class ReidNeedPolicy:
         detections: list[DetectionBox],
         floor_points: dict[int, FloorPoint],
         open_phs: list[PersonHypothesis],
-        face_anchors: list[FaceAnchor],
         camera_id: str,
         now: datetime,
     ) -> tuple[bool, str, str | None]:
@@ -87,10 +88,6 @@ class ReidNeedPolicy:
         # Multiple detections → ambiguous assignment.
         if len(detections) != 1:
             return True, "multi_detect", None
-
-        # Recognized face anchor present → gallery seeding may be needed.
-        if any(a.recognition_state == "recognized" for a in face_anchors):
-            return True, "face_anchor", None
 
         fp = floor_points.get(0)
         if fp is None:
