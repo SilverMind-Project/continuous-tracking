@@ -8,7 +8,7 @@ threshold) and to share face-anchor evidence within the same GlobalTrack.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from structlog import get_logger
 
@@ -16,6 +16,8 @@ from ..domain import OverlapGroup
 from .cc_client import CognitiveCompanionClient
 
 logger = get_logger(__name__)
+
+OVERLAP_GROUPS_PATH: Final = "/api/v1/cts/overlap_groups"
 
 
 async def fetch_overlap_groups(client: CognitiveCompanionClient) -> list[OverlapGroup]:
@@ -25,11 +27,18 @@ async def fetch_overlap_groups(client: CognitiveCompanionClient) -> list[Overlap
     empty cross-camera topology.
     """
     try:
-        raw: list[dict[str, Any]] = await client.get("/api/v1/cts/overlap_groups")
+        raw: object = await client.get(OVERLAP_GROUPS_PATH)
     except Exception as exc:
         logger.exception("overlap_groups_fetch_failed")
         raise RuntimeError("Failed to fetch overlap groups from CC") from exc
 
+    groups = parse_overlap_groups(raw)
+    logger.info("Fetched camera overlap groups from CC", group_count=len(groups))
+    return groups
+
+
+def parse_overlap_groups(raw: object) -> list[OverlapGroup]:
+    """Validate CC's overlap-group list; skip malformed entries with one warning."""
     if not isinstance(raw, list):
         raise TypeError("CC overlap_groups response must be a list")
 
@@ -56,7 +65,6 @@ async def fetch_overlap_groups(client: CognitiveCompanionClient) -> list[Overlap
         )
     if skipped:
         logger.warning("Skipped malformed overlap groups", count=skipped)
-    logger.info("Fetched camera overlap groups from CC", group_count=len(groups))
     return groups
 
 
