@@ -164,18 +164,20 @@ class RedisStreamsTransport:
                 break
             next_cursor = result[0]
             entries = result[1] if len(result) > 1 else []
-            if not entries:
+            deleted_ids = result[2] if len(result) > 2 else []
+            if not entries and not deleted_ids:
                 break
             msg_ids = [entry[0] if isinstance(entry, (tuple, list)) else entry for entry in entries]
-            await self._redis.xack(
-                self._config.frames_stream,
-                self._config.consumer_group,
-                *msg_ids,
-            )
-            count = len(msg_ids)
+            if msg_ids:
+                await self._redis.xack(
+                    self._config.frames_stream,
+                    self._config.consumer_group,
+                    *msg_ids,
+                )
+            count = len(msg_ids) + len(deleted_ids)
             reclaimed_total += count
             metrics.metrics.frames_abandoned_total.inc(count)
-            if next_cursor in ("0-0", b"0-0", None, ""):
+            if next_cursor in ("0-0", b"0-0", None, "", b""):
                 break
             cursor = next_cursor
         if reclaimed_total:

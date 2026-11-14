@@ -561,6 +561,7 @@ class TestPendingAcksEviction:
         mock_redis.xgroup_create = AsyncMock(return_value=True)
         mock_redis.xautoclaim = AsyncMock(
             side_effect=[
+                (b"1-0", [], [b"0-1", b"0-2"]),
                 (b"3-0", [(b"1-0", {b"frame": b"x"}), (b"2-0", {b"frame": b"y"})], []),
                 (b"0-0", [(b"3-0", {b"frame": b"z"})], []),
             ]
@@ -572,9 +573,9 @@ class TestPendingAcksEviction:
             transport = RedisStreamsTransport(TransportConfig(pending_reclaim_min_idle_s=300))
             await transport.connect()
 
-        assert mock_redis.xautoclaim.await_count == 2
+        assert mock_redis.xautoclaim.await_count == 3
         assert mock_redis.xack.await_count == 2
-        assert fresh.frames_abandoned_total._value.get() == 3.0
+        assert fresh.frames_abandoned_total._value.get() == 5.0
 
     @pytest.mark.asyncio
     async def test_pending_count_reads_pending_and_lag_from_xinfo_groups(self) -> None:
