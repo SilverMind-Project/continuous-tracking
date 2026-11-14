@@ -28,7 +28,7 @@ def client(repo: InMemoryCameraTopologyRepository) -> Iterator[TestClient]:
 
 
 @pytest.mark.asyncio
-async def test_transitions_sorted_by_observations_with_gate_flag(
+async def test_transitions_sorted_by_observations(
     repo: InMemoryCameraTopologyRepository, client: TestClient
 ) -> None:
     at = datetime(2026, 11, 14, 10, 0, 0, tzinfo=UTC)
@@ -37,15 +37,14 @@ async def test_transitions_sorted_by_observations_with_gate_flag(
 
     body = client.get("/internal/topology/transitions").json()
 
-    assert body["min_observations_to_gate"] == 3
     first, second = body["transitions"]
-    assert (first["from_camera"], first["to_camera"], first["gates_revival"]) == (
+    assert (first["from_camera"], first["to_camera"], first["observation_count"]) == (
         "cam-b",
         "cam-a",
-        True,
+        9,
     )
     assert first["std_transit_s"] == pytest.approx(2.0)
-    assert second["gates_revival"] is False
+    assert second["observation_count"] == 2
 
 
 def test_no_transitions_learned_yet(client: TestClient) -> None:

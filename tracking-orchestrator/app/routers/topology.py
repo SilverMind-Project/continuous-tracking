@@ -1,8 +1,10 @@
-"""Learned camera-to-camera transitions, read-only.
+"""Learned camera-to-camera handoff statistics, read-only.
 
-CTS learns how long people take to walk between two cameras from accepted cross-camera
-handoffs (``camera_topology_edges``). The cross-camera revival gate uses those statistics; this
-endpoint lets the CC admin show them next to the operator-declared overlap groups.
+Every accepted cross-camera revival or continuation records the delay between the earlier
+PH's close and the new sighting (``camera_topology_edges``). The delay is measured from
+``closed_at``, which comes at least ``ph_close_grace_s`` after the last sighting, so it says
+how often and how soon tracking hands a person from one camera to another; it is not a walk
+time. This endpoint lets the CC admin show it next to the operator-declared overlap groups.
 
 Endpoints
 ---------
@@ -18,7 +20,6 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ..storage.base import CameraTopologyRepository, InMemoryCameraTopologyRepository
-from ..tracking.world.topology import MIN_OBSERVATIONS_FOR_LEARNED
 
 router = APIRouter(prefix="/internal/topology", tags=["topology-internal"])
 
@@ -42,13 +43,10 @@ class LearnedTransitionOut(BaseModel):
     mean_transit_s: float
     std_transit_s: float
     last_updated_at: datetime | None
-    # True once enough handoffs exist for the revival gate to reject a too-fast crossing.
-    gates_revival: bool
 
 
 class LearnedTransitionsResponse(BaseModel):
     transitions: list[LearnedTransitionOut]
-    min_observations_to_gate: int
 
 
 @router.get("/transitions", response_model=LearnedTransitionsResponse)
@@ -69,9 +67,7 @@ async def list_transitions(
                 mean_transit_s=e.mean_transit_s,
                 std_transit_s=math.sqrt(max(e.variance_transit_s2, 0.0)),
                 last_updated_at=e.last_updated_at,
-                gates_revival=e.observation_count >= MIN_OBSERVATIONS_FOR_LEARNED,
             )
             for e in edges
         ],
-        min_observations_to_gate=MIN_OBSERVATIONS_FOR_LEARNED,
     )

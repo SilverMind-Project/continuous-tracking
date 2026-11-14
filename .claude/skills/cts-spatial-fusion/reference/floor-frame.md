@@ -44,11 +44,11 @@ within 5 m, at or below 0.30 m otherwise. A camera that cannot meet it stays unc
 | --- | --- | --- | --- |
 | Calibration (homography) | Where on the floor is this pixel? | Operator, per camera | Floor position, floor-distance dedup, speed, rooms by polygon |
 | Overlap group | Do these cameras see the same floor area at the same time? | Operator, per set of cameras | Group appearance dedup of uncalibrated cameras, co-presence links, always-embed ReID cadence |
-| Learned transition | How long does a walk from camera A's view to camera B's take? | Learned from accepted handoffs (`camera_topology_edges`) | Cross-camera revival rejects a crossing faster than the learned walk |
+| Learned handoff statistics | How often, and how soon after a track closes, does tracking hand a person from camera A to B? | Learned from accepted handoffs (`camera_topology_edges`) | Display only: the revival plausibility check cannot reject at the production threshold, and the delay is measured from the earlier track's close, not its last sighting |
 
 Overlap is not adjacency: overlapping cameras see one person at the same instant, adjacent
-cameras see them one after the other. There is no operator-edited adjacency graph; transit
-times are learned. Two calibrated cameras need no overlap group, because their observations
+cameras see them one after the other. There is no operator-edited adjacency graph, and
+cameras along a walking route need no configuration. Two calibrated cameras need no overlap group, because their observations
 merge by floor distance; a group matters for any pair where at least one camera is uncalibrated.
 
 ## Rules
