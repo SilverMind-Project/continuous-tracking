@@ -596,6 +596,10 @@ world_tracker:
   initial_position_sigma_m: 1.0
   initial_velocity_sigma_m_s: 2.0
   velocity_decay_s: 3.0
+  # When true, Kalman prediction integrates exponential velocity decay over dt
+  # (dx = v * tau * (1 - exp(-dt / tau))) and propagates covariance through the
+  # damped transition matrix. Default false until replay evaluation completes.
+  damped_velocity_prediction: false
   # ---- Adaptive zero-velocity update (ZUPT) ----
   # Treat only sustained near-still tracks as stationary. Exit begins at the
   # bottom of the clinically relevant slow-shuffle band (0.2-0.4 m/s) so
@@ -623,6 +627,10 @@ world_tracker:
   dedup_residual_coeff_k: 1.0
   dedup_max_distance_ceiling_m: 1.5
   dedup_require_no_face_conflict: true
+  # Pairwise distance gate allowance (m/s) per second of capture-time skew between
+  # two cameras in the same batch, still capped at dedup_max_distance_ceiling_m.
+  # 0.0 disables the skew term; set to ~1.4 m/s to cover normal walking speed.
+  dedup_time_skew_speed_m_s: 0.0
   # ---- PH revival ----
   # M2 enabled 2026-06-02 (phase 1) after make ci guardrails passed.
   enable_ph_revival: true

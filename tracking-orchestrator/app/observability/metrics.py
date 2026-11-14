@@ -229,6 +229,7 @@ class Metrics:
     # ---- Low-confidence detection recovery ----
     worldtracker_low_band_matches_total: Counter
     worldtracker_low_band_dropped_total: Counter
+    worldtracker_out_of_order_observations_total: Counter
 
     # ---- Low-confidence band measurement (diagnostic, gated, read-only) ----
     # Quantifies how often the detector_confidence cut hides a present person:
@@ -823,6 +824,11 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         worldtracker_low_band_dropped_total=_counter(
             "cts_worldtracker_low_band_dropped_total",
             "Low-band observations dropped (no open PH within recovery gate).",
+        ),
+        worldtracker_out_of_order_observations_total=_counter(
+            "cts_worldtracker_out_of_order_observations_total",
+            "Observations whose captured_at preceded the matched PH's last_seen_at.",
+            ["camera_id"],
         ),
         # ---- Low-confidence band measurement (diagnostic) ----
         detector_band_frames_total=_counter(

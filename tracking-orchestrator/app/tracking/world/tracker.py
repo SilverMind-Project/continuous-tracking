@@ -48,7 +48,7 @@ from ..orientation import update_view_prototypes
 from .appearance_policy import AppearanceDecision, evaluate_appearance_update
 from .association import associate
 from .config import WorldTrackerConfig
-from .dedup import dedup_observations
+from .dedup import _finalize_singleton, dedup_observations
 from .helpers import (
     is_in_any_room_polygon,
     position_sigma_m,
@@ -166,6 +166,7 @@ class WorldTrackerResult:
     # ReIDCandidateStage uses these for origin_tracklet_id lookups.
     det_to_observation_id: dict[str, str] = field(default_factory=dict)
     revived_ph_ids: frozenset[str] = frozenset()
+    coasting_ph_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -410,16 +411,25 @@ class WorldTracker:
         active_phs = await self._ph_repo.list_open()
         # Cache for ReidNeedPolicy (InferenceStage proximity check next frame).
         self._last_open_phs = list(active_phs)
+        stored_states: list[KalmanState] = []
         predicted_states: list[KalmanState] = []
+        predicted_by_ph: dict[str, KalmanState] = {}
         for ph in active_phs:
             ks = KalmanState(
                 mean=np.array(ph.state_mean, dtype=np.float64),
                 covariance=np.array(ph.state_cov, dtype=np.float64).reshape(4, 4),
                 updated_at=ph.last_seen_at,
             )
-            predicted_states.append(
-                predict(ks, now, cfg.process_noise_accel_m_s2, cfg.velocity_decay_s)
+            stored_states.append(ks)
+            pred_ks = predict(
+                ks,
+                now,
+                cfg.process_noise_accel_m_s2,
+                cfg.velocity_decay_s,
+                damped=cfg.damped_velocity_prediction,
             )
+            predicted_states.append(pred_ks)
+            predicted_by_ph[ph.ph_id] = pred_ks
 
         # 2. Build observation lists; run cross-camera dedup before association.
         raw_observations = observations  # keep original for cluster expansion
@@ -528,28 +538,83 @@ class WorldTracker:
         # 4. Update matched PHs.
         for ph_idx, obs_idx in assignment.matched:
             ph = active_phs[ph_idx]
-            ks = predicted_states[ph_idx]
             obs = observations[obs_idx]  # deduped representative
+            src_ids = cluster_map.get(obs.detection_id, (obs.detection_id,))
+            cluster_source_obs = [obs_by_det_id[did] for did in src_ids if did in obs_by_det_id]
+            cluster_source_obs.sort(key=lambda o: (o.captured_at, o.camera_id, o.detection_id))
+            distinct_capture_times = {o.captured_at for o in cluster_source_obs}
 
-            obs_r = (
-                tuple_to_cov2x2(obs.floor_cov_random)
-                if obs.floor_cov_random is not None and obs.floor_point.calibrated
-                else isotropic_cov(cfg.observation_noise_m)
-            )
-            new_state = update(
-                ks,
-                obs.floor_point.x_mm / 1000.0,
-                obs.floor_point.y_mm / 1000.0,
-                obs_r,
-            )
-            new_state = self._maybe_apply_zero_velocity_update(
-                ph_id=ph.ph_id,
-                predicted_state=ks,
-                updated_state=new_state,
-                observation_x_m=obs.floor_point.x_mm / 1000.0,
-                observation_y_m=obs.floor_point.y_mm / 1000.0,
-                observation_cov_m2=obs_r,
-            )
+            cur_state = stored_states[ph_idx]
+            cur_last_seen_at = ph.last_seen_at
+            if len(cluster_source_obs) > 1 and len(distinct_capture_times) > 1:
+                # Multi-camera cluster with distinct capture times: predict and update
+                # sequentially at each observation's own capture time.
+                for src_obs in cluster_source_obs:
+                    finalized_src = _finalize_singleton(src_obs, cfg.k_cal)
+                    if finalized_src.captured_at < cur_last_seen_at:
+                        m.worldtracker_out_of_order_observations_total.labels(
+                            camera_id=finalized_src.camera_id
+                        ).inc()
+                    pred_at_obs = predict(
+                        cur_state,
+                        finalized_src.captured_at,
+                        cfg.process_noise_accel_m_s2,
+                        cfg.velocity_decay_s,
+                        damped=cfg.damped_velocity_prediction,
+                    )
+                    src_r = (
+                        tuple_to_cov2x2(finalized_src.floor_cov_random)
+                        if finalized_src.floor_cov_random is not None
+                        and finalized_src.floor_point.calibrated
+                        else isotropic_cov(cfg.observation_noise_m)
+                    )
+                    fx_src = finalized_src.floor_point.x_mm / 1000.0
+                    fy_src = finalized_src.floor_point.y_mm / 1000.0
+                    upd_state = update(pred_at_obs, fx_src, fy_src, src_r)
+                    cur_state = self._maybe_apply_zero_velocity_update(
+                        ph_id=ph.ph_id,
+                        predicted_state=pred_at_obs,
+                        updated_state=upd_state,
+                        observation_x_m=fx_src,
+                        observation_y_m=fy_src,
+                        observation_cov_m2=src_r,
+                    )
+                    if finalized_src.captured_at > cur_last_seen_at:
+                        cur_last_seen_at = finalized_src.captured_at
+                new_state = cur_state
+            else:
+                # Singleton or simultaneous multi-camera cluster: predict from the PH's
+                # stored state at last_seen_at to obs.captured_at, then apply one update.
+                for src_obs in cluster_source_obs or [obs]:
+                    if src_obs.captured_at < cur_last_seen_at:
+                        m.worldtracker_out_of_order_observations_total.labels(
+                            camera_id=src_obs.camera_id
+                        ).inc()
+                pred_at_obs = predict(
+                    cur_state,
+                    obs.captured_at,
+                    cfg.process_noise_accel_m_s2,
+                    cfg.velocity_decay_s,
+                    damped=cfg.damped_velocity_prediction,
+                )
+                obs_r = (
+                    tuple_to_cov2x2(obs.floor_cov_random)
+                    if obs.floor_cov_random is not None and obs.floor_point.calibrated
+                    else isotropic_cov(cfg.observation_noise_m)
+                )
+                fx_obs = obs.floor_point.x_mm / 1000.0
+                fy_obs = obs.floor_point.y_mm / 1000.0
+                new_state = update(pred_at_obs, fx_obs, fy_obs, obs_r)
+                new_state = self._maybe_apply_zero_velocity_update(
+                    ph_id=ph.ph_id,
+                    predicted_state=pred_at_obs,
+                    updated_state=new_state,
+                    observation_x_m=fx_obs,
+                    observation_y_m=fy_obs,
+                    observation_cov_m2=obs_r,
+                )
+                if obs.captured_at > cur_last_seen_at:
+                    cur_last_seen_at = obs.captured_at
             # contamination guard: a geometrically valid match may still be
             # an appearance outlier. When it is, the Kalman state and
             # observation_count still advance (the person was there) but
@@ -590,7 +655,6 @@ class WorldTracker:
             )
 
             # Expand active_cameras to include all cameras from the dedup cluster.
-            src_ids = cluster_map.get(obs.detection_id, (obs.detection_id,))
             cluster_cameras = frozenset(
                 obs_by_det_id[did].camera_id for did in src_ids if did in obs_by_det_id
             )
@@ -605,7 +669,7 @@ class WorldTracker:
                     float(new_state.mean[3]),
                 ),
                 state_cov=tuple(float(v) for v in new_state.covariance.flatten()),
-                last_seen_at=obs.captured_at,
+                last_seen_at=cur_last_seen_at,
                 last_seen_camera=obs.camera_id,
                 observation_count=ph.observation_count + 1,
                 gallery_mean=new_gallery_mean,
@@ -636,13 +700,12 @@ class WorldTracker:
                 if src_det_id:
                     det_to_ph[src_det_id] = ph.ph_id
 
-            # Persist ALL source observations (not just the representative) so that
-            # both cameras' raw rows land on the PH (U1 requirement).
-            for src_det_id in src_ids:
-                src_obs = obs_by_det_id.get(src_det_id, obs)
+            # Persist ALL source observations in capture-time order so that
+            # every camera's raw row lands on the PH.
+            for src_obs in cluster_source_obs or [obs]:
                 saved_obs_id = await self._obs_repo.save(src_obs, ph_id=ph.ph_id)
-                if src_det_id:
-                    det_to_observation_id[src_det_id] = saved_obs_id
+                if src_obs.detection_id:
+                    det_to_observation_id[src_obs.detection_id] = saved_obs_id
 
         # 5. Spawn new PHs for unmatched observations (or revive recently-closed).
         # Hoist shared queries outside the per-observation loop to avoid N DB
@@ -777,7 +840,7 @@ class WorldTracker:
                         float(ks.mean[3]),
                     ),
                     state_cov=tuple(float(v) for v in ks.covariance.flatten()),
-                    last_seen_at=obs.captured_at,
+                    last_seen_at=max(closed.last_seen_at, obs.captured_at),
                     last_seen_camera=obs.camera_id,
                     observation_count=closed.observation_count + 1,
                     gallery_mean=new_gallery_mean,
@@ -985,8 +1048,18 @@ class WorldTracker:
                 for local_ph_idx, lb_obs_idx in lb_assignment.matched:
                     ph_idx = unmatched_after_pass1[local_ph_idx]
                     ph = active_phs[ph_idx]
-                    ks = predicted_states[ph_idx]
                     obs = lb_obs_raw[lb_obs_idx]
+                    if obs.captured_at < ph.last_seen_at:
+                        m.worldtracker_out_of_order_observations_total.labels(
+                            camera_id=obs.camera_id
+                        ).inc()
+                    ks = predict(
+                        stored_states[ph_idx],
+                        obs.captured_at,
+                        cfg.process_noise_accel_m_s2,
+                        cfg.velocity_decay_s,
+                        damped=cfg.damped_velocity_prediction,
+                    )
                     fx = obs.floor_point.x_mm / 1000.0
                     fy = obs.floor_point.y_mm / 1000.0
                     obs_r = isotropic_cov(cfg.observation_noise_m)
@@ -1010,7 +1083,7 @@ class WorldTracker:
                             float(new_state.mean[3]),
                         ),
                         state_cov=tuple(float(v) for v in new_state.covariance.flatten()),
-                        last_seen_at=obs.captured_at,
+                        last_seen_at=max(ph.last_seen_at, obs.captured_at),
                         last_seen_camera=obs.camera_id,
                         active_cameras=ph.active_cameras | frozenset([obs.camera_id]),
                         last_floor_speed_m_s=speed_m_s(
@@ -1040,13 +1113,17 @@ class WorldTracker:
         # PHs matched in the low-band second pass (5a) already have their state
         # advanced and last_seen_at refreshed; skip them here so they are not
         # double-counted or prematurely closed.
+        coasting_ph_ids: set[str] = set()
         for ph_idx in assignment.unmatched_phs:
             if ph_idx in lb_matched_ph_indices:
                 continue
             ph = active_phs[ph_idx]
-            updated_phs.append(
-                _advance_unmatched_ph(ph, predicted_states[ph_idx], now, cfg.ph_close_grace_s)
+            advanced_ph = _advance_unmatched_ph(
+                ph, predicted_states[ph_idx], now, cfg.ph_close_grace_s
             )
+            if advanced_ph.closed_at is None:
+                coasting_ph_ids.add(advanced_ph.ph_id)
+            updated_phs.append(advanced_ph)
 
         # 8. Persist all updated PHs.
         for ph in updated_phs:
@@ -1121,10 +1198,23 @@ class WorldTracker:
         for ph in updated_phs:
             if ph.observation_count < cfg.min_observations_to_publish:
                 continue
+            is_coasting = ph.ph_id in coasting_ph_ids
+            if is_coasting and ph.ph_id in predicted_by_ph:
+                pred_ks = predicted_by_ph[ph.ph_id]
+                snap_mean = (
+                    float(pred_ks.mean[0]),
+                    float(pred_ks.mean[1]),
+                    float(pred_ks.mean[2]),
+                    float(pred_ks.mean[3]),
+                )
+                snap_cov = tuple(float(v) for v in pred_ks.covariance.flatten())
+            else:
+                snap_mean = ph.state_mean
+                snap_cov = ph.state_cov
             primary_camera = self._primary_camera.get(ph.ph_id, ph.last_seen_camera)
             room_id, room_name = resolve_room(
-                ph.state_mean[0],
-                ph.state_mean[1],
+                snap_mean[0],
+                snap_mean[1],
                 primary_camera,
                 room_polygons,
                 camera_room_map,
@@ -1141,11 +1231,11 @@ class WorldTracker:
                     camera_id=primary_camera,
                     frame_index=obs_frame_index,
                     captured_at=ph.last_seen_at,
-                    floor_x_m=ph.state_mean[0],
-                    floor_y_m=ph.state_mean[1],
-                    floor_vx_m_s=ph.state_mean[2],
-                    floor_vy_m_s=ph.state_mean[3],
-                    position_sigma_m=position_sigma_m(ph.state_cov),
+                    floor_x_m=snap_mean[0],
+                    floor_y_m=snap_mean[1],
+                    floor_vx_m_s=snap_mean[2],
+                    floor_vy_m_s=snap_mean[3],
+                    position_sigma_m=position_sigma_m(snap_cov),
                     contributing_camera_count=contributing_camera_count,
                     footpoint_reliable=footpoint_reliable,
                     identity_id=_sanitize_identity_id(
@@ -1170,9 +1260,7 @@ class WorldTracker:
                     mean_quality=ph.mean_quality,
                     active_cameras=ph.active_cameras,
                     floor_speed_m_s=(
-                        speed_m_s(ph.state_mean)
-                        if ph_floor_calibrated.get(ph.ph_id, False)
-                        else None
+                        speed_m_s(snap_mean) if ph_floor_calibrated.get(ph.ph_id, False) else None
                     ),
                     evidence_json=str(id_data.get("evidence_json", "{}")),
                     inferred_identity_id=str(id_data.get("inferred_identity_id") or ""),
@@ -1186,6 +1274,7 @@ class WorldTracker:
                     ),
                     config_hash=str(id_data.get("config_hash") or ""),
                     model_set_version=str(id_data.get("model_set_version") or ""),
+                    coasting=is_coasting,
                 )
             )
 
@@ -1198,6 +1287,7 @@ class WorldTracker:
             det_to_ph=det_to_ph,
             det_to_observation_id=det_to_observation_id,
             revived_ph_ids=frozenset(revived_ph_ids),
+            coasting_ph_ids=frozenset(coasting_ph_ids),
         )
 
     def _update_primary_camera(self, ph_id: str, best_camera: str) -> None:
@@ -1355,31 +1445,19 @@ def _advance_unmatched_ph(
     now: datetime,
     ph_close_grace_s: float,
 ) -> PersonHypothesis:
-    """Return a closed or drift-predicted PH for one unmatched active track.
+    """Close an unmatched PH past ph_close_grace_s or keep its stored state unchanged.
 
-    Closes the PH (sets closed_at) when it has not been observed for longer
-    than ph_close_grace_s and emits lifetime metrics.  Otherwise advances
-    the Kalman state to the predicted position without touching identity or
-    gallery state.
+    Stored state_mean and state_cov always represent the posterior at last_seen_at;
+    in-round predictions are transient and never written back to the PH.
     """
+    _ = predicted_ks
     grace = (now - ph.last_seen_at).total_seconds()
     if grace > ph_close_grace_s:
         _metrics.metrics.world_tracker_ph_closed_total.inc()
         _metrics.metrics.ph_lifetime_seconds.observe((now - ph.born_at).total_seconds())
         _metrics.metrics.ph_observations_at_close.observe(ph.observation_count)
         return replace(ph, closed_at=now)
-    # Keep open but unobserved; advance state to Kalman prediction.
-    ks = predicted_ks
-    return replace(
-        ph,
-        state_mean=(
-            float(ks.mean[0]),
-            float(ks.mean[1]),
-            float(ks.mean[2]),
-            float(ks.mean[3]),
-        ),
-        state_cov=tuple(float(v) for v in ks.covariance.flatten()),
-    )
+    return ph
 
 
 # ---------------------------------------------------------------------------

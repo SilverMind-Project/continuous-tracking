@@ -24,6 +24,11 @@ class WorldTrackerConfig:
 
     # ---- Velocity decay for unobserved PHs ----
     velocity_decay_s: float = 3.0
+    # When enabled, predict() integrates exponential velocity decay over dt
+    # (dx = v * tau * (1 - exp(-dt / tau))) and propagates covariance through
+    # the damped transition matrix instead of scaling velocity before a linear
+    # dt step. Default false until replay evaluation confirms no regressions.
+    damped_velocity_prediction: bool = False
 
     # ---- Adaptive zero-velocity update (ZUPT) ----
     # Enter below a sustained near-still speed; exit at the bottom of the
@@ -179,6 +184,10 @@ class WorldTrackerConfig:
     dedup_residual_coeff_k: float = 1.0
     dedup_max_distance_ceiling_m: float = 1.5
     dedup_require_no_face_conflict: bool = True
+    # Additional pairwise distance gate (m per second of capture-time skew) for
+    # cross-camera observations captured at slightly different instants in one
+    # batch. Bounded by dedup_max_distance_ceiling_m. 0.0 disables the term.
+    dedup_time_skew_speed_m_s: float = 0.0
 
     # ---- Low-confidence detection recovery (BYTE-style second association) ----
     # When enabled, YOLO detections in [low_confidence_floor, detector_confidence) are

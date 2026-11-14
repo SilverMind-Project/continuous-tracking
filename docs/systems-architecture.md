@@ -80,20 +80,20 @@ For overlapping cameras with opposite perspectives (front on A, back on B), CTS 
 
 ### WorldTracker.step: the 10-step loop
 
-Each frame, `WorldTracker.step` (`app/tracking/world/tracker.py`) runs:
+Each frame, `WorldTracker.step` (`app/tracking/world/tracker.py`) runs on the capture-time clock (`now = max(ctx.capture_time)`):
 
 ```mermaid
 flowchart TD
-  s1["1. Load open PHs, Kalman predict to now"] --> s2
+  s1["1. Load open PHs, predict from last_seen_at to now for association"] --> s2
   s2["2. dedup_observations()\ncollapse cross-camera duplicates"] --> s3
   s3["3. associate()\nHungarian over cost matrix with gating"] --> s4
-  s4["4. Update matched PHs\nKalman update + EMAs + expand cameras"] --> s5
+  s4["4. Update matched PHs\npredict from last_seen_at to obs.captured_at,\nKalman update + EMAs + expand cameras"] --> s5
   s5["5. Spawn PHs for unmatched obs"] --> s6
   s6["6. Emit PHContinuationCandidate for nearby closed PHs"] --> s7
-  s7["7. Close unmatched PHs past ph_close_grace_s"] --> s8
+  s7["7. Close unmatched PHs past ph_close_grace_s;\notherwise keep stored state unchanged"] --> s8
   s8["8. Persist all updated PHs"] --> s9
   s9["9. Identity resolution"] --> s10
-  s10["10. Build WorldFrameSnapshot per PH"]
+  s10["10. Build WorldFrameSnapshot per PH\n(unobserved PHs use in-round prediction, coasting=True)"]
 ```
 
 ### Home-camera nuances (load-bearing)

@@ -284,10 +284,15 @@ def _effective_distance_gate_m(
     obs_j: WorldObservation,
     cfg: WorldTrackerConfig,
 ) -> float:
-    """Return the pairwise dedup gate widened by calibration residuals."""
+    """Return the pairwise dedup gate widened by calibration residuals and capture-time skew."""
     residual_i = obs_i.floor_residual_m or 0.0
     residual_j = obs_j.floor_residual_m or 0.0
-    widened = cfg.dedup_max_distance_m + cfg.dedup_residual_coeff_k * (residual_i + residual_j)
+    skew_s = abs((obs_i.captured_at - obs_j.captured_at).total_seconds())
+    widened = (
+        cfg.dedup_max_distance_m
+        + cfg.dedup_residual_coeff_k * (residual_i + residual_j)
+        + cfg.dedup_time_skew_speed_m_s * skew_s
+    )
     return min(widened, cfg.dedup_max_distance_ceiling_m)
 
 
@@ -335,6 +340,7 @@ def _build_representative(
     # Best face anchor in the cluster; the best observation's own anchor wins ties.
     cluster_faces = [obs.face_anchor for obs in (best, *cluster) if obs.face_anchor is not None]
     best_face = max(cluster_faces, key=_face_rank) if cluster_faces else None
+    latest_captured_at = max((obs.captured_at for obs in cluster), default=best.captured_at)
 
     # Gather calibrated members that carry a random covariance.
     fuseable = [
@@ -362,6 +368,7 @@ def _build_representative(
             )
             return dataclasses.replace(
                 best,
+                captured_at=latest_captured_at,
                 floor_point=fused_fp,
                 face_anchor=best_face,
                 floor_cov_random=fused_cov_rm,
@@ -392,6 +399,7 @@ def _build_representative(
 
     return dataclasses.replace(
         best,
+        captured_at=latest_captured_at,
         floor_point=mean_fp,
         face_anchor=best_face,
     )

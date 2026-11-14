@@ -369,6 +369,7 @@ class WorldFrameSnapshot:
     last_independent_evidence_at_unix_ns: int = 0
     config_hash: str = ""
     model_set_version: str = ""
+    coasting: bool = False
 
 
 # ---------------------------------------------------------------------------

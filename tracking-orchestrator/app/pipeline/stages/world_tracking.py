@@ -166,7 +166,7 @@ class WorldTrackingStage(FrameStage):
         for ctx in contexts:
             low_band_observations.extend(self._build_low_band_observations(ctx))
 
-        batch_time = max((ctx.event_time for ctx in contexts), default=contexts[0].event_time)
+        batch_time = max((ctx.capture_time for ctx in contexts), default=contexts[0].capture_time)
 
         # Room bindings computed before matching so a room-only CC assertion
         # (no floor point, e.g. a reCamera sighting) can be spatially gated.
@@ -295,7 +295,7 @@ class WorldTrackingStage(FrameStage):
                 WorldObservation(
                     camera_id=ctx.frame.camera_id,
                     frame_index=ctx.frame.frame_index,
-                    captured_at=ctx.event_time,
+                    captured_at=ctx.capture_time,
                     floor_point=fp,
                     bbox=BoundingBox(
                         x_min=int(det.x1 * ew),
@@ -381,7 +381,7 @@ class WorldTrackingStage(FrameStage):
                 WorldObservation(
                     camera_id=det.camera_id,
                     frame_index=ctx.frame.frame_index,
-                    captured_at=det.capture_time if det.capture_time else ctx.event_time,
+                    captured_at=det.capture_time if det.capture_time else ctx.capture_time,
                     floor_point=fp,
                     bbox=det.bbox,
                     embedding=det.embedding,
@@ -584,6 +584,8 @@ class WorldTrackingStage(FrameStage):
                 ph.ph_id: ph.current_identity_id for ph in result.updated_phs
             }
             for ph in result.updated_phs:
+                if ph.closed_at is not None or ph.ph_id in result.coasting_ph_ids:
+                    continue
                 events = transit_detector.check(
                     ph_id=ph.ph_id,
                     floor_x_m=ph.state_mean[0],

@@ -63,31 +63,47 @@ def predict(
     now: datetime,
     process_noise_accel_m_s2: float,
     velocity_decay_s: float = 3.0,
+    *,
+    damped: bool = False,
 ) -> KalmanState:
-    """Advance state to *now*. dt may be > 0; identity transform when dt == 0."""
+    """Advance state to *now*. dt may be > 0; identity transform when dt <= 0."""
     dt = (now - state.updated_at).total_seconds()
     if dt <= 0:
         return state
 
-    # State transition (constant velocity).
-    F = np.array(  # noqa: N806
-        [
-            [1.0, 0.0, dt, 0.0],
-            [0.0, 1.0, 0.0, dt],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ],
-        dtype=np.float64,
-    )
-
     # Velocity decay: a person we have not observed for a while is more
     # likely stationary than continuing at last-seen velocity.
     decay = float(np.exp(-dt / velocity_decay_s))
-    decayed_mean = state.mean.copy()
-    decayed_mean[2] *= decay
-    decayed_mean[3] *= decay
-
-    predicted_mean = F @ decayed_mean
+    if damped:
+        # Exact step of dv/dt = -v/tau, dx/dt = v:
+        #   x' = x + v * tau * (1 - exp(-dt / tau))
+        #   v' = v * exp(-dt / tau)
+        pos_step = velocity_decay_s * (1.0 - decay)
+        F = np.array(  # noqa: N806
+            [
+                [1.0, 0.0, pos_step, 0.0],
+                [0.0, 1.0, 0.0, pos_step],
+                [0.0, 0.0, decay, 0.0],
+                [0.0, 0.0, 0.0, decay],
+            ],
+            dtype=np.float64,
+        )
+        predicted_mean = F @ state.mean
+    else:
+        # Constant-velocity transition matrix with pre-scaled velocity mean.
+        F = np.array(  # noqa: N806
+            [
+                [1.0, 0.0, dt, 0.0],
+                [0.0, 1.0, 0.0, dt],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        decayed_mean = state.mean.copy()
+        decayed_mean[2] *= decay
+        decayed_mean[3] *= decay
+        predicted_mean = F @ decayed_mean
 
     # Process noise from white-noise acceleration model.
     sigma_a2 = process_noise_accel_m_s2**2

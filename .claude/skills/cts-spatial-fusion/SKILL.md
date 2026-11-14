@@ -74,6 +74,11 @@ R*   = ( Σ (J Σ_px Jᵀ)ᵢ⁻¹ )⁻¹  +  R_bias_floor
   AND estimated speed stay below thresholds for K consecutive frames, apply a zero-velocity
   pseudo-measurement to the velocity sub-state. Tune K and thresholds so a slow shuffle
   (0.2–0.4 m/s, clinically relevant for dementia gait) is NOT clamped.
+- **Time model and coasting state.** Stored `PersonHypothesis` state (`state_mean`, `state_cov`)
+  always represents the posterior at `last_seen_at` (capture time); in-round predictions to
+  `now` (`max(ctx.capture_time)`) are transient for association and `coasting=True` snapshots,
+  and matched updates predict from `last_seen_at` to `obs.captured_at` (see
+  `reference/time-model.md`).
 
 ## Primary-camera selection
 
@@ -100,6 +105,7 @@ and occluded lower bodies) and the `orientation` bin (side views best separate s
 | Information-form cross-camera fusion | `app/tracking/world/dedup.py` |
 | Matrix-R update, ZUPT | `app/tracking/world/kalman.py` |
 | Primary-camera selection | `app/tracking/world/tracker.py` |
+| Time model, coasting state, damped prediction, time-skew dedup | `reference/time-model.md` |
 | Posture weighting | `app/trajectory/posture.py` |
 
 ## Tests

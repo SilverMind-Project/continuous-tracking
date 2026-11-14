@@ -158,7 +158,7 @@ def _assert_carryover(
 # ---------------------------------------------------------------------------
 
 _ADVANCE_CLOSE_CHANGED = frozenset({"closed_at"})
-_ADVANCE_KEEP_OPEN_CHANGED = frozenset({"state_mean", "state_cov"})
+_ADVANCE_KEEP_OPEN_CHANGED: frozenset[str] = frozenset()
 
 
 def test_advance_unmatched_ph_close_branch_carries_everything_but_closed_at() -> None:
@@ -171,7 +171,7 @@ def test_advance_unmatched_ph_close_branch_carries_everything_but_closed_at() ->
     _assert_carryover(ph, after, _ADVANCE_CLOSE_CHANGED)
 
 
-def test_advance_unmatched_ph_keep_open_branch_carries_everything_but_kalman_state() -> None:
+def test_advance_unmatched_ph_keep_open_branch_carries_everything_unchanged() -> None:
     ph = _sentinel_ph()
     predicted = initialize(5.0, 5.0, 1.0, 0.5, _T0)
     after = _advance_unmatched_ph(
