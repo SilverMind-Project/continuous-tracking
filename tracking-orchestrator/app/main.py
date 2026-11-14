@@ -61,6 +61,8 @@ from .routers.ph import router as ph_router
 from .routers.ph import set_ph_repository, set_revision_publisher
 from .routers.reid_review import router as reid_review_router
 from .routers.reid_review import set_context as set_reid_review_context
+from .routers.topology import router as topology_router
+from .routers.topology import set_topology_repo
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
 from .sampling.keyframe_sampler import SamplerConfig
@@ -888,6 +890,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         topology_repo_obj = InMemoryCameraTopologyRepository()
         copresence_repo_obj = InMemoryCoPresenceRepository()
+    set_topology_repo(topology_repo_obj)
 
     deps = PipelineDependencies(
         detector=detector,
@@ -1170,6 +1173,7 @@ def create_app() -> FastAPI:
     app.include_router(ph_router)
     app.include_router(trajectory_router)
     app.include_router(gait_router)
+    app.include_router(topology_router)
 
     @app.get("/health")
     async def health() -> dict[str, object]:
