@@ -2,7 +2,7 @@
  "cross_camera_handoff": [
   {
    "decisions": [],
-   "revisions": 0,
+   "revisions": 1,
    "revived": 0,
    "snapshots": []
   },
@@ -2111,7 +2111,7 @@
  "mixed_calibration_entry": [
   {
    "decisions": [],
-   "revisions": 0,
+   "revisions": 1,
    "revived": 0,
    "snapshots": []
   },
@@ -7631,7 +7631,7 @@
  "resident_plus_stranger": [
   {
    "decisions": [],
-   "revisions": 0,
+   "revisions": 1,
    "revived": 0,
    "snapshots": []
   },
@@ -9465,7 +9465,7 @@
  "single_camera_turn": [
   {
    "decisions": [],
-   "revisions": 0,
+   "revisions": 1,
    "revived": 0,
    "snapshots": []
   },
@@ -13819,20 +13819,6 @@
      "authority": "direct_face",
      "decision_source": "arcface_authority",
      "evidence_backed": true,
-     "identity_id": "amma",
-     "ph": 0,
-     "posterior": {
-      "UNKNOWN": 0.006187,
-      "amma": 0.969064,
-      "grandma": 0.024749
-     },
-     "reason": "",
-     "revises_previous": false
-    },
-    {
-     "authority": "direct_face",
-     "decision_source": "arcface_authority",
-     "evidence_backed": true,
      "identity_id": "grandma",
      "ph": 1,
      "posterior": {
@@ -13842,11 +13828,39 @@
      },
      "reason": "",
      "revises_previous": false
+    },
+    {
+     "authority": "direct_face",
+     "decision_source": "arcface_authority",
+     "evidence_backed": true,
+     "identity_id": "amma",
+     "ph": 2,
+     "posterior": {
+      "UNKNOWN": 0.007066,
+      "amma": 0.922272,
+      "grandma": 0.070662
+     },
+     "reason": "arcface_authority: amma",
+     "revises_previous": true
     }
    ],
-   "revisions": 0,
+   "revisions": 1,
    "revived": 0,
    "snapshots": [
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.44385,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
     {
      "authority": "direct_face",
      "camera_id": "cam-2",
@@ -13855,11 +13869,11 @@
      "direct_face_evidence": true,
      "effective_identity_id": "amma",
      "evidence": {},
-     "identity_confidence": 0.969064,
+     "identity_confidence": 0.922272,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
-     "posterior_entropy": 0.2214
+     "ph": 2,
+     "posterior_entropy": 0.428286
     },
     {
      "authority": "direct_face",
@@ -13883,20 +13897,6 @@
      "authority": "direct_face",
      "decision_source": "arcface_authority",
      "evidence_backed": true,
-     "identity_id": "amma",
-     "ph": 0,
-     "posterior": {
-      "UNKNOWN": 0.006187,
-      "amma": 0.969064,
-      "grandma": 0.024749
-     },
-     "reason": "",
-     "revises_previous": false
-    },
-    {
-     "authority": "direct_face",
-     "decision_source": "arcface_authority",
-     "evidence_backed": true,
      "identity_id": "grandma",
      "ph": 1,
      "posterior": {
@@ -13906,11 +13906,39 @@
      },
      "reason": "",
      "revises_previous": false
+    },
+    {
+     "authority": "direct_face",
+     "decision_source": "arcface_authority",
+     "evidence_backed": true,
+     "identity_id": "amma",
+     "ph": 2,
+     "posterior": {
+      "UNKNOWN": 0.006187,
+      "amma": 0.969064,
+      "grandma": 0.024749
+     },
+     "reason": "",
+     "revises_previous": false
     }
    ],
    "revisions": 0,
    "revived": 0,
    "snapshots": [
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.44385,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
     {
      "authority": "direct_face",
      "camera_id": "cam-2",
@@ -13922,7 +13950,7 @@
      "identity_confidence": 0.969064,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior_entropy": 0.2214
     },
     {
@@ -13943,20 +13971,6 @@
   },
   {
    "decisions": [
-    {
-     "authority": "posterior",
-     "decision_source": "face",
-     "evidence_backed": false,
-     "identity_id": "amma",
-     "ph": 0,
-     "posterior": {
-      "UNKNOWN": 0.027394,
-      "amma": 0.863028,
-      "grandma": 0.109578
-     },
-     "reason": "",
-     "revises_previous": false
-    },
     {
      "authority": "posterior",
      "decision_source": "face",
@@ -13970,11 +13984,39 @@
      },
      "reason": "",
      "revises_previous": false
+    },
+    {
+     "authority": "posterior",
+     "decision_source": "face",
+     "evidence_backed": false,
+     "identity_id": "amma",
+     "ph": 2,
+     "posterior": {
+      "UNKNOWN": 0.027394,
+      "amma": 0.863028,
+      "grandma": 0.109578
+     },
+     "reason": "",
+     "revises_previous": false
     }
    ],
    "revisions": 0,
    "revived": 0,
    "snapshots": [
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.44385,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
     {
      "authority": "posterior",
      "camera_id": "cam-2",
@@ -13986,7 +14028,7 @@
      "identity_confidence": 0.863028,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior_entropy": 0.675139
     },
     {
@@ -14008,20 +14050,6 @@
   {
    "decisions": [
     {
-     "authority": "direct_face",
-     "decision_source": "arcface_authority",
-     "evidence_backed": true,
-     "identity_id": "amma",
-     "ph": 0,
-     "posterior": {
-      "UNKNOWN": 0.003218,
-      "amma": 0.98391,
-      "grandma": 0.012872
-     },
-     "reason": "",
-     "revises_previous": false
-    },
-    {
      "authority": "posterior",
      "decision_source": "face",
      "evidence_backed": true,
@@ -14034,11 +14062,39 @@
      },
      "reason": "",
      "revises_previous": false
+    },
+    {
+     "authority": "direct_face",
+     "decision_source": "arcface_authority",
+     "evidence_backed": true,
+     "identity_id": "amma",
+     "ph": 2,
+     "posterior": {
+      "UNKNOWN": 0.003218,
+      "amma": 0.98391,
+      "grandma": 0.012872
+     },
+     "reason": "",
+     "revises_previous": false
     }
    ],
    "revisions": 0,
    "revived": 0,
    "snapshots": [
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.44385,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
     {
      "authority": "direct_face",
      "camera_id": "cam-2",
@@ -14050,7 +14106,7 @@
      "identity_confidence": 0.98391,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior_entropy": 0.130501
     },
     {
@@ -14072,20 +14128,6 @@
   {
    "decisions": [
     {
-     "authority": "direct_face",
-     "decision_source": "arcface_authority",
-     "evidence_backed": true,
-     "identity_id": "amma",
-     "ph": 0,
-     "posterior": {
-      "UNKNOWN": 0.003218,
-      "amma": 0.98391,
-      "grandma": 0.012872
-     },
-     "reason": "",
-     "revises_previous": false
-    },
-    {
      "authority": "posterior",
      "decision_source": "face",
      "evidence_backed": false,
@@ -14098,11 +14140,39 @@
      },
      "reason": "",
      "revises_previous": false
+    },
+    {
+     "authority": "direct_face",
+     "decision_source": "arcface_authority",
+     "evidence_backed": true,
+     "identity_id": "amma",
+     "ph": 2,
+     "posterior": {
+      "UNKNOWN": 0.003218,
+      "amma": 0.98391,
+      "grandma": 0.012872
+     },
+     "reason": "",
+     "revises_previous": false
     }
    ],
    "revisions": 0,
    "revived": 0,
    "snapshots": [
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.44385,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
     {
      "authority": "direct_face",
      "camera_id": "cam-2",
@@ -14114,7 +14184,7 @@
      "identity_confidence": 0.98391,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior_entropy": 0.130501
     },
     {
@@ -14141,6 +14211,20 @@
      "evidence_backed": true,
      "identity_id": "amma",
      "ph": 0,
+     "posterior": {
+      "UNKNOWN": 0.015112,
+      "amma": 0.966396,
+      "grandma": 0.018492
+     },
+     "reason": "",
+     "revises_previous": false
+    },
+    {
+     "authority": "posterior",
+     "decision_source": "face",
+     "evidence_backed": true,
+     "identity_id": "amma",
+     "ph": 2,
      "posterior": {
       "UNKNOWN": 0.008421,
       "amma": 0.957895,
@@ -14178,45 +14262,59 @@
      "identity_confidence": 0.957895,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior_entropy": 0.282257
+    },
+    {
+     "authority": "posterior",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "face",
+     "direct_face_evidence": true,
+     "effective_identity_id": "amma",
+     "evidence": {},
+     "identity_confidence": 0.966396,
+     "identity_id": "amma",
+     "inferred_identity_id": "amma",
+     "ph": 0,
+     "posterior_entropy": 0.245517
     }
    ]
   },
   {
    "decisions": [
     {
-     "authority": "none",
+     "authority": "posterior",
      "decision_source": "face",
-     "evidence_backed": false,
-     "identity_id": null,
+     "evidence_backed": true,
+     "identity_id": "amma",
+     "ph": 0,
+     "posterior": {
+      "UNKNOWN": 0.008063,
+      "amma": 0.959685,
+      "grandma": 0.032252
+     },
+     "reason": "",
+     "revises_previous": false
+    },
+    {
+     "authority": "posterior",
+     "decision_source": "face",
+     "evidence_backed": true,
+     "identity_id": "amma",
      "ph": 2,
      "posterior": {
-      "UNKNOWN": 0.011683,
-      "amma": 0.848123,
-      "grandma": 0.140194
+      "UNKNOWN": 0.004489,
+      "amma": 0.977557,
+      "grandma": 0.017954
      },
-     "reason": "duplicate_active_identity_blocked: amma (direct_face_confidence=0.650)",
+     "reason": "",
      "revises_previous": false
     }
    ],
    "revisions": 0,
    "revived": 0,
    "snapshots": [
-    {
-     "authority": "",
-     "camera_id": "cam-2",
-     "conflict": "",
-     "decision_source": "",
-     "direct_face_evidence": false,
-     "effective_identity_id": "",
-     "evidence": {},
-     "identity_confidence": 0.957895,
-     "identity_id": "amma",
-     "inferred_identity_id": "",
-     "ph": 0,
-     "posterior_entropy": 0.0
-    },
     {
      "authority": "",
      "camera_id": "cam-2",
@@ -14232,18 +14330,32 @@
      "posterior_entropy": 0.0
     },
     {
-     "authority": "none",
+     "authority": "posterior",
      "camera_id": "cam-2",
      "conflict": "",
      "decision_source": "face",
      "direct_face_evidence": true,
      "effective_identity_id": "amma",
      "evidence": {},
-     "identity_confidence": 0.848123,
-     "identity_id": "grandma",
+     "identity_confidence": 0.977557,
+     "identity_id": "amma",
      "inferred_identity_id": "amma",
      "ph": 2,
-     "posterior_entropy": 0.673938
+     "posterior_entropy": 0.171148
+    },
+    {
+     "authority": "posterior",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "face",
+     "direct_face_evidence": true,
+     "effective_identity_id": "amma",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "amma",
+     "ph": 0,
+     "posterior_entropy": 0.272841
     }
    ]
   },
@@ -14264,15 +14376,15 @@
      "revises_previous": false
     },
     {
-     "authority": "temporal_prior",
-     "decision_source": "temporal_prior",
+     "authority": "posterior",
+     "decision_source": "face",
      "evidence_backed": false,
-     "identity_id": "grandma",
+     "identity_id": "amma",
      "ph": 2,
      "posterior": {
-      "UNKNOWN": 0.336683,
-      "amma": 0.160804,
-      "grandma": 0.502513
+      "UNKNOWN": 0.341256,
+      "amma": 0.488964,
+      "grandma": 0.169779
      },
      "reason": "",
      "revises_previous": false
@@ -14289,25 +14401,25 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.957895,
+     "identity_confidence": 0.959685,
      "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 0,
      "posterior_entropy": 0.0
     },
     {
-     "authority": "temporal_prior",
+     "authority": "posterior",
      "camera_id": "cam-2",
      "conflict": "",
-     "decision_source": "temporal_prior",
+     "decision_source": "face",
      "direct_face_evidence": false,
-     "effective_identity_id": "grandma",
+     "effective_identity_id": "amma",
      "evidence": {},
-     "identity_confidence": 0.502513,
-     "identity_id": "grandma",
-     "inferred_identity_id": "grandma",
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
+     "inferred_identity_id": "amma",
      "ph": 2,
-     "posterior_entropy": 1.451632
+     "posterior_entropy": 1.468363
     },
     {
      "authority": "direct_face",
@@ -14340,20 +14452,6 @@
      },
      "reason": "",
      "revises_previous": false
-    },
-    {
-     "authority": "posterior",
-     "decision_source": "face",
-     "evidence_backed": true,
-     "identity_id": "grandma",
-     "ph": 2,
-     "posterior": {
-      "UNKNOWN": 0.015112,
-      "amma": 0.018492,
-      "grandma": 0.966396
-     },
-     "reason": "",
-     "revises_previous": false
     }
    ],
    "revisions": 0,
@@ -14367,25 +14465,25 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.957895,
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
      "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 0,
      "posterior_entropy": 0.0
-    },
-    {
-     "authority": "posterior",
-     "camera_id": "cam-2",
-     "conflict": "",
-     "decision_source": "face",
-     "direct_face_evidence": true,
-     "effective_identity_id": "grandma",
-     "evidence": {},
-     "identity_confidence": 0.966396,
-     "identity_id": "grandma",
-     "inferred_identity_id": "grandma",
-     "ph": 2,
-     "posterior_entropy": 0.245517
     },
     {
      "authority": "direct_face",
@@ -14418,20 +14516,6 @@
      },
      "reason": "",
      "revises_previous": false
-    },
-    {
-     "authority": "posterior",
-     "decision_source": "face",
-     "evidence_backed": true,
-     "identity_id": "grandma",
-     "ph": 2,
-     "posterior": {
-      "UNKNOWN": 0.008063,
-      "amma": 0.032252,
-      "grandma": 0.959685
-     },
-     "reason": "",
-     "revises_previous": false
     }
    ],
    "revisions": 0,
@@ -14445,25 +14529,25 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.957895,
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
      "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 0,
      "posterior_entropy": 0.0
-    },
-    {
-     "authority": "posterior",
-     "camera_id": "cam-2",
-     "conflict": "",
-     "decision_source": "face",
-     "direct_face_evidence": true,
-     "effective_identity_id": "grandma",
-     "evidence": {},
-     "identity_confidence": 0.959685,
-     "identity_id": "grandma",
-     "inferred_identity_id": "grandma",
-     "ph": 2,
-     "posterior_entropy": 0.272841
     },
     {
      "authority": "posterior",
@@ -14487,20 +14571,6 @@
      "authority": "direct_face",
      "decision_source": "arcface_authority",
      "evidence_backed": true,
-     "identity_id": "amma",
-     "ph": 0,
-     "posterior": {
-      "UNKNOWN": 0.001065,
-      "amma": 0.994675,
-      "grandma": 0.00426
-     },
-     "reason": "",
-     "revises_previous": false
-    },
-    {
-     "authority": "direct_face",
-     "decision_source": "arcface_authority",
-     "evidence_backed": true,
      "identity_id": "grandma",
      "ph": 1,
      "posterior": {
@@ -14510,9 +14580,23 @@
      },
      "reason": "",
      "revises_previous": false
+    },
+    {
+     "authority": "direct_face",
+     "decision_source": "arcface_authority",
+     "evidence_backed": true,
+     "identity_id": "amma",
+     "ph": 3,
+     "posterior": {
+      "UNKNOWN": 0.001267,
+      "amma": 0.986065,
+      "grandma": 0.012668
+     },
+     "reason": "arcface_authority: amma",
+     "revises_previous": true
     }
    ],
-   "revisions": 0,
+   "revisions": 1,
    "revived": 0,
    "snapshots": [
     {
@@ -14523,10 +14607,24 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.959685,
-     "identity_id": "grandma",
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -14537,11 +14635,11 @@
      "direct_face_evidence": true,
      "effective_identity_id": "amma",
      "evidence": {},
-     "identity_confidence": 0.994675,
+     "identity_confidence": 0.986065,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
-     "posterior_entropy": 0.051722
+     "ph": 3,
+     "posterior_entropy": 0.112
     },
     {
      "authority": "direct_face",
@@ -14565,12 +14663,12 @@
      "authority": "direct_face",
      "decision_source": "arcface_authority",
      "evidence_backed": true,
-     "identity_id": "amma",
-     "ph": 0,
+     "identity_id": "grandma",
+     "ph": 1,
      "posterior": {
-      "UNKNOWN": 0.001065,
-      "amma": 0.994675,
-      "grandma": 0.00426
+      "UNKNOWN": 0.000852,
+      "amma": 0.003408,
+      "grandma": 0.995739
      },
      "reason": "",
      "revises_previous": false
@@ -14579,12 +14677,12 @@
      "authority": "direct_face",
      "decision_source": "arcface_authority",
      "evidence_backed": true,
-     "identity_id": "grandma",
-     "ph": 1,
+     "identity_id": "amma",
+     "ph": 3,
      "posterior": {
-      "UNKNOWN": 0.000852,
-      "amma": 0.003408,
-      "grandma": 0.995739
+      "UNKNOWN": 0.001065,
+      "amma": 0.994675,
+      "grandma": 0.00426
      },
      "reason": "",
      "revises_previous": false
@@ -14601,10 +14699,24 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.959685,
-     "identity_id": "grandma",
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -14618,7 +14730,7 @@
      "identity_confidence": 0.994675,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.051722
     },
     {
@@ -14644,7 +14756,7 @@
      "decision_source": "face",
      "evidence_backed": false,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior": {
       "UNKNOWN": 0.031054,
       "amma": 0.84473,
@@ -14665,8 +14777,8 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.959685,
-     "identity_id": "grandma",
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 2,
      "posterior_entropy": 0.0
@@ -14683,6 +14795,20 @@
      "identity_id": "grandma",
      "inferred_identity_id": "",
      "ph": 1,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -14696,7 +14822,7 @@
      "identity_confidence": 0.84473,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.734967
     }
    ]
@@ -14708,7 +14834,7 @@
      "decision_source": "arcface_authority",
      "evidence_backed": true,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior": {
       "UNKNOWN": 0.000852,
       "amma": 0.995739,
@@ -14729,8 +14855,8 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.959685,
-     "identity_id": "grandma",
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 2,
      "posterior_entropy": 0.0
@@ -14750,6 +14876,20 @@
      "posterior_entropy": 0.0
     },
     {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
+    {
      "authority": "direct_face",
      "camera_id": "cam-2",
      "conflict": "",
@@ -14760,7 +14900,7 @@
      "identity_confidence": 0.995739,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.04276
     }
    ]
@@ -14772,7 +14912,7 @@
      "decision_source": "arcface_authority",
      "evidence_backed": true,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior": {
       "UNKNOWN": 0.000852,
       "amma": 0.995739,
@@ -14793,8 +14933,8 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.959685,
-     "identity_id": "grandma",
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 2,
      "posterior_entropy": 0.0
@@ -14814,6 +14954,20 @@
      "posterior_entropy": 0.0
     },
     {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
+    {
      "authority": "direct_face",
      "camera_id": "cam-2",
      "conflict": "",
@@ -14824,7 +14978,7 @@
      "identity_confidence": 0.995739,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.04276
     }
    ]
@@ -14836,7 +14990,7 @@
      "decision_source": "face",
      "evidence_backed": true,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior": {
       "UNKNOWN": 0.003055,
       "amma": 0.984724,
@@ -14857,8 +15011,8 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.959685,
-     "identity_id": "grandma",
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 2,
      "posterior_entropy": 0.0
@@ -14878,6 +15032,20 @@
      "posterior_entropy": 0.0
     },
     {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
+    {
      "authority": "posterior",
      "camera_id": "cam-2",
      "conflict": "",
@@ -14888,7 +15056,7 @@
      "identity_confidence": 0.984724,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.125051
     }
    ]
@@ -14900,7 +15068,7 @@
      "decision_source": "face",
      "evidence_backed": true,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior": {
       "UNKNOWN": 0.007063,
       "amma": 0.964685,
@@ -14921,8 +15089,8 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.959685,
-     "identity_id": "grandma",
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 2,
      "posterior_entropy": 0.0
@@ -14942,6 +15110,20 @@
      "posterior_entropy": 0.0
     },
     {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
+    {
      "authority": "posterior",
      "camera_id": "cam-2",
      "conflict": "",
@@ -14952,7 +15134,7 @@
      "identity_confidence": 0.964685,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.245878
     }
    ]
@@ -14964,7 +15146,7 @@
      "decision_source": "face",
      "evidence_backed": false,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior": {
       "UNKNOWN": 0.373646,
       "amma": 0.44385,
@@ -14985,8 +15167,8 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
-     "identity_confidence": 0.959685,
-     "identity_id": "grandma",
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 2,
      "posterior_entropy": 0.0
@@ -15006,6 +15188,20 @@
      "posterior_entropy": 0.0
     },
     {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
+    {
      "authority": "posterior",
      "camera_id": "cam-2",
      "conflict": "",
@@ -15016,7 +15212,7 @@
      "identity_confidence": 0.44385,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 1.498666
     }
    ]
@@ -15036,20 +15232,6 @@
      },
      "reason": "",
      "revises_previous": false
-    },
-    {
-     "authority": "posterior",
-     "decision_source": "face",
-     "evidence_backed": true,
-     "identity_id": "grandma",
-     "ph": 2,
-     "posterior": {
-      "UNKNOWN": 0.008727,
-      "amma": 0.039143,
-      "grandma": 0.952131
-     },
-     "reason": "",
-     "revises_previous": false
     }
    ],
    "revisions": 0,
@@ -15063,25 +15245,39 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
      "identity_confidence": 0.44385,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 3,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
      "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 0,
      "posterior_entropy": 0.0
-    },
-    {
-     "authority": "posterior",
-     "camera_id": "cam-2",
-     "conflict": "",
-     "decision_source": "face",
-     "direct_face_evidence": true,
-     "effective_identity_id": "grandma",
-     "evidence": {},
-     "identity_confidence": 0.952131,
-     "identity_id": "grandma",
-     "inferred_identity_id": "grandma",
-     "ph": 2,
-     "posterior_entropy": 0.310071
     },
     {
      "authority": "direct_face",
@@ -15114,20 +15310,6 @@
      },
      "reason": "",
      "revises_previous": false
-    },
-    {
-     "authority": "posterior",
-     "decision_source": "face",
-     "evidence_backed": true,
-     "identity_id": "grandma",
-     "ph": 2,
-     "posterior": {
-      "UNKNOWN": 0.002736,
-      "amma": 0.010944,
-      "grandma": 0.98632
-     },
-     "reason": "",
-     "revises_previous": false
     }
    ],
    "revisions": 0,
@@ -15141,25 +15323,39 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
      "identity_confidence": 0.44385,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 3,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
      "identity_id": "amma",
      "inferred_identity_id": "",
      "ph": 0,
      "posterior_entropy": 0.0
-    },
-    {
-     "authority": "posterior",
-     "camera_id": "cam-2",
-     "conflict": "",
-     "decision_source": "face",
-     "direct_face_evidence": true,
-     "effective_identity_id": "grandma",
-     "evidence": {},
-     "identity_confidence": 0.98632,
-     "identity_id": "grandma",
-     "inferred_identity_id": "grandma",
-     "ph": 2,
-     "posterior_entropy": 0.114177
     },
     {
      "authority": "posterior",
@@ -15184,71 +15380,7 @@
      "decision_source": "arcface_authority_conflict",
      "evidence_backed": false,
      "identity_id": null,
-     "ph": 2,
-     "posterior": {
-      "UNKNOWN": 0.003218,
-      "amma": 0.012872,
-      "grandma": 0.98391
-     },
-     "reason": "arcface_authority_conflict: two qualifying anchors for different identities",
-     "revises_previous": true
-    }
-   ],
-   "revisions": 1,
-   "revived": 0,
-   "snapshots": [
-    {
-     "authority": "",
-     "camera_id": "cam-2",
-     "conflict": "",
-     "decision_source": "",
-     "direct_face_evidence": false,
-     "effective_identity_id": "",
-     "evidence": {},
-     "identity_confidence": 0.44385,
-     "identity_id": "amma",
-     "inferred_identity_id": "",
-     "ph": 0,
-     "posterior_entropy": 0.0
-    },
-    {
-     "authority": "",
-     "camera_id": "cam-2",
-     "conflict": "",
-     "decision_source": "",
-     "direct_face_evidence": false,
-     "effective_identity_id": "",
-     "evidence": {},
-     "identity_confidence": 0.863028,
-     "identity_id": "grandma",
-     "inferred_identity_id": "",
-     "ph": 1,
-     "posterior_entropy": 0.0
-    },
-    {
-     "authority": "none",
-     "camera_id": "cam-2",
-     "conflict": "AUTHORITY_CONFLICT",
-     "decision_source": "arcface_authority_conflict",
-     "direct_face_evidence": false,
-     "effective_identity_id": "",
-     "evidence": {},
-     "identity_confidence": 0.98391,
-     "identity_id": "grandma",
-     "inferred_identity_id": "",
-     "ph": 2,
-     "posterior_entropy": 0.130501
-    }
-   ]
-  },
-  {
-   "decisions": [
-    {
-     "authority": "none",
-     "decision_source": "arcface_authority_conflict",
-     "evidence_backed": false,
-     "identity_id": null,
-     "ph": 2,
+     "ph": 4,
      "posterior": {
       "UNKNOWN": 0.003762,
       "amma": 0.037623,
@@ -15269,10 +15401,24 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
      "identity_confidence": 0.44385,
      "identity_id": "amma",
      "inferred_identity_id": "",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.0
     },
     {
@@ -15290,6 +15436,20 @@
      "posterior_entropy": 0.0
     },
     {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
+    {
      "authority": "none",
      "camera_id": "cam-2",
      "conflict": "AUTHORITY_CONFLICT",
@@ -15300,7 +15460,99 @@
      "identity_confidence": 0.958614,
      "identity_id": null,
      "inferred_identity_id": "",
+     "ph": 4,
+     "posterior_entropy": 0.266799
+    }
+   ]
+  },
+  {
+   "decisions": [
+    {
+     "authority": "none",
+     "decision_source": "arcface_authority_conflict",
+     "evidence_backed": false,
+     "identity_id": null,
+     "ph": 4,
+     "posterior": {
+      "UNKNOWN": 0.003762,
+      "amma": 0.037623,
+      "grandma": 0.958614
+     },
+     "reason": "arcface_authority_conflict: two qualifying anchors for different identities",
+     "revises_previous": false
+    }
+   ],
+   "revisions": 0,
+   "revived": 0,
+   "snapshots": [
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.488964,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
      "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.44385,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 3,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.863028,
+     "identity_id": "grandma",
+     "inferred_identity_id": "",
+     "ph": 1,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "none",
+     "camera_id": "cam-2",
+     "conflict": "AUTHORITY_CONFLICT",
+     "decision_source": "arcface_authority_conflict",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.958614,
+     "identity_id": null,
+     "inferred_identity_id": "",
+     "ph": 4,
      "posterior_entropy": 0.266799
     }
    ]
@@ -15312,7 +15564,7 @@
      "decision_source": "face",
      "evidence_backed": false,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior": {
       "UNKNOWN": 0.027394,
       "amma": 0.863028,
@@ -15333,10 +15585,24 @@
      "direct_face_evidence": false,
      "effective_identity_id": "",
      "evidence": {},
+     "identity_confidence": 0.44385,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 3,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
      "identity_confidence": 0.0,
      "identity_id": null,
      "inferred_identity_id": "",
-     "ph": 2,
+     "ph": 4,
      "posterior_entropy": 0.0
     },
     {
@@ -15354,6 +15620,20 @@
      "posterior_entropy": 0.0
     },
     {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
+    {
      "authority": "posterior",
      "camera_id": "cam-2",
      "conflict": "",
@@ -15364,7 +15644,7 @@
      "identity_confidence": 0.863028,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior_entropy": 0.675139
     }
    ]
@@ -15376,7 +15656,7 @@
      "decision_source": "arcface_authority",
      "evidence_backed": true,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior": {
       "UNKNOWN": 0.009869,
       "amma": 0.952286,
@@ -15414,7 +15694,35 @@
      "identity_confidence": 0.0,
      "identity_id": null,
      "inferred_identity_id": "",
+     "ph": 4,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.863028,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
      "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -15428,7 +15736,7 @@
      "identity_confidence": 0.952286,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.311696
     }
    ]
@@ -15440,7 +15748,7 @@
      "decision_source": "arcface_authority",
      "evidence_backed": true,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior": {
       "UNKNOWN": 0.008879,
       "amma": 0.953238,
@@ -15478,7 +15786,35 @@
      "identity_confidence": 0.0,
      "identity_id": null,
      "inferred_identity_id": "",
+     "ph": 4,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.863028,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
      "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -15492,7 +15828,7 @@
      "identity_confidence": 0.953238,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.305272
     }
    ]
@@ -15504,7 +15840,7 @@
      "decision_source": "face",
      "evidence_backed": true,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior": {
       "UNKNOWN": 0.015112,
       "amma": 0.966396,
@@ -15542,7 +15878,35 @@
      "identity_confidence": 0.0,
      "identity_id": null,
      "inferred_identity_id": "",
+     "ph": 4,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.863028,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
      "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -15556,7 +15920,7 @@
      "identity_confidence": 0.966396,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.245517
     }
    ]
@@ -15568,7 +15932,7 @@
      "decision_source": "face",
      "evidence_backed": true,
      "identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior": {
       "UNKNOWN": 0.008063,
       "amma": 0.959685,
@@ -15606,7 +15970,35 @@
      "identity_confidence": 0.0,
      "identity_id": null,
      "inferred_identity_id": "",
+     "ph": 4,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.863028,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
      "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -15620,7 +16012,7 @@
      "identity_confidence": 0.959685,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.272841
     }
    ]
@@ -15632,7 +16024,7 @@
      "decision_source": "arcface_authority",
      "evidence_backed": true,
      "identity_id": "grandma",
-     "ph": 2,
+     "ph": 4,
      "posterior": {
       "UNKNOWN": 0.009263,
       "amma": 0.098806,
@@ -15656,7 +16048,7 @@
      "identity_confidence": 0.959685,
      "identity_id": "amma",
      "inferred_identity_id": "",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.0
     },
     {
@@ -15674,6 +16066,34 @@
      "posterior_entropy": 0.0
     },
     {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.863028,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
+    {
      "authority": "direct_face",
      "camera_id": "cam-2",
      "conflict": "",
@@ -15684,7 +16104,7 @@
      "identity_confidence": 0.891931,
      "identity_id": "grandma",
      "inferred_identity_id": "grandma",
-     "ph": 2,
+     "ph": 4,
      "posterior_entropy": 0.53967
     }
    ]
@@ -15696,7 +16116,7 @@
      "decision_source": "arcface_authority",
      "evidence_backed": true,
      "identity_id": "grandma",
-     "ph": 2,
+     "ph": 4,
      "posterior": {
       "UNKNOWN": 0.008246,
       "amma": 0.038954,
@@ -15720,7 +16140,7 @@
      "identity_confidence": 0.959685,
      "identity_id": "amma",
      "inferred_identity_id": "",
-     "ph": 0,
+     "ph": 3,
      "posterior_entropy": 0.0
     },
     {
@@ -15738,6 +16158,34 @@
      "posterior_entropy": 0.0
     },
     {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.863028,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 2,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
+     "posterior_entropy": 0.0
+    },
+    {
      "authority": "direct_face",
      "camera_id": "cam-2",
      "conflict": "",
@@ -15748,7 +16196,7 @@
      "identity_confidence": 0.9528,
      "identity_id": "grandma",
      "inferred_identity_id": "grandma",
-     "ph": 2,
+     "ph": 4,
      "posterior_entropy": 0.305927
     }
    ]
@@ -15774,7 +16222,7 @@
      "decision_source": "face",
      "evidence_backed": true,
      "identity_id": "grandma",
-     "ph": 2,
+     "ph": 4,
      "posterior": {
       "UNKNOWN": 0.008063,
       "amma": 0.032252,
@@ -15787,6 +16235,34 @@
    "revisions": 0,
    "revived": 0,
    "snapshots": [
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 3,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.863028,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 2,
+     "posterior_entropy": 0.0
+    },
     {
      "authority": "",
      "camera_id": "cam-2",
@@ -15826,7 +16302,7 @@
      "identity_confidence": 0.959685,
      "identity_id": "grandma",
      "inferred_identity_id": "grandma",
-     "ph": 2,
+     "ph": 4,
      "posterior_entropy": 0.272841
     }
    ]
@@ -15837,12 +16313,12 @@
      "authority": "direct_face",
      "decision_source": "arcface_authority",
      "evidence_backed": true,
-     "identity_id": "amma",
-     "ph": 0,
+     "identity_id": "grandma",
+     "ph": 1,
      "posterior": {
-      "UNKNOWN": 0.001065,
-      "amma": 0.994675,
-      "grandma": 0.00426
+      "UNKNOWN": 0.000852,
+      "amma": 0.003408,
+      "grandma": 0.995739
      },
      "reason": "",
      "revises_previous": false
@@ -15851,12 +16327,12 @@
      "authority": "direct_face",
      "decision_source": "arcface_authority",
      "evidence_backed": true,
-     "identity_id": "grandma",
-     "ph": 1,
+     "identity_id": "amma",
+     "ph": 2,
      "posterior": {
-      "UNKNOWN": 0.000852,
-      "amma": 0.003408,
-      "grandma": 0.995739
+      "UNKNOWN": 0.001065,
+      "amma": 0.994675,
+      "grandma": 0.00426
      },
      "reason": "",
      "revises_previous": false
@@ -15874,9 +16350,37 @@
      "effective_identity_id": "",
      "evidence": {},
      "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 3,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
      "identity_id": "grandma",
      "inferred_identity_id": "",
-     "ph": 2,
+     "ph": 4,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -15904,7 +16408,7 @@
      "identity_confidence": 0.994675,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior_entropy": 0.051722
     }
    ]
@@ -15915,12 +16419,12 @@
      "authority": "direct_face",
      "decision_source": "arcface_authority",
      "evidence_backed": true,
-     "identity_id": "amma",
-     "ph": 0,
+     "identity_id": "grandma",
+     "ph": 1,
      "posterior": {
-      "UNKNOWN": 0.001065,
-      "amma": 0.994675,
-      "grandma": 0.00426
+      "UNKNOWN": 0.000852,
+      "amma": 0.003408,
+      "grandma": 0.995739
      },
      "reason": "",
      "revises_previous": false
@@ -15929,12 +16433,12 @@
      "authority": "direct_face",
      "decision_source": "arcface_authority",
      "evidence_backed": true,
-     "identity_id": "grandma",
-     "ph": 1,
+     "identity_id": "amma",
+     "ph": 2,
      "posterior": {
-      "UNKNOWN": 0.000852,
-      "amma": 0.003408,
-      "grandma": 0.995739
+      "UNKNOWN": 0.001065,
+      "amma": 0.994675,
+      "grandma": 0.00426
      },
      "reason": "",
      "revises_previous": false
@@ -15952,9 +16456,37 @@
      "effective_identity_id": "",
      "evidence": {},
      "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 3,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
      "identity_id": "grandma",
      "inferred_identity_id": "",
-     "ph": 2,
+     "ph": 4,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -15982,27 +16514,13 @@
      "identity_confidence": 0.994675,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior_entropy": 0.051722
     }
    ]
   },
   {
    "decisions": [
-    {
-     "authority": "posterior",
-     "decision_source": "face",
-     "evidence_backed": false,
-     "identity_id": "amma",
-     "ph": 0,
-     "posterior": {
-      "UNKNOWN": 0.031054,
-      "amma": 0.84473,
-      "grandma": 0.124216
-     },
-     "reason": "",
-     "revises_previous": false
-    },
     {
      "authority": "posterior",
      "decision_source": "face",
@@ -16016,6 +16534,20 @@
      },
      "reason": "",
      "revises_previous": false
+    },
+    {
+     "authority": "posterior",
+     "decision_source": "face",
+     "evidence_backed": false,
+     "identity_id": "amma",
+     "ph": 2,
+     "posterior": {
+      "UNKNOWN": 0.031054,
+      "amma": 0.84473,
+      "grandma": 0.124216
+     },
+     "reason": "",
+     "revises_previous": false
     }
    ],
    "revisions": 0,
@@ -16030,9 +16562,37 @@
      "effective_identity_id": "",
      "evidence": {},
      "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 3,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
      "identity_id": "grandma",
      "inferred_identity_id": "",
-     "ph": 2,
+     "ph": 4,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -16060,27 +16620,13 @@
      "identity_confidence": 0.84473,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior_entropy": 0.734967
     }
    ]
   },
   {
    "decisions": [
-    {
-     "authority": "direct_face",
-     "decision_source": "arcface_authority",
-     "evidence_backed": true,
-     "identity_id": "amma",
-     "ph": 0,
-     "posterior": {
-      "UNKNOWN": 0.000852,
-      "amma": 0.995739,
-      "grandma": 0.003408
-     },
-     "reason": "",
-     "revises_previous": false
-    },
     {
      "authority": "posterior",
      "decision_source": "face",
@@ -16091,6 +16637,20 @@
       "UNKNOWN": 0.007063,
       "amma": 0.028252,
       "grandma": 0.964685
+     },
+     "reason": "",
+     "revises_previous": false
+    },
+    {
+     "authority": "direct_face",
+     "decision_source": "arcface_authority",
+     "evidence_backed": true,
+     "identity_id": "amma",
+     "ph": 2,
+     "posterior": {
+      "UNKNOWN": 0.000852,
+      "amma": 0.995739,
+      "grandma": 0.003408
      },
      "reason": "",
      "revises_previous": false
@@ -16108,9 +16668,37 @@
      "effective_identity_id": "",
      "evidence": {},
      "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 3,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
      "identity_id": "grandma",
      "inferred_identity_id": "",
-     "ph": 2,
+     "ph": 4,
+     "posterior_entropy": 0.0
+    },
+    {
+     "authority": "",
+     "camera_id": "cam-2",
+     "conflict": "",
+     "decision_source": "",
+     "direct_face_evidence": false,
+     "effective_identity_id": "",
+     "evidence": {},
+     "identity_confidence": 0.959685,
+     "identity_id": "amma",
+     "inferred_identity_id": "",
+     "ph": 0,
      "posterior_entropy": 0.0
     },
     {
@@ -16138,7 +16726,7 @@
      "identity_confidence": 0.995739,
      "identity_id": "amma",
      "inferred_identity_id": "amma",
-     "ph": 0,
+     "ph": 2,
      "posterior_entropy": 0.04276
     }
    ]
@@ -17169,7 +17757,7 @@
  "two_people_one_room": [
   {
    "decisions": [],
-   "revisions": 0,
+   "revisions": 2,
    "revived": 0,
    "snapshots": []
   },
@@ -21351,7 +21939,7 @@
  "uncalibrated_two_people_home": [
   {
    "decisions": [],
-   "revisions": 0,
+   "revisions": 1,
    "revived": 0,
    "snapshots": []
   },
