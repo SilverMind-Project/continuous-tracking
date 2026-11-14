@@ -56,6 +56,10 @@ class ReidNeedPolicy:
         self._overlap_group_cameras = overlap_group_cameras
         self._last_embed_at_by_ph: dict[str, datetime] = {}
 
+    def set_overlap_group_cameras(self, camera_ids: frozenset[str]) -> None:
+        """Replace the cameras that always embed: group appearance dedup needs both embeddings."""
+        self._overlap_group_cameras = camera_ids
+
     def should_embed_frame(
         self,
         detections: list[DetectionBox],

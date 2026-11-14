@@ -333,6 +333,7 @@ class FrameProcessingPipeline:
         self._backfill_service: UnknownBackfillService | None = None
         # World tracker
         self._world_tracker: WorldTracker | None = None
+        self._reid_policy: ReidNeedPolicy | None = None
         self._ph_repo: PHRepositoryProtocol | None = None
         self._obs_repo: WorldObservationRepositoryProtocol | None = None
         self._frame_fetcher: FrameImageFetcher | None = None
@@ -665,7 +666,11 @@ class FrameProcessingPipeline:
             _reid_policy = ReidNeedPolicy(
                 config=self._config.adaptive_reid,
                 prior_maintenance_max_age_s=self._config.resolver.prior_maintenance_max_age_s,
+                overlap_group_cameras=frozenset(
+                    cid for group in (deps.overlap_groups or []) for cid in group.camera_ids
+                ),
             )
+        self._reid_policy = _reid_policy
 
         pre_world_stages = [
             PrivacyStage(),
@@ -1280,9 +1285,17 @@ class FrameProcessingPipeline:
         self._live_config.camera_room_map = camera_room_map
 
     def set_overlap_groups(self, overlap_groups: Sequence[OverlapGroup]) -> None:
-        """Apply camera overlap groups from the CC config sync to the world tracker."""
+        """Apply camera overlap groups from the CC config sync to every consumer.
+
+        The world tracker merges by appearance inside a group, and the adaptive ReID policy must
+        then always embed on those cameras, or the merge has no embedding to compare.
+        """
         if self._world_tracker is not None:
             self._world_tracker.set_overlap_groups(overlap_groups)
+        if self._reid_policy is not None:
+            self._reid_policy.set_overlap_group_cameras(
+                frozenset(cid for group in overlap_groups for cid in group.camera_ids)
+            )
 
     def set_room_polygon_map(self, room_polygon_map: RoomPolygonMap) -> None:
         """Replace the live room polygon map read by WorldTrackingStage."""
