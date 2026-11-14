@@ -41,7 +41,8 @@ def select_revival_candidate(
     1. Any camera (different camera allowed).
     2. ``closed.closed_at`` within ``revive_max_age_s`` (unchanged).
     3. Topology gate: ``plausible_transit(closed_camera, obs_camera, elapsed_s)``
-       >= ``cross_camera_min_plausibility``.  Unseen edges get the floor.
+       >= ``cross_camera_min_plausibility``. Only a crossing faster than the learned walk
+       can fail; an unseen or sparsely learned camera pair always passes.
     4. Appearance gate: max cosine similarity over the closed PH's
        ``view_prototypes`` vs ``obs.embedding`` >=
        ``cross_camera_revive_appearance_min_sim``.  Falls back to

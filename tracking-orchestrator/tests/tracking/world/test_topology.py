@@ -10,58 +10,41 @@ from app.tracking.world.topology import plausible_transit, record_handoff
 _NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
 
-def test_unseen_edge_returns_floor() -> None:
-    """plausible_transit returns the configured floor for an unseen edge."""
-    p = plausible_transit("cam-a", "cam-b", 5.0, [])
-    assert abs(p - 0.05) < 1e-6
-
-
-def test_unseen_edge_returns_floor_with_data() -> None:
-    """plausible_transit returns floor for an unseen edge even when other edges exist."""
-    edge = CameraTopologyEdge(
+def _edge(count: int = 10, mean_s: float = 5.0, var_s2: float = 1.0) -> CameraTopologyEdge:
+    return CameraTopologyEdge(
         from_camera="cam-a",
         to_camera="cam-b",
-        observation_count=10,
-        mean_transit_s=3.0,
-        variance_transit_s2=1.0,
+        observation_count=count,
+        mean_transit_s=mean_s,
+        variance_transit_s2=var_s2,
     )
-    # Different camera pair -> unseen.
-    p = plausible_transit("cam-x", "cam-y", 5.0, [edge])
-    assert abs(p - 0.05) < 1e-6
 
 
-def test_few_samples_edge_returns_floor() -> None:
-    """An edge with fewer than 3 observations returns the floor."""
-    edge = CameraTopologyEdge(
-        from_camera="cam-a",
-        to_camera="cam-b",
-        observation_count=2,
-        mean_transit_s=3.0,
-        variance_transit_s2=0.5,
-    )
-    p = plausible_transit("cam-a", "cam-b", 5.0, [edge])
-    assert abs(p - 0.05) < 1e-6
+def test_unseen_edge_never_rejects() -> None:
+    assert plausible_transit("cam-a", "cam-b", 0.1, []) == 1.0
+    assert plausible_transit("cam-x", "cam-y", 0.1, [_edge()]) == 1.0
 
 
-def test_well_observed_edge_peaks_near_mean() -> None:
-    """plausible_transit returns near 1.0 at the learned mean and decays away."""
-    edge = CameraTopologyEdge(
-        from_camera="cam-a",
-        to_camera="cam-b",
-        observation_count=10,
-        mean_transit_s=5.0,
-        variance_transit_s2=1.0,
-    )
-    p_at_mean = plausible_transit("cam-a", "cam-b", 5.0, [edge])
-    p_off = plausible_transit("cam-a", "cam-b", 20.0, [edge])
-    assert p_at_mean > 0.9, "should peak near 1.0 at the mean"
-    assert p_off <= 0.05, "should decay to floor far from mean"
+def test_sparse_edge_never_rejects() -> None:
+    assert plausible_transit("cam-a", "cam-b", 0.1, [_edge(count=2)]) == 1.0
 
 
-def test_custom_floor_respected() -> None:
-    """The floor parameter controls the minimum returned value."""
-    p = plausible_transit("cam-a", "cam-b", 5.0, [], floor=0.10)
-    assert abs(p - 0.10) < 1e-6
+def test_slow_transit_is_plausible() -> None:
+    """A pause on the way is not evidence of a different person."""
+    assert plausible_transit("cam-a", "cam-b", 5.0, [_edge()]) == 1.0
+    assert plausible_transit("cam-a", "cam-b", 25.0, [_edge()]) == 1.0
+
+
+def test_too_fast_transit_falls_below_the_production_threshold() -> None:
+    edge = _edge(mean_s=8.0, var_s2=1.0)
+    assert plausible_transit("cam-a", "cam-b", 7.0, [edge]) > 0.5
+    assert plausible_transit("cam-a", "cam-b", 1.0, [edge]) < 0.05
+
+
+def test_spread_has_a_floor() -> None:
+    """Near-identical learned handoffs do not reject a walk one second faster than usual."""
+    edge = _edge(mean_s=8.0, var_s2=0.0)
+    assert plausible_transit("cam-a", "cam-b", 7.0, [edge]) > 0.5
 
 
 def test_record_handoff_first_observation() -> None:
