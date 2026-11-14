@@ -66,7 +66,7 @@ from .routers.trajectory import set_context as set_trajectory_context
 from .sampling.keyframe_sampler import SamplerConfig
 from .services.cc_client import CognitiveCompanionClient
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
-from .services.overlap_group_sync import fetch_adjacency_edges, fetch_overlap_groups
+from .services.overlap_group_sync import fetch_overlap_groups
 from .services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
 from .storage.migrations import MigrationRunner
 from .storage.postgres.appearance_repo import PostgresDailyAppearanceRepo
@@ -586,7 +586,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     cc_api_key = settings.as_str("cognitive_companion.api_key")
     cc_client = CognitiveCompanionClient(cc_url, cc_api_key)
     face_id_camera_configs = await _fetch_cc_camera_configs(cc_client)
-    adjacency_edges_raw = await fetch_adjacency_edges(cc_client)
 
     declared_overlap_groups: list[OverlapGroup] = []
     try:
@@ -924,38 +923,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # see the comment at that call site.)
     correction_service.set_publisher(_pipeline._revision_publisher)
 
-    # Restore persisted adjacency edges from CC DB into in-memory calibration state.
-    from .calibration.state import AdjacencyEdge as _AdjacencyEdge
     from .calibration.state import calibration_state
-
-    if adjacency_edges_raw:
-        edges: list[_AdjacencyEdge] = []
-        for e in adjacency_edges_raw:
-            try:
-                overlap_raw = e["overlap"]
-                if isinstance(overlap_raw, bool):
-                    overlap = overlap_raw
-                else:
-                    normalized_overlap = str(overlap_raw).strip().lower()
-                    if normalized_overlap in {"1", "true", "yes", "on"}:
-                        overlap = True
-                    elif normalized_overlap in {"0", "false", "no", "off"}:
-                        overlap = False
-                    else:
-                        raise ValueError(f"Invalid adjacency overlap value: {overlap_raw!r}")
-                edges.append(
-                    _AdjacencyEdge(
-                        from_camera=str(e["from"]),
-                        to_camera=str(e["to"]),
-                        min_transit_s=float(e["min_transit_s"]),
-                        max_transit_s=float(e["max_transit_s"]),
-                        overlap=overlap,
-                    )
-                )
-            except (KeyError, TypeError, ValueError) as exc:
-                logger.warning("Skipped malformed CC adjacency edge", edge=e, error=str(exc))
-        await calibration_state.set_adjacency(edges)
-        logger.info("Restored adjacency edges from CC", edge_count=len(edges))
 
     # Privacy zones live only in memory; load them before the first frame so a restart never
     # tracks people inside an excluded zone. CCConfigSyncService keeps them current afterwards.

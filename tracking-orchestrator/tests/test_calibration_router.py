@@ -157,42 +157,6 @@ def test_post_privacy_zones_coordinates_out_of_range_rejected(client: TestClient
 
 
 # ---------------------------------------------------------------------------
-# Adjacency
-# ---------------------------------------------------------------------------
-
-
-def test_post_adjacency_accepted(client: TestClient):
-    resp = client.post(
-        "/internal/calibration/camera_adjacency",
-        json={
-            "edges": [
-                {"from": "hallway", "to": "kitchen", "min_transit_s": 1.0, "max_transit_s": 20.0}
-            ]
-        },
-    )
-    assert resp.status_code == 204
-
-    status_resp = client.get("/internal/calibration/status")
-    assert status_resp.json()["adjacency_edge_count"] == 1
-
-
-def test_post_adjacency_inverted_transit_rejected(client: TestClient):
-    resp = client.post(
-        "/internal/calibration/camera_adjacency",
-        json={"edges": [{"from": "a", "to": "b", "min_transit_s": 30.0, "max_transit_s": 1.0}]},
-    )
-    assert resp.status_code == 422
-
-
-def test_post_adjacency_defaults_applied(client: TestClient):
-    resp = client.post(
-        "/internal/calibration/camera_adjacency",
-        json={"edges": [{"from": "a", "to": "b"}]},
-    )
-    assert resp.status_code == 204
-
-
-# ---------------------------------------------------------------------------
 # Reload
 # ---------------------------------------------------------------------------
 
@@ -225,13 +189,3 @@ async def test_state_set_privacy_zones():
     zones = [PrivacyZoneConfig(zone_id="z1", polygon=[[0, 0], [1, 0], [1, 1]], policy="blur_faces")]
     await s.set_privacy_zones("cam-y", zones)
     assert len(s.privacy_zones["cam-y"]) == 1
-
-
-@pytest.mark.asyncio
-async def test_state_set_adjacency():
-    from app.calibration.state import AdjacencyEdge
-
-    s = CalibrationState()
-    edges = [AdjacencyEdge(from_camera="a", to_camera="b")]
-    await s.set_adjacency(edges)
-    assert len(s.adjacency_edges) == 1

@@ -12,8 +12,6 @@ import numpy as np
 import pytest
 from prometheus_client import CollectorRegistry
 
-from app.calibration.state import AdjacencyEdge as CalibrationAdjacencyEdge
-from app.calibration.state import calibration_state
 from app.inference.schemas import DetectionBox
 from app.observability import metrics as _metrics_module
 from app.pipeline.frame_pipeline import (
@@ -344,33 +342,6 @@ class TestPipelineSkeleton:
             assert publish_kwargs["capture_time_unix_ns"] == frame.capture_time_unix_ns
 
             await pipeline.stop()
-
-    @pytest.mark.asyncio
-    async def test_calibration_adjacency_syncs_into_pipeline(
-        self, pipeline: FrameProcessingPipeline
-    ) -> None:
-        """Verify calibration adjacency edges are set after pipeline initialization."""
-        old_edges = list(calibration_state.adjacency_edges)
-        old_version = calibration_state.version
-        try:
-            await calibration_state.set_adjacency(
-                [
-                    CalibrationAdjacencyEdge(
-                        from_camera="cam-1",
-                        to_camera="cam-2",
-                        max_transit_s=12.0,
-                    )
-                ]
-            )
-            with _mock_redis_deps():
-                await pipeline.initialize()
-                # _overlap_groups removed (dead code); pipeline init
-                # should still succeed with adjacency edges present.
-                assert pipeline._stage_runner is not None
-                await pipeline.stop()
-        finally:
-            calibration_state.adjacency_edges = old_edges
-            calibration_state.version = old_version
 
 
 class TestFullPipelineIntegration:

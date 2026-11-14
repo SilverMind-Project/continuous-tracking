@@ -1,7 +1,7 @@
 """Thread-safe calibration state store for the orchestrator.
 
-The CC backend pushes homography matrices, privacy zones, and the adjacency
-graph here via /internal/calibration/* endpoints.  The pipeline reads from
+Homography matrices and privacy zones arrive from the CC config sync (and from the
+/internal/calibration/* endpoints CC calls when an operator saves). The pipeline reads from
 this store on every frame so updates take effect without restart.
 """
 
@@ -25,15 +25,6 @@ class PrivacyZoneConfig:
 
 
 @dataclass
-class AdjacencyEdge:
-    from_camera: str
-    to_camera: str
-    min_transit_s: float = 0.5
-    max_transit_s: float = 30.0
-    overlap: bool = False
-
-
-@dataclass
 class CalibrationState:
     """In-memory calibration store.  All mutations are protected by an asyncio lock."""
 
@@ -47,9 +38,6 @@ class CalibrationState:
 
     # camera_id -> list of privacy zones
     privacy_zones: dict[str, list[PrivacyZoneConfig]] = field(default_factory=dict)
-
-    # list of directed adjacency edges
-    adjacency_edges: list[AdjacencyEdge] = field(default_factory=list)
 
     # ISO-8601 wall-clock of the last successful reload
     last_reload_at: str | None = None
@@ -128,11 +116,6 @@ class CalibrationState:
             self.privacy_zones[camera_id] = zones
             self.version += 1
 
-    async def set_adjacency(self, edges: list[AdjacencyEdge]) -> None:
-        async with self._lock:
-            self.adjacency_edges = edges
-            self.version += 1
-
     async def reload(self) -> None:
         """Mark the last reload time.  Callers may extend this for filesystem re-reads."""
         async with self._lock:
@@ -159,7 +142,6 @@ class CalibrationState:
                 k: [{"zone_id": z.zone_id, "policy": z.policy, "enabled": z.enabled} for z in v]
                 for k, v in self.privacy_zones.items()
             },
-            "adjacency_edge_count": len(self.adjacency_edges),
             "last_reload_at": self.last_reload_at,
             "version": self.version,
         }

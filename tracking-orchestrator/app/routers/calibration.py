@@ -10,7 +10,6 @@ Routes:
     POST /internal/calibration/auto/{camera_id}   - depth-based auto-calibration
     POST /internal/calibration/drift/{camera_id}  - score drift against reference
     POST /internal/calibration/privacy_zones
-    POST /internal/calibration/camera_adjacency
     POST /internal/calibration/reload
     GET  /internal/calibration/status
 """
@@ -29,7 +28,7 @@ from app.calibration.homography import (
     compute_homography,
     residual_status,
 )
-from app.calibration.state import AdjacencyEdge, CalibrationState, PrivacyZoneConfig
+from app.calibration.state import CalibrationState, PrivacyZoneConfig
 from app.calibration.state import calibration_state as _default_state
 
 if TYPE_CHECKING:
@@ -107,27 +106,11 @@ class PrivacyZonesRequest(BaseModel):
     zones: list[PrivacyZoneIn]
 
 
-class AdjacencyEdgeIn(BaseModel):
-    from_camera: str = Field(..., alias="from", min_length=1)
-    to_camera: str = Field(..., alias="to", min_length=1)
-    min_transit_s: float = Field(default=0.5, ge=0.0)
-    max_transit_s: float = Field(default=30.0, ge=0.0)
-    overlap: bool = False
-
-    model_config = {"populate_by_name": True}
-
-
-class AdjacencyRequest(BaseModel):
-    edges: list[AdjacencyEdgeIn]
-
-
 class CalibrationStatusResponse(BaseModel):
     cameras_with_homography: int
     homography_camera_ids: list[str] = []
     cameras_with_privacy_zones: int
-    adjacency_edge_count: int
     last_reload_at: str | None
-    adjacency_edges: list[AdjacencyEdgeIn] = []
 
 
 class CalibrationPoint(BaseModel):
@@ -542,33 +525,6 @@ async def post_privacy_zones(
 
 
 @router.post(
-    "/camera_adjacency",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Replace the full camera adjacency graph",
-)
-async def post_camera_adjacency(
-    body: Annotated[AdjacencyRequest, Body()],
-) -> None:
-    state = _get_state()
-    edges = [
-        AdjacencyEdge(
-            from_camera=e.from_camera,
-            to_camera=e.to_camera,
-            min_transit_s=e.min_transit_s,
-            max_transit_s=e.max_transit_s,
-            overlap=e.overlap,
-        )
-        for e in body.edges
-    ]
-    if any(e.max_transit_s < e.min_transit_s for e in edges):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="max_transit_s must be >= min_transit_s for every edge",
-        )
-    await state.set_adjacency(edges)
-
-
-@router.post(
     "/reload",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Trigger a hot-reload of all calibration config",
@@ -585,24 +541,12 @@ async def post_reload() -> None:
 )
 async def get_status() -> CalibrationStatusResponse:
     state = _get_state()
-    edges = [
-        AdjacencyEdgeIn(
-            from_camera=e.from_camera,
-            to_camera=e.to_camera,
-            min_transit_s=e.min_transit_s,
-            max_transit_s=e.max_transit_s,
-            overlap=e.overlap,
-        )
-        for e in state.adjacency_edges
-    ]
     return CalibrationStatusResponse(
         cameras_with_homography=len(state.homographies),
         homography_camera_ids=sorted(state.homographies),
         # A camera whose zones were cleared keeps an empty entry; it has no zones.
         cameras_with_privacy_zones=sum(1 for zones in state.privacy_zones.values() if zones),
-        adjacency_edge_count=len(state.adjacency_edges),
         last_reload_at=state.last_reload_at,
-        adjacency_edges=edges,
     )
 
 

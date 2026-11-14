@@ -12,7 +12,7 @@ threshold) and to share face-anchor evidence within the same GlobalTrack.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import Final
 
 from structlog import get_logger
 
@@ -73,24 +73,3 @@ def parse_overlap_groups(raw: object) -> list[OverlapGroup]:
     if skipped:
         logger.warning("Skipped malformed overlap groups", count=skipped)
     return groups
-
-
-async def fetch_adjacency_edges(client: CognitiveCompanionClient) -> list[dict[str, Any]]:
-    """Fetch persisted camera adjacency edges from CC.
-
-    Raises when CC is unavailable so startup does not silently run with an
-    empty camera-transition graph. Each dict has keys ``from``, ``to``,
-    ``min_transit_s``, ``max_transit_s``, ``overlap`` matching the
-    orchestrator's AdjacencyEdgeIn wire format.
-    """
-    try:
-        data: dict[str, Any] = await client.get("/api/v1/cts/calibration/adjacency")
-    except Exception as exc:
-        logger.exception("adjacency_edges_fetch_failed")
-        raise RuntimeError("Failed to fetch adjacency edges from CC") from exc
-
-    edges = data["edges"]
-    if not isinstance(edges, list):
-        raise TypeError("CC adjacency response field edges must be a list")
-    logger.info("Fetched camera adjacency edges from CC", edge_count=len(edges))
-    return edges
