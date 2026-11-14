@@ -14,6 +14,10 @@ diverged historically because the geometry was computed in two places.
 
 ## Coordinate frames and units (non-negotiable)
 
+The shared floor frame (origin, axes, scale check, the two calibration tiers) is defined in
+`reference/floor-frame.md`. A metre is only a metre on a calibrated camera: code that compares
+floor positions must check `floor_point.calibrated`.
+
 | Quantity | Unit | Frame |
 |---|---|---|
 | `FloorPoint.x_mm/y_mm` | mm | shared floor plan |
@@ -106,6 +110,7 @@ and occluded lower bodies) and the `orientation` bin (side views best separate s
 | Matrix-R update, ZUPT | `app/tracking/world/kalman.py` |
 | Primary-camera selection | `app/tracking/world/tracker.py` |
 | Time model, coasting state, damped prediction, time-skew dedup | `reference/time-model.md` |
+| Floor frame definition, calibration tiers, CC sync authority | `reference/floor-frame.md` |
 | Posture weighting | `app/trajectory/posture.py` |
 
 ## Tests

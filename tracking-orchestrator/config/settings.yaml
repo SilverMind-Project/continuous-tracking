@@ -660,11 +660,12 @@ world_tracker:
   cross_camera_min_plausibility: 0.05
   cross_camera_revive_appearance_min_sim: 0.60
 
-  # ---- Group appearance dedup (M5) ----
-  # Enabled 2026-06-02 for the declared overlap group {cam02,cam03,cam04}.
-  # Merges same-perspective uncalibrated obs within a group by appearance; no
-  # group => no merge; face conflict blocks. Covered by test_dedup group cases.
-  # Requires the overlap group declared CC-side (cts_camera_overlap_groups).
+  # ---- Group appearance dedup ----
+  # Merges uncalibrated observations from different cameras of one declared
+  # overlap group when their appearance similarity reaches
+  # dedup_group_appearance_min_sim and no face conflicts. Inert without a group:
+  # groups are declared in CC (cts_camera_overlap_groups) and applied on every
+  # CC config sync poll. Calibrated observations use the floor-distance pass.
   enable_group_appearance_dedup: true
   dedup_group_appearance_min_sim: 0.75
 
