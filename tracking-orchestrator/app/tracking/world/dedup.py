@@ -65,7 +65,8 @@ def dedup_observations(
     Args:
         observations: raw observations for this frame (all cameras).
         cfg: WorldTrackerConfig; uses ``dedup_enabled``, ``dedup_max_distance_m``,
-             ``dedup_require_no_face_conflict``, and group-appearance keys.
+             ``dedup_require_no_face_conflict``, ``face_conflict_min_similarity``, and
+             group-appearance keys.
         overlap_groups: declared overlap groups for group-appearance dedup.
 
     Returns:
@@ -116,22 +117,11 @@ def dedup_observations(
             effective_gate = _effective_distance_gate_m(obs_i, obs_j, cfg)
             if dist > effective_gate:
                 continue
-            # Rule 3: no identity conflict if both have recognized face ids.
-            # Candidate and unrecognized anchors are weak evidence; they must
-            # not block cross-camera dedup.
-            if cfg.dedup_require_no_face_conflict:
-                fa_i: FaceAnchor | None = obs_i.face_anchor
-                fa_j: FaceAnchor | None = obs_j.face_anchor
-                if (
-                    fa_i is not None
-                    and fa_j is not None
-                    and fa_i.recognition_state == "recognized"
-                    and fa_j.recognition_state == "recognized"
-                    and fa_i.person_id is not None
-                    and fa_j.person_id is not None
-                    and fa_i.person_id != fa_j.person_id
-                ):
-                    continue
+            # Rule 3: no strong face conflict (see _faces_conflict).
+            if cfg.dedup_require_no_face_conflict and _faces_conflict(
+                obs_i.face_anchor, obs_j.face_anchor, cfg
+            ):
+                continue
             _union(i, j)
 
     # Group-appearance dedup for uncalibrated cameras in declared overlap groups.
@@ -174,6 +164,34 @@ def dedup_observations(
             _ = n_collapsed  # surfaced to caller via cluster_map length
 
     return deduped, cluster_map
+
+
+def _faces_conflict(
+    fa_i: FaceAnchor | None,
+    fa_j: FaceAnchor | None,
+    cfg: WorldTrackerConfig,
+) -> bool:
+    """Return True when two observations' faces name different people strongly enough to split them.
+
+    Both anchors are native single-frame recognitions, they name different people, and each raw
+    similarity is at least ``face_conflict_min_similarity``, the floor the association and
+    revival gates apply to a face against a PH's held identity. A weak recognition (which the
+    calibrated evidence policy emits from 0.40 upward), a candidate, a template, or external
+    evidence never splits one person into two PHs; the resolver still sees every face after the
+    merge.
+    """
+    if fa_i is None or fa_j is None:
+        return False
+    for fa in (fa_i, fa_j):
+        if (
+            fa.recognition_state != "recognized"
+            or fa.origin != "native"
+            or fa.aggregation != "frame"
+            or not fa.person_id
+            or fa.match_score < cfg.face_conflict_min_similarity
+        ):
+            return False
+    return fa_i.person_id != fa_j.person_id
 
 
 def _group_appearance_dedup_pass(
@@ -223,20 +241,10 @@ def _group_appearance_dedup_pass(
             else:
                 continue  # cannot merge without embeddings
 
-            # Identity-conflict gate: recognized faces only.
-            if cfg.dedup_require_no_face_conflict:
-                fa_i = obs_i.face_anchor
-                fa_j = obs_j.face_anchor
-                if (
-                    fa_i is not None
-                    and fa_j is not None
-                    and fa_i.recognition_state == "recognized"
-                    and fa_j.recognition_state == "recognized"
-                    and fa_i.person_id is not None
-                    and fa_j.person_id is not None
-                    and fa_i.person_id != fa_j.person_id
-                ):
-                    continue
+            if cfg.dedup_require_no_face_conflict and _faces_conflict(
+                obs_i.face_anchor, obs_j.face_anchor, cfg
+            ):
+                continue
 
             _union(i, j)
             logger.debug(

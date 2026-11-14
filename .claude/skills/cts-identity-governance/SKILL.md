@@ -161,6 +161,10 @@ Physical plausibility belongs in world association, not identity resolution.
 - Validate covariance shape, symmetry, positive semidefiniteness, and configured caps before
   Hungarian assignment.
 - Operator identity and qualifying direct ArcFace conflicts are hard association gates.
+  Association and revival compare an observation's recognized face with the PH's held identity;
+  cross-camera dedup compares two observations' faces (`dedup._faces_conflict`: both native
+  single-frame recognitions naming different people). All three use the same floor,
+  `world_tracker.face_conflict_min_similarity`, so a weak recognition never splits a person.
 - Verified ReID disagreement may add cost but is not a hard gate.
 - If every pair is invalid, spawn or revive an `Unknown` PH; never force a least-bad match.
 - Preserve current PH batch-time behavior unless a separately approved replay-backed change

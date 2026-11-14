@@ -549,3 +549,81 @@ def test_representative_floor_point_is_quality_weighted_fallback() -> None:
     rep = deduped[0]
     # floor_cov_random=None on both → fallback path → quality-weighted mean.
     assert abs(rep.floor_point.x_mm / 1000.0 - 5.0) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Face-conflict threshold: dedup uses the association and revival rule
+# ---------------------------------------------------------------------------
+
+
+def _face(
+    person_id: str,
+    match_score: float,
+    *,
+    recognition_state: str = "recognized",
+    origin: str = "native",
+    aggregation: str = "frame",
+) -> FaceAnchor:
+    return FaceAnchor(
+        person_id=person_id,
+        match_score=match_score,
+        quality=1.0,
+        tracklet_id="",
+        recognition_state=recognition_state,
+        origin=origin,
+        aggregation=aggregation,
+    )
+
+
+def _pair_merges(fa_1: FaceAnchor, fa_2: FaceAnchor, *, geometric: bool) -> bool:
+    """Return whether two co-located cross-camera observations carrying these faces merge."""
+    cfg = WorldTrackerConfig(
+        dedup_enabled=True,
+        dedup_max_distance_m=0.6,
+        enable_group_appearance_dedup=True,
+        dedup_group_appearance_min_sim=0.75,
+        dedup_require_no_face_conflict=True,
+        face_conflict_min_similarity=0.70,
+    )
+    obs = [
+        dataclasses.replace(
+            _obs(cam, 5.0, 5.0, detection_id=det, calibrated=geometric), face_anchor=fa
+        )
+        for cam, det, fa in (("cam-1", "d1", fa_1), ("cam-2", "d2", fa_2))
+    ]
+    deduped, _ = dedup_observations(obs, cfg, overlap_groups=[_GROUP])
+    return len(deduped) == 1
+
+
+@pytest.mark.parametrize("geometric", [True, False], ids=["geometric", "group_appearance"])
+@pytest.mark.parametrize(
+    ("fa_1", "fa_2", "merges"),
+    [
+        pytest.param(_face("alice", 0.75), _face("bob", 0.80), False, id="strong_conflict"),
+        pytest.param(_face("alice", 0.70), _face("bob", 0.70), False, id="at_threshold"),
+        pytest.param(_face("alice", 0.45), _face("bob", 0.80), True, id="one_weak"),
+        pytest.param(_face("alice", 0.90), _face("alice", 0.90), True, id="same_person"),
+        pytest.param(
+            _face("alice", 0.95, aggregation="template"),
+            _face("bob", 0.95),
+            True,
+            id="template_never_blocks",
+        ),
+        pytest.param(
+            _face("alice", 0.95, origin="cc_assertion"),
+            _face("bob", 0.95),
+            True,
+            id="external_never_blocks",
+        ),
+        pytest.param(
+            _face("alice", 0.95, recognition_state="candidate"),
+            _face("bob", 0.95),
+            True,
+            id="candidate_never_blocks",
+        ),
+    ],
+)
+def test_face_conflict_uses_association_threshold(
+    fa_1: FaceAnchor, fa_2: FaceAnchor, merges: bool, geometric: bool
+) -> None:
+    assert _pair_merges(fa_1, fa_2, geometric=geometric) is merges
