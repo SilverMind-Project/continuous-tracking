@@ -913,9 +913,10 @@ class WorldTracker:
                     last_seen_at=obs.captured_at,
                     last_seen_camera=obs.camera_id,
                     observation_count=1,
-                    current_identity_id=_sanitize_identity_id(
-                        obs.face_anchor.person_id if obs.face_anchor else None
-                    ),
+                    # Born Unknown: the resolver runs in this same step with this round's faces
+                    # and is the only writer of identity, so a first face is weighed like any
+                    # other instead of becoming an uncommitted prior.
+                    current_identity_id=None,
                     gallery_mean=obs.embedding if obs.embedding else None,
                     height_estimate_m=obs.height_estimate_m,
                     active_cameras=spawn_cameras,

@@ -7,8 +7,17 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.domain import BoundingBox, FaceAnchor, FloorPoint, OrientationBin, WorldObservation
+from app.domain import (
+    BoundingBox,
+    FaceAnchor,
+    FloorPoint,
+    Identity,
+    OrientationBin,
+    WorldObservation,
+)
 from app.storage.base import InMemoryPHRepository, InMemoryWorldObservationRepository
+from app.storage.gallery import InMemoryGalleryRepository
+from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 from app.tracking.world.config import WorldTrackerConfig
 from app.tracking.world.tracker import WorldTracker
 
@@ -152,13 +161,26 @@ async def test_new_ph_mean_quality_set_from_first_observation():
 
 @pytest.mark.asyncio
 async def test_no_room_polygons_still_spawns_ph_and_snapshot_identity():
-    """Unconfigured room polygons must not block live PH/identity publication."""
+    """Unconfigured room polygons must not block live PH/identity publication.
+
+    The identity comes from the resolver's decision in the spawn step: a PH is born Unknown.
+    """
     cfg = WorldTrackerConfig(dedup_enabled=False, min_observations_to_publish=1)
     ph_repo = InMemoryPHRepository()
     obs_repo = InMemoryWorldObservationRepository()
-    tracker = WorldTracker(ph_repo=ph_repo, obs_repo=obs_repo, config=cfg)
-
     t0 = datetime(2026, 5, 29, 10, 0, 0, tzinfo=UTC)
+    gallery = InMemoryGalleryRepository()
+    await gallery.upsert_identity(
+        Identity(identity_id="grandma", display_name="grandma", enrolled_at=t0)
+    )
+    tracker = WorldTracker(
+        ph_repo=ph_repo,
+        obs_repo=obs_repo,
+        config=cfg,
+        identity_resolver=IdentityResolver(gallery_repo=gallery, config=ResolverConfig()),
+        gallery_repo=gallery,
+    )
+
     obs = replace(
         _obs("cam-1", 5.0, 5.0, "det-grandma", t0, quality=0.9),
         face_anchor=FaceAnchor(
@@ -171,7 +193,9 @@ async def test_no_room_polygons_still_spawns_ph_and_snapshot_identity():
         ),
     )
 
-    result = await tracker.step([obs], now=t0, room_polygons={})
+    result = await tracker.step(
+        [obs], now=t0, room_polygons={}, face_anchors=[obs.face_anchor] if obs.face_anchor else []
+    )
 
     phs = await ph_repo.list_open()
     assert len(phs) == 1

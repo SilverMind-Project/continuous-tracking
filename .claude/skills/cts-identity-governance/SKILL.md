@@ -30,6 +30,11 @@ Keep these concepts separate even when one service coordinates them:
 
 Never collapse these into a single mutable `person_id` field.
 
+A PH is born Unknown; only the resolver writes identity. The spawn branch of `WorldTracker.step`
+sets `current_identity_id=None` and the resolver, which runs in the same step with that round's
+faces, decides as for any Unknown PH. Outside operator corrections, `current_identity_id` changes
+only through `evidence_backed_commit`, `prior_only_update`, and `clear_to_unknown`.
+
 ## Authority order
 
 Identity resolution uses this order:

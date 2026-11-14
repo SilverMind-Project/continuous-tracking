@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 from prometheus_client import Counter
 
+from app.inference.evidence import FaceEvidence
 from tests.integration._replay import _ROOM_POLYGONS, FIXTURES_DIR, load_fixture
 
 # Must match the BASE_TIME used by synthesize_replay_fixture.py.
@@ -53,30 +54,66 @@ async def _replay(
     db_pool: Any,
     fixture_name: str,
 ) -> Any:
-    """Replay a fixture through WorldTracker.step with Postgres repos.
+    """Replay a fixture through WorldTracker.step with Postgres repos and an identity resolver.
 
-    Returns the PH repository for assertions.
+    A PH is born Unknown and only the resolver names it, so the resolver is wired in with every
+    identity the fixture's faces name enrolled, and each face is passed as direct evidence, as
+    FaceIdentityStage does in production. Returns the PH repository for assertions.
     """
+    from app.domain import Identity
+    from app.storage.base import InMemoryGalleryRepository
     from app.storage.postgres.ph_repo import (
         PostgresPHRepository,
         PostgresWorldObservationRepository,
     )
+    from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
     from app.tracking.world.tracker import WorldTracker
-
-    ph_repo = PostgresPHRepository(db_pool)
-    obs_repo = PostgresWorldObservationRepository(db_pool)
-    tracker = WorldTracker(ph_repo=ph_repo, obs_repo=obs_repo)
 
     fixture = FIXTURES_DIR / fixture_name
     assert fixture.exists(), f"Fixture missing: {fixture_name}"
-
     steps = load_fixture(fixture)
+
+    gallery = InMemoryGalleryRepository()
+    named = {
+        obs.face_anchor.person_id
+        for frame_obs in steps
+        for obs in frame_obs
+        if obs.face_anchor is not None
+        and obs.face_anchor.person_id
+        and obs.face_anchor.person_id != "unknown"
+    }
+    for identity_id in sorted(named):
+        await gallery.upsert_identity(
+            Identity(identity_id=identity_id, display_name=identity_id, enrolled_at=BASE_TIME)
+        )
+    ph_repo = PostgresPHRepository(db_pool)
+    tracker = WorldTracker(
+        ph_repo=ph_repo,
+        obs_repo=PostgresWorldObservationRepository(db_pool),
+        identity_resolver=IdentityResolver(gallery_repo=gallery, config=ResolverConfig()),
+    )
+
     for i, frame_obs in enumerate(steps):
         now = BASE_TIME + timedelta(seconds=i * 0.5)
+        anchors = [obs.face_anchor for obs in frame_obs if obs.face_anchor is not None]
         await tracker.step(
             observations=frame_obs,
             now=now,
             room_polygons=_ROOM_POLYGONS,
+            face_anchors=anchors or None,
+            face_evidence=[
+                FaceEvidence(
+                    person_id=fa.person_id,
+                    match_score=fa.match_score,
+                    tracklet_id=fa.tracklet_id,
+                    detection_id=fa.detection_id,
+                    source="direct",
+                    quality=fa.quality,
+                    captured_at=fa.captured_at or now,
+                )
+                for fa in anchors
+            ]
+            or None,
         )
 
     return ph_repo
