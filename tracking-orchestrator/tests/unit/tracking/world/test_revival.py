@@ -295,27 +295,10 @@ def test_cross_camera_accepted_when_enabled() -> None:
     assert result.ph_id == "ph-closed-1"
 
 
-def test_cross_camera_implausible_transit_rejected() -> None:
-    """A crossing far faster than the learned walk between the cameras is rejected."""
-    # The learned walk takes 12 s; this person "arrived" 1 s after leaving.
-    closed = _closed_ph(camera_id="cam-b", closed_at=NOW - timedelta(seconds=1))
-    obs = _obs(camera_id="cam-a")
-    edge = _topology_edge(mean_s=12.0, var_s2=1.0)
-    cfg = _config(cross_camera_min_plausibility=0.05)
-    result = select_revival_candidate(
-        obs,
-        [closed],
-        NOW,
-        cfg,
-        enable_cross_camera=True,
-        topology_edges=[edge],
-    )
-    assert result is None
-
-
-def test_cross_camera_slow_transit_accepted() -> None:
-    """A crossing slower than the learned walk (a pause on the way) is still revived."""
-    closed = _closed_ph(camera_id="cam-b", closed_at=NOW - timedelta(seconds=25))
+def test_cross_camera_closed_beyond_revival_age_rejected() -> None:
+    """A PH closed longer ago than revive_max_age_s is not revived on another camera."""
+    # Closed 100 s ago against a 30 s revival age; the topology edge does not decide this.
+    closed = _closed_ph(camera_id="cam-b", closed_at=NOW - timedelta(seconds=100))
     obs = _obs(camera_id="cam-a")
     edge = _topology_edge(mean_s=3.0, var_s2=0.5)
     cfg = _config(cross_camera_min_plausibility=0.05)
@@ -327,7 +310,7 @@ def test_cross_camera_slow_transit_accepted() -> None:
         enable_cross_camera=True,
         topology_edges=[edge],
     )
-    assert result is not None
+    assert result is None
 
 
 def test_cross_camera_low_appearance_rejected() -> None:

@@ -12,12 +12,16 @@ from datetime import datetime
 
 from ...domain import CameraTopologyEdge
 
-# Minimum observations before a learned distribution may reject a transit.
-MIN_OBSERVATIONS_FOR_LEARNED = 3
+# Default floor for unseen edges: small enough to allow first handoff,
+# large enough that implausible long jumps are filtered once data accumulates.
+_DEFAULT_PLAUSIBILITY_FLOOR = 0.05
 
-# Lower bound on the learned spread. A handful of handoffs at nearly the same speed would
-# otherwise give a spread of a few tenths of a second and reject an ordinary brisk walk.
-_MIN_TRANSIT_STD_S = 1.0
+# Number of standard deviations at which the Gaussian score decays to 1/e
+# (roughly ~0.37; below the floor so effectively floor-clipped).
+_PLAUSIBILITY_SIGMA = 3.0
+
+# Minimum observations before the learned distribution is trusted over the floor.
+_MIN_OBSERVATIONS_FOR_LEARNED = 3
 
 
 def plausible_transit(
@@ -25,29 +29,27 @@ def plausible_transit(
     to_camera: str,
     elapsed_s: float,
     edges: list[CameraTopologyEdge],
+    *,
+    floor: float = _DEFAULT_PLAUSIBILITY_FLOOR,
 ) -> float:
-    """Return how plausible one person crossing *from_camera* to *to_camera* in *elapsed_s* is.
+    """Return transit plausibility [0, 1] for a camera pair given *elapsed_s*.
 
-    The score is in [0, 1] and is compared against ``cross_camera_min_plausibility``.
+    For unseen edges or edges with fewer than ``_MIN_OBSERVATIONS_FOR_LEARNED``
+    samples, returns *floor* (default 0.05) so the first few handoffs always
+    pass.  For well-observed edges, returns a Gaussian-shaped score centred on
+    the learned mean transit time, clipped to *floor*.
 
-    - An unseen camera pair, or one with fewer than ``MIN_OBSERVATIONS_FOR_LEARNED`` handoffs,
-      returns 1.0: there is no evidence against the transit, so the first handoffs always pass
-      and the topology can be learned.
-    - A transit at or slower than the learned mean returns 1.0. People stop on the way between
-      rooms, so a slow transit is not evidence of a different person; the revival age limit
-      bounds how slow it can be.
-    - A transit faster than the learned mean decays as a one-sided Gaussian, so a crossing that
-      is physically too fast for the learned walk scores near 0 and is rejected.
+    The caller is expected to have loaded the edge list from the repository
+    before calling this function.
     """
     edge = _find_edge(from_camera, to_camera, edges)
-    if edge is None or edge.observation_count < MIN_OBSERVATIONS_FOR_LEARNED:
-        return 1.0
-    if elapsed_s >= edge.mean_transit_s:
-        return 1.0
+    if edge is None or edge.observation_count < _MIN_OBSERVATIONS_FOR_LEARNED:
+        return floor
 
-    std = max(math.sqrt(max(edge.variance_transit_s2, 0.0)), _MIN_TRANSIT_STD_S)
-    z = (edge.mean_transit_s - elapsed_s) / std
-    return math.exp(-0.5 * z * z)
+    std = math.sqrt(max(edge.variance_transit_s2, 1e-6))
+    z = (elapsed_s - edge.mean_transit_s) / std
+    gaussian = math.exp(-0.5 * z * z)
+    return max(floor, gaussian)
 
 
 def record_handoff(

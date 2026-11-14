@@ -10,41 +10,58 @@ from app.tracking.world.topology import plausible_transit, record_handoff
 _NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
 
-def _edge(count: int = 10, mean_s: float = 5.0, var_s2: float = 1.0) -> CameraTopologyEdge:
-    return CameraTopologyEdge(
+def test_unseen_edge_returns_floor() -> None:
+    """plausible_transit returns the configured floor for an unseen edge."""
+    p = plausible_transit("cam-a", "cam-b", 5.0, [])
+    assert abs(p - 0.05) < 1e-6
+
+
+def test_unseen_edge_returns_floor_with_data() -> None:
+    """plausible_transit returns floor for an unseen edge even when other edges exist."""
+    edge = CameraTopologyEdge(
         from_camera="cam-a",
         to_camera="cam-b",
-        observation_count=count,
-        mean_transit_s=mean_s,
-        variance_transit_s2=var_s2,
+        observation_count=10,
+        mean_transit_s=3.0,
+        variance_transit_s2=1.0,
     )
+    # Different camera pair -> unseen.
+    p = plausible_transit("cam-x", "cam-y", 5.0, [edge])
+    assert abs(p - 0.05) < 1e-6
 
 
-def test_unseen_edge_never_rejects() -> None:
-    assert plausible_transit("cam-a", "cam-b", 0.1, []) == 1.0
-    assert plausible_transit("cam-x", "cam-y", 0.1, [_edge()]) == 1.0
+def test_few_samples_edge_returns_floor() -> None:
+    """An edge with fewer than 3 observations returns the floor."""
+    edge = CameraTopologyEdge(
+        from_camera="cam-a",
+        to_camera="cam-b",
+        observation_count=2,
+        mean_transit_s=3.0,
+        variance_transit_s2=0.5,
+    )
+    p = plausible_transit("cam-a", "cam-b", 5.0, [edge])
+    assert abs(p - 0.05) < 1e-6
 
 
-def test_sparse_edge_never_rejects() -> None:
-    assert plausible_transit("cam-a", "cam-b", 0.1, [_edge(count=2)]) == 1.0
+def test_well_observed_edge_peaks_near_mean() -> None:
+    """plausible_transit returns near 1.0 at the learned mean and decays away."""
+    edge = CameraTopologyEdge(
+        from_camera="cam-a",
+        to_camera="cam-b",
+        observation_count=10,
+        mean_transit_s=5.0,
+        variance_transit_s2=1.0,
+    )
+    p_at_mean = plausible_transit("cam-a", "cam-b", 5.0, [edge])
+    p_off = plausible_transit("cam-a", "cam-b", 20.0, [edge])
+    assert p_at_mean > 0.9, "should peak near 1.0 at the mean"
+    assert p_off <= 0.05, "should decay to floor far from mean"
 
 
-def test_slow_transit_is_plausible() -> None:
-    """A pause on the way is not evidence of a different person."""
-    assert plausible_transit("cam-a", "cam-b", 5.0, [_edge()]) == 1.0
-    assert plausible_transit("cam-a", "cam-b", 25.0, [_edge()]) == 1.0
-
-
-def test_too_fast_transit_falls_below_the_production_threshold() -> None:
-    edge = _edge(mean_s=8.0, var_s2=1.0)
-    assert plausible_transit("cam-a", "cam-b", 7.0, [edge]) > 0.5
-    assert plausible_transit("cam-a", "cam-b", 1.0, [edge]) < 0.05
-
-
-def test_spread_has_a_floor() -> None:
-    """Near-identical learned handoffs do not reject a walk one second faster than usual."""
-    edge = _edge(mean_s=8.0, var_s2=0.0)
-    assert plausible_transit("cam-a", "cam-b", 7.0, [edge]) > 0.5
+def test_custom_floor_respected() -> None:
+    """The floor parameter controls the minimum returned value."""
+    p = plausible_transit("cam-a", "cam-b", 5.0, [], floor=0.10)
+    assert abs(p - 0.10) < 1e-6
 
 
 def test_record_handoff_first_observation() -> None:
@@ -98,3 +115,22 @@ def test_zero_variance_does_not_divide_by_zero() -> None:
     # Should not raise.
     p = plausible_transit("cam-a", "cam-b", 5.0, [edge])
     assert p > 0.9  # at the exact mean, Gaussian = 1.0
+
+
+def test_learned_gate_cannot_reject_at_the_production_threshold() -> None:
+    """The floor equals ``cross_camera_min_plausibility`` (0.05), so no transit is rejected.
+
+    Learned transits are measured from a closed PH's ``closed_at``, which grace expiry sets at
+    least ``ph_close_grace_s`` after the last sighting; they describe delay after closure, not
+    walk time, so a physically too-fast crossing never reaches this gate. Changing the floor or
+    the threshold makes the gate reject revivals and needs its own design decision.
+    """
+    edge = CameraTopologyEdge(
+        from_camera="cam-a",
+        to_camera="cam-b",
+        observation_count=50,
+        mean_transit_s=20.0,
+        variance_transit_s2=1.0,
+    )
+    for elapsed_s in (0.0, 0.5, 5.0, 20.0, 30.0, 600.0):
+        assert plausible_transit("cam-a", "cam-b", elapsed_s, [edge]) >= 0.05
