@@ -40,7 +40,13 @@ def _postgres_container() -> Generator[PostgresContainer, None, None]:
 
     testcontainers_config.ryuk_disabled = True
 
-    container: PostgresContainer = PostgresContainer("timescale/timescaledb-ha:pg18")
+    # TimescaleDB's job scheduler is off: a background policy job (the 14-day retention on
+    # face_observation_stats drops chunks holding fixture rows dated before the window) races the
+    # tests' own writes and DDL, deadlocking a migration rollback or deleting rows mid-test. Jobs
+    # still register, so tests can assert a policy exists; none runs on its own.
+    container: PostgresContainer = PostgresContainer("timescale/timescaledb-ha:pg18").with_command(
+        "postgres -c timescaledb.max_background_workers=0"
+    )
     try:
         container.start()
         _container_ref = container
