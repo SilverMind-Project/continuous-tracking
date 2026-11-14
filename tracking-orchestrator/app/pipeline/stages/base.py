@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Protocol
 
 from structlog import get_logger
@@ -11,6 +13,19 @@ from ...observability import metrics as _metrics
 from ..frame_context import FrameContext
 
 logger = get_logger(__name__)
+
+
+@contextmanager
+def timed_phase(stage_name: str, camera_id: str) -> Iterator[None]:
+    """Observe ``cts_stage_latency_ms`` for a pipeline stage or direct phase call."""
+    start = time.monotonic()
+    try:
+        yield
+    finally:
+        latency_ms = (time.monotonic() - start) * 1000.0
+        _metrics.metrics.stage_latency_ms.labels(stage=stage_name, camera_id=camera_id).observe(
+            latency_ms
+        )
 
 
 class FrameStage(Protocol):
@@ -33,7 +48,8 @@ class StageRunner:
         for stage in self._stages:
             start = time.monotonic()
             try:
-                await stage.run(ctx)
+                with timed_phase(stage.name, ctx.frame.camera_id):
+                    await stage.run(ctx)
             except Exception:
                 latency_ms = (time.monotonic() - start) * 1000.0
                 logger.exception(
@@ -45,7 +61,3 @@ class StageRunner:
                     latency_ms=round(latency_ms, 3),
                 )
                 raise
-            latency_ms = (time.monotonic() - start) * 1000.0
-            _metrics.metrics.stage_latency_ms.labels(
-                stage=stage.name, camera_id=ctx.frame.camera_id
-            ).observe(latency_ms)

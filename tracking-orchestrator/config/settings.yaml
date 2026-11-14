@@ -26,6 +26,7 @@ redis:
   batch_max_size: 8
   xack_timeout_ms: 5000
   ack_ttl_seconds: 300
+  pending_reclaim_min_idle_s: 300
 
 # PostgreSQL database
 database:

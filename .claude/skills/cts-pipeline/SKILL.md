@@ -39,8 +39,8 @@ Current orchestration side effects are placed as follows:
 | Gallery-cache epoch | `_process_frame` calls `_begin_tracker_round` once per frame | Same, because `_handle_batch` delegates each frame to `_process_frame` | The round loop calls `_begin_tracker_round` once before pre-world stages and `run_many` |
 | Staleness check | `_process_frame` calls `_is_stale` | Same through `_process_frame` | `_handle_cross_camera_batch` calls `_is_stale` before context creation, fetch, and round assembly |
 | Camera-row seeding | `_process_frame_direct` calls `_ensure_camera_row` before `_process_frame` | `_handle_batch` calls `_ensure_camera_row` before each `_process_frame` | The round loop calls `_ensure_camera_row` before each context enters `_pre_world_runner` |
-| Success ACK and latency log | `_process_frame_direct` after `_process_frame` | `_handle_batch` after each `_process_frame` | `_process_post_world_context` after `_post_world_runner` |
-| Failure metrics | `_process_frame_direct` increments `frames_failed_total` | `_handle_batch` increments `frames_failed_total` | Fetch, detector, pre-world, world, and post-world failure branches increment `frames_failed_total` |
+| Success or failure ACK and latency | `_process_frame_direct` calls `_finish_frame` on success or failure (`reference/frame-transport.md`) | `_handle_batch` calls `_finish_frame` on success or failure | Fetch, detector, pre-world, world, and post-world paths call `_finish_frame` on every exit (`reference/frame-transport.md`) |
+| Failure metrics | `_finish_frame` increments `frames_failed_total` before `ack_frame` | Same, through `_finish_frame` | Same, through `_finish_frame` on every failure branch |
 | Face template buffer feed | `WorldTrackingStage.run` delegates to `run_many`, which feeds it (`reference/face-template-buffer.md`) | Same, through `_process_frame` | `world_tracking_stage.run_many` feeds it once per round |
 
 `_begin_tracker_round` is the required chokepoint for work that must happen exactly once before world tracking, such as invalidating the per-round `GalleryCache`. Any new route that can reach `WorldTrackingStage` must call it. Do not add a cache invalidation directly to an individual stage.
@@ -100,7 +100,7 @@ The list is configuration-dependent. A conditional stage must name its enabling 
 
 ## StageRunner contract
 
-`StageRunner` (`app/pipeline/stages/base.py`) iterates the stage list and calls `await stage.run(ctx)` in order. Exceptions propagate to the `_consume_loop` handler, which logs and retries the frame. Individual stages must not catch broad exceptions; let them propagate.
+`StageRunner` (`app/pipeline/stages/base.py`) iterates the stage list and calls `await stage.run(ctx)` in order inside `timed_phase(stage.name, ctx.camera_id)`. Exceptions propagate to the pipeline caller, which records the failure and always acknowledges the frame via `_finish_frame` (`reference/frame-transport.md`). Individual stages must not catch broad exceptions; let them propagate.
 
 A stage that is computationally expensive but optional (e.g., pose estimation with an unavailable model) should degrade gracefully and log at `warning` level, but must not silently skip work without a log.
 

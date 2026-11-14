@@ -181,3 +181,31 @@ func TestReconnectBackoffDefaultsAndValidation(t *testing.T) {
 			fromYAML.CameraDefaults.ReconnectBackoffMaxSeconds)
 	}
 }
+
+func TestMotionAndCaptureLatencyValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.CameraDefaults.MotionMode != "frame_mean" {
+		t.Fatalf("default motion_mode: got %q, want frame_mean", cfg.CameraDefaults.MotionMode)
+	}
+	if cfg.CameraDefaults.MotionCellThreshold != 0.04 {
+		t.Fatalf("default motion_cell_threshold: got %v, want 0.04", cfg.CameraDefaults.MotionCellThreshold)
+	}
+	if cfg.CameraDefaults.MotionMinCells != 1 {
+		t.Fatalf("default motion_min_cells: got %d, want 1", cfg.CameraDefaults.MotionMinCells)
+	}
+	if cfg.CameraDefaults.MotionHoldS != 3.0 {
+		t.Fatalf("default motion_hold_s: got %v, want 3.0", cfg.CameraDefaults.MotionHoldS)
+	}
+
+	invalidLatency := DefaultConfig()
+	invalidLatency.CameraDefaults.CaptureLatencyMs = 6000
+	if err := invalidLatency.Validate(); err == nil {
+		t.Fatal("expected capture_latency_ms > 5000 to fail validation")
+	}
+
+	invalidMode := DefaultConfig()
+	invalidMode.CameraDefaults.MotionMode = "bogus"
+	if err := invalidMode.Validate(); err == nil {
+		t.Fatal("expected invalid motion_mode to fail validation")
+	}
+}

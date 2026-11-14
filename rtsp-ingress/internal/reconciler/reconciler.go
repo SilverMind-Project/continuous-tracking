@@ -149,8 +149,23 @@ func (r *Reconciler) fetchCameras(ctx context.Context) ([]config.CameraConfig, e
 		if cc.FrameIntervalMs <= 0 {
 			cc.FrameIntervalMs = r.defaults.FrameIntervalMs
 		}
+		if cc.CaptureLatencyMs <= 0 {
+			cc.CaptureLatencyMs = r.defaults.CaptureLatencyMs
+		}
 		if cc.MotionThreshold <= 0 {
 			cc.MotionThreshold = r.defaults.MotionThreshold
+		}
+		if cc.MotionMode == "" {
+			cc.MotionMode = r.defaults.MotionMode
+		}
+		if cc.MotionCellThreshold <= 0 {
+			cc.MotionCellThreshold = r.defaults.MotionCellThreshold
+		}
+		if cc.MotionMinCells <= 0 {
+			cc.MotionMinCells = r.defaults.MotionMinCells
+		}
+		if cc.MotionHoldS <= 0 {
+			cc.MotionHoldS = r.defaults.MotionHoldS
 		}
 		if cc.ReconnectBackoffSeconds <= 0 {
 			cc.ReconnectBackoffSeconds = r.defaults.ReconnectBackoffSeconds

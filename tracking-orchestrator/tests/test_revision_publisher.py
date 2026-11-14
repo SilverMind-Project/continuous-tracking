@@ -176,3 +176,90 @@ class TestRevisionPublisher:
         result = await publisher.publish(revision)
         assert result == "msg-42"
         mock_redis.xadd.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_publish_maps_reason_to_bounded_kind_label(self, monkeypatch) -> None:
+        """Revision reasons with names/posteriors or unknown text map to bounded kind enum."""
+        from prometheus_client import CollectorRegistry
+
+        from app.observability import metrics as metrics_pkg
+        from app.transport import revision_publisher as rev_mod
+
+        fresh = metrics_pkg.build_metrics(registry=CollectorRegistry())
+        monkeypatch.setattr(metrics_pkg, "metrics", fresh)
+        monkeypatch.setattr(rev_mod.metrics, "metrics", fresh)
+
+        publisher = RevisionPublisher(redis_url="redis://localhost:6379/0")
+        mock_redis = AsyncMock()
+        mock_redis.xadd = AsyncMock(return_value="msg-1")
+        mock_redis.pipeline = MagicMock()
+        mock_pipe = AsyncMock()
+        mock_pipe.xadd = MagicMock()
+        mock_pipe.execute = AsyncMock(return_value=["msg-2", "msg-3", "msg-4"])
+        mock_redis.pipeline.return_value = mock_pipe
+        publisher._redis = mock_redis
+
+        rev_initial = IdentityRevision(
+            revision_id="rev-1",
+            ph_id="ph-1",
+            previous_identity_id=None,
+            new_identity_id="sriram",
+            actor="resolver",
+            reason="initial_assignment: sriram (p=0.923)",
+            applied_at=datetime.now(UTC),
+            rewritten_rows=1,
+        )
+        await publisher.publish(rev_initial)
+
+        batch = [
+            IdentityRevision(
+                revision_id="rev-2",
+                ph_id="ph-2",
+                previous_identity_id="alice",
+                new_identity_id="bob",
+                actor="resolver",
+                reason="identity_change: alice -> bob (p=0.880, margin=0.320)",
+                applied_at=datetime.now(UTC),
+                rewritten_rows=2,
+            ),
+            IdentityRevision(
+                revision_id="rev-3",
+                ph_id="ph-3",
+                previous_identity_id="alice",
+                new_identity_id=None,
+                actor="resolver",
+                reason="demoted_to_unknown: alice (p=0.310, margin=0.050)",
+                applied_at=datetime.now(UTC),
+                rewritten_rows=1,
+            ),
+            IdentityRevision(
+                revision_id="rev-4",
+                ph_id="ph-4",
+                previous_identity_id=None,
+                new_identity_id="carol",
+                actor="operator",
+                reason="free-form custom reason: fixed wrong person (manual)",
+                applied_at=datetime.now(UTC),
+                rewritten_rows=1,
+            ),
+        ]
+        await publisher.publish_many(batch)
+
+        samples = [
+            s
+            for metric in fresh.tracking_revisions_published_total.collect()
+            for s in metric.samples
+            if s.name.endswith("_total")
+        ]
+        by_kind = {s.labels["kind"]: s.value for s in samples}
+        assert by_kind == {
+            "initial_assignment": 1.0,
+            "identity_changed": 1.0,
+            "demoted_to_unknown": 1.0,
+            "other": 1.0,
+        }
+        for kind_label in by_kind:
+            assert ":" not in kind_label
+            assert "(" not in kind_label
+            assert ")" not in kind_label
+            assert " " not in kind_label

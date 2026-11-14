@@ -36,9 +36,8 @@ class RevisionPublisher(BasePublisher):
         message = _to_proto(revision)
         message_id = await self._xadd({FIELD: message.SerializeToString()})
 
-        metrics.metrics.tracking_revisions_published_total.labels(
-            reason=revision.reason or "unknown"
-        ).inc()
+        kind = metrics.classify_revision_reason(revision.reason)
+        metrics.metrics.tracking_revisions_published_total.labels(kind=str(kind)).inc()
 
         logger.info(
             "Published identity revision",
@@ -70,9 +69,8 @@ class RevisionPublisher(BasePublisher):
 
         results = await pipe.execute()
         for revision in revisions:
-            metrics.metrics.tracking_revisions_published_total.labels(
-                reason=revision.reason or "unknown"
-            ).inc()
+            kind = metrics.classify_revision_reason(revision.reason)
+            metrics.metrics.tracking_revisions_published_total.labels(kind=str(kind)).inc()
         logger.info(
             "Published batch of revisions",
             count=len(revisions),

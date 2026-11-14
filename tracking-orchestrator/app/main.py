@@ -192,6 +192,10 @@ async def _fetch_cc_camera_configs(
 
 def _build_transport_config(s: Settings) -> TransportConfig:
     """Build TransportConfig from required settings.yaml keys."""
+    try:
+        pending_reclaim_min_idle_s = s.as_int("redis.pending_reclaim_min_idle_s")
+    except SettingNotFoundError:
+        pending_reclaim_min_idle_s = 300
     return TransportConfig(
         redis_url=s.as_str("redis.url"),
         consumer_group=s.as_str("redis.consumer_group"),
@@ -202,6 +206,7 @@ def _build_transport_config(s: Settings) -> TransportConfig:
         batch_max_size=s.as_int("redis.batch_max_size"),
         xack_timeout_ms=s.as_int("redis.xack_timeout_ms"),
         ack_ttl_seconds=s.as_int("redis.ack_ttl_seconds"),
+        pending_reclaim_min_idle_s=pending_reclaim_min_idle_s,
         revisions_stream=s.as_str("redis.revisions_stream"),
         signals_stream=s.as_str("redis.signals_stream"),
         scene_samples_stream=s.as_str("redis.scene_samples_stream"),

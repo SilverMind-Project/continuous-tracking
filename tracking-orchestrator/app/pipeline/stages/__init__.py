@@ -1,6 +1,6 @@
 """Pipeline stage implementations."""
 
-from .base import FrameStage, StageRunner
+from .base import FrameStage, StageRunner, timed_phase
 from .detect import DetectStage
 from .detection_backfill import DetectionBackfillStage
 from .face_identity import FaceIdentityStage
@@ -41,4 +41,5 @@ __all__ = [
     "TrailsStage",
     "TrajectoryStage",
     "WorldTrackingStage",
+    "timed_phase",
 ]

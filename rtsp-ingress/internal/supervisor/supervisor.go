@@ -42,6 +42,7 @@ type Supervisor struct {
 type workerHandle struct {
 	cancel context.CancelFunc
 	camera config.CameraConfig
+	worker *poll.Worker
 }
 
 // New creates a Supervisor.
@@ -113,23 +114,28 @@ func (s *Supervisor) Reconcile(cameras []config.CameraConfig) {
 		if _, ok := s.workers[id]; !ok {
 			s.log.Info("starting_worker", zap.String("camera_id", id))
 			ctx, cancel := context.WithCancel(s.parent)
-			h := &workerHandle{cancel: cancel, camera: cam}
+			gate := motion.NewWithOptions(motion.Options{
+				Mode:          cam.MotionMode,
+				Threshold:     cam.MotionThreshold,
+				CellThreshold: cam.MotionCellThreshold,
+				MinCells:      cam.MotionMinCells,
+			})
+			w := poll.NewWorker(
+				cam,
+				s.go2rtc,
+				gate,
+				s.publisher,
+				s.log.With(zap.String("camera_id", cam.ID)),
+			)
+			h := &workerHandle{cancel: cancel, camera: cam, worker: w}
 			s.workers[id] = h
 			s.wg.Add(1)
 			metrics.ActiveWorkers.Inc()
-			go func(c config.CameraConfig) {
+			go func(worker *poll.Worker) {
 				defer s.wg.Done()
 				defer metrics.ActiveWorkers.Dec()
-				gate := motion.New(c.MotionThreshold)
-				w := poll.NewWorker(
-					c,
-					s.go2rtc,
-					gate,
-					s.publisher,
-					s.log.With(zap.String("camera_id", c.ID)),
-				)
-				w.Run(ctx)
-			}(cam)
+				worker.Run(ctx)
+			}(w)
 		}
 	}
 }
@@ -152,9 +158,20 @@ func (s *Supervisor) StreamHealth(ctx context.Context, cameraID string) map[stri
 		"latency_ms": elapsed.Milliseconds(),
 	}
 	s.mu.Lock()
-	_, running := s.workers[cameraID]
+	h, running := s.workers[cameraID]
 	s.mu.Unlock()
 	result["worker_running"] = running
+	if running && h.worker != nil {
+		if age, ok := h.worker.LastFrameAgeSeconds(time.Now()); ok {
+			result["last_frame_age_s"] = age
+		} else {
+			result["last_frame_age_s"] = nil
+		}
+		result["fetch_backoff_s"] = h.worker.CurrentBackoffSeconds()
+	} else {
+		result["last_frame_age_s"] = nil
+		result["fetch_backoff_s"] = 0.0
+	}
 
 	if err != nil {
 		result["error"] = err.Error()
@@ -192,24 +209,29 @@ func (s *Supervisor) ReloadStream(ctx context.Context, cameraID string) error {
 
 	// Start a fresh worker immediately — don't wait for the next reconcile.
 	workerCtx, cancel := context.WithCancel(s.parent)
-	s.workers[cameraID] = &workerHandle{cancel: cancel, camera: cam}
+	gate := motion.NewWithOptions(motion.Options{
+		Mode:          cam.MotionMode,
+		Threshold:     cam.MotionThreshold,
+		CellThreshold: cam.MotionCellThreshold,
+		MinCells:      cam.MotionMinCells,
+	})
+	w := poll.NewWorker(
+		cam,
+		s.go2rtc,
+		gate,
+		s.publisher,
+		s.log.With(zap.String("camera_id", cam.ID)),
+	)
+	s.workers[cameraID] = &workerHandle{cancel: cancel, camera: cam, worker: w}
 	s.mu.Unlock()
 
 	s.wg.Add(1)
 	metrics.ActiveWorkers.Inc()
-	go func(c config.CameraConfig) {
+	go func(worker *poll.Worker) {
 		defer s.wg.Done()
 		defer metrics.ActiveWorkers.Dec()
-		gate := motion.New(c.MotionThreshold)
-		w := poll.NewWorker(
-			c,
-			s.go2rtc,
-			gate,
-			s.publisher,
-			s.log.With(zap.String("camera_id", c.ID)),
-		)
-		w.Run(workerCtx)
-	}(cam)
+		worker.Run(workerCtx)
+	}(w)
 
 	return nil
 }

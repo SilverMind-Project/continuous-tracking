@@ -152,6 +152,9 @@ class WorldTrackingStage(FrameStage):
             frame_observations, uncalibrated_count = self._build_observations(ctx)
             observations.extend(frame_observations)
             if uncalibrated_count:
+                _metrics.metrics.uncalibrated_detection_total.labels(
+                    camera_id=ctx.frame.camera_id
+                ).inc(uncalibrated_count)
                 logger.debug(
                     "world_tracking_synthetic_floor_points",
                     camera_id=ctx.frame.camera_id,

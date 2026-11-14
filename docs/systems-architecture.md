@@ -37,7 +37,7 @@ Data flow: cameras to go2rtc to rtsp-ingress to `frames.ready` to tracking-orche
 The architecture is a single floor-plane Kalman world tracker over PersonHypothesis (PH) with a Bayesian identity resolver. It is not BoT-SORT, per-camera tracklets, or GlobalTrack (those were removed).
 
 - **PersonHypothesis (PH)** (`app/domain/__init__.py`, frozen dataclass) is the one cross-camera person entity. `ph_id` (UUID string) is the only person id on the wire. It carries Kalman `state_mean (x, y, vx, vy)` and `state_cov` in floor metres, `gallery_mean` (EMA SOLIDER embedding), `height_estimate_m`, `active_cameras`, `mean_quality` (EMA of CropQuality), and `current_identity_id` plus `current_identity_committed_at`.
-- **Frame pipeline** (`app/pipeline/frame_pipeline.py`): 15 ordered `FrameStage`s run by `StageRunner`. A stage is live only if it is in the `stages` list built in `initialize()`.
+- **Frame pipeline** (`app/pipeline/frame_pipeline.py`): 15 ordered `FrameStage`s run by `StageRunner`. A stage is live only if it is in the `stages` list built in `initialize()`. Frames consumed from `frames.ready` are processed at most once and always acknowledged (on success, staleness drop, or terminal failure via `_finish_frame`); failed frames increment `cts_frames_failed_total` and are never left in the Redis Stream PEL to be reprocessed. On startup, `RedisStreamsTransport` reclaims and acknowledges any stale pending entries older than `redis.pending_reclaim_min_idle_s`.
 
 ```mermaid
 flowchart LR
@@ -132,8 +132,8 @@ The multi-view gallery query holds residual mass on UNKNOWN for weak matches, so
 
 1. `reconciler` fetches the enabled camera list from `GET /api/v1/cts/cameras` on cognitive-companion (polled every 60 s)
 2. `Supervisor.Reconcile()` calls `go2rtc.RegisterStream(ctx, cameraID, rtspURL)` -- idempotent HTTP PUT to go2rtc `/api/streams`; heals go2rtc restarts
-3. `poll.Worker` ticks every `frame_interval_ms` ms and calls `go2rtc.FetchJPEG(ctx, cameraID)` -- HTTP GET `/api/frame.jpeg`. Each fetch can make go2rtc open an RTSP session, so after a failed fetch (or a truncated frame) the worker waits `reconnect_backoff_s`, doubling per consecutive failure up to `reconnect_backoff_max_s`, and resets on the first good frame. `rtsp_camera_backoff_seconds{camera_id}` shows the current wait (0 while healthy); a failing camera logs one `fetch_failed`/`jpeg_decode_failed` per attempt and `fetch_recovered` when it returns
-4. Frame passes motion gate, uploads to MinIO, publishes to `frames.ready`
+3. `poll.Worker` ticks every `frame_interval_ms` ms, records the fetch-start wall-clock instant before calling `go2rtc.FetchJPEG(ctx, cameraID)` (HTTP GET `/api/frame.jpeg`), and records `receivedAt` after JPEG decode and rotation. `CaptureTimeUnixNs` is stamped as `fetchStart - capture_latency_ms` (never later than `fetchStart`) and `ReceivedTimeUnixNs` as `receivedAt`. Each fetch can make go2rtc open an RTSP session, so after a failed fetch (or a truncated frame) the worker waits `reconnect_backoff_s`, doubling per consecutive failure up to `reconnect_backoff_max_s`, and resets on the first good frame. `rtsp_camera_backoff_seconds{camera_id}` shows the current wait (0 while healthy); `rtsp_last_fetch_success_timestamp_seconds{camera_id}` and `rtsp_last_frame_published_timestamp_seconds{camera_id}` track ingest liveness; a failing camera logs one `fetch_failed`/`jpeg_decode_failed` per attempt and `fetch_recovered` when it returns
+4. Frame passes the motion gate (`motion.Gate`), uploads to MinIO, and publishes to `frames.ready`. In `cells` mode (`defaults.motion_mode: cells`), the 320x180 grayscale frame is divided into a 16x9 grid of 20x20 px cells. Motion fires when at least `motion_min_cells` cells have a mean absolute delta at or above `motion_cell_threshold` against either the previous polled frame or the last published frame (so slow movement accumulates across polls), or when the whole-frame mean delta exceeds `motion_threshold`. Once motion fires, the worker continues publishing subsequent polled frames for `motion_hold_s` seconds (default 3.0 s) so a walking person continues producing frames across the room.
 
 `rtsp-ingress/config/go2rtc.yaml` has **no `streams:` section** -- all registrations are dynamic. Do not add `gortsplib` or `pion/rtp` to this codebase.
 
@@ -152,7 +152,12 @@ rtsp-ingress polls `GET /api/v1/cts/cameras` on cognitive-companion every 60 s (
 | `RoomName` | `cts_cameras.location` |
 | `Enabled` | only enabled cameras are included (filtered Go-side) |
 | `FrameIntervalMs` | falls back to `defaults.frame_interval_ms` from settings.yaml |
+| `CaptureLatencyMs` | falls back to `defaults.capture_latency_ms` (subtracted from fetch start to stamp `CaptureTimeUnixNs`) |
 | `MotionThreshold` | falls back to `defaults.motion_threshold` |
+| `MotionMode` | falls back to `defaults.motion_mode` (`cells` or `frame_mean`) |
+| `MotionCellThreshold` | falls back to `defaults.motion_cell_threshold` |
+| `MotionMinCells` | falls back to `defaults.motion_min_cells` |
+| `MotionHoldSeconds` | falls back to `defaults.motion_hold_s` |
 | `ReconnectBackoffSeconds` | falls back to `defaults.reconnect_backoff_s` (first retry delay after a failed fetch) |
 | `ReconnectBackoffMaxSeconds` | falls back to `defaults.reconnect_backoff_max_s` (cap on the doubling retry delay) |
 

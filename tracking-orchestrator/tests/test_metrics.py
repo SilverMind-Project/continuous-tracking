@@ -17,8 +17,11 @@ def test_build_metrics_registers_required_series() -> None:
     # Inc one of every counter so the series materialise in the registry.
     m.frames_consumed_total.labels(camera_id="cam-1").inc()
     m.frames_failed_total.labels(camera_id="cam-1", reason="timeout").inc()
+    m.frames_abandoned_total.inc()
+    m.frames_stream_pending.set(0)
+    m.frames_stream_lag.set(0)
     m.tracking_events_published_total.labels(camera_id="cam-1").inc()
-    m.tracking_revisions_published_total.labels(reason="initial_assignment").inc()
+    m.tracking_revisions_published_total.labels(kind="initial_assignment").inc()
     m.dementia_signals_published_total.labels(signal_kind="pacing", severity="warning").inc()
     m.scene_samples_published_total.labels(reason="periodic").inc()
     m.proto_messages_emitted_total.labels(stream="tracking.events").inc()
@@ -35,6 +38,9 @@ def test_build_metrics_registers_required_series() -> None:
     expected = {
         "cts_frames_consumed",
         "cts_frames_failed",
+        "cts_frames_abandoned",
+        "cts_frames_stream_pending",
+        "cts_frames_stream_lag",
         "cts_tracking_events_published",
         "cts_tracking_revisions_published",
         "cts_dementia_signals_published",

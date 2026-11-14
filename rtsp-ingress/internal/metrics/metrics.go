@@ -61,4 +61,34 @@ var (
 		},
 		[]string{"camera_id"},
 	)
+	FetchDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "rtsp_fetch_duration_seconds",
+			Help:    "Round-trip duration of go2rtc JPEG frame fetches.",
+			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1.0, 2.5},
+		},
+		[]string{"camera_id"},
+	)
+	MotionActiveCells = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "rtsp_motion_active_cells",
+			Help:    "Number of active 20x20 grid cells on the 320x180 motion evaluation frame.",
+			Buckets: []float64{0, 1, 2, 4, 8, 16, 32, 64, 144},
+		},
+		[]string{"camera_id"},
+	)
+	LastFramePublishedTimestampSeconds = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "rtsp_last_frame_published_timestamp_seconds",
+			Help: "Unix timestamp (seconds) of the last frame published for a camera.",
+		},
+		[]string{"camera_id"},
+	)
+	LastFetchSuccessTimestampSeconds = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "rtsp_last_fetch_success_timestamp_seconds",
+			Help: "Unix timestamp (seconds) of the last successful go2rtc JPEG fetch for a camera.",
+		},
+		[]string{"camera_id"},
+	)
 )

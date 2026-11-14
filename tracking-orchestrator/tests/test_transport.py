@@ -250,7 +250,11 @@ class TestTransportDataPath:
             width=640,
             height=480,
         )
-        transport._pending_acks[id(frame)] = ("1700000000000-0", 0.0)
+        key = (frame.camera_id, frame.frame_index, frame.capture_time_unix_ns)
+        transport._pending_acks[key] = (
+            "1700000000000-0",
+            0.0,
+        )
 
         await transport.ack_frame(frame)
         mock_redis.xack.assert_called_once_with(
@@ -439,10 +443,14 @@ class TestPendingAcksEviction:
             width=640,
             height=480,
         )
-        transport._pending_acks[id(frame)] = ("msg-1", stale_time)
+        key = (frame.camera_id, frame.frame_index, frame.capture_time_unix_ns)
+        transport._pending_acks[key] = (
+            "msg-1",
+            stale_time,
+        )
 
         # Also add a fresh entry.
-        transport._pending_acks[id(frame) + 1] = ("msg-2", time.monotonic())
+        transport._pending_acks[("cam-1", 2, 2000000000)] = ("msg-2", time.monotonic())
 
         assert len(transport._pending_acks) == 2
         transport._cleanup_stale_acks()
@@ -466,7 +474,125 @@ class TestPendingAcksEviction:
             width=640,
             height=480,
         )
-        transport._pending_acks[id(frame)] = ("msg-1", time.monotonic())
+        key = (frame.camera_id, frame.frame_index, frame.capture_time_unix_ns)
+        transport._pending_acks[key] = (
+            "msg-1",
+            time.monotonic(),
+        )
 
         transport._cleanup_stale_acks()
         assert len(transport._pending_acks) == 1
+
+    @pytest.mark.asyncio
+    async def test_pending_acks_key_does_not_collide_on_object_reuse(self) -> None:
+        """Two distinct frames use value-based keys and never overwrite each other."""
+        from app.proto.continuoustracking.v1 import frame_pb2
+
+        transport = RedisStreamsTransport()
+        mock_redis = AsyncMock()
+        transport._redis = mock_redis
+
+        pb1 = frame_pb2.FrameReady(
+            camera_id="cam-1",
+            minio_key="frames/cam-1/1.jpg",
+            frame_index=1,
+            capture_time_unix_ns=1000,
+            received_time_unix_ns=1001,
+            width=640,
+            height=480,
+        )
+        pb2 = frame_pb2.FrameReady(
+            camera_id="cam-1",
+            minio_key="frames/cam-1/2.jpg",
+            frame_index=2,
+            capture_time_unix_ns=2000,
+            received_time_unix_ns=2001,
+            width=640,
+            height=480,
+        )
+        mock_redis.xreadgroup = AsyncMock(
+            return_value=[
+                (
+                    b"frames.ready",
+                    [
+                        (b"1-0", {b"frame": pb1.SerializeToString()}),
+                        (b"2-0", {b"frame": pb2.SerializeToString()}),
+                    ],
+                )
+            ]
+        )
+
+        consumed: list[FrameReady] = []
+        async for f in transport.consume_frames(count=2):
+            consumed.append(f)
+
+        assert len(consumed) == 2
+        assert len(transport._pending_acks) == 2
+
+        # Re-create an equal value FrameReady instance at a new Python id() and ACK it.
+        clone_f1 = FrameReady(
+            camera_id="cam-1",
+            minio_key="frames/cam-1/1.jpg",
+            frame_index=1,
+            capture_time_unix_ns=1000,
+            received_time_unix_ns=1001,
+            width=640,
+            height=480,
+        )
+        assert id(clone_f1) != id(consumed[0])
+        await transport.ack_frame(clone_f1)
+        await transport.ack_frame(consumed[1])
+        assert mock_redis.xack.await_count == 2
+        assert len(transport._pending_acks) == 0
+
+    @pytest.mark.asyncio
+    async def test_connect_reclaims_stale_pending_entries(self, monkeypatch) -> None:
+        """Startup connect() reclaims and XACKs stale pending entries via XAUTOCLAIM."""
+        from prometheus_client import CollectorRegistry
+
+        from app.observability import metrics as metrics_pkg
+        from app.transport import redis_streams
+
+        fresh = metrics_pkg.build_metrics(registry=CollectorRegistry())
+        monkeypatch.setattr(metrics_pkg, "metrics", fresh)
+        monkeypatch.setattr(redis_streams.metrics, "metrics", fresh)
+
+        mock_redis = AsyncMock()
+        mock_redis.xgroup_create = AsyncMock(return_value=True)
+        mock_redis.xautoclaim = AsyncMock(
+            side_effect=[
+                (b"3-0", [(b"1-0", {b"frame": b"x"}), (b"2-0", {b"frame": b"y"})], []),
+                (b"0-0", [(b"3-0", {b"frame": b"z"})], []),
+            ]
+        )
+        mock_redis.xack = AsyncMock(return_value=2)
+
+        with monkeypatch.context() as m:
+            m.setattr(redis_streams.redis, "from_url", lambda *a, **kw: mock_redis)
+            transport = RedisStreamsTransport(TransportConfig(pending_reclaim_min_idle_s=300))
+            await transport.connect()
+
+        assert mock_redis.xautoclaim.await_count == 2
+        assert mock_redis.xack.await_count == 2
+        assert fresh.frames_abandoned_total._value.get() == 3.0
+
+    @pytest.mark.asyncio
+    async def test_pending_count_reads_pending_and_lag_from_xinfo_groups(self) -> None:
+        """pending_count() returns (pending, lag) from XINFO GROUPS and handles lag=None."""
+        transport = RedisStreamsTransport(TransportConfig(consumer_group="cts-orchestrator"))
+        mock_redis = AsyncMock()
+        mock_redis.xinfo_groups = AsyncMock(
+            return_value=[
+                {b"name": b"other-group", b"pending": 99, b"lag": 50},
+                {b"name": b"cts-orchestrator", b"pending": 12, b"lag": 34},
+            ]
+        )
+        transport._redis = mock_redis
+
+        pending, lag = await transport.pending_count()
+        assert (pending, lag) == (12, 34)
+
+        mock_redis.xinfo_groups = AsyncMock(
+            return_value=[{b"name": b"cts-orchestrator", b"pending": 5, b"lag": None}]
+        )
+        assert await transport.pending_count() == (5, 0)

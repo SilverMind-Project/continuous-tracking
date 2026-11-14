@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -532,5 +533,125 @@ func TestWorker_TruncatedFramesBackOffLikeFetchErrors(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if got := fetcher.callCount(); got != 1 {
 		t.Fatalf("fetched %d times after a truncated frame, want 1", got)
+	}
+}
+
+type clockAdvancingFetcher struct {
+	clock   *fakeClock
+	advance time.Duration
+	data    []byte
+	calls   atomic.Int64
+}
+
+func (f *clockAdvancingFetcher) FetchJPEG(_ context.Context, _ string) ([]byte, error) {
+	f.calls.Add(1)
+	f.clock.Advance(f.advance)
+	return f.data, nil
+}
+
+func TestWorker_CaptureAndReceivedTimestampsAreDistinct(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	clock := &fakeClock{now: t0}
+	fetcher := &clockAdvancingFetcher{
+		clock:   clock,
+		advance: 120 * time.Millisecond,
+		data:    solidJPEG(t, 64, 48, color.Gray{Y: 200}),
+	}
+	pub := &fakePublisher{}
+	cam := makeCam(5)
+	cam.ID = "cam-capture-ts"
+	cam.CaptureLatencyMs = 40
+	w := poll.NewWorker(cam, fetcher, motion.New(cam.MotionThreshold), pub, zap.NewNop(),
+		poll.WithClock(clock.Now))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	waitFor(t, "first frame publish", func() bool { return pub.callCount() >= 1 })
+	cancel()
+
+	pub.mu.Lock()
+	meta := pub.metas[0]
+	pub.mu.Unlock()
+
+	wantCaptureNs := t0.Add(-40 * time.Millisecond).UnixNano()
+	wantReceivedNs := t0.Add(120 * time.Millisecond).UnixNano()
+	if fmt.Sprintf("%d", meta.CaptureTimeUnixNs) != fmt.Sprintf("%d", wantCaptureNs) {
+		t.Fatalf("CaptureTimeUnixNs = %d, want %d", meta.CaptureTimeUnixNs, wantCaptureNs)
+	}
+	if fmt.Sprintf("%d", meta.ReceivedTimeUnixNs) != fmt.Sprintf("%d", wantReceivedNs) {
+		t.Fatalf("ReceivedTimeUnixNs = %d, want %d", meta.ReceivedTimeUnixNs, wantReceivedNs)
+	}
+	diffMs := float64(meta.ReceivedTimeUnixNs-meta.CaptureTimeUnixNs) / 1e6
+	if diffMs < 120.0 {
+		t.Fatalf("expected ReceivedTimeUnixNs - CaptureTimeUnixNs >= 120ms, got %.2fms", diffMs)
+	}
+
+	age, ok := w.LastFrameAgeSeconds(t0.Add(5120 * time.Millisecond))
+	if !ok || age < 4.9 || age > 5.1 {
+		t.Fatalf("LastFrameAgeSeconds = (%v, %v), want (~5.0, true)", age, ok)
+	}
+}
+
+type clampingSequenceFetcher struct {
+	mu     sync.Mutex
+	frames [][]byte
+	idx    int
+	calls  atomic.Int64
+}
+
+func (f *clampingSequenceFetcher) FetchJPEG(_ context.Context, _ string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls.Add(1)
+	i := f.idx
+	if i >= len(f.frames) {
+		i = len(f.frames) - 1
+	}
+	f.idx++
+	return f.frames[i], nil
+}
+
+func TestWorker_MotionHoldWindowPublishesStaticFramesUntilExpiry(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	clock := &fakeClock{now: t0}
+	black := solidJPEG(t, 64, 48, color.Black)
+	white := solidJPEG(t, 64, 48, color.White)
+	// Frame 1: black (baseline -> not static). Frame 2: white (motion). Frame 3+: white (static).
+	fetcher := &clampingSequenceFetcher{frames: [][]byte{black, white}}
+	pub := &fakePublisher{}
+	cam := makeCam(5)
+	cam.ID = "cam-motion-hold"
+	cam.MotionHoldS = 3.0
+	gate := motion.NewWithOptions(motion.Options{
+		Mode:          motion.ModeCells,
+		Threshold:     0.02,
+		CellThreshold: 0.04,
+		MinCells:      1,
+	})
+	w := poll.NewWorker(cam, fetcher, gate, pub, zap.NewNop(), poll.WithClock(clock.Now))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	// Wait for >= 4 frames to be published while clock is within the 3.0s hold window
+	// (frames 3 and 4 are identical white frames published only because of MotionHoldS).
+	waitFor(t, "frames published inside hold window", func() bool { return pub.callCount() >= 4 })
+	// Advance clock past the 3.0s hold window; subsequent static white frames must be filtered.
+	clock.Advance(4 * time.Second)
+	beforeFetches := fetcher.calls.Load()
+	waitFor(t, "one tick to observe advanced clock", func() bool {
+		return fetcher.calls.Load() >= beforeFetches+1
+	})
+	beforeCount := pub.callCount()
+	afterAdvanceFetches := fetcher.calls.Load()
+	waitFor(t, "additional static fetches after hold window", func() bool {
+		return fetcher.calls.Load() >= afterAdvanceFetches+4
+	})
+	afterCount := pub.callCount()
+	if afterCount != beforeCount {
+		t.Fatalf("expected static frames after hold window expiry to be filtered, before=%d after=%d", beforeCount, afterCount)
 	}
 }

@@ -29,7 +29,12 @@ cognitive_companion:
 
 defaults:
   frame_interval_ms: 200
+  capture_latency_ms: 0
   motion_threshold: 0.02
+  motion_mode: cells
+  motion_cell_threshold: 0.04
+  motion_min_cells: 1
+  motion_hold_s: 3.0
   # A camera whose frames fail is retried after reconnect_backoff_s, doubling per consecutive
   # failure up to reconnect_backoff_max_s, instead of every frame tick: each fetch makes go2rtc
   # open a new RTSP session, and a camera that is down must not be flooded with them.

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"image/jpeg"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -41,16 +42,19 @@ type Publisher interface {
 // ReconnectBackoffMaxSeconds, and one good frame resets it. Without this a dead or refusing
 // camera receives a new session attempt every frame interval, indefinitely.
 type Worker struct {
-	cam         config.CameraConfig
-	fetcher     JPEGFetcher
-	gate        *motion.Gate
-	pub         Publisher
-	log         *zap.Logger
-	now         func() time.Time
-	seq         int64
-	lastPublish time.Time
-	failures    int       // consecutive failed fetch or decode attempts
-	retryAt     time.Time // no fetch before this instant while failures > 0
+	cam          config.CameraConfig
+	fetcher      JPEGFetcher
+	gate         *motion.Gate
+	pub          Publisher
+	log          *zap.Logger
+	now          func() time.Time
+	seq          int64
+	stateMu      sync.Mutex
+	lastPublish  time.Time
+	lastMotionAt time.Time
+	failures     int           // consecutive failed fetch or decode attempts
+	backoff      time.Duration // current retry delay while failures > 0
+	retryAt      time.Time     // no fetch before this instant while failures > 0
 }
 
 // Option customizes a Worker.
@@ -105,29 +109,61 @@ func (w *Worker) backoffDelay() time.Duration {
 // attempts (and so log lines) are at most one per backoff interval.
 func (w *Worker) recordFailure(event string, err error) {
 	metrics.FetchErrorsTotal.WithLabelValues(w.cam.ID).Inc()
+	w.stateMu.Lock()
 	w.failures++
 	delay := w.backoffDelay()
+	w.backoff = delay
 	w.retryAt = w.now().Add(delay)
+	failures := w.failures
+	w.stateMu.Unlock()
 	metrics.CameraBackoffSeconds.WithLabelValues(w.cam.ID).Set(delay.Seconds())
 	w.log.Warn(event,
 		zap.String("camera_id", w.cam.ID),
 		zap.Error(err),
-		zap.Int("consecutive_failures", w.failures),
+		zap.Int("consecutive_failures", failures),
 		zap.Duration("retry_in", delay),
 	)
 }
 
 func (w *Worker) recordSuccess() {
+	w.stateMu.Lock()
 	if w.failures == 0 {
+		w.stateMu.Unlock()
 		return
 	}
+	failedAttempts := w.failures
+	w.failures = 0
+	w.backoff = 0
+	w.retryAt = time.Time{}
+	w.stateMu.Unlock()
 	w.log.Info("fetch_recovered",
 		zap.String("camera_id", w.cam.ID),
-		zap.Int("failed_attempts", w.failures),
+		zap.Int("failed_attempts", failedAttempts),
 	)
-	w.failures = 0
-	w.retryAt = time.Time{}
 	metrics.CameraBackoffSeconds.WithLabelValues(w.cam.ID).Set(0)
+}
+
+// LastFrameAgeSeconds returns the elapsed seconds since the last published
+// frame, and false when no frame has been published yet.
+func (w *Worker) LastFrameAgeSeconds(now time.Time) (float64, bool) {
+	w.stateMu.Lock()
+	last := w.lastPublish
+	w.stateMu.Unlock()
+	if last.IsZero() {
+		return 0, false
+	}
+	age := now.Sub(last).Seconds()
+	if age < 0 {
+		age = 0
+	}
+	return age, true
+}
+
+// CurrentBackoffSeconds returns the active retry backoff in seconds (0 when healthy).
+func (w *Worker) CurrentBackoffSeconds() float64 {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	return w.backoff.Seconds()
 }
 
 // Run polls go2rtc until ctx is cancelled.
@@ -146,11 +182,17 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) poll(ctx context.Context) {
-	if w.failures > 0 && w.now().Before(w.retryAt) {
+	w.stateMu.Lock()
+	inBackoff := w.failures > 0 && w.now().Before(w.retryAt)
+	w.stateMu.Unlock()
+	if inBackoff {
 		return
 	}
 
+	fetchStart := w.now()
 	jpegBytes, err := w.fetcher.FetchJPEG(ctx, w.cam.ID)
+	fetchDuration := w.now().Sub(fetchStart)
+	metrics.FetchDurationSeconds.WithLabelValues(w.cam.ID).Observe(fetchDuration.Seconds())
 	if err != nil {
 		w.recordFailure("fetch_failed", err)
 		return
@@ -164,12 +206,16 @@ func (w *Worker) poll(ctx context.Context) {
 		return
 	}
 	w.recordSuccess()
+	fetchDoneAt := w.now()
+	metrics.LastFetchSuccessTimestampSeconds.WithLabelValues(w.cam.ID).Set(
+		float64(fetchDoneAt.UnixNano()) / 1e9,
+	)
 
 	// Apply per-camera rotation between decode and motion gate so every
 	// downstream consumer sees a single canonical orientation.  The
 	// rotated JPEG replaces the original bytes for publish.
 	if w.cam.RotationDegrees != 0 {
-		rotStart := time.Now()
+		rotStart := w.now()
 		rotated, err := imageops.RotateCW(img, w.cam.RotationDegrees)
 		if err != nil {
 			metrics.RotationErrorsTotal.WithLabelValues(w.cam.ID).Inc()
@@ -189,32 +235,61 @@ func (w *Worker) poll(ctx context.Context) {
 			} else {
 				jpegBytes = reencoded
 				img = rotated
-				metrics.RotationLatencySeconds.WithLabelValues(w.cam.ID).Observe(time.Since(rotStart).Seconds())
+				metrics.RotationLatencySeconds.WithLabelValues(w.cam.ID).Observe(
+					w.now().Sub(rotStart).Seconds(),
+				)
 			}
 		}
 	}
 
-	if w.gate.IsStatic(img) {
-		if w.cam.StaticSampleIntervalS <= 0 || time.Since(w.lastPublish) < time.Duration(w.cam.StaticSampleIntervalS)*time.Second {
+	receivedAt := w.now()
+	isStatic := w.gate.IsStatic(img)
+	metrics.MotionActiveCells.WithLabelValues(w.cam.ID).Observe(float64(w.gate.LastActiveCells()))
+	if !isStatic {
+		w.lastMotionAt = receivedAt
+	} else {
+		inHoldWindow := w.cam.MotionHoldS > 0 &&
+			!w.lastMotionAt.IsZero() &&
+			receivedAt.Sub(w.lastMotionAt) <= time.Duration(w.cam.MotionHoldS*float64(time.Second))
+		w.stateMu.Lock()
+		lastPub := w.lastPublish
+		w.stateMu.Unlock()
+		inStaticSample := w.cam.StaticSampleIntervalS > 0 &&
+			receivedAt.Sub(lastPub) >= time.Duration(w.cam.StaticSampleIntervalS)*time.Second
+		if !inHoldWindow && !inStaticSample {
 			metrics.FramesFilteredTotal.WithLabelValues(w.cam.ID, "motion").Inc()
 			return
 		}
 	}
 
+	latencyOffset := time.Duration(w.cam.CaptureLatencyMs) * time.Millisecond
+	if latencyOffset < 0 {
+		latencyOffset = 0
+	}
+	captureTime := fetchStart.Add(-latencyOffset)
+	if captureTime.After(fetchStart) {
+		captureTime = fetchStart
+	}
+
 	w.seq++
 	bounds := img.Bounds()
-	now := time.Now()
 	meta := &pb.FrameReady{
 		CameraId:           w.cam.ID,
 		FrameIndex:         w.seq,
-		CaptureTimeUnixNs:  uint64(now.UnixNano()), //nolint:gosec
-		ReceivedTimeUnixNs: uint64(now.UnixNano()), //nolint:gosec
-		Width:              int32(bounds.Dx()),     //nolint:gosec
-		Height:             int32(bounds.Dy()),     //nolint:gosec
+		CaptureTimeUnixNs:  uint64(captureTime.UnixNano()), //nolint:gosec
+		ReceivedTimeUnixNs: uint64(receivedAt.UnixNano()),  //nolint:gosec
+		Width:              int32(bounds.Dx()),             //nolint:gosec
+		Height:             int32(bounds.Dy()),             //nolint:gosec
 	}
 	if err := w.pub.Publish(ctx, meta, jpegBytes); err != nil {
 		w.log.Warn("publish_failed", zap.String("camera_id", w.cam.ID), zap.Error(err))
 		return
 	}
-	w.lastPublish = now
+	w.gate.MarkPublished()
+	w.stateMu.Lock()
+	w.lastPublish = receivedAt
+	w.stateMu.Unlock()
+	metrics.LastFramePublishedTimestampSeconds.WithLabelValues(w.cam.ID).Set(
+		float64(receivedAt.UnixNano()) / 1e9,
+	)
 }

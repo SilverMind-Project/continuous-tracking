@@ -60,8 +60,13 @@ type Go2RTCConfig struct {
 }
 
 type CameraDefaults struct {
-	FrameIntervalMs int     `yaml:"frame_interval_ms"`
-	MotionThreshold float64 `yaml:"motion_threshold"`
+	FrameIntervalMs     int     `yaml:"frame_interval_ms"`
+	CaptureLatencyMs    int     `yaml:"capture_latency_ms"`
+	MotionThreshold     float64 `yaml:"motion_threshold"`
+	MotionMode          string  `yaml:"motion_mode"`
+	MotionCellThreshold float64 `yaml:"motion_cell_threshold"`
+	MotionMinCells      int     `yaml:"motion_min_cells"`
+	MotionHoldS         float64 `yaml:"motion_hold_s"`
 	// ReconnectBackoffSeconds is the first retry delay after a failed frame fetch; each further
 	// consecutive failure doubles it, up to ReconnectBackoffMaxSeconds.
 	ReconnectBackoffSeconds    float64 `yaml:"reconnect_backoff_s"`
@@ -77,7 +82,12 @@ type CameraConfig struct {
 	RTSPURL                    string
 	RoomName                   string
 	FrameIntervalMs            int
+	CaptureLatencyMs           int
 	MotionThreshold            float64
+	MotionMode                 string
+	MotionCellThreshold        float64
+	MotionMinCells             int
+	MotionHoldS                float64
 	ReconnectBackoffSeconds    float64
 	ReconnectBackoffMaxSeconds float64
 	StaticSampleIntervalS      int
@@ -132,7 +142,12 @@ func DefaultConfig() Config {
 		},
 		CameraDefaults: CameraDefaults{
 			FrameIntervalMs:            500,
+			CaptureLatencyMs:           0,
 			MotionThreshold:            0.02,
+			MotionMode:                 "frame_mean",
+			MotionCellThreshold:        0.04,
+			MotionMinCells:             1,
+			MotionHoldS:                3.0,
 			ReconnectBackoffSeconds:    2.0,
 			ReconnectBackoffMaxSeconds: 60.0,
 			StaticSampleIntervalS:      0,
@@ -262,6 +277,29 @@ func Load() (Config, error) {
 			cfg.CameraDefaults.StaticSampleIntervalS = n
 		}
 	}
+	if v := os.Getenv("DEFAULT_CAPTURE_LATENCY_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.CameraDefaults.CaptureLatencyMs = n
+		}
+	}
+	if v := os.Getenv("DEFAULT_MOTION_MODE"); v != "" {
+		cfg.CameraDefaults.MotionMode = v
+	}
+	if v := os.Getenv("DEFAULT_MOTION_CELL_THRESHOLD"); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.CameraDefaults.MotionCellThreshold = n
+		}
+	}
+	if v := os.Getenv("DEFAULT_MOTION_MIN_CELLS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.CameraDefaults.MotionMinCells = n
+		}
+	}
+	if v := os.Getenv("DEFAULT_MOTION_HOLD_S"); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.CameraDefaults.MotionHoldS = n
+		}
+	}
 
 	cfg.normalize()
 	return cfg, nil
@@ -288,6 +326,16 @@ func (c Config) Validate() error {
 		return fmt.Errorf("cognitive_companion.base_url must not be empty")
 	case c.CameraDefaults.FrameIntervalMs <= 0:
 		return fmt.Errorf("defaults.frame_interval_ms must be > 0")
+	case c.CameraDefaults.CaptureLatencyMs < 0 || c.CameraDefaults.CaptureLatencyMs > 5000:
+		return fmt.Errorf("defaults.capture_latency_ms must be between 0 and 5000")
+	case c.CameraDefaults.MotionMode != "" && c.CameraDefaults.MotionMode != "frame_mean" && c.CameraDefaults.MotionMode != "cells":
+		return fmt.Errorf("defaults.motion_mode must be frame_mean or cells, got %q", c.CameraDefaults.MotionMode)
+	case c.CameraDefaults.MotionCellThreshold < 0 || c.CameraDefaults.MotionCellThreshold > 1:
+		return fmt.Errorf("defaults.motion_cell_threshold must be between 0 and 1")
+	case c.CameraDefaults.MotionMinCells < 1:
+		return fmt.Errorf("defaults.motion_min_cells must be >= 1")
+	case c.CameraDefaults.MotionHoldS < 0:
+		return fmt.Errorf("defaults.motion_hold_s must be >= 0")
 	case c.CameraDefaults.ReconnectBackoffSeconds <= 0:
 		return fmt.Errorf("defaults.reconnect_backoff_s must be > 0")
 	case c.CameraDefaults.ReconnectBackoffMaxSeconds < c.CameraDefaults.ReconnectBackoffSeconds:
@@ -325,6 +373,15 @@ func (c *Config) normalize() {
 	}
 	if c.AssignedCameras == "" {
 		c.AssignedCameras = "ALL"
+	}
+	if c.CameraDefaults.MotionMode == "" {
+		c.CameraDefaults.MotionMode = "frame_mean"
+	}
+	if c.CameraDefaults.MotionCellThreshold <= 0 {
+		c.CameraDefaults.MotionCellThreshold = 0.04
+	}
+	if c.CameraDefaults.MotionMinCells <= 0 {
+		c.CameraDefaults.MotionMinCells = 1
 	}
 }
 

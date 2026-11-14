@@ -14,6 +14,7 @@ between cases.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from prometheus_client import (
     REGISTRY,
@@ -31,6 +32,41 @@ LATENCY_BUCKETS_MS = (5, 10, 25, 50, 100, 200, 350, 500, 750, 1000, 2000, 5000)
 ENTROPY_BUCKETS = (0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0)
 
 
+class RevisionReasonKind(StrEnum):
+    """Bounded label set for ``cts_tracking_revisions_published_total{kind}``."""
+
+    INITIAL_ASSIGNMENT = "initial_assignment"
+    DEMOTED_TO_UNKNOWN = "demoted_to_unknown"
+    IDENTITY_CHANGED = "identity_changed"
+    ARCFACE_AUTHORITY = "arcface_authority"
+    ARCFACE_AUTHORITY_CONFLICT = "arcface_authority_conflict"
+    UNKNOWN_BACKFILL = "unknown_backfill"
+    OPERATOR_CORRECTION = "operator_correction"
+    OTHER = "other"
+
+
+_REVISION_REASON_PREFIX_MAP: dict[str, RevisionReasonKind] = {
+    "initial_assignment": RevisionReasonKind.INITIAL_ASSIGNMENT,
+    "demoted_to_unknown": RevisionReasonKind.DEMOTED_TO_UNKNOWN,
+    "identity_change": RevisionReasonKind.IDENTITY_CHANGED,
+    "identity_changed": RevisionReasonKind.IDENTITY_CHANGED,
+    "arcface_authority": RevisionReasonKind.ARCFACE_AUTHORITY,
+    "arcface_authority_conflict": RevisionReasonKind.ARCFACE_AUTHORITY_CONFLICT,
+    "unknown_backfill": RevisionReasonKind.UNKNOWN_BACKFILL,
+    "operator_correction": RevisionReasonKind.OPERATOR_CORRECTION,
+    "operator_unknown": RevisionReasonKind.OPERATOR_CORRECTION,
+    "operator_frame_correction": RevisionReasonKind.OPERATOR_CORRECTION,
+}
+
+
+def classify_revision_reason(reason: str | None) -> RevisionReasonKind:
+    """Extract the prefix before the first ``:`` and map to a bounded ``RevisionReasonKind``."""
+    if not reason:
+        return RevisionReasonKind.OTHER
+    prefix = reason.split(":", 1)[0].strip().lower()
+    return _REVISION_REASON_PREFIX_MAP.get(prefix, RevisionReasonKind.OTHER)
+
+
 @dataclass
 class Metrics:
     """Container for the orchestrator's Prometheus metrics."""
@@ -38,6 +74,9 @@ class Metrics:
     # ---- Stream consumption / publishing -----------------------------
     frames_consumed_total: Counter
     frames_failed_total: Counter
+    frames_abandoned_total: Counter
+    frames_stream_pending: Gauge
+    frames_stream_lag: Gauge
     tracking_events_published_total: Counter
     tracking_revisions_published_total: Counter
     dementia_signals_published_total: Counter
@@ -107,10 +146,8 @@ class Metrics:
     ph_observations_at_close: Histogram
     identity_unknown_after_known_total: Counter
 
-    world_tracker_observations_total: Counter
     world_tracker_assignment_cost: Histogram
     world_tracker_continuations_total: Counter
-    world_tracker_clock_skew_ms: Histogram
     world_tracker_spawn_rejected_out_of_room_total: Counter
 
     # ---- cross-camera dedup -----------------------------------------
@@ -273,6 +310,18 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "FrameReady messages whose pipeline processing raised.",
             ["camera_id", "reason"],
         ),
+        frames_abandoned_total=_counter(
+            "cts_frames_abandoned_total",
+            "Stale pending FrameReady entries reclaimed and acknowledged at startup.",
+        ),
+        frames_stream_pending=_gauge(
+            "cts_frames_stream_pending",
+            "Unacknowledged entries in the frames.ready consumer group PEL.",
+        ),
+        frames_stream_lag=_gauge(
+            "cts_frames_stream_lag",
+            "Unread entries behind the frames.ready consumer group cursor.",
+        ),
         tracking_events_published_total=_counter(
             "cts_tracking_events_published_total",
             "TrackingEvent messages emitted to tracking.events.",
@@ -281,7 +330,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         tracking_revisions_published_total=_counter(
             "cts_tracking_revisions_published_total",
             "IdentityRevision messages emitted to tracking.revisions.",
-            ["reason"],
+            ["kind"],
         ),
         dementia_signals_published_total=_counter(
             "cts_dementia_signals_published_total",
@@ -361,7 +410,10 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         # ---- Calibration and transit metrics ------------------------------------
         uncalibrated_detection_total=_counter(
             "cts_uncalibrated_detection_total",
-            "Detections dropped because the source camera lacks a valid homography.",
+            (
+                "Detections projected via synthetic floor point because the source camera "
+                "lacks a valid homography."
+            ),
             ["camera_id"],
         ),
         transit_event_published_total=_counter(
@@ -477,11 +529,6 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_identity_unknown_after_known_total",
             "PHs that previously had a known identity now resolving to UNKNOWN.",
         ),
-        world_tracker_observations_total=_counter(
-            "cts_world_tracker_observations_total",
-            "Observations consumed by the world tracker.",
-            ["camera_id", "result"],
-        ),
         world_tracker_assignment_cost=_hist(
             "cts_world_tracker_assignment_cost",
             "Final cost of matched (PH, obs) pairs.",
@@ -490,12 +537,6 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         world_tracker_continuations_total=_counter(
             "cts_world_tracker_continuations_total",
             "PH continuation candidates published.",
-        ),
-        world_tracker_clock_skew_ms=_hist(
-            "cts_world_tracker_clock_skew_ms",
-            "Per-camera clock skew vs orchestrator wall-clock.",
-            (1, 5, 10, 25, 50, 100, 200, 500),
-            ["camera_id"],
         ),
         world_tracker_spawn_rejected_out_of_room_total=_counter(
             "cts_world_tracker_spawn_rejected_out_of_room_total",

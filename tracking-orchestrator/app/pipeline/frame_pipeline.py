@@ -58,6 +58,7 @@ from ..pipeline.stages import (
     TrailsStage,
     TrajectoryStage,
     WorldTrackingStage,
+    timed_phase,
 )
 from ..pipeline.stages._room_maps import camera_room_name
 from ..pipeline.types import (
@@ -813,6 +814,7 @@ class FrameProcessingPipeline:
         self._running = True
         self._tasks = [
             asyncio.create_task(self._consume_loop()),
+            asyncio.create_task(self._stream_metrics_loop()),
         ]
         if self._signal_worker is not None:
             self._tasks.append(asyncio.create_task(self._signal_loop()))
@@ -945,6 +947,51 @@ class FrameProcessingPipeline:
 
         logger.info("Signal loop stopped")
 
+    async def _sample_stream_backlog_once(self) -> None:
+        """Read pending and lag from Redis Streams and update Prometheus gauges."""
+        if self._transport is None:
+            return
+        pending, lag = await self._transport.pending_count()
+        _metrics.metrics.frames_stream_pending.set(pending)
+        _metrics.metrics.frames_stream_lag.set(lag)
+
+    async def _stream_metrics_loop(self) -> None:
+        """Sample consumer-group pending and lag counts every 15 seconds."""
+        while not self._stop_event.is_set():
+            try:
+                await self._sample_stream_backlog_once()
+            except asyncio.CancelledError:
+                break
+            except (OSError, RuntimeError, ValueError, TypeError):
+                logger.debug("Stream backlog sample failed", exc_info=True)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=15.0)
+            except TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+    async def _finish_frame(self, frame: FrameReady, *, failed_reason: str | None = None) -> None:
+        """Record failure (if any), observe end-to-end latency, and ACK the frame."""
+        assert self._transport is not None
+        if failed_reason is not None:
+            _metrics.metrics.frames_failed_total.labels(
+                camera_id=frame.camera_id, reason=failed_reason
+            ).inc()
+        if frame.capture_time_unix_ns > 0:
+            e2e_ms = (time.time_ns() - frame.capture_time_unix_ns) / 1_000_000.0
+            if e2e_ms >= 0.0:
+                _metrics.metrics.frame_end_to_end_latency_ms.labels(
+                    camera_id=frame.camera_id
+                ).observe(e2e_ms)
+        await self._transport.ack_frame(frame)
+
+    async def _run_timed_fetch(self, ctx: FrameContext) -> None:
+        """Execute FetchStage under ``timed_phase``."""
+        assert self._fetch_stage is not None
+        with timed_phase(getattr(self._fetch_stage, "name", "fetch"), ctx.frame.camera_id):
+            await self._fetch_stage.run(ctx)
+
     async def _handle_frame(self, frame: FrameReady) -> None:
         """Push a frame into the batcher (or process directly when batching is off)."""
         if self._batcher is not None:
@@ -968,7 +1015,7 @@ class FrameProcessingPipeline:
             try:
                 await self._ensure_camera_row(frame.camera_id)
                 await self._process_frame(frame)
-                await self._transport.ack_frame(frame)
+                await self._finish_frame(frame)
                 latency_us = int((time.monotonic() - start) * 1e6)
                 logger.debug(
                     "Frame processed",
@@ -982,9 +1029,7 @@ class FrameProcessingPipeline:
                     camera_id=frame.camera_id,
                     frame_index=frame.frame_index,
                 )
-                _metrics.metrics.frames_failed_total.labels(
-                    camera_id=frame.camera_id, reason="processing_error"
-                ).inc()
+                await self._finish_frame(frame, failed_reason="processing_error")
 
     async def _handle_cross_camera_batch(self, frames: list[FrameReady]) -> None:
         """Fetch and detect a mixed-camera frame batch with one Triton request.
@@ -1020,7 +1065,7 @@ class FrameProcessingPipeline:
             for camera_frames in frames_by_camera.values():
                 for frame in camera_frames:
                     if self._is_stale(frame):
-                        await self._transport.ack_frame(frame)
+                        await self._finish_frame(frame)
                         continue
                     contexts.append(self._init_context(frame))
 
@@ -1028,7 +1073,7 @@ class FrameProcessingPipeline:
                 return
 
             fetch_results = await asyncio.gather(
-                *(self._fetch_stage.run(ctx) for ctx in contexts),
+                *(self._run_timed_fetch(ctx) for ctx in contexts),
                 return_exceptions=True,
             )
             fetched_contexts: list[FrameContext] = []
@@ -1040,9 +1085,7 @@ class FrameProcessingPipeline:
                         frame_index=ctx.frame.frame_index,
                         error=str(result),
                     )
-                    _metrics.metrics.frames_failed_total.labels(
-                        camera_id=ctx.frame.camera_id, reason="fetch_error"
-                    ).inc()
+                    await self._finish_frame(ctx.frame, failed_reason="fetch_error")
                 else:
                     fetched_contexts.append(ctx)
 
@@ -1050,16 +1093,15 @@ class FrameProcessingPipeline:
                 return
 
             try:
-                await self._detect_stage.run_batch(fetched_contexts)
+                with timed_phase(getattr(self._detect_stage, "name", "detect"), "batch"):
+                    await self._detect_stage.run_batch(fetched_contexts)
             except Exception:
                 logger.exception(
                     "Batched detector inference failed",
                     count=len(fetched_contexts),
                 )
                 for ctx in fetched_contexts:
-                    _metrics.metrics.frames_failed_total.labels(
-                        camera_id=ctx.frame.camera_id, reason="detector_error"
-                    ).inc()
+                    await self._finish_frame(ctx.frame, failed_reason="detector_error")
                 return
 
             await self._process_cross_camera_post_detect_batch(fetched_contexts)
@@ -1103,24 +1145,23 @@ class FrameProcessingPipeline:
                         camera_id=ctx.frame.camera_id,
                         frame_index=ctx.frame.frame_index,
                     )
-                    _metrics.metrics.frames_failed_total.labels(
-                        camera_id=ctx.frame.camera_id, reason="processing_error"
-                    ).inc()
+                    await self._finish_frame(ctx.frame, failed_reason="processing_error")
 
             if not ready_contexts:
                 continue
 
             try:
-                await self._world_tracking_stage.run_many(ready_contexts)
+                with timed_phase(
+                    getattr(self._world_tracking_stage, "name", "world_tracking"), "batch"
+                ):
+                    await self._world_tracking_stage.run_many(ready_contexts)
             except Exception:
                 logger.exception(
                     "Cross-camera world tracking failed",
                     count=len(ready_contexts),
                 )
                 for ctx in ready_contexts:
-                    _metrics.metrics.frames_failed_total.labels(
-                        camera_id=ctx.frame.camera_id, reason="processing_error"
-                    ).inc()
+                    await self._finish_frame(ctx.frame, failed_reason="processing_error")
                 continue
 
             await asyncio.gather(
@@ -1135,7 +1176,7 @@ class FrameProcessingPipeline:
         start = time.monotonic()
         try:
             await self._post_world_runner.run(ctx)
-            await self._transport.ack_frame(ctx.frame)
+            await self._finish_frame(ctx.frame)
             latency_us = int((time.monotonic() - start) * 1e6)
             logger.debug(
                 "Frame processed",
@@ -1149,9 +1190,7 @@ class FrameProcessingPipeline:
                 camera_id=ctx.frame.camera_id,
                 frame_index=ctx.frame.frame_index,
             )
-            _metrics.metrics.frames_failed_total.labels(
-                camera_id=ctx.frame.camera_id, reason="processing_error"
-            ).inc()
+            await self._finish_frame(ctx.frame, failed_reason="processing_error")
 
     async def _process_post_detect_batch(self, contexts: list[FrameContext]) -> None:
         """Run stages after detection for one camera ordered context group."""
@@ -1162,7 +1201,7 @@ class FrameProcessingPipeline:
             try:
                 await self._ensure_camera_row(ctx.frame.camera_id)
                 await self._post_detect_runner.run(ctx)
-                await self._transport.ack_frame(ctx.frame)
+                await self._finish_frame(ctx.frame)
                 latency_us = int((time.monotonic() - start) * 1e6)
                 logger.debug(
                     "Frame processed",
@@ -1176,9 +1215,7 @@ class FrameProcessingPipeline:
                     camera_id=ctx.frame.camera_id,
                     frame_index=ctx.frame.frame_index,
                 )
-                _metrics.metrics.frames_failed_total.labels(
-                    camera_id=ctx.frame.camera_id, reason="processing_error"
-                ).inc()
+                await self._finish_frame(ctx.frame, failed_reason="processing_error")
 
     async def _handle_batch(self, camera_id: str, frames: list[FrameReady]) -> None:
         """Process a batch of frames for one camera (called by FrameBatcher).
@@ -1197,7 +1234,7 @@ class FrameProcessingPipeline:
                 try:
                     await self._ensure_camera_row(frame.camera_id)
                     await self._process_frame(frame)
-                    await self._transport.ack_frame(frame)
+                    await self._finish_frame(frame)
                     latency_us = int((time.monotonic() - start) * 1e6)
                     logger.debug(
                         "Frame processed",
@@ -1211,9 +1248,7 @@ class FrameProcessingPipeline:
                         camera_id=frame.camera_id,
                         frame_index=frame.frame_index,
                     )
-                    _metrics.metrics.frames_failed_total.labels(
-                        camera_id=frame.camera_id, reason="processing_error"
-                    ).inc()
+                    await self._finish_frame(frame, failed_reason="processing_error")
 
     async def _ensure_camera_row(self, camera_id: str) -> None:
         """Lazily seed an FK-anchor row in ``cameras`` on first sight per process.

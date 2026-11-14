@@ -616,8 +616,8 @@ class TestFrameFailureCounter:
         )
 
     @pytest.mark.asyncio
-    async def test_processing_failure_increments_counter_and_does_not_ack(self) -> None:
-        """A frame whose _process_frame raises increments frames_failed_total."""
+    async def test_processing_failure_increments_counter_and_acks_frame(self) -> None:
+        """A frame whose _process_frame raises increments frames_failed_total and still ACKs."""
         pipeline = FrameProcessingPipeline(
             PipelineConfig(allow_skeleton=True, signals_enabled=False)
         )
@@ -635,5 +635,5 @@ class TestFrameFailureCounter:
             counter = _metrics_module.metrics.frames_failed_total
             value = counter.labels(camera_id="cam-1", reason="processing_error")._value.get()
             assert value == 1.0, f"expected frames_failed_total=1, got {value}"
-            mock_transport.ack_frame.assert_not_called()
+            mock_transport.ack_frame.assert_awaited_once_with(frame)
             await pipeline.stop()

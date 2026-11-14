@@ -61,6 +61,7 @@ class TransportConfig:
     batch_max_size: int = 8
     xack_timeout_ms: int = 5000
     ack_ttl_seconds: int = 300
+    pending_reclaim_min_idle_s: int = 300
     revisions_stream: str = "tracking.revisions"
     signals_stream: str = "tracking.signals"
     scene_samples_stream: str = "scene.samples"
@@ -70,6 +71,12 @@ class TransportConfig:
 # a redundant conversion layer.  The proto class is constructed identically
 # (all fields are optional kwargs) and accessed via the same attribute names.
 FrameReady = frame_pb2.FrameReady
+FrameAckKey = tuple[str, int, int]
+
+
+def frame_ack_key(frame: FrameReady) -> FrameAckKey:
+    """Return a value-based key for tracking pending stream acknowledgements."""
+    return (frame.camera_id, int(frame.frame_index), int(frame.capture_time_unix_ns))
 
 
 @dataclass
@@ -98,8 +105,8 @@ class RedisStreamsTransport:
         self._config = config or TransportConfig()
         self._redis: redis.Redis | None = None
         self._group_created = False
-        # id(frame) -> (Redis message ID bytes, monotonic timestamp)
-        self._pending_acks: dict[int, tuple[Any, float]] = {}
+        # (camera_id, frame_index, capture_time_unix_ns) -> (Redis message ID, monotonic timestamp)
+        self._pending_acks: dict[FrameAckKey, tuple[Any, float]] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -134,7 +141,50 @@ class RedisStreamsTransport:
             else:
                 raise
 
+        await self._reclaim_abandoned_pending()
         logger.info("Connected to Redis", url=self._config.redis_url)
+
+    async def _reclaim_abandoned_pending(self) -> int:
+        """Reclaim and XACK pending entries idle longer than ``pending_reclaim_min_idle_s``."""
+        if self._redis is None or self._config.pending_reclaim_min_idle_s < 0:
+            return 0
+        min_idle_ms = int(self._config.pending_reclaim_min_idle_s) * 1000
+        cursor: str | bytes = "0-0"
+        reclaimed_total = 0
+        while True:
+            result = await self._redis.xautoclaim(
+                self._config.frames_stream,
+                self._config.consumer_group,
+                self._config.consumer_name,
+                min_idle_ms,
+                start_id=cursor,
+                count=100,
+            )
+            if not result:
+                break
+            next_cursor = result[0]
+            entries = result[1] if len(result) > 1 else []
+            if not entries:
+                break
+            msg_ids = [entry[0] if isinstance(entry, (tuple, list)) else entry for entry in entries]
+            await self._redis.xack(
+                self._config.frames_stream,
+                self._config.consumer_group,
+                *msg_ids,
+            )
+            count = len(msg_ids)
+            reclaimed_total += count
+            metrics.metrics.frames_abandoned_total.inc(count)
+            if next_cursor in ("0-0", b"0-0", None, ""):
+                break
+            cursor = next_cursor
+        if reclaimed_total:
+            logger.info(
+                "Reclaimed and acknowledged stale pending frames",
+                count=reclaimed_total,
+                min_idle_s=self._config.pending_reclaim_min_idle_s,
+            )
+        return reclaimed_total
 
     async def disconnect(self) -> None:
         """Close the Redis connection."""
@@ -188,7 +238,7 @@ class RedisStreamsTransport:
                 except Exception:
                     logger.exception("Failed to deserialize FrameReady")
                     continue
-                self._pending_acks[id(frame)] = (message_id, time.monotonic())
+                self._pending_acks[frame_ack_key(frame)] = (message_id, time.monotonic())
                 metrics.metrics.frames_consumed_total.labels(camera_id=frame.camera_id).inc()
                 yield frame
 
@@ -197,9 +247,9 @@ class RedisStreamsTransport:
         if self._redis is None:
             return
 
-        entry = self._pending_acks.pop(id(frame), None)
+        entry = self._pending_acks.pop(frame_ack_key(frame), None)
         if entry is None:
-            logger.warning("Cannot ACK: no message ID on frame", camera_id=frame.camera_id)
+            logger.debug("Cannot ACK: no message ID on frame", camera_id=frame.camera_id)
             return
 
         await self._redis.xack(
@@ -283,22 +333,26 @@ class RedisStreamsTransport:
         logger.debug("Published tracking event", event_id=event_id, message_id=message_id)
         return message_id
 
-    async def stream_length(self, stream: str | None = None) -> int:
+    async def pending_count(self) -> tuple[int, int]:
+        """Return ``(pending, lag)`` for the consumer group from ``XINFO GROUPS``."""
         if self._redis is None:
-            return 0
-        info = await self._redis.xinfo_stream(stream or self._config.frames_stream)
-        return int(info.get(b"length") or info.get("length") or 0)
-
-    async def pending_count(self) -> int:
-        if self._redis is None:
-            return 0
-        consumers = await self._redis.xinfo_consumers(
-            self._config.frames_stream, self._config.consumer_group
-        )
-        if not consumers:
-            return 0
-        first = consumers[0]
-        return int(first.get(b"pending") or first.get("pending") or 0)
+            return (0, 0)
+        groups = await self._redis.xinfo_groups(self._config.frames_stream)
+        for group in groups:
+            raw_name = group.get(b"name") if b"name" in group else group.get("name")
+            name = (
+                raw_name.decode("utf-8", errors="replace")
+                if isinstance(raw_name, bytes)
+                else str(raw_name or "")
+            )
+            if name != self._config.consumer_group:
+                continue
+            raw_pending = group.get(b"pending") if b"pending" in group else group.get("pending")
+            raw_lag = group.get(b"lag") if b"lag" in group else group.get("lag")
+            pending = int(raw_pending) if raw_pending is not None else 0
+            lag = int(raw_lag) if raw_lag is not None else 0
+            return (pending, lag)
+        return (0, 0)
 
 
 # ---------------------------------------------------------------------------
