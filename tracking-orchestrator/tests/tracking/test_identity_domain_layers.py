@@ -104,13 +104,6 @@ class TestTypedSourceDistinction:
         assert direct.can_advance_evidence_clock
         assert not propagated.can_advance_evidence_clock
 
-    def test_direct_face_can_create_identity_hint_cannot(self) -> None:
-        direct = IdentityEvidence.direct_face("alice", 0.95, "tl-1", _NOW)
-        hint = IdentityEvidence.association_hint("alice", 0.95, "tl-1", _NOW)
-
-        assert direct.can_create_identity
-        assert not hint.can_create_identity
-
 
 class TestIdentityAuthorityEnum:
     def test_all_authority_levels_present(self) -> None:

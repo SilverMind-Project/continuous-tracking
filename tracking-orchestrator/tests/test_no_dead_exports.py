@@ -11,7 +11,6 @@ from __future__ import annotations
 import app.tracking.identity as identity_pkg
 
 _EXPECTED_ALL = (
-    "CAN_CREATE_IDENTITY",
     "CommitEvaluation",
     "CommitPolicy",
     "EvidencePosterior",

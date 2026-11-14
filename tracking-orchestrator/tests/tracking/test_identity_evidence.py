@@ -12,11 +12,7 @@ from app.tracking.identity.commit_policy import (
     CommitPolicy,
     evaluate_commit,
 )
-from app.tracking.identity.evidence import (
-    CAN_CREATE_IDENTITY,
-    EvidenceSource,
-    IdentityEvidence,
-)
+from app.tracking.identity.evidence import EvidenceSource, IdentityEvidence
 
 _NOW = datetime.now(UTC)
 
@@ -80,46 +76,33 @@ def _call_evaluate(
 
 
 class TestIdentityEvidence:
-    def test_direct_face_can_create_identity(self) -> None:
+    def test_direct_face_advances_clock(self) -> None:
         ev = IdentityEvidence.direct_face(
             identity_id="alice", confidence=0.95, tracklet_id="tl-1", captured_at=_NOW
         )
-        assert ev.can_create_identity
         assert ev.can_advance_evidence_clock
         assert ev.source == "direct_face"
         assert ev.source == EvidenceSource.DIRECT_FACE
 
-    def test_association_hint_cannot_create_or_advance_clock(self) -> None:
+    def test_association_hint_cannot_advance_clock(self) -> None:
         ev = IdentityEvidence.association_hint(
             identity_id="alice", confidence=0.8, tracklet_id="tl-1", captured_at=_NOW
         )
-        assert not ev.can_create_identity
         assert not ev.can_advance_evidence_clock
         assert ev.source == "association_hint"
 
-    def test_temporal_prior_cannot_create_identity(self) -> None:
+    def test_temporal_prior_cannot_advance_clock(self) -> None:
         ev = IdentityEvidence.temporal_prior(identity_id="alice", confidence=0.6)
-        assert not ev.can_create_identity
         assert not ev.can_advance_evidence_clock
         assert ev.source == "temporal_prior"
 
-    def test_reid_can_create_and_advance_clock(self) -> None:
+    def test_reid_advances_clock(self) -> None:
         ev = IdentityEvidence.reid(identity_id="bob", confidence=0.75)
-        assert ev.can_create_identity
         assert ev.can_advance_evidence_clock
 
-    def test_operator_can_create_but_not_advance_clock(self) -> None:
+    def test_operator_does_not_advance_clock(self) -> None:
         ev = IdentityEvidence.operator_correction(identity_id="alice")
-        assert ev.can_create_identity
         assert not ev.can_advance_evidence_clock  # operator override is not an observation
-
-    def test_source_sets_are_correct(self) -> None:
-        expected_create = {EvidenceSource.DIRECT_FACE, EvidenceSource.REID, EvidenceSource.OPERATOR}
-        assert expected_create == CAN_CREATE_IDENTITY
-
-    def test_source_sets_equal_strings(self) -> None:
-        # StrEnum: members compare equal to their wire strings.
-        assert {"direct_face", "reid", "operator"} == CAN_CREATE_IDENTITY
 
     def test_evidence_source_is_str_subtype(self) -> None:
         assert EvidenceSource.DIRECT_FACE == "direct_face"

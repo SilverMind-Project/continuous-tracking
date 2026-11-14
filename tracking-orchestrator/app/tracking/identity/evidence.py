@@ -33,14 +33,6 @@ class EvidenceSource(StrEnum):
     FACE_TEMPLATE = "face_template"
 
 
-# Evidence sources that can justify a new identity assignment.
-CAN_CREATE_IDENTITY: set[EvidenceSource] = {
-    EvidenceSource.DIRECT_FACE,
-    EvidenceSource.REID,
-    EvidenceSource.OPERATOR,
-}
-
-
 @dataclass(frozen=True)
 class IdentityEvidence:
     """One piece of identity evidence for a global track.
@@ -197,11 +189,6 @@ class IdentityEvidence:
     # ------------------------------------------------------------------
     # Classification helpers
     # ------------------------------------------------------------------
-
-    @property
-    def can_create_identity(self) -> bool:
-        """Return True when this evidence can justify a new identity assignment."""
-        return self.source in CAN_CREATE_IDENTITY
 
     @property
     def can_advance_evidence_clock(self) -> bool:

@@ -6,7 +6,7 @@ from .commit_policy import (
     compute_contradiction,
     evaluate_commit,
 )
-from .evidence import CAN_CREATE_IDENTITY, EvidenceSource, IdentityEvidence
+from .evidence import EvidenceSource, IdentityEvidence
 from .gallery_scoring import (
     GalleryScoringConfig,
     ScoredHit,
@@ -19,7 +19,6 @@ from .posterior import EvidencePosterior, combine_posteriors
 from .types import IdentityAuthority
 
 __all__ = [
-    "CAN_CREATE_IDENTITY",
     "CommitEvaluation",
     "CommitPolicy",
     "EvidencePosterior",
