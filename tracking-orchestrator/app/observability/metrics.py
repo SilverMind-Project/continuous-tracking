@@ -112,6 +112,7 @@ class Metrics:
 
     # ---- Calibration and transit metrics -----------------------------------
     worldtracker_observations_by_calibration_total: Counter  # labels: camera_id, calibrated
+    overlap_groups_loaded: Gauge
     transit_event_published_total: Counter
     transit_event_unknown_identity_total: Counter
     transit_zones_loaded: Gauge
@@ -417,6 +418,10 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
                 "a homography (calibrated=true) or the per-camera virtual room (calibrated=false)."
             ),
             ["camera_id", "calibrated"],
+        ),
+        overlap_groups_loaded=_gauge(
+            "cts_overlap_groups_loaded",
+            "Camera overlap groups currently loaded from CC.",
         ),
         transit_event_published_total=_counter(
             "cts_transit_event_published_total",

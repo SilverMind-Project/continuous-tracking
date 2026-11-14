@@ -982,6 +982,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         room_polygon_map=room_polygon_map,
         transit_zone_map=transit_zone_map,
         poll_interval_s=_poll_s,
+        overlap_group_sink=_pipeline.set_overlap_groups,
     )
     app.state.cc_sync_service = cc_sync_service
     app.state.cc_sync_task = asyncio.create_task(cc_sync_service.run())

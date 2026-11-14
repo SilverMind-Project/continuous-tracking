@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import time
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -1277,6 +1278,11 @@ class FrameProcessingPipeline:
         Stages that need room attribution read from this map.
         """
         self._live_config.camera_room_map = camera_room_map
+
+    def set_overlap_groups(self, overlap_groups: Sequence[OverlapGroup]) -> None:
+        """Apply camera overlap groups from the CC config sync to the world tracker."""
+        if self._world_tracker is not None:
+            self._world_tracker.set_overlap_groups(overlap_groups)
 
     def set_room_polygon_map(self, room_polygon_map: RoomPolygonMap) -> None:
         """Replace the live room polygon map read by WorldTrackingStage."""

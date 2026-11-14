@@ -7,7 +7,7 @@ no direct I/O. Called by WorldTrackingStage once per frame.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
@@ -302,7 +302,7 @@ class WorldTracker:
         self._gallery_repo = gallery_repo
         self._topology_repo = topology_repo
         self._copresence_repo = copresence_repo
-        self._overlap_groups = overlap_groups or []
+        self._overlap_groups: list[OverlapGroup] = list(overlap_groups or [])
         # In-process cache of each PH's last positive identity confidence.
         # On coasting / unresolved frames the resolver produces no decision for a
         # PH, so its per-frame posterior is absent (0.0). Replaying the last
@@ -369,6 +369,10 @@ class WorldTracker:
                         identity = entry.identity_id
             resolved.append(identity)
         return resolved
+
+    def set_overlap_groups(self, overlap_groups: Sequence[OverlapGroup]) -> None:
+        """Replace the declared overlap groups; the next round's dedup and co-presence use them."""
+        self._overlap_groups = list(overlap_groups)
 
     async def step(
         self,

@@ -1,4 +1,8 @@
-"""Fetches camera overlap groups from cognitive-companion at startup.
+"""Fetches camera overlap groups from cognitive-companion.
+
+Loaded once at startup and then on every CC config sync poll
+(:class:`app.services.cc_config_sync.CCConfigSyncService`), so a group the operator
+registers takes effect without a restart.
 
 Overlap groups define cameras that share a physical field of view.  The
 cross-camera associator uses this information to fuse tracklets across
@@ -45,6 +49,9 @@ def parse_overlap_groups(raw: object) -> list[OverlapGroup]:
     groups: list[OverlapGroup] = []
     skipped = 0
     for r in raw:
+        if not isinstance(r, dict):
+            skipped += 1
+            continue
         gid = r.get("id")
         cam_ids = r.get("camera_ids")
         if (

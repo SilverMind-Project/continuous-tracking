@@ -9,6 +9,7 @@ pipeline starts (:func:`restore_privacy_zones`) and re-applied on every poll.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, get_args
@@ -24,7 +25,7 @@ from tenacity import (
 
 from ..calibration.state import CalibrationState, PrivacyZoneConfig
 from ..calibration.validator import validate_homography
-from ..domain import PrivacyPolicy, TransitZone
+from ..domain import OverlapGroup, PrivacyPolicy, TransitZone
 from ..observability import metrics as _m
 from ..services.camera_room_map import (
     CameraRoomBinding,
@@ -32,6 +33,7 @@ from ..services.camera_room_map import (
     RoomPolygonBinding,
     RoomPolygonMap,
 )
+from ..services.overlap_group_sync import OVERLAP_GROUPS_PATH, parse_overlap_groups
 from ..services.transit_zone_map import TransitZoneBinding, TransitZoneMap
 
 if TYPE_CHECKING:
@@ -237,7 +239,13 @@ async def restore_privacy_zones(
 
 class CCConfigSyncService:
     """Background task that polls CC every *poll_interval_s* and applies
-    camera→room bindings, homography matrices, and privacy zones atomically."""
+    camera→room bindings, homography matrices, privacy zones, room polygons, transit zones,
+    and camera overlap groups.
+
+    CC is authoritative for homographies: a camera whose matrix CC no longer holds (cleared,
+    rejected by validation, camera disabled or deleted) loses its runtime homography at the
+    next poll and falls back to its virtual room.
+    """
 
     def __init__(
         self,
@@ -250,6 +258,7 @@ class CCConfigSyncService:
         fetch_retry_attempts: int = 3,
         fetch_retry_initial_s: float = 3.0,
         fetch_retry_max_s: float = 15.0,
+        overlap_group_sink: Callable[[Sequence[OverlapGroup]], None] | None = None,
     ) -> None:
         self._client = client
         self._calibration_state = calibration_state
@@ -262,6 +271,10 @@ class CCConfigSyncService:
         self._fetch_retry_max_s = fetch_retry_max_s
         self._stop_event = asyncio.Event()
         self._warned_privacy_zones_unavailable = False
+        self._overlap_group_sink = overlap_group_sink
+        self._applied_overlap_groups: tuple[OverlapGroup, ...] | None = None
+        if overlap_group_sink is None:
+            logger.warning("cc_config_sync_overlap_groups_not_wired")
 
     async def run(self) -> None:
         """Run the poll loop until stopped."""
@@ -305,6 +318,7 @@ class CCConfigSyncService:
             logger.warning("cc_config_sync_privacy_zones_unavailable")
 
         bindings: list[CameraRoomBinding] = []
+        calibrated_camera_ids: set[str] = set()
 
         for index, cam_raw in enumerate(cameras):
             context = f"/api/v1/cts/cameras[{index}]"
@@ -384,12 +398,21 @@ class CCConfigSyncService:
                     quality_status=validation.severity,
                     quality_point_count=len(residuals) if residuals else 0,
                 )
+                calibrated_camera_ids.add(camera_id)
+
+        removed = await self._calibration_state.remove_homographies(
+            set(self._calibration_state.homographies) - calibrated_camera_ids
+        )
+        if removed:
+            logger.info("cc_config_sync_homography_removed", camera_ids=removed)
 
         await self._camera_room_map.set_all(bindings)
         logger.debug(
             "cc_config_sync_applied",
             camera_count=len(bindings),
         )
+
+        await self._sync_overlap_groups()
 
         scale_m = await self._floor_plan_scale_m()
         if scale_m is None:
@@ -409,6 +432,30 @@ class CCConfigSyncService:
         width_m, height_m = scale_m
         await self._sync_room_polygons(now, width_m=width_m, height_m=height_m)
         await self._sync_transit_zones(now, width_m=width_m, height_m=height_m)
+
+    async def _sync_overlap_groups(self) -> None:
+        """Apply CC's overlap groups to the tracker; keep the last applied set on failure.
+
+        A transient CC failure or a malformed response must not dissolve the groups that are
+        in use, so this logs and returns instead of raising.
+        """
+        if self._overlap_group_sink is None:
+            return
+        try:
+            groups = tuple(parse_overlap_groups(await self._fetch_with_retry(OVERLAP_GROUPS_PATH)))
+        except Exception:  # keep the applied groups; the next poll retries
+            logger.exception("cc_config_sync_overlap_groups_failed")
+            return
+        if groups == self._applied_overlap_groups:
+            return
+        self._overlap_group_sink(groups)
+        self._applied_overlap_groups = groups
+        _m.metrics.overlap_groups_loaded.set(len(groups))
+        logger.info(
+            "cc_config_sync_overlap_groups_applied",
+            group_count=len(groups),
+            camera_ids=sorted({cid for g in groups for cid in g.camera_ids}),
+        )
 
     async def _floor_plan_scale_m(self) -> tuple[float, float] | None:
         """Return floor-plan dimensions in metres, or None when scale is unset."""

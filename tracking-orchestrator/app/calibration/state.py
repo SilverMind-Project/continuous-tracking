@@ -103,6 +103,22 @@ class CalibrationState:
 
             self.version += 1
 
+    async def remove_homographies(self, camera_ids: set[str]) -> list[str]:
+        """Drop the homography of each listed camera; return the ids that had one, sorted.
+
+        The camera's detections fall back to the virtual room on the next frame. Its fit
+        metadata goes with the matrix; privacy zones are unaffected.
+        """
+        async with self._lock:
+            removed = sorted(cid for cid in camera_ids if cid in self.homographies)
+            for camera_id in removed:
+                del self.homographies[camera_id]
+                self.calibrations.pop(camera_id, None)
+                self.camera_meta.pop(camera_id, None)
+            if removed:
+                self.version += 1
+            return removed
+
     async def set_privacy_zones(
         self,
         camera_id: str,
