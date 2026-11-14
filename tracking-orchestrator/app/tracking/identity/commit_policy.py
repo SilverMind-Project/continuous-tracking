@@ -10,7 +10,7 @@ backward compatibility with existing imports.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -152,11 +152,36 @@ def collect_evidence_identity_ids(
       inflated by averaging, so only its template-profile calibrated confidence
       makes it evidence.
     """
+    ids = {
+        fa.person_id
+        for fa in _evidence_face_anchors(
+            entity_obs_ids=entity_obs_ids,
+            entity_id=entity_id,
+            face_anchors=face_anchors,
+            face_evidence=face_evidence,
+            recognized_only=recognized_only,
+            calibrated_faces_only=calibrated_faces_only,
+        )
+    }
+    reid_id = _reid_evidence_identity(reid_likelihood)
+    if reid_id is not None:
+        ids.add(reid_id)
+    return frozenset(ids)
+
+
+def _evidence_face_anchors(
+    *,
+    entity_obs_ids: frozenset[str],
+    entity_id: str,
+    face_anchors: Sequence[FaceAnchor],
+    face_evidence: Sequence[FaceEvidence],
+    recognized_only: bool,
+    calibrated_faces_only: bool,
+) -> Iterator[FaceAnchor]:
+    """Yield the entity's face anchors that count as identity evidence (rules above)."""
     ev_by_detection: dict[str, FaceEvidence] = {
         fe.detection_id: fe for fe in face_evidence if fe.detection_id
     }
-
-    ids: set[str] = set()
     for fa in face_anchors:
         if recognized_only and fa.origin == "cc_assertion":
             continue
@@ -175,16 +200,17 @@ def collect_evidence_identity_ids(
             ev = ev_by_detection.get(fa.detection_id)
             if ev is not None and ev.source == "propagated":
                 continue
-            ids.add(fa.person_id)
+            yield fa
         elif fa.recognition_state == "candidate" and not recognized_only:
-            ids.add(fa.person_id)
+            yield fa
 
-    if reid_likelihood.distribution:
-        top_id, top_score = reid_likelihood.top_identity()
-        if top_id != "UNKNOWN" and top_score > 0.3:
-            ids.add(top_id)
 
-    return frozenset(ids)
+def _reid_evidence_identity(reid_likelihood: PosteriorDist) -> str | None:
+    """Return the ReID argmax when it is real evidence (not UNKNOWN, score above 0.3)."""
+    if not reid_likelihood.distribution:
+        return None
+    top_id, top_score = reid_likelihood.top_identity()
+    return top_id if top_id != "UNKNOWN" and top_score > 0.3 else None
 
 
 # ---------------------------------------------------------------------------
