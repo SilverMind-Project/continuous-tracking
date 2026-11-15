@@ -59,6 +59,7 @@ from .routers.live import router as live_router
 from .routers.live import set_context as set_live_context
 from .routers.ph import router as ph_router
 from .routers.ph import set_ph_repository, set_revision_publisher
+from .routers.readiness import router as readiness_router
 from .routers.reid_review import router as reid_review_router
 from .routers.reid_review import set_context as set_reid_review_context
 from .routers.topology import router as topology_router
@@ -67,6 +68,7 @@ from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
 from .sampling.keyframe_sampler import SamplerConfig
 from .services.cc_client import CognitiveCompanionClient
+from .services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
 from .services.overlap_group_sync import fetch_overlap_groups
 from .services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
@@ -543,6 +545,18 @@ def _build_face_id_config(
         crop_jpeg_quality=fi.as_int("crop_jpeg_quality"),
         # FaceIdConfig validates the value; the cast only narrows the type for mypy.
         evidence_policy=cast(FaceEvidencePolicy, fi.as_str("evidence_policy")),
+    )
+
+
+def _build_identity_policy_snapshot(config: PipelineConfig) -> IdentityPolicySnapshot:
+    """Copy the identity policies from the built pipeline config, so readiness reports what runs."""
+    return IdentityPolicySnapshot(
+        face_evidence_policy=config.face_id.evidence_policy,
+        face_templates_mode=config.face_templates.mode,
+        face_quality_mode=config.resolver.face_quality_mode,
+        cc_assertion_mode=config.resolver.cc_assertion_mode,
+        expected_arcface_model_version=config.face_id.expected_arcface_model_version or None,
+        expected_quality_version=config.face_id.expected_quality_version,
     )
 
 
@@ -1080,6 +1094,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         set_reid_review_context(reid_review_service)
 
+    app.state.identity_readiness_service = IdentityReadinessService(
+        policy=_build_identity_policy_snapshot(config),
+        calibration_state=calibration_state,
+        camera_room_map=camera_room_map,
+        overlap_groups=_pipeline,
+        gallery_repo=gallery_repo,
+    )
+
     if signal_repo is not None and trajectory_repo is not None and keyframe_repo is not None:
         dashboard_router_mod.set_repos(
             signal=signal_repo,
@@ -1161,6 +1183,8 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    # Set by the lifespan once the pipeline is built; the route answers 503 until then.
+    app.state.identity_readiness_service = None
     # Internal calibration endpoints consumed by the CC BFF.
     # Reserved for future use: separate :8510 listener
     # they live on the same app under /internal/ to keep the routing simple.
@@ -1169,6 +1193,7 @@ def create_app() -> FastAPI:
     app.include_router(corrections_router)
     app.include_router(gallery_router)
     app.include_router(reid_review_router)
+    app.include_router(readiness_router)
     app.include_router(live_router)
     app.include_router(ph_router)
     app.include_router(trajectory_router)

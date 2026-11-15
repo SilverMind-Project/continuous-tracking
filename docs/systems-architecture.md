@@ -173,6 +173,12 @@ CC is the consumer and control plane for CTS. CTS does not serve users directly;
 - **CC owns camera configuration.** There is no static camera list in CTS. `rtsp-ingress` polls `GET /api/v1/cts/cameras` on CC every 60 s; CC stores RTSP URLs (with embedded credentials), room bindings, and enable flags. Operators manage cameras in the CC admin UI. The orchestrator's `cc_config_sync` reads the same list for room bindings, homographies, and each camera's `privacy_zones`. Privacy zones live only in orchestrator memory, so `restore_privacy_zones` loads them before the pipeline starts (startup fails without them) and every sync poll re-applies them; CC's `POST /internal/calibration/privacy_zones` push only makes a saved change take effect sooner.
 - **CC drives identity corrections.** The CC BFF `routers/cts_ph.py` proxies the orchestrator `/ph/*` endpoints (`get_ph`, observations, trail, co-present, correct, merge, split, batch_correct). Operator corrections produce `IdentityRevision`s that flow back through CTS and CC history.
 - **CC injects evidence back into CTS.** CC can push face assertions (from person-identification-service) that `WorldTrackingStage` matches to observations as `FaceAnchor`s, so CC-side identity knowledge strengthens the CTS posterior.
+- **CC reads identity readiness from CTS.** `GET /internal/identity/readiness`
+  (`app/routers/readiness.py`, `IdentityReadinessService`) reports the face, template, quality,
+  and assertion policies the pipeline was built with, ReID gallery rows by lifecycle state, each
+  enabled camera with whether a homography is in use, and the overlap-group count. It carries
+  counts and settings only, never an identity id or a position; CC turns it into the identity
+  setup page and the `get_identity_readiness` MCP tool.
 - **`mean_quality` and identity confidence travel on the wire** from CTS to the CC `PersonLocationEnvelope`. CC does not recompute them.
 - **Trajectory confidence is persisted for signal gating.** CTS stores `position_sigma_m`,
   `primary_camera_id`, `contributing_camera_count`, and `footpoint_reliable` on each

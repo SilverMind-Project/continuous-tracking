@@ -374,6 +374,10 @@ class WorldTracker:
         """Replace the declared overlap groups; the next round's dedup and co-presence use them."""
         self._overlap_groups = list(overlap_groups)
 
+    def overlap_group_count(self) -> int:
+        """How many declared overlap groups dedup and co-presence use."""
+        return len(self._overlap_groups)
+
     async def step(
         self,
         observations: list[WorldObservation],

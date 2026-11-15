@@ -1297,6 +1297,12 @@ class FrameProcessingPipeline:
                 frozenset(cid for group in overlap_groups for cid in group.camera_ids)
             )
 
+    def overlap_group_count(self) -> int | None:
+        """Overlap groups the world tracker uses; None before the tracker is built."""
+        if self._world_tracker is None:
+            return None
+        return self._world_tracker.overlap_group_count()
+
     def set_room_polygon_map(self, room_polygon_map: RoomPolygonMap) -> None:
         """Replace the live room polygon map read by WorldTrackingStage."""
         self._live_config.room_polygon_map = room_polygon_map

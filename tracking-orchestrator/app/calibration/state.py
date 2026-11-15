@@ -122,6 +122,10 @@ class CalibrationState:
             self.last_reload_at = datetime.now(UTC).isoformat()
             self.version += 1
 
+    def calibrated_camera_ids(self) -> frozenset[str]:
+        """Cameras whose floor homography is in use right now."""
+        return frozenset(self.homographies)
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "homographies": dict(self.homographies),

@@ -41,6 +41,11 @@ class CameraRoomMap:
             self._bindings = {b.camera_id: b for b in bindings}
             self._version += 1
 
+    async def snapshot(self) -> list[CameraRoomBinding]:
+        """Every bound (enabled) camera, ordered by camera id."""
+        async with self._lock:
+            return sorted(self._bindings.values(), key=lambda b: b.camera_id)
+
     async def version(self) -> int:
         async with self._lock:
             return self._version
