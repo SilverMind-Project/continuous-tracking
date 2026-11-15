@@ -140,3 +140,11 @@ def max_age_entries(
         _entry("boundary-12h", timedelta(hours=12)),
         _entry("stale-13h", timedelta(hours=13)),
     )
+
+
+def expected_state_counts() -> dict[str, int]:
+    """``count_review_queue`` over the seeded entries: every row counts, whoever wrote it."""
+    counts = dict.fromkeys(_STATES, 0)
+    for entry in make_entries():
+        counts[entry.state] += 1
+    return counts

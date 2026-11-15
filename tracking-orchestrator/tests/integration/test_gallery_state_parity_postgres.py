@@ -25,6 +25,7 @@ from tests.storage._gallery_parity_fixtures import (
     ALL_TRACKLET_IDS,
     STATE_FILTER_CASES,
     expected_ids,
+    expected_state_counts,
     make_entries,
     make_identities,
     max_age_entries,
@@ -175,6 +176,14 @@ def _candidate(
         confidence=0.9,
         state=state,
     )
+
+
+@pytest.mark.asyncio
+async def test_count_review_queue_counts_rows_written_by_upsert_gallery_entry(
+    db_pool: Any,
+) -> None:
+    repo = await _seeded_repo(db_pool)
+    assert await repo.count_review_queue() == expected_state_counts()
 
 
 @pytest.mark.asyncio

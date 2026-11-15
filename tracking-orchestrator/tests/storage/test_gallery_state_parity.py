@@ -31,6 +31,7 @@ from tests.storage._gallery_parity_fixtures import (
     STATE_FILTER_CASES,
     entry_for,
     expected_ids,
+    expected_state_counts,
     make_entries,
     make_identities,
     max_age_entries,
@@ -45,6 +46,13 @@ async def _seeded_repo() -> InMemoryGalleryRepository:
     for entry in make_entries():
         await repo.upsert_gallery_entry(entry)
     return repo
+
+
+class TestCountReviewQueueParity:
+    @pytest.mark.asyncio
+    async def test_counts_rows_written_by_upsert_gallery_entry(self) -> None:
+        repo = await _seeded_repo()
+        assert await repo.count_review_queue() == expected_state_counts()
 
 
 class TestListGalleryEntriesParity:

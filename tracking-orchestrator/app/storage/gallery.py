@@ -506,8 +506,13 @@ class InMemoryGalleryRepository(GalleryRepository):
             "operator_verified": 0,
             "rejected": 0,
         }
-        for c in self._candidates.values():
-            counts[c.state] = counts.get(c.state, 0) + 1
+        # Postgres counts every reid_gallery row, including rows written by
+        # upsert_gallery_entry that never became review candidates; the
+        # candidate's state wins where both dicts hold the row.
+        for row_id in self._entries.keys() | self._candidates.keys():
+            candidate = self._candidates.get(row_id)
+            state = candidate.state if candidate is not None else self._entries[row_id].state
+            counts[state] = counts.get(state, 0) + 1
         return counts
 
     async def apply_review_action(
