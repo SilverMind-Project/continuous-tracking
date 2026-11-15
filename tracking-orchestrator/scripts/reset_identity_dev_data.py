@@ -12,9 +12,10 @@ Required env vars (read from environment; same vars as docker-compose):
   CC:  POSTGRES_HOST, POSTGRES_PORT, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
   MinIO: MINIO_ENDPOINT_URL, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET, MINIO_SECURE
   Redis (optional, only with --include-redis): REDIS_URL
-  Smoke check (optional): CTS_BASE_URL, CC_BASE_URL, CC_API_KEY (the last enables the
-    correction-targets endpoint probe; without it that probe is skipped and the auth-free
-    identities-preserved DB check remains authoritative).
+  Smoke check (optional): CTS_BASE_URL, CC_BASE_URL, CC_API_KEY (the last, a key holding
+    identity_targets:read such as a caregiver key, enables the identity-targets endpoint probe;
+    without it that probe is skipped and the auth-free identities-preserved DB check remains
+    authoritative).
 """
 
 from __future__ import annotations
@@ -408,12 +409,12 @@ async def _run_smoke_check(
         except Exception as exc:  # noqa: BLE001 -- smoke probe records the failure as not-ok; non-fatal
             results["cc_health"] = {"ok": False, "error": str(exc)}
 
-        # Correction targets endpoint (requires X-API-Key). The authoritative
+        # Identity targets endpoint (requires X-API-Key). The authoritative
         # "both members survive" assertion is identities_preserved below, which
         # is auth-free, so this HTTP probe is optional: run it only when an
         # operator supplies CC_API_KEY, and never let a missing key fail the run.
         if not cc_api_key:
-            results["correction_targets"] = {
+            results["identity_targets"] = {
                 "ok": True,
                 "skipped": "no CC_API_KEY provided; identities_preserved is authoritative",
                 "count": None,
@@ -421,18 +422,18 @@ async def _run_smoke_check(
         else:
             try:
                 r = await http.get(
-                    f"{cc_base_url}/api/v1/cts/identity/correction-targets",
+                    f"{cc_base_url}/api/v1/identity/targets",
                     headers={"X-API-Key": cc_api_key},
                 )
                 body = r.json() if r.status_code == 200 else {}
                 targets = body.get("targets", [])
-                results["correction_targets"] = {
+                results["identity_targets"] = {
                     "ok": r.status_code == 200 and len(targets) >= 2,
                     "status": r.status_code,
                     "count": len(targets),
                 }
             except Exception as exc:  # noqa: BLE001 -- smoke probe records the failure as not-ok; non-fatal
-                results["correction_targets"] = {"ok": False, "error": str(exc)}
+                results["identity_targets"] = {"ok": False, "error": str(exc)}
 
     # Raw frame survival (sampled before the reset; must never be deleted).
     if raw_frame_survival is not None:
