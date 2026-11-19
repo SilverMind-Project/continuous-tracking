@@ -22,6 +22,8 @@ redis:
   scene_samples_stream: scene.samples
   presence_stream: tracking.presence
   dwell_stream: tracking.dwell
+  wearable_fixes_stream: wearable.fixes
+  wearable_capabilities_stream: wearable.capabilities
   batch_max_wait_ms: 100
   batch_max_size: 8
   xack_timeout_ms: 5000

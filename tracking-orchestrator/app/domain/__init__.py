@@ -1503,3 +1503,17 @@ class CameraProfile:
     ir_capable: bool | None = None
     frame_natural_width_px: int | None = None
     frame_natural_height_px: int | None = None
+
+
+from .wearables import (  # noqa: E402
+    RfNode as RfNode,
+)
+from .wearables import (  # noqa: E402
+    WearableBinding as WearableBinding,
+)
+from .wearables import (  # noqa: E402
+    WearableDevice as WearableDevice,
+)
+from .wearables import (  # noqa: E402
+    WearableSiteConfig as WearableSiteConfig,
+)

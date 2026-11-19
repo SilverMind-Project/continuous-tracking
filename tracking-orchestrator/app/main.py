@@ -237,6 +237,8 @@ def _build_transport_config(s: Settings) -> TransportConfig:
         revisions_stream=s.as_str("redis.revisions_stream"),
         signals_stream=s.as_str("redis.signals_stream"),
         scene_samples_stream=s.as_str("redis.scene_samples_stream"),
+        wearable_fixes_stream=s.as_str("redis.wearable_fixes_stream"),
+        wearable_capabilities_stream=s.as_str("redis.wearable_capabilities_stream"),
     )
 
 
@@ -982,16 +984,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await _pipeline.start()
 
-    # CC config sync service (camera-to-room map + camera profiles + homography sync).
+    # CC config sync service (camera-to-room map + camera profiles + homography + wearables sync).
     from .services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from .services.cc_config_sync import CCConfigSyncService
     from .services.transit_zone_map import TransitZoneMap
+    from .services.wearable_site_config_map import WearableSiteConfigMap
 
     camera_room_map = CameraRoomMap()
     room_polygon_map = RoomPolygonMap()
     transit_zone_map = TransitZoneMap()
     camera_profile_map = CameraProfileMap(initial_camera_profiles)
+    wearable_site_config_map = WearableSiteConfigMap()
     _pipeline.set_camera_profile_map(camera_profile_map)
+    _pipeline.set_wearable_site_config_map(wearable_site_config_map)
     _poll_s = settings.as_float("cc_sync.poll_interval_s")
     cc_sync_service = CCConfigSyncService(
         client=cc_client,
@@ -1002,6 +1007,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         poll_interval_s=_poll_s,
         overlap_group_sink=_pipeline.set_overlap_groups,
         camera_profile_map=camera_profile_map,
+        wearable_site_config_map=wearable_site_config_map,
     )
     app.state.cc_sync_service = cc_sync_service
     app.state.cc_sync_task = asyncio.create_task(cc_sync_service.run())
@@ -1009,6 +1015,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.room_polygon_map = room_polygon_map
     app.state.transit_zone_map = transit_zone_map
     app.state.camera_profile_map = camera_profile_map
+    app.state.wearable_site_config_map = wearable_site_config_map
     # Wire CameraRoomMap into the pipeline so stages read room bindings.
     _pipeline.set_camera_room_map(camera_room_map)
     _pipeline.set_room_polygon_map(room_polygon_map)
@@ -1109,6 +1116,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             members_source=_pipeline._face_id_client if _pipeline is not None else None,
             identity_resolver=_pipeline._identity_resolver if _pipeline is not None else None,
             face_templates=_pipeline.face_templates if _pipeline is not None else None,
+            wearable_site_config=wearable_site_config_map,
             interval_s=60.0,
         )
         await roster_sync_service.start()

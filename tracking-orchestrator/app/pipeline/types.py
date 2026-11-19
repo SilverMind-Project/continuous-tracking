@@ -18,6 +18,7 @@ from ..inference.schemas import Embedding
 from ..services.camera_profile_map import CameraProfileMap
 from ..services.camera_room_map import CameraRoomMap, RoomPolygonMap
 from ..services.transit_zone_map import TransitZoneMap
+from ..services.wearable_site_config_map import WearableSiteConfigMap
 
 
 class FrameImageFetcher(Protocol):
@@ -94,6 +95,7 @@ class LiveConfigHolder:
     camera_room_map: CameraRoomMap
     room_polygon_map: RoomPolygonMap
     camera_profile_map: CameraProfileMap = field(default_factory=CameraProfileMap)
+    wearable_site_config_map: WearableSiteConfigMap = field(default_factory=WearableSiteConfigMap)
     transit_detector: TransitDetectorProtocol | None = None
     transit_zone_map: TransitZoneMap | None = None
     room_transition_publisher: RoomTransitionPublisherProtocol | None = None

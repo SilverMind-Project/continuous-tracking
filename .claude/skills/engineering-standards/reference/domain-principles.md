@@ -23,6 +23,9 @@ event = decode(fields, TrackingEvent, field="event")
 | `tracking.revisions` | `"revision"` | `IdentityRevision` |
 | `tracking.signals` | `"signal"` | `DementiaSignal` |
 | `scene.samples` | `"sample"` | `SceneSample` |
+| `wearable.fixes` | `"fix"` | `TagFix` (producers trim with `XADD ... MINID` to 72 hours) |
+| `wearable.capabilities` | `"capability"` | `AdapterCapability` |
+| `position.tracks` | `"track"` | `AnonymousPositionTrack` (reserved, unused; never carries identity and is not wearable evidence; any future consumer integrates it as a second anonymous position sensor for the world tracker) |
 
 1. Redis clients use `decode_responses=False` so binary payloads round-trip unchanged.
 2. No codec discriminator field -- consumers know the message type from the stream.

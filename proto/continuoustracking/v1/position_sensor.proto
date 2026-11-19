@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package continuoustracking.v1;
+
+option go_package = "github.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1";
+
+// Reserved contract for device-free anonymous position sensors (for example
+// mmWave radar) reporting people detected in the shared floor frame without
+// knowing who they are. Reserved stream name: position.tracks.
+//
+// No service produces or consumes this message yet. This message never carries
+// identity and is never wearable evidence; a future consumer would integrate it
+// as a second anonymous position sensor for the world tracker.
+message AnonymousPositionTrack {
+  // Registered sensor identifier owned by Cognitive Companion.
+  string sensor_id = 1;
+  // Short-lived target identifier assigned by the sensor itself.
+  string sensor_track_id = 2;
+  fixed64 measured_at_unix_ns = 3;
+  // Floor-plane position in millimetres (shared floor frame, matching FloorPoint).
+  sint32 x_mm = 4;
+  sint32 y_mm = 5;
+  // 2x2 horizontal position covariance in square metres.
+  float cov_xx_m2 = 6;
+  float cov_xy_m2 = 7;
+  float cov_yy_m2 = 8;
+  bool has_speed = 9;
+  float speed_m_s = 10;
+  string floor_plan_id = 11;
+}

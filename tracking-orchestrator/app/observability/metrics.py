@@ -52,6 +52,12 @@ class CameraProfileRejectReason(StrEnum):
     MALFORMED_FIELD = "malformed_field"
 
 
+class CCSyncResource(StrEnum):
+    """Bounded label set for ``cts_cc_sync_failures_total{resource}``."""
+
+    WEARABLES = "wearables"
+
+
 _REVISION_REASON_PREFIX_MAP: dict[str, RevisionReasonKind] = {
     "initial_assignment": RevisionReasonKind.INITIAL_ASSIGNMENT,
     "demoted_to_unknown": RevisionReasonKind.DEMOTED_TO_UNKNOWN,
@@ -117,6 +123,7 @@ class Metrics:
     homography_rejected_total: Counter
     homography_warning_total: Counter
     camera_profile_rejected_total: Counter
+    cc_sync_failures_total: Counter
 
     # ---- Calibration and transit metrics -----------------------------------
     worldtracker_observations_by_calibration_total: Counter  # labels: camera_id, calibrated
@@ -422,6 +429,11 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_camera_profile_rejected_total",
             "Camera profile entries rejected during CC config sync (e.g. unknown role).",
             ["camera_id", "reason"],
+        ),
+        cc_sync_failures_total=_counter(
+            "cts_cc_sync_failures_total",
+            "CC config sync fetch or decode failures that kept the previous live snapshot.",
+            ["resource"],
         ),
         # ---- Calibration and transit metrics ------------------------------------
         worldtracker_observations_by_calibration_total=_counter(

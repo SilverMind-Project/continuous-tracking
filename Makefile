@@ -12,7 +12,9 @@ PROTO_FILES    := \
 	proto/continuoustracking/v1/frame.proto \
 	proto/continuoustracking/v1/tracking.proto \
 	proto/continuoustracking/v1/signals.proto \
-	proto/continuoustracking/v1/scene.proto
+	proto/continuoustracking/v1/scene.proto \
+	proto/continuoustracking/v1/wearable.proto \
+	proto/continuoustracking/v1/position_sensor.proto
 
 .PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all check-toolchain deps-outdated deps-upgrade go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit hooks-test check-md docs-check
 

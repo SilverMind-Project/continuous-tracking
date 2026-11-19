@@ -81,6 +81,7 @@ from ..services.identity_rewriter import (
 )
 from ..services.transit_zone_map import TransitZoneMap
 from ..services.unknown_backfill import BackfillConfig, UnknownBackfillService
+from ..services.wearable_site_config_map import WearableSiteConfigMap
 from ..storage.appearance import DailyAppearanceRepo, InMemoryDailyAppearanceRepo
 from ..storage.base import (
     BboxAnnotationRepository,
@@ -1296,6 +1297,10 @@ class FrameProcessingPipeline:
     def set_camera_profile_map(self, camera_profile_map: CameraProfileMap) -> None:
         """Replace the live CameraProfileMap read by pipeline stages."""
         self._live_config.camera_profile_map = camera_profile_map
+
+    def set_wearable_site_config_map(self, wearable_site_config_map: WearableSiteConfigMap) -> None:
+        """Replace the live WearableSiteConfigMap synced from CC."""
+        self._live_config.wearable_site_config_map = wearable_site_config_map
 
     def _record_observed_stream_size(self, camera_id: str, width_px: int, height_px: int) -> None:
         """Record observed frame pixel size and log once if it differs from the CC profile."""

@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+package continuoustracking.v1;
+
+option go_package = "github.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1";
+
+// Kind of localization fix emitted by an RF adapter on the wearable.fixes stream.
+enum FixKind {
+  FIX_KIND_UNSPECIFIED = 0;
+  // Floor-plane position in the shared floor frame with a true 2x2 covariance.
+  FIX_KIND_POSITION = 1;
+  // Room-level presence mapped to a Cognitive Companion room identifier.
+  FIX_KIND_ROOM = 2;
+  // Proximity to a single RF node, optionally with an estimated distance.
+  FIX_KIND_PROXIMITY = 3;
+}
+
+// Hardware-neutral RF adapter family declared in AdapterCapability.
+enum AdapterKind {
+  ADAPTER_KIND_UNSPECIFIED = 0;
+  // The wearable measures ranges to fixed RF nodes (for example a watch controller).
+  ADAPTER_KIND_DEVICE_RANGING = 1;
+  // Fixed RF nodes measure ranges or signal strength to the wearable tag.
+  ADAPTER_KIND_ANCHOR_RANGING = 2;
+  // An external solver reports solved floor-plane positions directly.
+  ADAPTER_KIND_SOLVED_POSITION = 3;
+  // Room-level presence receivers report which room hears a beacon.
+  ADAPTER_KIND_ROOM_PRESENCE = 4;
+  // Deterministic simulator or replay adapter used in CI and offline validation.
+  ADAPTER_KIND_SIMULATOR = 5;
+}
+
+// Whether the wearable reports being worn on the body.
+enum WearState {
+  // The device or adapter cannot determine on-body state (for example coin-cell beacons).
+  WEAR_STATE_UNSPECIFIED = 0;
+  WEAR_STATE_ON_BODY = 1;
+  WEAR_STATE_OFF_BODY = 2;
+}
+
+// Whether the wearable tag is moving or parked/stationary.
+enum MotionState {
+  // The adapter cannot determine motion state.
+  MOTION_STATE_UNSPECIFIED = 0;
+  MOTION_STATE_MOVING = 1;
+  MOTION_STATE_STILL = 2;
+}
+
+// Role of a fixed RF node registered in Cognitive Companion.
+enum RfNodeRole {
+  RF_NODE_ROLE_UNSPECIFIED = 0;
+  // Fixed receiver that hears broadcast beacons (for example room BLE scanners).
+  RF_NODE_ROLE_RECEIVER = 1;
+  // Fixed ranging anchor used for time-of-flight or phase-based ranging.
+  RF_NODE_ROLE_RANGING_ANCHOR = 2;
+}
+
+// Hardware-neutral RF localization technology declared by an adapter or RF node.
+enum RangingTechnology {
+  RANGING_TECHNOLOGY_UNSPECIFIED = 0;
+  RANGING_TECHNOLOGY_BLE_RSSI = 1;
+  RANGING_TECHNOLOGY_BLE_CHANNEL_SOUNDING = 2;
+  RANGING_TECHNOLOGY_UWB = 3;
+}
+
+// One per registered tag per solver epoch on the wearable.fixes Redis Stream
+// (field "fix", trimmed to 72 hours). Positions are in the shared floor-plan
+// frame (CC normalized floor-plan coordinates multiplied by floor dimensions in
+// metres), expressed in millimetres to match CTS FloorPoint. (0, 0) is a real
+// floor coordinate; every optional scalar carries an explicit presence flag.
+message TagFix {
+  // Hardware-neutral registered device identifier (never a raw radio address).
+  string tag_id = 1;
+  fixed64 measured_at_unix_ns = 2;
+  FixKind kind = 3;
+  uint32 epoch_seq = 4;
+
+  // Floor-plane position in millimetres (shared floor-plan frame).
+  bool has_position = 5;
+  sint32 x_mm = 6;
+  sint32 y_mm = 7;
+
+  // Optional elevation above the floor plane in millimetres.
+  bool has_z = 8;
+  sint32 z_mm = 9;
+
+  // 2x2 horizontal position covariance in square metres. A FIX_KIND_POSITION
+  // message always carries a positive-definite covariance that is true for the
+  // technology and geometry that produced it; downstream consumers decide what
+  // a fix is good for solely from this covariance and never branch on
+  // adapter_kind or a radio technology name.
+  float cov_xx_m2 = 10;
+  float cov_xy_m2 = 11;
+  float cov_yy_m2 = 12;
+  string floor_plan_id = 13;
+
+  // Cognitive Companion room identifier; empty when unknown.
+  string room_id = 14;
+  bool has_room_probability = 15;
+  float room_probability = 16;
+
+  // RF node identifier for proximity fixes.
+  string anchor_id = 17;
+  bool has_distance = 18;
+  float distance_m = 19;
+
+  WearState wear_state = 20;
+  bool has_quality = 21;
+  // Solver quality score in [0, 1].
+  float quality = 22;
+  // Number of RF nodes contributing to this epoch solve.
+  uint32 anchors_used = 23;
+  bool has_residual = 24;
+  float residual_rms_m = 25;
+
+  // Configured adapter instance identifier, kind, and version.
+  string adapter_id = 26;
+  AdapterKind adapter_kind = 27;
+  string adapter_version = 28;
+
+  // Tag motion state so stationary/parked tags can be excluded from identity evidence.
+  MotionState motion_state = 29;
+
+  // Optional remaining battery fraction in [0, 1] for caregiver maintenance alerts.
+  bool has_battery = 30;
+  float battery_fraction = 31;
+}
+
+// Capability descriptor published by an RF adapter on wearable.capabilities
+// (field "capability"). Consumers inspect declared capabilities rather than
+// branching on vendor or model names.
+message AdapterCapability {
+  string adapter_id = 1;
+  AdapterKind adapter_kind = 2;
+  repeated FixKind fix_kinds = 3;
+  float nominal_rate_hz = 4;
+  bool reports_covariance = 5;
+  bool reports_wear_state = 6;
+  bool reports_z = 7;
+  fixed64 reported_at_unix_ns = 8;
+  bool reports_motion_state = 9;
+}

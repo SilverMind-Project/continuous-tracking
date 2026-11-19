@@ -9,12 +9,13 @@ pipeline starts (:func:`restore_privacy_zones`) and re-applied on every poll.
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, get_args
 
-from cts_contracts import CameraRole
+from cts_contracts import CameraRole, DeviceKind, RangingTechnology, RfNodeRole
 from structlog import get_logger
 from tenacity import (
     AsyncRetrying,
@@ -26,9 +27,18 @@ from tenacity import (
 
 from ..calibration.state import CalibrationState, PrivacyZoneConfig
 from ..calibration.validator import validate_homography
-from ..domain import CameraProfile, OverlapGroup, PrivacyPolicy, TransitZone
+from ..domain import (
+    CameraProfile,
+    OverlapGroup,
+    PrivacyPolicy,
+    RfNode,
+    TransitZone,
+    WearableBinding,
+    WearableDevice,
+    WearableSiteConfig,
+)
 from ..observability import metrics as _m
-from ..observability.metrics import CameraProfileRejectReason
+from ..observability.metrics import CameraProfileRejectReason, CCSyncResource
 from ..services.camera_profile_map import CameraProfileMap
 from ..services.camera_room_map import (
     CameraRoomBinding,
@@ -38,6 +48,7 @@ from ..services.camera_room_map import (
 )
 from ..services.overlap_group_sync import OVERLAP_GROUPS_PATH, parse_overlap_groups
 from ..services.transit_zone_map import TransitZoneBinding, TransitZoneMap
+from ..services.wearable_site_config_map import WearableSiteConfigMap
 
 if TYPE_CHECKING:
     from ..services.cc_client import CognitiveCompanionClient
@@ -46,6 +57,7 @@ logger = get_logger(__name__)
 
 _PRIVACY_POLICIES: Final[frozenset[str]] = frozenset(get_args(PrivacyPolicy))
 _CAMERAS_PATH: Final = "/api/v1/cts/cameras"
+WEARABLES_SITE_CONFIG_PATH: Final = "/api/v1/wearables/site-config"
 
 
 def _log_fetch_retry(retry_state: RetryCallState) -> None:
@@ -125,6 +137,153 @@ def _optional_positive_int(data: dict[str, Any], key: str, *, context: str) -> i
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise CCConfigSyncContractError(f"{context}.{key} must be a positive integer")
     return value
+
+
+def _require_finite_number(value: Any, *, context: str) -> float:
+    num = _require_number(value, context=context)
+    if not math.isfinite(num):
+        raise CCConfigSyncContractError(f"{context} must be a finite number")
+    return num
+
+
+def _parse_iso_utc(value: Any, *, context: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise CCConfigSyncContractError(f"{context} must be an ISO-8601 timestamp string")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise CCConfigSyncContractError(f"{context} is not a valid ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise CCConfigSyncContractError(f"{context} must be timezone-aware")
+    return parsed.astimezone(UTC)
+
+
+def parse_wearable_site_config(payload: Any) -> WearableSiteConfig:
+    """Decode CC's ``GET /api/v1/wearables/site-config`` payload into frozen domain objects.
+
+    Converts RF node coordinates from metres to integer millimetres at the
+    boundary (matching ``FloorPoint``) and validates every closed vocabulary.
+    Raises :class:`CCConfigSyncContractError` on any malformed field so the
+    caller keeps its previous live configuration.
+    """
+    ctx = WEARABLES_SITE_CONFIG_PATH
+    root = _require_mapping(payload, context=ctx)
+    version = _require_non_empty_str(root, "version", context=ctx)
+
+    floor_plan_raw = root.get("floor_plan_id")
+    if floor_plan_raw is not None and (not isinstance(floor_plan_raw, str) or not floor_plan_raw):
+        raise CCConfigSyncContractError(f"{ctx}.floor_plan_id must be a non-empty string or null")
+    floor_plan_id: str | None = floor_plan_raw
+
+    raw_nodes = _require_list(root.get("nodes"), context=f"{ctx}.nodes")
+    nodes: list[RfNode] = []
+    for index, node_raw in enumerate(raw_nodes):
+        nctx = f"{ctx}.nodes[{index}]"
+        node = _require_mapping(node_raw, context=nctx)
+        anchor_id = _require_non_empty_str(node, "anchor_id", context=nctx)
+        adapter_id = _require_non_empty_str(node, "adapter_id", context=nctx)
+
+        raw_role = _require_non_empty_str(node, "node_role", context=nctx)
+        node_role = RfNodeRole.from_wire(raw_role)
+        if node_role is None:
+            raise CCConfigSyncContractError(f"{nctx}.node_role {raw_role!r} is unknown")
+
+        raw_tech = _require_non_empty_str(node, "technology", context=nctx)
+        technology = RangingTechnology.from_wire(raw_tech)
+        if technology is None:
+            raise CCConfigSyncContractError(f"{nctx}.technology {raw_tech!r} is unknown")
+
+        x_m = _require_finite_number(node.get("x_m"), context=f"{nctx}.x_m")
+        y_m = _require_finite_number(node.get("y_m"), context=f"{nctx}.y_m")
+        z_m = _require_finite_number(node.get("z_m"), context=f"{nctx}.z_m")
+
+        room_id_raw = node.get("room_id")
+        if room_id_raw is None:
+            room_id: str | None = None
+        elif isinstance(room_id_raw, str) and room_id_raw:
+            room_id = room_id_raw
+        elif isinstance(room_id_raw, int) and not isinstance(room_id_raw, bool):
+            room_id = str(room_id_raw)
+        else:
+            raise CCConfigSyncContractError(f"{nctx}.room_id must be a string, int, or null")
+
+        uwb_addr_raw = node.get("uwb_address_hex")
+        if uwb_addr_raw is not None and (not isinstance(uwb_addr_raw, str) or not uwb_addr_raw):
+            raise CCConfigSyncContractError(f"{nctx}.uwb_address_hex must be a string or null")
+        uwb_channel = _optional_positive_int(node, "uwb_channel", context=nctx)
+        uwb_preamble = _optional_positive_int(node, "uwb_preamble_index", context=nctx)
+
+        nodes.append(
+            RfNode(
+                anchor_id=anchor_id,
+                adapter_id=adapter_id,
+                node_role=node_role,
+                technology=technology,
+                x_mm=round(x_m * 1000.0),
+                y_mm=round(y_m * 1000.0),
+                z_mm=round(z_m * 1000.0),
+                room_id=room_id,
+                uwb_address_hex=uwb_addr_raw,
+                uwb_channel=uwb_channel,
+                uwb_preamble_index=uwb_preamble,
+            )
+        )
+
+    raw_bindings = _require_list(root.get("bindings"), context=f"{ctx}.bindings")
+    bindings: list[WearableBinding] = []
+    for index, binding_raw in enumerate(raw_bindings):
+        bctx = f"{ctx}.bindings[{index}]"
+        binding = _require_mapping(binding_raw, context=bctx)
+        tag_id = _require_non_empty_str(binding, "tag_id", context=bctx)
+        member_id = _require_non_empty_str(binding, "member_id", context=bctx)
+        valid_from = _parse_iso_utc(binding.get("valid_from"), context=f"{bctx}.valid_from")
+        valid_to_raw = binding.get("valid_to")
+        valid_to = (
+            _parse_iso_utc(valid_to_raw, context=f"{bctx}.valid_to")
+            if valid_to_raw is not None
+            else None
+        )
+        if valid_to is not None and valid_to <= valid_from:
+            raise CCConfigSyncContractError(f"{bctx}.valid_to must be strictly after valid_from")
+        bindings.append(
+            WearableBinding(
+                tag_id=tag_id,
+                member_id=member_id,
+                valid_from=valid_from,
+                valid_to=valid_to,
+            )
+        )
+
+    raw_devices = _require_list(root.get("devices"), context=f"{ctx}.devices")
+    devices: list[WearableDevice] = []
+    for index, device_raw in enumerate(raw_devices):
+        dctx = f"{ctx}.devices[{index}]"
+        device = _require_mapping(device_raw, context=dctx)
+        tag_id = _require_non_empty_str(device, "tag_id", context=dctx)
+        adapter_id = _require_non_empty_str(device, "adapter_id", context=dctx)
+        hardware_key = _require_non_empty_str(device, "hardware_key", context=dctx)
+        raw_kind = _require_non_empty_str(device, "device_kind", context=dctx)
+        device_kind = DeviceKind.from_wire(raw_kind)
+        if device_kind is None:
+            raise CCConfigSyncContractError(f"{dctx}.device_kind {raw_kind!r} is unknown")
+        is_active = _require_bool(device, "is_active", context=dctx)
+        devices.append(
+            WearableDevice(
+                tag_id=tag_id,
+                adapter_id=adapter_id,
+                hardware_key=hardware_key,
+                device_kind=device_kind,
+                is_active=is_active,
+            )
+        )
+
+    return WearableSiteConfig(
+        floor_plan_id=floor_plan_id,
+        nodes=tuple(nodes),
+        bindings=tuple(bindings),
+        devices=tuple(devices),
+        version=version,
+    )
 
 
 def parse_camera_profile(
@@ -336,6 +495,7 @@ class CCConfigSyncService:
         fetch_retry_max_s: float = 15.0,
         overlap_group_sink: Callable[[Sequence[OverlapGroup]], None] | None = None,
         camera_profile_map: CameraProfileMap | None = None,
+        wearable_site_config_map: WearableSiteConfigMap | None = None,
     ) -> None:
         self._client = client
         self._calibration_state = calibration_state
@@ -345,6 +505,7 @@ class CCConfigSyncService:
         self._camera_profile_map = (
             camera_profile_map if camera_profile_map is not None else CameraProfileMap()
         )
+        self._wearable_site_config_map = wearable_site_config_map
         self._poll_interval_s = poll_interval_s
         self._fetch_retry_attempts = fetch_retry_attempts
         self._fetch_retry_initial_s = fetch_retry_initial_s
@@ -361,6 +522,11 @@ class CCConfigSyncService:
     def camera_profile_map(self) -> CameraProfileMap:
         """Live map of synced camera profiles."""
         return self._camera_profile_map
+
+    @property
+    def wearable_site_config_map(self) -> WearableSiteConfigMap | None:
+        """Live holder of synced wearable site configuration."""
+        return self._wearable_site_config_map
 
     async def run(self) -> None:
         """Run the poll loop until stopped."""
@@ -538,6 +704,7 @@ class CCConfigSyncService:
         )
 
         await self._sync_overlap_groups()
+        await self._sync_wearables()
 
         scale_m = await self._floor_plan_scale_m()
         if scale_m is None:
@@ -557,6 +724,33 @@ class CCConfigSyncService:
         width_m, height_m = scale_m
         await self._sync_room_polygons(now, width_m=width_m, height_m=height_m)
         await self._sync_transit_zones(now, width_m=width_m, height_m=height_m)
+
+    async def _sync_wearables(self) -> None:
+        """Fetch CC wearable site-config and publish to the live holder.
+
+        A transport failure or malformed payload keeps the previous snapshot
+        intact and increments ``cts_cc_sync_failures_total{resource="wearables"}``.
+        """
+        if self._wearable_site_config_map is None:
+            return
+        try:
+            raw = await self._fetch_with_retry(WEARABLES_SITE_CONFIG_PATH)
+            parsed = parse_wearable_site_config(raw)
+        except Exception:  # keep previous valid wearable config; retry next poll
+            _m.metrics.cc_sync_failures_total.labels(resource=CCSyncResource.WEARABLES.value).inc()
+            logger.warning("cc_config_sync_wearables_failed", exc_info=True)
+            return
+        current = self._wearable_site_config_map.get_sync()
+        if parsed == current:
+            return
+        await self._wearable_site_config_map.set_config(parsed)
+        logger.info(
+            "cc_config_sync_wearables_applied",
+            version=parsed.version,
+            node_count=len(parsed.nodes),
+            binding_count=len(parsed.bindings),
+            device_count=len(parsed.devices),
+        )
 
     async def _sync_overlap_groups(self) -> None:
         """Apply CC's overlap groups to the tracker; keep the last applied set on failure.

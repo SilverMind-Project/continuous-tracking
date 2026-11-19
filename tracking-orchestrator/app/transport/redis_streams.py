@@ -65,6 +65,8 @@ class TransportConfig:
     revisions_stream: str = "tracking.revisions"
     signals_stream: str = "tracking.signals"
     scene_samples_stream: str = "scene.samples"
+    wearable_fixes_stream: str = "wearable.fixes"
+    wearable_capabilities_stream: str = "wearable.capabilities"
 
 
 # Re-export proto FrameReady so callers use the wire type directly without
