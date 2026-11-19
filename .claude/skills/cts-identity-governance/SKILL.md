@@ -118,8 +118,9 @@ Face scores have four names, and each name means one thing:
   memory. Read `reference/face-templates.md` before changing templates.
 - ArcFace enrollment is a golden dataset. PH inference, operator identity correction, and ReID
   review never modify enrollment. Enrollment gains entries
-  only via explicit enroll calls or explicit operator naming of a visitor cluster
-  (`person-identification-service`'s `VisitorStore.name_cluster`); never automatically. Visitor
+  only via explicit enroll calls, explicit operator naming of a visitor cluster
+  (`person-identification-service`'s `VisitorStore.name_cluster`), or explicit operator promotion
+  of a labeled capture; never automatically. Visitor
   clusters themselves (unmatched face embeddings persisted for cross-visit review) are a
   separate, non-authoritative dataset that never enters enrollment, identification, or tracking
   until a caregiver explicitly names one.

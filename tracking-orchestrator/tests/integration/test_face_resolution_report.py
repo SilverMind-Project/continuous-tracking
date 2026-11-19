@@ -135,3 +135,75 @@ async def test_report_counts_faces_only_the_calibrated_policy_would_emit(
     assert "recognized faces only the calibrated policy would emit: 2" in (
         report_script.render_table(report)
     )
+
+
+@pytest.mark.integration
+async def test_report_aggregates_recognized_share_by_pitch_band(db_pool: asyncpg.Pool) -> None:
+    pitch_rows = [
+        _row(
+            20,
+            "cam-pitch",
+            26.0,
+            pitch_deg=-25.0,
+            recognition_state="recognized",
+            raw_similarity=0.55,
+        ),
+        _row(
+            21,
+            "cam-pitch",
+            26.0,
+            pitch_deg=-22.0,
+            recognition_state="candidate",
+            raw_similarity=0.32,
+        ),
+        _row(
+            22,
+            "cam-pitch",
+            26.0,
+            pitch_deg=-10.0,
+            recognition_state="recognized",
+            raw_similarity=0.60,
+        ),
+        _row(
+            23,
+            "cam-pitch",
+            26.0,
+            pitch_deg=12.0,
+            recognition_state="recognized",
+            raw_similarity=0.58,
+        ),
+        _row(
+            24,
+            "cam-pitch",
+            26.0,
+            pitch_deg=24.0,
+            recognition_state="unrecognized",
+            raw_similarity=0.18,
+        ),
+        _row(
+            25,
+            "cam-pitch",
+            26.0,
+            pitch_deg=28.0,
+            recognition_state="recognized",
+            raw_similarity=0.52,
+        ),
+    ]
+    await PostgresFaceObservationStatsRepository(db_pool).append_many(pitch_rows)
+
+    async with db_pool.acquire() as conn:
+        report = await report_script.build_report(conn, T0, T0 + timedelta(hours=1), "cam-pitch")
+
+    bands = report["cameras"]["cam-pitch"]["pitch_bands"]
+    assert list(bands.keys()) == ["lt_-20deg", "-20_to_0deg", "0_to_20deg", "ge_20deg"]
+    assert bands["lt_-20deg"]["faces"] == 2
+    assert bands["lt_-20deg"]["recognized"] == 1
+    assert bands["lt_-20deg"]["recognized_share"] == 0.5
+    assert bands["-20_to_0deg"]["recognized_share"] == 1.0
+    assert bands["0_to_20deg"]["recognized_share"] == 1.0
+    assert bands["ge_20deg"]["faces"] == 2
+    assert bands["ge_20deg"]["recognized"] == 1
+    assert bands["ge_20deg"]["recognized_share"] == 0.5
+    table = report_script.render_table(report)
+    assert "pitch bands:" in table
+    assert "ge_20deg n=2 recognized=1 (0.5)" in table

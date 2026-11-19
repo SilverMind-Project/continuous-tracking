@@ -133,6 +133,27 @@ GROUP BY camera_id, best_candidate_id
 ORDER BY camera_id, faces DESC, best_candidate_id
 """
 
+# Head-pitch bands in degrees. Both tails (lt_-20deg and ge_20deg) correspond to steep pitch
+# (abs(pitch_deg) >= 20), where ceiling cameras looking down produce positive pitch_deg.
+_PITCH_BANDS = ("lt_-20deg", "-20_to_0deg", "0_to_20deg", "ge_20deg")
+
+_SQL_PITCH_BANDS = """
+SELECT camera_id,
+       CASE
+           WHEN pitch_deg < -20 THEN 'lt_-20deg'
+           WHEN pitch_deg < 0   THEN '-20_to_0deg'
+           WHEN pitch_deg < 20  THEN '0_to_20deg'
+           ELSE 'ge_20deg'
+       END                                                         AS band,
+       count(*)                                                    AS faces,
+       count(*) FILTER (WHERE recognition_state = 'recognized')    AS recognized,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY raw_similarity) AS raw_similarity_p50
+FROM continuous_tracking.face_observation_stats
+WHERE observed_at >= $1 AND observed_at < $2 AND ($3::text IS NULL OR camera_id = $3)
+GROUP BY camera_id, band
+ORDER BY camera_id, band
+"""
+
 
 def _round(value: float | None) -> float | None:
     return None if value is None else round(float(value), 3)
@@ -160,6 +181,7 @@ async def build_report(
                 "dropped_min_similarity": {"faces": 0},
                 "emitted_shadow_only": {"faces": 0},
                 "quality_bands": {},
+                "pitch_bands": {},
                 "calibrated_recognition_by_band": {},
                 "recognized_by_candidate": {},
             },
@@ -216,6 +238,22 @@ async def build_report(
     for row in await conn.fetch(_SQL_RECOGNIZED_BY_CANDIDATE, *args):
         candidate = row["best_candidate_id"] or "(none)"
         camera(row["camera_id"])["recognized_by_candidate"][candidate] = row["faces"]
+
+    for row in await conn.fetch(_SQL_PITCH_BANDS, *args):
+        faces = row["faces"]
+        recognized = row["recognized"]
+        camera(row["camera_id"])["pitch_bands"][row["band"]] = {
+            "faces": faces,
+            "recognized": recognized,
+            "recognized_share": round(recognized / faces, 3) if faces else None,
+            "raw_similarity_p50": _round(row["raw_similarity_p50"]),
+        }
+    for entry in cameras.values():
+        entry["pitch_bands"] = {
+            band: entry["pitch_bands"][band]
+            for band in _PITCH_BANDS
+            if band in entry["pitch_bands"]
+        }
 
     return {
         "since": since.isoformat(),
@@ -285,6 +323,15 @@ def render_table(report: dict[str, Any]) -> str:
                 + ", ".join(
                     f"{band} {stats['share_calibrated_ge_0.8']} of {stats['recognized']}"
                     for band, stats in entry["calibrated_recognition_by_band"].items()
+                )
+            )
+        if entry["pitch_bands"]:
+            lines.append(
+                "  pitch bands: "
+                + ", ".join(
+                    f"{band} n={stats['faces']} recognized={stats['recognized']} "
+                    f"({stats['recognized_share']}) sim_p50={stats['raw_similarity_p50']}"
+                    for band, stats in entry["pitch_bands"].items()
                 )
             )
         if entry["recognized_by_candidate"]:

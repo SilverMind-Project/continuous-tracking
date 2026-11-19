@@ -182,3 +182,42 @@ async def test_match_template_when_disconnected_returns_none() -> None:
     client = FaceIdentificationClient("http://person-id.test")
     members = [TemplateMember(embedding=_unit(i), quality=_QUALITY) for i in range(2)]
     assert await client.match_template(members, "buffalo_l") is None
+
+
+@pytest.mark.asyncio
+async def test_identify_and_match_template_parse_margin_and_gallery_representation() -> None:
+    face_payload = _face(
+        second_best_candidate_id="bob",
+        second_best_similarity=0.22,
+        margin=0.30,
+        gallery_representation="prototypes-v1",
+    )
+    match_payload = _MATCH | {
+        "second_best_candidate_id": "bob",
+        "margin": 0.59,
+        "gallery_representation": "prototypes-v1",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/match-template"):
+            return httpx.Response(200, json=match_payload)
+        return httpx.Response(200, json={"faces": [face_payload]})
+
+    client = await _client(handler)
+    [crop_result] = await client.identify_crops(
+        [np.zeros((80, 60, 3), dtype=np.uint8)],
+        [(0.1, 0.1, 0.3, 0.5)],
+        _CONTEXT,
+    )
+    parsed_face = crop_result.faces[0]
+    assert parsed_face.second_best_candidate_id == "bob"
+    assert parsed_face.second_best_similarity == pytest.approx(0.22)
+    assert parsed_face.margin == pytest.approx(0.30)
+    assert parsed_face.gallery_representation == "prototypes-v1"
+
+    members = [TemplateMember(embedding=_unit(i), quality=_QUALITY) for i in range(2)]
+    parsed_tpl = await client.match_template(members, "buffalo_l")
+    assert parsed_tpl is not None
+    assert parsed_tpl.second_best_candidate_id == "bob"
+    assert parsed_tpl.margin == pytest.approx(0.59)
+    assert parsed_tpl.gallery_representation == "prototypes-v1"

@@ -81,6 +81,11 @@ class FaceResult:
     # persisted. None when not requested or malformed.
     embedding: npt.NDArray[np.float32] | None = field(default=None, repr=False, compare=False)
     embedding_model_version: str = ""
+    # Top-2 margin and gallery representation metadata from person-identification-service.
+    second_best_candidate_id: str | None = None
+    second_best_similarity: float | None = None
+    margin: float | None = None
+    gallery_representation: str = "centroid"
 
 
 # The calibration profile for per-face (single frame) calibrated confidence.
@@ -128,6 +133,9 @@ class TemplateMatchResult:
     # "template" when a template artifact is loaded, "" otherwise.
     calibration_profile: str
     calibration_status: str
+    second_best_candidate_id: str | None = None
+    margin: float | None = None
+    gallery_representation: str = "centroid"
 
 
 @dataclass(frozen=True)
@@ -443,6 +451,7 @@ def _parse_template_match(data: dict[str, Any]) -> TemplateMatchResult:
     quality = data["template_quality"]
     calibrated = data.get("calibrated_confidence")
     second = data.get("second_best_similarity")
+    margin = data.get("margin")
     return TemplateMatchResult(
         person_id=str(data["person_id"]),
         recognition_state=str(data["recognition_state"]),
@@ -460,6 +469,9 @@ def _parse_template_match(data: dict[str, Any]) -> TemplateMatchResult:
         calibrated_confidence=float(calibrated) if calibrated is not None else None,
         calibration_profile=str(data.get("calibration_profile", "")),
         calibration_status=str(data.get("calibration_status", "degraded_missing")),
+        second_best_candidate_id=data.get("second_best_candidate_id"),
+        margin=float(margin) if margin is not None else None,
+        gallery_representation=str(data.get("gallery_representation", "centroid")),
     )
 
 
@@ -515,6 +527,8 @@ def _parse_face(
     raw_sim = float(face.get("raw_similarity", face.get("similarity", 0)))
     cal_conf_raw = face.get("calibrated_confidence")
     interocular_raw = face.get("interocular_px")
+    second_sim_raw = face.get("second_best_similarity")
+    margin_raw = face.get("margin")
     return FaceResult(
         person_id=face.get("person_id", "unknown"),
         name=face.get("name", "Unknown"),
@@ -537,6 +551,10 @@ def _parse_face(
         calibration_profile=str(face.get("calibration_profile", "")),
         embedding=_decode_embedding(face.get("embedding_f16_b64")),
         embedding_model_version=str(face.get("embedding_model_version") or ""),
+        second_best_candidate_id=face.get("second_best_candidate_id"),
+        second_best_similarity=float(second_sim_raw) if second_sim_raw is not None else None,
+        margin=float(margin_raw) if margin_raw is not None else None,
+        gallery_representation=str(face.get("gallery_representation", "centroid")),
     )
 
 
