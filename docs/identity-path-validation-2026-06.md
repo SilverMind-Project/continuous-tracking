@@ -1,5 +1,26 @@
 # Identity Path Validation, June 2026
 
+> **Current Status (Updated 2026-11):** The deprecation plan in this June 2026
+> validation report has been **executed** across Waves 1 to 4 of the Identity
+> Integrity and Location Consolidation work:
+>
+> - `PersonLocationService` (`presence_segments` and `location_observations`) is
+>   now the single unified location store in `cognitive-companion` (enforced by
+>   `backend/tests/architecture/test_no_legacy_location_truth.py`).
+> - `PersonLocationState`, `PersonLocationHistory`, `old_location_history`,
+>   `old_sightings_record`, `LocationWriter`, and duplicate `/persons/locations`
+>   route registrations have been deleted from `cognitive-companion`.
+> - ReCamera face workflows (`person_identification` step) now ingest into
+>   `PersonLocationService` via `FaceSightingIngest` (`source="face_sighting"`)
+>   and forward external face assertions to CTS `WorldTrackingStage` on the
+>   `cc.identity_assertions` protobuf stream (`CCIdentityAssertion`).
+> - The presence provider chain in `cognitive-companion/config/presence.yaml`
+>   reads `location_service` (`PersonLocationService`, priority 50) instead of
+>   the retired `cts_location` provider.
+>
+> The sections below are preserved as the June 2026 historical audit record that
+> motivated the consolidation.
+
 ## Decision
 
 Decision gate outcome: **(a)**. `PersonTrackingService` identity and location

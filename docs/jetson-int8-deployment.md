@@ -14,7 +14,7 @@ The Jetson repository contains eight explicit-Q/DQ ONNX graphs:
 
 | Triton model | Purpose | Input contract |
 | --- | --- | --- |
-| `person-detector` | YOLO26L person detection | Fixed `[8,3,640,640]` |
+| `person-detector` | YOLO26L person detection | Fixed `[1,3,640,640]` (Jetson INT8; DGX FP32 uses `[8,3,640,640]`) |
 | `pose-rtmpose` | RTMPose-m pose estimation | Dynamic batch 1 to 8 |
 | `reid-solider` | SOLIDER body re-identification | Dynamic batch 1 to 8 |
 | `face-detector-scrfd` | Buffalo_L face detection | Fixed batch 1 |

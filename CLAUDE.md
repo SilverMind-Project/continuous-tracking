@@ -32,8 +32,12 @@ The **Continuous Tracking System (CTS)** monitors seniors with early dementia vi
 
 ## Design Documents
 
-The canonical reference for architecture decisions is this file and the code. The architecture
-reference is [docs/systems-architecture.md](docs/systems-architecture.md): the service diagram,
+The canonical reference for architecture decisions is this file, `.claude/skills/`, and the code.
+See [`docs/README.md`](docs/README.md) for the three-tier documentation delineation standard
+(`.claude/skills/` for normative agent rules, `docs/` for repo-scoped engineering architecture,
+runbooks, wire contracts, and ADRs, and `../silvermind-project.github.io/docs/` for public guides
+and deep-dive series). The architecture reference is
+[docs/systems-architecture.md](docs/systems-architecture.md): the service diagram,
 the PersonHypothesis world-tracker model and its 10-step loop, the frame pipeline, the identity
 resolver and how priors update, home-camera nuances, rtsp-ingress and camera configuration, the
 settings coupling rule, and the CTS-to-CC wire contract. The CC-side companion doc is
@@ -155,10 +159,10 @@ Requires `protoc >= 25` (`apt install protobuf-compiler`) and the project Go too
 | ID | Severity | Description |
 | --- | --- | --- |
 | TD-003 | Medium | Revision stream consumer group pre-created by publisher instead of admin tooling |
-| TD-007 | Low | Validated by [`docs/identity-path-validation-2026-06.md`](docs/identity-path-validation-2026-06.md): CC face-based location conclusions are redundant when `cts.enabled=true`, but remain the non-CTS reCamera path and the owner of raw sightings/activity capture. Deprecate its identity/location writes behind an explicit CTS-aware boundary; keep non-CTS and non-location responsibilities until their consumers migrate. |
+| TD-007 | Low | Validated by [`docs/identity-path-validation-2026-06.md`](docs/identity-path-validation-2026-06.md): Wave 4 deleted `PersonLocationState`, `old_location_history`, `old_sightings_record`, and `LocationWriter` in CC, consolidating all location truth in `PersonLocationService` (`presence_segments` and `location_observations`) and forwarding reCamera sightings on `cc.identity_assertions`. `PersonTrackingService` remains in CC for non-CTS workflow detection outputs and activity helpers. |
 | TD-008 | Medium | DepthEstimator (`app/inference/depth.py`) is implemented and importable but not wired into the live frame pipeline. It is used only during homography auto-calibration. M7 (Occluded Posture Detection) will wire it into the posture slow-path. Do not connect it to `FrameProcessingPipeline` before M7 is complete. |
 | TD-009 | Low | ReID crop invariant: `_crop_detection()` in `frame_pipeline.py` must always be called before `ReidEmbedder.embed_batch()`. Any refactor that moves or merges these calls must preserve this ordering or the gallery distances become meaningless. |
-| TD-010 | Low | Floor-region visibility fix (Track G): harvest a floor-region polygon from `FloorPlaneFitter` inliers and return it on `/internal/calibration/auto`; CC then projects that boundary (not the image border) for the visibility polygon. Reuses Depth Anything v2 (no new model); non-blocking. Plan: `/home/sriram/code/nanai/notes/cc/guided-companion/guided-companion-trackG-floor-geometry.md`. |
+| TD-010 | Low | Floor-region visibility fix (Track G, implemented): `FloorPlaneFitter` inlier harvesting returns `floor_region_polygon` on `/internal/calibration/auto`, and CC `compute_visibility_from_homography` projects that boundary (not the image border) for the visibility polygon. Plan: `/home/sriram/code/nanai/notes/cc/guided-companion/guided-companion-trackG-floor-geometry.md`. |
 
 The resolved 2026-07 hardening findings (F1 to F14) and their evidence live in
 `/home/sriram/code/nanai/notes/guided-companion-and-identity-hardening/`.
