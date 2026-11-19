@@ -98,6 +98,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.5"
@@ -117,10 +119,21 @@ jobs:
           buf generate
           git diff --exit-code
       - name: buf breaking
-        uses: bufbuild/buf-breaking-action@v1
-        with:
-          input: proto
-          against: "https://github.com/${{ github.repository }}.git#branch=main,subdir=proto"
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${GITHUB_BASE_REF}"
+            BASE_REF="FETCH_HEAD"
+          elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            BASE_REF="HEAD~1"
+          else
+            echo "No parent commit to check breaking changes against; skipping."
+            exit 0
+          fi
+          TMP_BASE="$(mktemp -d)"
+          trap 'rm -rf "$TMP_BASE"' EXIT
+          git archive "$BASE_REF" proto | tar -x -C "$TMP_BASE"
+          buf breaking proto --against "$TMP_BASE/proto"
 
   security-scan:
     runs-on: ubuntu-latest
