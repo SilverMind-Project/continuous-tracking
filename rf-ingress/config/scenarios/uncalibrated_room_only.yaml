@@ -1,0 +1,103 @@
+name: uncalibrated_room_only
+description: House with room polygons only (uncalibrated cameras), combining position fixes and direct room presence reports.
+seed: 106
+start_time: "2026-11-19T12:25:00Z"
+duration_s: 20.0
+step_s: 1.0
+floor_plan_id: "household:1"
+rooms:
+  - room_id: "1"
+    x_min_m: 0.0
+    y_min_m: 0.0
+    x_max_m: 5.0
+    y_max_m: 5.0
+  - room_id: "2"
+    x_min_m: 5.0
+    y_min_m: 0.0
+    x_max_m: 10.0
+    y_max_m: 5.0
+nodes:
+  - anchor_id: "ble-r1-a"
+    adapter_id: "sim-1"
+    node_role: "receiver"
+    technology: "ble_rssi"
+    x_m: 0.5
+    y_m: 0.5
+    z_m: 1.5
+    room_id: "1"
+  - anchor_id: "ble-r1-b"
+    adapter_id: "sim-1"
+    node_role: "receiver"
+    technology: "ble_rssi"
+    x_m: 4.5
+    y_m: 4.5
+    z_m: 1.5
+    room_id: "1"
+  - anchor_id: "ble-r2-a"
+    adapter_id: "sim-1"
+    node_role: "receiver"
+    technology: "ble_rssi"
+    x_m: 5.5
+    y_m: 0.5
+    z_m: 1.5
+    room_id: "2"
+  - anchor_id: "ble-r2-b"
+    adapter_id: "sim-1"
+    node_role: "receiver"
+    technology: "ble_rssi"
+    x_m: 9.5
+    y_m: 4.5
+    z_m: 1.5
+    room_id: "2"
+tags:
+  - tag_id: "tag-room-presence"
+    member_id: "resident-1"
+    device_kind: "ble_beacon"
+    report_protocol: "room"
+    technology: "ble_rssi"
+    battery_start: 0.88
+    battery_end: 0.88
+    waypoints:
+      - t_s: 0.0
+        x_m: 2.0
+        y_m: 2.0
+        z_m: 1.0
+      - t_s: 10.0
+        x_m: 4.0
+        y_m: 2.5
+        z_m: 1.0
+      - t_s: 20.0
+        x_m: 7.5
+        y_m: 2.5
+        z_m: 1.0
+    wear_schedule:
+      - start_s: 0.0
+        end_s: 21.0
+        state: "unspecified"
+    motion_schedule:
+      - start_s: 0.0
+        end_s: 21.0
+        state: "moving"
+  - tag_id: "tag-room-pos-fallback"
+    member_id: "caregiver-1"
+    device_kind: "ble_beacon"
+    report_protocol: "position"
+    technology: "ble_rssi"
+    position_sigma_m: 1.8
+    waypoints:
+      - t_s: 0.0
+        x_m: 7.5
+        y_m: 2.0
+        z_m: 1.0
+      - t_s: 20.0
+        x_m: 8.0
+        y_m: 3.0
+        z_m: 1.0
+    wear_schedule:
+      - start_s: 0.0
+        end_s: 21.0
+        state: "on_body"
+    motion_schedule:
+      - start_s: 0.0
+        end_s: 21.0
+        state: "moving"

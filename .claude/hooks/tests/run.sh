@@ -49,10 +49,15 @@ new_repo() {  # new_repo <dir>: a committed repo with the files the stop checks 
 # --- guard-project -------------------------------------------------------------------------
 guard deny  'pytest tracking-orchestrator/tests'
 guard deny  'cd tracking-orchestrator && python -m pytest tests'
+guard deny  'cd rf-ingress && pytest tests'
 guard allow 'tracking-orchestrator/.venv/bin/pytest tests -q'
 guard allow 'tracking-orchestrator/.venv/bin/python -m pytest tests -q'
 guard allow 'cd tracking-orchestrator && .venv/bin/pytest tests'
+guard allow 'rf-ingress/.venv/bin/pytest tests -q'
+guard allow 'rf-ingress/.venv/bin/python -m pytest tests -q'
+guard allow 'cd rf-ingress && .venv/bin/pytest tests'
 guard allow 'make test'
+guard allow 'make rf-test'
 guard allow 'sed -n 1,20p tests/conftest.py; grep -n marker pytest.ini'
 guard allow 'source tracking-orchestrator/.venv/bin/activate && cd tracking-orchestrator && python -m pytest -q tests'
 guard allow 'git status --short'
@@ -72,13 +77,21 @@ stop block "$r"
 r="$TMP/relock"; new_repo "$r"; printf 'churn\n' >>"$r/$LOCK"; printf 'dep\n' >>"$r/$MANIFEST"
 stop pass "$r"
 
-# --- post-edit: Python lint (temporary file inside tracking-orchestrator/, removed on exit) --
-lintfile="$ROOT/tracking-orchestrator/_hooktest_tmp_$$.py"; trap 'rm -rf "$TMP" "$lintfile"' EXIT
+# --- post-edit: Python lint (temporary files inside tracking-orchestrator/ and rf-ingress/) --
+lintfile="$ROOT/tracking-orchestrator/_hooktest_tmp_$$.py"
+rf_lintfile="$ROOT/rf-ingress/_hooktest_tmp_$$.py"
+trap 'rm -rf "$TMP" "$lintfile" "$rf_lintfile"' EXIT
 printf 'from __future__ import annotations\n\nimport os\n' >"$lintfile"
 post_edit block "$lintfile"
 printf 'from __future__ import annotations\n\nVALUE = 1\n' >"$lintfile"
 post_edit pass "$lintfile"
 rm -f "$lintfile"
+
+printf 'from __future__ import annotations\n\nimport os\n' >"$rf_lintfile"
+post_edit block "$rf_lintfile"
+printf 'from __future__ import annotations\n\nVALUE = 1\n' >"$rf_lintfile"
+post_edit pass "$rf_lintfile"
+rm -f "$rf_lintfile"
 
 # --- post-edit: markdown -------------------------------------------------------------------
 printf 'fine: colon, comma; parentheses\n' >"$TMP/clean.md"

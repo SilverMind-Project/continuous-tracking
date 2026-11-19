@@ -1,0 +1,65 @@
+name: sole_occupant_room
+description: Sole occupant moving from kitchen to hallway heard by at most two room receivers, exercising core room fallback.
+seed: 104
+start_time: "2026-11-19T12:15:00Z"
+duration_s: 20.0
+step_s: 1.0
+floor_plan_id: "household:1"
+rooms:
+  - room_id: "1"
+    x_min_m: 0.0
+    y_min_m: 0.0
+    x_max_m: 4.5
+    y_max_m: 4.0
+  - room_id: "2"
+    x_min_m: 4.5
+    y_min_m: 0.0
+    x_max_m: 9.0
+    y_max_m: 4.0
+nodes:
+  - anchor_id: "ble-kitchen"
+    adapter_id: "sim-1"
+    node_role: "receiver"
+    technology: "ble_rssi"
+    x_m: 2.0
+    y_m: 2.0
+    z_m: 1.5
+    room_id: "1"
+  - anchor_id: "ble-hall"
+    adapter_id: "sim-1"
+    node_role: "receiver"
+    technology: "ble_rssi"
+    x_m: 7.0
+    y_m: 2.0
+    z_m: 1.5
+    room_id: "2"
+tags:
+  - tag_id: "tag-sole-ble"
+    member_id: "resident-1"
+    device_kind: "ble_beacon"
+    report_protocol: "range"
+    technology: "ble_rssi"
+    max_nodes_per_epoch: 2
+    battery_start: 0.95
+    battery_end: 0.95
+    waypoints:
+      - t_s: 0.0
+        x_m: 1.8
+        y_m: 2.0
+        z_m: 1.0
+      - t_s: 10.0
+        x_m: 2.2
+        y_m: 2.1
+        z_m: 1.0
+      - t_s: 20.0
+        x_m: 7.2
+        y_m: 2.0
+        z_m: 1.0
+    wear_schedule:
+      - start_s: 0.0
+        end_s: 21.0
+        state: "unspecified"
+    motion_schedule:
+      - start_s: 0.0
+        end_s: 21.0
+        state: "moving"

@@ -1,12 +1,15 @@
 PY_VENV := tracking-orchestrator/.venv
 PY_BIN := $(PY_VENV)/bin
 PYTHON := $(PY_BIN)/python
+RF_VENV := rf-ingress/.venv
+RF_BIN := $(RF_VENV)/bin
 UV := uv
 GO_ENV := . $(CURDIR)/scripts/go-env.sh &&
 GO := $(GO_ENV) go
 
 PROTOC ?= protoc
 ORCH_PROTO_OUT := tracking-orchestrator/app/proto
+RF_PROTO_OUT   := rf-ingress/rf_ingress/proto
 CC_PROTO_OUT   := ../cognitive-companion/backend/integrations/proto
 PROTO_FILES    := \
 	proto/continuoustracking/v1/frame.proto \
@@ -16,13 +19,16 @@ PROTO_FILES    := \
 	proto/continuoustracking/v1/wearable.proto \
 	proto/continuoustracking/v1/position_sensor.proto
 
-.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all check-toolchain deps-outdated deps-upgrade go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit hooks-test check-md docs-check
+.PHONY: help venv rf-venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint rf-lint rf-format rf-format-check rf-mypy rf-import-lint rf-test rf-test-integration rf-check rf-audit check check-all check-toolchain deps-outdated deps-upgrade go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit hooks-test check-md docs-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 venv: ## Create or sync the project venv at tracking-orchestrator/.venv
 	cd tracking-orchestrator && $(UV) sync --frozen --extra dev
+
+rf-venv: ## Create or sync the rf-ingress venv at rf-ingress/.venv
+	cd rf-ingress && $(UV) sync --frozen --extra dev
 
 docs-check: ## Instruction files (CLAUDE.md, skills, rules) name only files that exist
 	$(PYTHON) scripts/check_doc_refs.py
@@ -59,15 +65,19 @@ proto: proto-go proto-py ## Generate protobuf code (Go + Python)
 proto-go: go-env-check ## Generate Go protobuf bindings via buf
 	cd proto && $(GO_ENV) buf generate
 
-proto-py: ## Generate Python protobuf bindings (orchestrator + cognitive-companion)
+proto-py: ## Generate Python protobuf bindings (orchestrator + rf-ingress + cognitive-companion)
 	@command -v $(PROTOC) >/dev/null 2>&1 || { \
 	  echo "protoc not found on PATH. Install protoc >= 25 (e.g. apt install protobuf-compiler) or set PROTOC=/path/to/protoc." >&2; \
 	  exit 1; \
 	}
-	mkdir -p $(ORCH_PROTO_OUT) $(CC_PROTO_OUT)
+	mkdir -p $(ORCH_PROTO_OUT) $(RF_PROTO_OUT) $(CC_PROTO_OUT)
 	$(PROTOC) --proto_path=proto --python_out=$(ORCH_PROTO_OUT) --pyi_out=$(ORCH_PROTO_OUT) $(PROTO_FILES)
+	$(PROTOC) --proto_path=proto --python_out=$(RF_PROTO_OUT)   --pyi_out=$(RF_PROTO_OUT)   $(PROTO_FILES)
 	$(PROTOC) --proto_path=proto --python_out=$(CC_PROTO_OUT)   --pyi_out=$(CC_PROTO_OUT)   $(PROTO_FILES)
-	@for d in $(ORCH_PROTO_OUT) $(CC_PROTO_OUT) $(ORCH_PROTO_OUT)/continuoustracking $(ORCH_PROTO_OUT)/continuoustracking/v1 $(CC_PROTO_OUT)/continuoustracking $(CC_PROTO_OUT)/continuoustracking/v1; do \
+	@for d in $(ORCH_PROTO_OUT) $(RF_PROTO_OUT) $(CC_PROTO_OUT) \
+	  $(ORCH_PROTO_OUT)/continuoustracking $(ORCH_PROTO_OUT)/continuoustracking/v1 \
+	  $(RF_PROTO_OUT)/continuoustracking $(RF_PROTO_OUT)/continuoustracking/v1 \
+	  $(CC_PROTO_OUT)/continuoustracking $(CC_PROTO_OUT)/continuoustracking/v1; do \
 	  test -f $$d/__init__.py || : > $$d/__init__.py; \
 	done
 
@@ -106,6 +116,41 @@ mypy: venv ## Type-check Python code
 import-lint: venv ## Enforce import layering
 	cd tracking-orchestrator && ../$(PY_BIN)/lint-imports
 
+rf-lint: rf-venv ## Lint rf-ingress Python code
+	$(RF_BIN)/ruff check rf-ingress
+
+rf-format: rf-venv ## Format rf-ingress Python code
+	$(RF_BIN)/ruff format rf-ingress
+
+rf-format-check: rf-venv ## Check rf-ingress Python formatting
+	$(RF_BIN)/ruff format --check rf-ingress
+
+rf-mypy: rf-venv ## Type-check rf-ingress Python code
+	$(RF_BIN)/mypy --config-file rf-ingress/pyproject.toml rf-ingress/rf_ingress
+
+rf-import-lint: rf-venv ## Enforce rf-ingress import layering
+	cd rf-ingress && ../$(RF_BIN)/lint-imports
+
+rf-test: rf-venv ## Run rf-ingress unit and conformance tests (no Docker needed)
+	cd rf-ingress && ../$(RF_BIN)/pytest tests -m "not integration" -v
+
+rf-test-integration: rf-venv ## Run rf-ingress integration tests (Docker Redis testcontainer required)
+	cd rf-ingress && ../$(RF_BIN)/pytest -m integration tests -v
+
+rf-check: rf-venv ## Run the rf-ingress quality gate
+	$(MAKE) rf-lint
+	$(MAKE) rf-format-check
+	$(MAKE) rf-mypy
+	$(MAKE) rf-import-lint
+	$(MAKE) rf-test
+
+rf-audit: ## Audit rf-ingress's locked Python dependencies for published advisories
+	@req=$$(mktemp); trap 'rm -f "$$req"' EXIT; \
+	cd rf-ingress && $(UV) export --frozen --no-emit-project \
+		--no-emit-package cts-contracts \
+		--extra dev --format requirements-txt > "$$req" && \
+	$(UV) tool run pip-audit --desc --disable-pip -r "$$req"
+
 check-toolchain: ## Verify Go/Python/tool pins stay aligned across .tool-versions, Dockerfiles, go.mod, Makefile, and CI
 	@bash scripts/check-toolchain-sync.sh
 
@@ -121,14 +166,16 @@ check: venv ## Run the Python quality gate
 	$(MAKE) mypy
 	$(MAKE) import-lint
 	$(MAKE) test
+	$(MAKE) rf-check
 	$(MAKE) hooks-test
 	$(MAKE) check-md
 	$(MAKE) docs-check
 	$(MAKE) check-toolchain
 	@bash scripts/check-env-var-drift.sh
 
-test-integration: venv ## Run every integration-marked test (testcontainer Postgres required)
+test-integration: venv ## Run every integration-marked test (testcontainer Postgres/Redis required)
 	cd tracking-orchestrator && ../$(PY_BIN)/pytest -m integration tests -v
+	$(MAKE) rf-test-integration
 
 ci: check-all test-integration ## Authoritative CI gate: full check + integration proofs
 

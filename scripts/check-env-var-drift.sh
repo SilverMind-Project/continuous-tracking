@@ -13,7 +13,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 COMPOSE_FILE="$PROJECT_DIR/docker-compose.yml"
-SETTINGS_FILE="$PROJECT_DIR/tracking-orchestrator/config/settings.yaml"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -21,51 +20,61 @@ NC='\033[0m'
 
 fail() { echo -e "${RED}ERROR:${NC} $*" >&2; }
 
-if [ ! -f "$COMPOSE_FILE" ] || [ ! -f "$SETTINGS_FILE" ]; then
-    echo "Skipping env-var drift check: required files missing."
+if [ ! -f "$COMPOSE_FILE" ]; then
+    echo "Skipping env-var drift check: docker-compose.yml missing."
     exit 0
 fi
 
-# Extract required vars without defaults.
-REQUIRED_VARS=$(grep -v '^[[:space:]]*#' "$SETTINGS_FILE" 2>/dev/null \
-    | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' 2>/dev/null \
-    | grep -v ':-' 2>/dev/null \
-    | sed 's/\${//;s/}//' \
-    | sort -u || true)
-
-DEFAULTED_VARS=$(grep -v '^[[:space:]]*#' "$SETTINGS_FILE" 2>/dev/null \
-    | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*:-[^}]*\}' 2>/dev/null \
-    | sort -u || true)
-
-# Collect env var names from the tracking-orchestrator section of docker-compose.
-COMPOSE_VARS=$(sed -n '/^  tracking-orchestrator:/,/^  [a-z]/p' "$COMPOSE_FILE" 2>/dev/null \
-    | grep -oE '^\s+[A-Z][A-Za-z0-9_]*:' 2>/dev/null \
-    | sed 's/^\s*//;s/://' \
-    | sort -u || true)
-
-# Also collect interpolated vars from the whole compose file.
+# Collect interpolated vars from the whole compose file.
 INTERP_VARS=$(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*[:}]' "$COMPOSE_FILE" 2>/dev/null \
     | sed 's/\${//;s/[:}]//' \
     | sort -u || true)
 
-COMBINED_COMPOSE=$( (echo "$COMPOSE_VARS"; echo "$INTERP_VARS") | sort -u)
-
 DRIFT=0
 
-if [ -n "$DEFAULTED_VARS" ]; then
-    fail "defaulted env interpolation is disabled in settings.yaml: $DEFAULTED_VARS"
-    DRIFT=1
-fi
+check_service() {
+    local service_name="$1"
+    local settings_file="$2"
 
-# Check required vars.
-if [ -n "$REQUIRED_VARS" ] && [ -n "$COMBINED_COMPOSE" ]; then
-    for var in $REQUIRED_VARS; do
-        if ! echo "$COMBINED_COMPOSE" | grep -qx "$var"; then
-            fail "$var — required by settings.yaml (no default), not in docker-compose.yml"
-            DRIFT=1
-        fi
-    done
-fi
+    if [ ! -f "$settings_file" ]; then
+        return 0
+    fi
+
+    local required_vars defaulted_vars compose_vars combined_compose
+    required_vars=$(grep -v '^[[:space:]]*#' "$settings_file" 2>/dev/null \
+        | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' 2>/dev/null \
+        | grep -v ':-' 2>/dev/null \
+        | sed 's/\${//;s/}//' \
+        | sort -u || true)
+
+    defaulted_vars=$(grep -v '^[[:space:]]*#' "$settings_file" 2>/dev/null \
+        | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*:-[^}]*\}' 2>/dev/null \
+        | sort -u || true)
+
+    compose_vars=$(sed -n "/^  ${service_name}:/,/^  [a-z]/p" "$COMPOSE_FILE" 2>/dev/null \
+        | grep -oE '^\s+[A-Z][A-Za-z0-9_]*:' 2>/dev/null \
+        | sed 's/^\s*//;s/://' \
+        | sort -u || true)
+
+    combined_compose=$( (echo "$compose_vars"; echo "$INTERP_VARS") | sort -u)
+
+    if [ -n "$defaulted_vars" ]; then
+        fail "${service_name}: defaulted env interpolation is disabled in settings.yaml: $defaulted_vars"
+        DRIFT=1
+    fi
+
+    if [ -n "$required_vars" ] && [ -n "$combined_compose" ]; then
+        for var in $required_vars; do
+            if ! echo "$combined_compose" | grep -qx "$var"; then
+                fail "${service_name}: $var required by settings.yaml (no default), not in docker-compose.yml"
+                DRIFT=1
+            fi
+        done
+    fi
+}
+
+check_service "tracking-orchestrator" "$PROJECT_DIR/tracking-orchestrator/config/settings.yaml"
+check_service "rf-ingress" "$PROJECT_DIR/rf-ingress/config/settings.yaml"
 
 if [ "$DRIFT" -eq 0 ]; then
     echo -e "${GREEN}No env var drift detected.${NC}"

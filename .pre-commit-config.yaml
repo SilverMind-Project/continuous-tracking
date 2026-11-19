@@ -32,6 +32,31 @@ repos:
         # makes mypy see every module twice ("Duplicate module named").
         pass_filenames: false
         args: ["--config-file", "tracking-orchestrator/pyproject.toml", "tracking-orchestrator/app"]
+      - id: rf-ruff
+        name: ruff check (rf-ingress venv)
+        entry: rf-ingress/.venv/bin/ruff check --fix --force-exclude
+        language: system
+        types: [python]
+        files: ^rf-ingress/
+      - id: rf-ruff-format
+        name: ruff format (rf-ingress venv)
+        entry: rf-ingress/.venv/bin/ruff format --force-exclude
+        language: system
+        types: [python]
+        files: ^rf-ingress/
+      - id: rf-import-linter
+        name: import-linter (rf-ingress venv)
+        entry: sh -c 'cd rf-ingress && .venv/bin/lint-imports'
+        language: system
+        pass_filenames: false
+        files: ^rf-ingress/rf_ingress/
+      - id: rf-mypy
+        name: mypy (rf-ingress venv)
+        entry: rf-ingress/.venv/bin/mypy
+        language: system
+        files: ^rf-ingress/.*\.py$
+        pass_filenames: false
+        args: ["--config-file", "rf-ingress/pyproject.toml", "rf-ingress/rf_ingress"]
       - id: golangci-lint
         name: golangci-lint (make go-lint, pinned toolchain)
         # Runs inside the rtsp-ingress module with the version installed by `make go-tools`;

@@ -6,7 +6,7 @@ The code is the source of truth. Some per-repo docs lag behind it (they may stil
 
 ## The three systems
 
-- **continuous-tracking/** is the CTS family. **rtsp-ingress** (Go) pulls camera frames through a go2rtc sidecar, motion-gates, uploads JPEGs to MinIO, and publishes `frames.ready`. **tracking-orchestrator** (Python, the ML brain, port 8000) consumes frames and runs detection, tracking, identity resolution, and dementia signals. **triton-shared/** is a sibling library providing the Triton gRPC client shared by CTS and scene-analysis-service. **cts-contracts/** is a sibling library providing shared signal vocabularies, camera-role enums (`CameraRole`), and pinhole optics helpers (`cts_contracts.optics`) shared by CTS and cognitive-companion.
+- **continuous-tracking/** is the CTS family. **rtsp-ingress** (Go) pulls camera frames through a go2rtc sidecar, motion-gates, uploads JPEGs to MinIO, and publishes `frames.ready`. **rf-ingress** (Python, port 8095, opt-in via `--profile wearables`) turns RF hardware or simulator reports into hardware-neutral `TagFix` messages on `wearable.fixes` and `AdapterCapability` heartbeats on `wearable.capabilities` using site config polled from CC. **tracking-orchestrator** (Python, the ML brain, port 8500) consumes frames and runs detection, tracking, identity resolution, and dementia signals. **triton-shared/** is a sibling library providing the Triton gRPC client shared by CTS and scene-analysis-service. **cts-contracts/** is a sibling library providing shared signal vocabularies, wearable/RF-node closed enums (`cts_contracts.wearables`), camera-role enums (`CameraRole`), and pinhole optics helpers (`cts_contracts.optics`) shared by CTS and cognitive-companion.
 - **cognitive-companion** (CC, port 8080) is the BFF gateway and rules engine. It consumes the CTS streams, serves the Vue 3 admin UI and MCP tools, and integrates a broad set of sensors and actuators beyond CTS. CC is the only system users and the browser talk to.
 
 ```mermaid
@@ -14,7 +14,8 @@ flowchart TD
   cam["IP cameras (RTSP)"] --> go2rtc["go2rtc sidecar :1984\nRTSP proxy"]
   go2rtc -->|"HTTP /api/frame.jpeg"| ingress["rtsp-ingress (Go) :8090\nmotion gate, MinIO upload"]
   ingress -->|"frames.ready (protobuf)"| orch
-  subgraph orch["tracking-orchestrator (Python) :8000"]
+  rf["rf-ingress (Python) :8095\nadapters, multilateration solver"] -->|"wearable.fixes / .capabilities (protobuf)"| orch
+  subgraph orch["tracking-orchestrator (Python) :8500"]
     direction TB
     det["YOLO26L detection"] --> reid["SOLIDER-REID embedding"]
     reid --> pose["RTMPose pose"]
@@ -165,6 +166,15 @@ rtsp-ingress authenticates to cognitive-companion with the `COGNITIVE_API_KEY` e
 
 RTSP credentials are stored in the cognitive-companion database as part of the full RTSP URL. They are never written to any config file on the rtsp-ingress side.
 
+## rf-ingress: hardware-neutral RF localization ingress
+
+`rf-ingress` (`continuous-tracking/rf-ingress/`, port `8095`, opt-in compose profile `wearables`) mirrors `rtsp-ingress` for wearable RF localization:
+
+1. **Adapter boundary:** all hardware and simulator sources sit behind `RangeAdapter`, `PositionAdapter`, and `RoomAdapter` protocols (`rf_ingress/adapters/base.py`) resolved by `AdapterRegistry` (`rf_ingress/adapters/registry.py`). The core ships with the deterministic `simulator` adapter (covering UWB, BLE Channel Sounding, BLE RSSI with body-shadow steps, burst-batched delivery, native-frame positions, room reports, and JSONL replay) and an adapter conformance kit (`rf-ingress/tests/conformance/`) that every future hardware adapter must pass unchanged.
+2. **Per-epoch solving, no cross-epoch smoothing:** `EpochBuilder` (`rf_ingress/solver/epoch.py`) groups ranges per tag by `epoch_seq` or `epoch_window_s` (0.25 s) and drops open epochs whenever CC's `version` changes. `MultilaterationSolver` (`rf_ingress/solver/multilateration.py`) weights strictly by `variance_m2`, rejects only degenerate/collinear geometry (never wide covariance), performs leave-one-out chi-square outlier rejection on 4+ nodes, and ignores `device_local` wrist azimuth. Epochs with fewer than 3 nodes emit `FIX_KIND_ROOM` via `room_fallback_from_epoch`.
+3. **Clock alignment and registration gate:** `BurstClockOffsetTracker` (`rf_ingress/clock.py`) decouples multi-second micro-batch flushing from device clock skew via minimum-delay `arrival - sent_at` estimation. `RegistrationGate` (`rf_ingress/registration.py`) publishes only registered, active, currently bound tags (passing `wear_state` and `motion_state` through truthfully to CTS).
+4. **Stream publishing and replay:** `RedisTagFixPublisher` (`rf_ingress/publish.py`) publishes raw `TagFix` protobufs on `wearable.fixes` (field `"fix"`, trimmed with `MINID` to 72 hours) and `AdapterCapability` heartbeats on `wearable.capabilities` (field `"capability"`, every 60 s). `python -m rf_ingress.replay` records raw reports (capped at 60 minutes) and replays them through the simulator.
+
 ## How CTS interacts with cognitive-companion (CC)
 
 CC is the consumer and control plane for CTS. CTS does not serve users directly; everything user-facing is in CC. The integration surface is deliberately narrow:
@@ -196,7 +206,7 @@ Redis Streams carry raw protobuf bytes (no JSON, no base64); clients set `decode
 
 ## Conventions that bite if ignored
 
-- Virtual environments: CTS `tracking-orchestrator/.venv`; CC `backend/.venv`. Never use the system Python.
+- Virtual environments: CTS `tracking-orchestrator/.venv` and `rf-ingress/.venv`; CC `backend/.venv`. Never use the system Python.
 - CTS gates: `make check` (fast), `make ci` (authoritative, Docker, runs the world-tracker replay proofs and PH repository parity). CC gates: `make check`, `make check-all`, `make test-integration`. Tracker or identity changes run in shadow with a mismatch metric and a frame-replay proof before becoming authoritative.
 - asyncpg `$1..$N` params only; schema-qualify every table as `continuous_tracking.<table>`; `datetime.now(UTC)` always; frozen dataclasses plus `dataclasses.replace()`; `structlog` only; no silent fallbacks (ruff `BLE001` is an error; stream consumers XACK, warn, and increment `cts_messages_dead_lettered_total`).
 - No em-dashes in Markdown. Test at the Protocol boundary with InMemory implementations; assertions must be falsifiable.

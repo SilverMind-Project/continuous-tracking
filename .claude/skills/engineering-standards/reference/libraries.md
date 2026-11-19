@@ -24,7 +24,24 @@ Read before adding or replacing a dependency. Part of the `engineering-standards
 | `import-linter` | Layering enforcement (`make check`, CI, pre-commit) |
 | `triton-shared` | Shared Triton client + YOLO/CLIP/Florence pre/post-processing (git source in `[tool.uv.sources]`, pinned by `uv.lock`) |
 
-Do not introduce `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a **test-only** dependency.
+Do not introduce `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a **test-only** dependency in `tracking-orchestrator`.
+
+## Python (`rf-ingress/pyproject.toml`)
+
+| Library | Role |
+| --- | --- |
+| `fastapi` + `uvicorn` | Health (`/health`) and metrics (`/metrics`) HTTP surface |
+| `pydantic v2` | Settings, HTTP site-config, and adapter payload profile validation |
+| `httpx` | Async client polling CC `GET /api/v1/wearables/site-config` |
+| `redis[hiredis]` | Async Redis Streams publisher (`decode_responses=False`, 72 h `MINID` trim) |
+| `protobuf` | `TagFix` and `AdapterCapability` wire bindings generated into `rf_ingress/proto/` |
+| `cts-contracts` | Shared wearable and RF-node closed vocabularies (`cts_contracts.wearables`) |
+| `numpy` + `scipy` | Multilateration solver (`scipy.optimize.least_squares`), chi-square outlier detection, 2D similarity transform |
+| `structlog` | Structured JSON logging |
+| `prometheus-client` | Central metrics exposition |
+| `pyyaml` | Settings and simulator scenario loading |
+| `hypothesis` (dev) | Property tests for noise-free solver accuracy |
+| `testcontainers` (dev) | Ephemeral `redis:7-alpine` container for `make rf-test-integration` |
 
 ## Go (`rtsp-ingress/go.mod`)
 

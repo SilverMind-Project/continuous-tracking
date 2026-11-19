@@ -26,6 +26,10 @@ case "$rel" in
     out=$("$root/tracking-orchestrator/.venv/bin/ruff" check --quiet "$file" 2>&1) || block "ruff check $rel failed:
 $(printf '%s' "$out" | head -20)"
     ;;
+  rf-ingress/*.py)
+    out=$("$root/rf-ingress/.venv/bin/ruff" check --quiet "$file" 2>&1) || block "ruff check $rel failed:
+$(printf '%s' "$out" | head -20)"
+    ;;
   rtsp-ingress/*.go)
     out=$(cd "$root" && . scripts/go-env.sh >/dev/null 2>&1 && gofmt -l "$file" 2>&1)
     [ -z "$out" ] || block "gofmt reports $rel is not formatted; run gofmt -w on it."

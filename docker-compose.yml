@@ -198,6 +198,36 @@ services:
       timeout: 5s
       retries: 5
 
+  # -----------------------------------------------------------------------
+  # RF Ingress (Python — hardware-neutral wearable localization ingress)
+  # Opt-in via `--profile wearables` so default camera-only deployments
+  # never start an RF adapter unintentionally.
+  # -----------------------------------------------------------------------
+  rf-ingress:
+    profiles: ["wearables"]
+    env_file:
+      - .env
+    build:
+      context: ./rf-ingress
+      dockerfile: Dockerfile
+    container_name: cts-rf-ingress
+    networks:
+      - nanai
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CC_API_URL: http://cc-backend:8000
+      CC_INGRESS_API_KEY: ${CC_INGRESS_API_KEY:?err}
+    ports:
+      - "8095:8095"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8095/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
 volumes:
   hf-cache:
   redisdata:

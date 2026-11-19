@@ -34,6 +34,26 @@ jobs:
       - name: import-linter
         working-directory: tracking-orchestrator
         run: .venv/bin/lint-imports
+      - name: Install rf-ingress
+        working-directory: rf-ingress
+        run: uv sync --frozen --extra dev
+      - name: Assert rf-ingress venv-only invocation
+        working-directory: rf-ingress
+        run: |
+          test -x .venv/bin/python
+          .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+      - name: rf-ingress Ruff check
+        working-directory: rf-ingress
+        run: .venv/bin/ruff check .
+      - name: rf-ingress Ruff format
+        working-directory: rf-ingress
+        run: .venv/bin/ruff format --check .
+      - name: rf-ingress MyPy
+        working-directory: rf-ingress
+        run: .venv/bin/mypy --config-file pyproject.toml rf_ingress
+      - name: rf-ingress import-linter
+        working-directory: rf-ingress
+        run: .venv/bin/lint-imports
       # The Claude Code hooks committed under .claude/hooks/ (guard, post-edit, stop scan).
       - name: Claude Code hook tests
         run: make hooks-test
@@ -56,6 +76,9 @@ jobs:
       - name: Install tracking-orchestrator
         working-directory: tracking-orchestrator
         run: uv sync --frozen --extra dev
+      - name: Install rf-ingress
+        working-directory: rf-ingress
+        run: uv sync --frozen --extra dev
       - name: Assert venv-only invocation
         working-directory: tracking-orchestrator
         run: |
@@ -64,6 +87,8 @@ jobs:
       # Same targets as the local gate (make ci), so CI and local runs cannot drift apart.
       - name: Unit tests
         run: make test
+      - name: rf-ingress unit and conformance tests
+        run: make rf-test
       - name: Integration tests
         run: make test-integration
 
@@ -153,6 +178,8 @@ jobs:
       # `make audit` exports uv.lock and audits every pinned PyPI package.
       - name: pip-audit (locked Python dependencies)
         run: make audit
+      - name: pip-audit (rf-ingress locked Python dependencies)
+        run: make rf-audit
 
       # Go: audit rtsp-ingress for known vulnerabilities
       - uses: actions/setup-go@v7

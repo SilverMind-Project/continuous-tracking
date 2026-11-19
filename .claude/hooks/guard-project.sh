@@ -32,7 +32,7 @@ deny() {
 # Test runs outside the project venv: bare pytest or a bare python -m pytest in command position.
 if printf '%s' "$bare" | grep -qP "${CMDPOS}(pytest|python3?(\.\d+)?\s+-m\s+pytest)(?=\$|[\s;&|)])" \
    && ! printf '%s' "$bare" | grep -qP '\.venv/bin/activate\b'; then
-  deny "pytest outside the project venv; use tracking-orchestrator/.venv/bin/pytest or make test."
+  deny "pytest outside a project venv; use tracking-orchestrator/.venv/bin/pytest, rf-ingress/.venv/bin/pytest, make test, or make rf-test."
 fi
 
 exit 0

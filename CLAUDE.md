@@ -11,6 +11,7 @@ Guidance for Claude Code agents working in this repository.
 | `.claude/skills/cts-signals/SKILL.md` | Dementia signals, detectors, baselines, robust z-scores, hysteresis, severity, protobuf/CC kind plumbing, and signal tests |
 | `.claude/skills/cts-spatial-fusion/SKILL.md` | Floor-plane localization, homography Jacobian, measurement covariance, cross-camera fusion, Kalman/ZUPT, primary camera selection, and posture geometry weighting |
 | `.claude/skills/cts-identity-governance/SKILL.md` | PH identity evidence, the identity resolver, authority order, ReID gallery lifecycle, revisions, operator corrections, external identity evidence, and identity provenance |
+| `.claude/skills/rf-ingress/SKILL.md` | `rf-ingress/` adapters, conformance kit, multilateration solver, clock offset tracking, replay CLI, and wearable stream publishing |
 | `/home/sriram/code/nanai/.claude/skills/nanai-workspace/SKILL.md` | Any change spanning more than one repository: repo map, gates, proto two-repo rule, milestone workflow |
 
 `engineering-standards` lists its rules as one-liners and keeps the detail in `reference/` beside
@@ -49,6 +50,7 @@ settings coupling rule, and the CTS-to-CC wire contract. The CC-side companion d
 .
 ├── rtsp-ingress/                  Go RTSP ingest service (cmd/server, internal/{config,go2rtc,imageops,
 │                                  media,metrics,motion,poll,reconciler,supervisor})
+├── rf-ingress/                    Python hardware-neutral RF ingress (rf_ingress/{adapters,solver,clock,site_config,publish,pipeline,health,replay,proto}, config/scenarios/, tests/conformance/)
 ├── tracking-orchestrator/         Python ML orchestration service
 │   ├── app/domain/                Frozen dataclasses (Detection, WorldObservation, PersonHypothesis, …)
 │   ├── app/inference/             Triton gRPC client (delegates to triton_shared) + ReID/Pose wrappers
@@ -115,9 +117,9 @@ Start sessions in this directory (or `/cd` here): `.claude/settings.json` applie
 session's working directory. It sets `UV_FROZEN=1`, skips the vendored `CLAUDE.md` files under
 `tools/go-mod-cache/`, and runs four hooks from `.claude/hooks/`:
 
-- **Guard:** blocks `pytest` outside `tracking-orchestrator/.venv`.
+- **Guard:** blocks `pytest` outside `tracking-orchestrator/.venv` or `rf-ingress/.venv`.
 - **Post-edit:** an em-dash in an edited `.md` file, a `ruff check` failure in
-  `tracking-orchestrator/`, or a `gofmt` finding in `rtsp-ingress/` comes back as feedback.
+  `tracking-orchestrator/` or `rf-ingress/`, or a `gofmt` finding in `rtsp-ingress/` comes back as feedback.
 - **Stop:** flags added em-dashes and `uv.lock` churn. It blocks once and never loops.
 - **Session start:** branch, changed files, gates.
 
@@ -156,7 +158,7 @@ make proto          # Go (buf generate) + Python (protoc --python_out --pyi_out)
 make proto-lint     # buf lint only
 ```
 
-Requires `protoc >= 25` (`apt install protobuf-compiler`) and the project Go toolchain (`make go-install`). The `proto-py` target writes to both `tracking-orchestrator/app/proto/` and `../cognitive-companion/backend/integrations/proto/`.
+Requires `protoc >= 25` (`apt install protobuf-compiler`) and the project Go toolchain (`make go-install`). The `proto-py` target writes to `tracking-orchestrator/app/proto/`, `rf-ingress/rf_ingress/proto/`, and `../cognitive-companion/backend/integrations/proto/`.
 
 ## Known Tech Debt
 

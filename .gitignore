@@ -27,6 +27,13 @@ tracking-orchestrator/.ruff_cache/
 tracking-orchestrator/.mypy_cache/
 tracking-orchestrator/.pytest_cache/
 tracking-orchestrator/*.egg-info/
+rf-ingress/.venv/
+rf-ingress/.ruff_cache/
+rf-ingress/.mypy_cache/
+rf-ingress/.pytest_cache/
+rf-ingress/*.egg-info/
+rf-ingress/recordings/
+*.replay.jsonl
 # Jetson-generated TensorRT engines are device and TensorRT-version specific.
 triton-models-jetson/**/1/*.plan
 triton-models-jetson/**/1/*.engine

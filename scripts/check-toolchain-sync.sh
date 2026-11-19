@@ -46,6 +46,12 @@ check_eq "tracking-orchestrator/Dockerfile python" "$PY_MINOR" "$DOCKER_PY"
 MYPY_PY="$(grep -oE 'python_version = "[0-9]+\.[0-9]+"' "$ROOT/tracking-orchestrator/pyproject.toml" | head -n1 | sed -E 's/.*"([^"]+)"/\1/')"
 check_eq "tracking-orchestrator/pyproject.toml mypy python_version" "$PY_MINOR" "$MYPY_PY"
 
+RF_DOCKER_PY="$(grep -oE 'FROM python:[0-9]+\.[0-9]+' "$ROOT/rf-ingress/Dockerfile" | head -n1 | cut -d: -f2)"
+check_eq "rf-ingress/Dockerfile python" "$PY_MINOR" "$RF_DOCKER_PY"
+
+RF_MYPY_PY="$(grep -oE 'python_version = "[0-9]+\.[0-9]+"' "$ROOT/rf-ingress/pyproject.toml" | head -n1 | sed -E 's/.*"([^"]+)"/\1/')"
+check_eq "rf-ingress/pyproject.toml mypy python_version" "$PY_MINOR" "$RF_MYPY_PY"
+
 while IFS= read -r ci_py; do
   check_eq ".github/workflows/ci.yml python-version" "$PY_MINOR" "$ci_py"
 done < <(grep -oE 'python-version: "[0-9]+\.[0-9]+"' "$ROOT/.github/workflows/ci.yml" | sed -E 's/.*"([^"]+)"/\1/')

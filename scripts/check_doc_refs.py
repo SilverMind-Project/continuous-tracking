@@ -27,6 +27,8 @@ RESOLVE_ROOTS: tuple[str, ...] = (
     "",
     "tracking-orchestrator",
     "tracking-orchestrator/app",
+    "rf-ingress",
+    "rf-ingress/rf_ingress",
     "rtsp-ingress",
 )
 

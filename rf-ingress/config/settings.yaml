@@ -1,0 +1,42 @@
+# Hardware-neutral RF localization ingress service configuration.
+# Secrets and service URLs are interpolated from environment variables;
+# runtime tunables stay literal here.
+
+service:
+  host: "127.0.0.1"
+  port: 8095
+  log_level: "INFO"
+  capability_heartbeat_interval_s: 60.0
+
+redis:
+  url: "${REDIS_URL}"
+  fixes_stream: "wearable.fixes"
+  capabilities_stream: "wearable.capabilities"
+  retention_hours: 72.0
+
+site_config:
+  cc_api_url: "${CC_API_URL}"
+  api_key: "${CC_INGRESS_API_KEY}"
+  poll_interval_s: 60.0
+  request_timeout_s: 10.0
+
+solver:
+  epoch_window_s: 0.25
+  assumed_tag_height_m: 1.0
+  tag_height_sigma_m: 0.3
+  min_vertical_spread_m: 0.5
+  max_condition: 1000.0
+  quality_scale_m: 0.5
+  # Wide fixes are still fixes: keep max_sigma_m null so downstream consumers
+  # decide fix utility from the published 2x2 covariance rather than dropping
+  # imprecise solves at ingress.
+  max_sigma_m: null
+
+clock:
+  skew_window_s: 60.0
+  skew_warn_threshold_s: 0.5
+  burst_window_size: 20
+
+# Adapters are configured explicitly per deployment. Keep empty by default so a
+# deployment never emits simulated fixes into a live household without opt-in.
+adapters: []

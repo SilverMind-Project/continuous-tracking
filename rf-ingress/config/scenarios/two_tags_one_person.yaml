@@ -1,0 +1,129 @@
+name: two_tags_one_person
+description: One household member wearing both a coin-cell BLE RSSI wristband and a BLE Channel Sounding pendant.
+seed: 103
+start_time: "2026-11-19T12:10:00Z"
+duration_s: 20.0
+step_s: 1.0
+floor_plan_id: "household:1"
+rooms:
+  - room_id: "1"
+    x_min_m: 0.0
+    y_min_m: 0.0
+    x_max_m: 6.0
+    y_max_m: 5.0
+nodes:
+  - anchor_id: "ble-nw"
+    adapter_id: "sim-1"
+    node_role: "receiver"
+    technology: "ble_rssi"
+    x_m: 0.3
+    y_m: 0.3
+    z_m: 1.5
+    room_id: "1"
+  - anchor_id: "ble-ne"
+    adapter_id: "sim-1"
+    node_role: "receiver"
+    technology: "ble_rssi"
+    x_m: 5.7
+    y_m: 0.3
+    z_m: 1.5
+    room_id: "1"
+  - anchor_id: "ble-se"
+    adapter_id: "sim-1"
+    node_role: "receiver"
+    technology: "ble_rssi"
+    x_m: 5.7
+    y_m: 4.7
+    z_m: 1.5
+    room_id: "1"
+  - anchor_id: "ble-sw"
+    adapter_id: "sim-1"
+    node_role: "receiver"
+    technology: "ble_rssi"
+    x_m: 0.3
+    y_m: 4.7
+    z_m: 1.5
+    room_id: "1"
+  - anchor_id: "cs-nw"
+    adapter_id: "sim-1"
+    node_role: "ranging_anchor"
+    technology: "ble_channel_sounding"
+    x_m: 0.4
+    y_m: 0.4
+    z_m: 2.1
+    room_id: "1"
+  - anchor_id: "cs-ne"
+    adapter_id: "sim-1"
+    node_role: "ranging_anchor"
+    technology: "ble_channel_sounding"
+    x_m: 5.6
+    y_m: 0.4
+    z_m: 2.1
+    room_id: "1"
+  - anchor_id: "cs-se"
+    adapter_id: "sim-1"
+    node_role: "ranging_anchor"
+    technology: "ble_channel_sounding"
+    x_m: 5.6
+    y_m: 4.6
+    z_m: 2.1
+    room_id: "1"
+  - anchor_id: "cs-sw"
+    adapter_id: "sim-1"
+    node_role: "ranging_anchor"
+    technology: "ble_channel_sounding"
+    x_m: 0.4
+    y_m: 4.6
+    z_m: 2.1
+    room_id: "1"
+tags:
+  - tag_id: "tag-resident-wrist"
+    member_id: "resident-1"
+    device_kind: "ble_beacon"
+    report_protocol: "range"
+    technology: "ble_rssi"
+    body_shadow_prob: 0.15
+    battery_start: 0.90
+    battery_end: 0.90
+    waypoints:
+      - t_s: 0.0
+        x_m: 1.5
+        y_m: 1.5
+        z_m: 0.9
+      - t_s: 20.0
+        x_m: 4.5
+        y_m: 3.5
+        z_m: 0.9
+    wear_schedule:
+      - start_s: 0.0
+        end_s: 21.0
+        state: "unspecified"
+    motion_schedule:
+      - start_s: 0.0
+        end_s: 21.0
+        state: "moving"
+  - tag_id: "tag-resident-pendant"
+    member_id: "resident-1"
+    device_kind: "ble_beacon"
+    report_protocol: "range"
+    technology: "ble_channel_sounding"
+    sigma_m: 0.50
+    battery_start: 0.80
+    battery_end: 0.79
+    waypoints:
+      - t_s: 0.0
+        x_m: 1.5
+        y_m: 1.5
+        z_m: 1.2
+      - t_s: 20.0
+        x_m: 4.5
+        y_m: 3.5
+        z_m: 1.2
+    wear_schedule:
+      - start_s: 0.0
+        end_s: 21.0
+        state: "on_body"
+    motion_schedule:
+      - start_s: 0.0
+        end_s: 21.0
+        state: "moving"

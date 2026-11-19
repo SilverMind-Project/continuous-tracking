@@ -26,9 +26,11 @@ while IFS= read -r f; do
   if [ -f "$f" ] && grep -qF "$EM" "$f"; then problems+=("em-dash in new file $f"); fi
 done <<<"$untracked"
 
-if grep -qx "tracking-orchestrator/uv.lock" <<<"$modified" && ! grep -qx "tracking-orchestrator/pyproject.toml" <<<"$modified"; then
-  problems+=("tracking-orchestrator/uv.lock changed but tracking-orchestrator/pyproject.toml did not: revert the churn (git checkout tracking-orchestrator/uv.lock) unless you re-locked on purpose")
-fi
+for pkg in tracking-orchestrator rf-ingress; do
+  if grep -qx "${pkg}/uv.lock" <<<"$modified" && ! grep -qx "${pkg}/pyproject.toml" <<<"$modified"; then
+    problems+=("${pkg}/uv.lock changed but ${pkg}/pyproject.toml did not: revert the churn (git checkout ${pkg}/uv.lock) unless you re-locked on purpose")
+  fi
+done
 
 [ "${#problems[@]}" -gt 0 ] || exit 0
 reason="Before finishing, fix or confirm: $(printf '%s; ' "${problems[@]}")"
