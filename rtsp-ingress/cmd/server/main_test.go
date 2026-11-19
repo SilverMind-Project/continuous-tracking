@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestHealthzHandler(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
 
 	healthzHandler(w, req)
@@ -39,7 +40,7 @@ func TestReadyzHandler_NotReady(t *testing.T) {
 	var mu sync.Mutex
 	handler := readyzHandler(&ready, &mu)
 
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -59,7 +60,7 @@ func TestReadyzHandler_Ready(t *testing.T) {
 	ready = true
 	mu.Unlock()
 
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -89,7 +90,7 @@ func TestTestConnectionHandler_Success(t *testing.T) {
 	handler := testConnectionHandler(g2r)
 
 	body := strings.NewReader(`{"rtsp_url":"rtsp://192.168.1.1:554/stream"}`)
-	req := httptest.NewRequest(http.MethodPost, "/internal/test-connection", body)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/internal/test-connection", body)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -115,7 +116,7 @@ func TestTestConnectionHandler_MissingRTSPURL(t *testing.T) {
 	handler := testConnectionHandler(g2r)
 
 	body := strings.NewReader(`{}`)
-	req := httptest.NewRequest(http.MethodPost, "/internal/test-connection", body)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/internal/test-connection", body)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -132,7 +133,7 @@ func TestTestConnectionHandler_WrongMethod(t *testing.T) {
 	g2r := go2rtc.New(go2rtc.Config{Addr: proxy.URL, TimeoutSeconds: 5})
 	handler := testConnectionHandler(g2r)
 
-	req := httptest.NewRequest(http.MethodGet, "/internal/test-connection", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/internal/test-connection", nil)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -150,7 +151,7 @@ func TestTestConnectionHandler_InvalidJSON(t *testing.T) {
 	handler := testConnectionHandler(g2r)
 
 	body := strings.NewReader(`not json`)
-	req := httptest.NewRequest(http.MethodPost, "/internal/test-connection", body)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/internal/test-connection", body)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -172,7 +173,7 @@ func TestTestConnectionHandler_ProbeFails(t *testing.T) {
 	handler := testConnectionHandler(g2r)
 
 	body := strings.NewReader(`{"rtsp_url":"rtsp://host/stream"}`)
-	req := httptest.NewRequest(http.MethodPost, "/internal/test-connection", body)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/internal/test-connection", body)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)

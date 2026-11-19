@@ -133,7 +133,7 @@ class ReIDCandidateStage(FrameStage):
         assert self._crop_storage is not None  # checked by caller
         try:
             await self._crop_storage.put_bytes(crop_key, crop_bytes)
-        except Exception:  # noqa: BLE001 -- best-effort auxiliary governance data,
+        except Exception:
             # a storage hiccup on one detection must never fail the tracking frame.
             logger.warning(
                 "reid_candidate_crop_upload_failed",
@@ -193,7 +193,7 @@ class ReIDCandidateStage(FrameStage):
 
         try:
             await self._gallery_repo.create_review_candidate(candidate)
-        except Exception:  # noqa: BLE001 -- see justification above; clean up the
+        except Exception:
             # orphaned crop object on DB failure so a retry with the same
             # candidate_id (idempotent on create_review_candidate) does not leak.
             logger.warning(
@@ -203,7 +203,7 @@ class ReIDCandidateStage(FrameStage):
             )
             try:
                 await self._crop_storage.delete_object(crop_key)
-            except Exception:  # noqa: BLE001 -- reconciliation job cleans up orphans
+            except Exception:
                 logger.warning(
                     "reid_candidate_orphan_crop_delete_failed",
                     crop_key=crop_key,

@@ -272,7 +272,7 @@ class AppearanceEvaluator:
             from ..observability import metrics as m
 
             m.metrics.appearance_signal_candidates_total.inc()
-        except Exception:  # noqa: BLE001  # metrics are non-required side-channel
+        except Exception:  # metrics are non-required side-channel
             logger.warning("appearance_signal_candidate_metric_failed", exc_info=True)
 
         if not self._cfg.enabled:

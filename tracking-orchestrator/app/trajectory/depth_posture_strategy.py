@@ -88,7 +88,7 @@ class DepthPostureStrategy:
             elapsed = time.monotonic() - t0
             _metrics.metrics.cts_posture_slow_path_latency_seconds.observe(elapsed)
             return self._score_from_depth(depth_map, detection)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "depth_posture_slow_path_failed",
                 camera_id=detection.camera_id,

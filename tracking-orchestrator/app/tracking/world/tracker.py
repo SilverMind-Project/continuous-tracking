@@ -734,7 +734,7 @@ class WorldTracker:
         if assignment.unmatched_obs and self._topology_repo is not None:
             try:
                 _topology_edges = await self._topology_repo.list_edges()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("topology_edges_load_failed", exc_info=True)
         for obs_idx in assignment.unmatched_obs:
             obs = observations[obs_idx]
@@ -1429,7 +1429,7 @@ class WorldTracker:
                     try:
                         assert self._copresence_repo is not None  # narrow for mypy
                         await self._copresence_repo.upsert_link(link)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         logger.warning(
                             "copresence_link_write_failed",
                             group_id=group_a,

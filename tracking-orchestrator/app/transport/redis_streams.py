@@ -223,7 +223,7 @@ class RedisStreamsTransport:
 
         self._cleanup_stale_acks()
 
-        streams = await self._redis.xreadgroup(
+        streams: Any = await self._redis.xreadgroup(
             self._config.consumer_group,
             self._config.consumer_name,
             {self._config.frames_stream: ">"},
@@ -339,7 +339,7 @@ class RedisStreamsTransport:
         """Return ``(pending, lag)`` for the consumer group from ``XINFO GROUPS``."""
         if self._redis is None:
             return (0, 0)
-        groups = await self._redis.xinfo_groups(self._config.frames_stream)
+        groups: list[dict[Any, Any]] = await self._redis.xinfo_groups(self._config.frames_stream)
         for group in groups:
             raw_name = group.get(b"name") if b"name" in group else group.get("name")
             name = (

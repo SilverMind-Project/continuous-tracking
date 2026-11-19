@@ -525,7 +525,7 @@ class FrameProcessingPipeline:
             )
             if closed:
                 logger.info("Reconciled dangling open dwells at startup", count=closed)
-        except Exception:  # noqa: BLE001  # startup reconciliation must not block boot
+        except Exception:  # startup reconciliation must not block boot
             logger.warning("dwell_reconciliation_failed", exc_info=True)
 
         # Gait bout segmenter, daily aggregator, and their repositories.

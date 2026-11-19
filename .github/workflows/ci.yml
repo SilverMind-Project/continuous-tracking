@@ -9,8 +9,8 @@ jobs:
   python-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           activate-environment: true
@@ -39,6 +39,8 @@ jobs:
         run: make hooks-test
       - name: Markdown has no em-dashes
         run: make check-md
+      - name: Toolchain pin alignment
+        run: make check-toolchain
 
   python-test:
     name: Python tests (unit and integration)
@@ -46,8 +48,8 @@ jobs:
     # No service containers: the tests start their own timescaledb-ha:pg18 testcontainer
     # (tests/conftest.py) and apply migrations through MigrationRunner, the production path.
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           activate-environment: true
@@ -68,26 +70,26 @@ jobs:
   go-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.24.5"
+          go-version: "1.27.4"
       - name: Pin GOTOOLCHAIN
         run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          # Pinned to the same version installed by `make go-tools` (Go 1.24 compatible).
-          version: v1.64.8
+          # Pinned to the same version installed by `make go-tools` (Go 1.27 compatible).
+          version: v2.15.0
           working-directory: rtsp-ingress
 
   go-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.24.5"
+          go-version: "1.27.4"
       - name: Pin GOTOOLCHAIN
         run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
       - name: Run Go vet, tests, and build
@@ -97,16 +99,16 @@ jobs:
   proto-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.24.5"
+          go-version: "1.27.4"
       - name: Pin GOTOOLCHAIN
         run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
       - name: Install protoc-gen-go
-        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
       - uses: bufbuild/buf-setup-action@v1
         with:
           version: "1.50.0"
@@ -138,28 +140,24 @@ jobs:
   security-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Python: audit tracking-orchestrator dependencies for known CVEs
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           activate-environment: true
       - name: Install tracking-orchestrator
         working-directory: tracking-orchestrator
         run: uv sync --frozen --extra dev
-      # `uvx pip-audit` with no arguments audited pip-audit's own throwaway environment and
-      # always passed. `make audit` audits the exported uv.lock. Non-blocking until the
-      # dependency upgrade follow-up lands (the lock carried open advisories on 2026-10-21);
-      # delete continue-on-error once `make audit` is clean.
+      # `make audit` exports uv.lock and audits every pinned PyPI package.
       - name: pip-audit (locked Python dependencies)
-        continue-on-error: true
         run: make audit
 
       # Go: audit rtsp-ingress for known vulnerabilities
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.24.5"
+          go-version: "1.27.4"
       - name: Pin GOTOOLCHAIN
         run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
       - name: govulncheck (Go CVE scan)

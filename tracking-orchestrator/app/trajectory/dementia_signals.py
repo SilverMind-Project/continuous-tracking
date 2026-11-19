@@ -291,7 +291,7 @@ class DementiaSignalWorker:
             from ..observability import metrics as m
 
             m.metrics.signal_worker_identities.set(len(identities))
-        except Exception:  # noqa: BLE001  # metrics are non-required side-channel
+        except Exception:  # metrics are non-required side-channel
             logger.warning("signal_worker_metrics_update_failed", exc_info=True)
 
         all_signals: list[DementiaSignal] = []
@@ -328,7 +328,7 @@ class DementiaSignalWorker:
                 m.metrics.signal_worker_emitted_total.labels(
                     kind=s.signal_kind, severity=s.severity
                 ).inc()
-        except Exception:  # noqa: BLE001  # metrics are non-required side-channel
+        except Exception:  # metrics are non-required side-channel
             logger.warning("signal_worker_run_metrics_failed", exc_info=True)
 
         return all_signals
@@ -1451,7 +1451,7 @@ class DementiaSignalWorker:
                         from ..observability import metrics as m
 
                         m.metrics.signal_baseline_cache_hits_total.inc()
-                    except Exception:  # noqa: BLE001  # metrics are non-required side-channel
+                    except Exception:  # metrics are non-required side-channel
                         logger.warning("signal_baseline_cache_metric_failed", exc_info=True)
 
             # Fetch if no cache hit.
@@ -1473,7 +1473,7 @@ class DementiaSignalWorker:
                 signal_kind=signal_kind,
                 limit=100,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "signal_legacy_baseline_lookup_failed",
                 identity_id=identity_id,

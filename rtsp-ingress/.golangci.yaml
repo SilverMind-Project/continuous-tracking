@@ -1,28 +1,30 @@
-run:
-  timeout: 5m
-
+version: "2"
 linters:
   enable:
     - bodyclose
-    - errcheck
     - errorlint
-    - gofmt
-    - goimports
     - gosec
-    - gosimple
-    - govet
-    - ineffassign
     - noctx
     - revive
     - rowserrcheck
-    - staticcheck
-    - unused
-
-linters-settings:
-  revive:
-    rules:
-      - name: var-naming
-        disabled: true
-
-issues:
-  exclude-use-default: false
+  settings:
+    revive:
+      rules:
+        - name: var-naming
+          disabled: true
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

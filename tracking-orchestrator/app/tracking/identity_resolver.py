@@ -1726,7 +1726,7 @@ class IdentityResolver:
                 tracklet_ids=set(entity.observation_ids),
                 limit=20,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "reid_gallery_lookup_failed",
                 entity_id=entity.entity_id,
@@ -1769,7 +1769,7 @@ class IdentityResolver:
                 limit=20,
                 **self._gallery_search_kwargs(),
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "reid_search_failed",
                 entity_id=entity.entity_id,
@@ -1824,7 +1824,7 @@ class IdentityResolver:
                     limit=20,
                     **self._gallery_search_kwargs(),
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning(
                     "reid_multiview_search_failed",
                     entity_id=entity.entity_id,
@@ -1964,7 +1964,7 @@ class IdentityResolver:
                 tracklet_ids=set(entity.observation_ids),
                 limit=20,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "reid_cross_camera_assist_lookup_failed",
                 entity_id=entity.entity_id,
@@ -1983,7 +1983,7 @@ class IdentityResolver:
                 limit=20,
                 **self._gallery_search_kwargs(),
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "reid_cross_camera_assist_search_failed",
                 entity_id=entity.entity_id,

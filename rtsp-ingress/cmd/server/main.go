@@ -329,8 +329,9 @@ func snapshotHandler(sup *supervisor.Supervisor) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(jpegData)
+		_, _ = w.Write(jpegData) // #nosec G705 -- binary JPEG snapshot served with image/jpeg and nosniff
 	}
 }
 

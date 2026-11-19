@@ -125,26 +125,25 @@ if HAS_HYPOTHESIS:
                         assert total_a == total_b
                         assert len(items_a) == len(items_b)
 
-                    elif op == "correct":
-                        if ph_id_counter > 0:
-                            target_id = str(_uuid.uuid5(_ns, str(ph_id_counter - 1)))
-                            try:
-                                rev_a = await repo_a.correct_identity(
-                                    ph_id=target_id,
-                                    new_identity_id="test_identity",
-                                    reason="property_test",
-                                    actor="hypothesis",
-                                )
-                                rev_b = await repo_b.correct_identity(
-                                    ph_id=target_id,
-                                    new_identity_id="test_identity",
-                                    reason="property_test",
-                                    actor="hypothesis",
-                                )
-                                assert rev_a.ph_id == rev_b.ph_id
-                                assert rev_a.new_identity_id == rev_b.new_identity_id
-                            except ValueError:
-                                pass
+                    elif op == "correct" and ph_id_counter > 0:
+                        target_id = str(_uuid.uuid5(_ns, str(ph_id_counter - 1)))
+                        try:
+                            rev_a = await repo_a.correct_identity(
+                                ph_id=target_id,
+                                new_identity_id="test_identity",
+                                reason="property_test",
+                                actor="hypothesis",
+                            )
+                            rev_b = await repo_b.correct_identity(
+                                ph_id=target_id,
+                                new_identity_id="test_identity",
+                                reason="property_test",
+                                actor="hypothesis",
+                            )
+                            assert rev_a.ph_id == rev_b.ph_id
+                            assert rev_a.new_identity_id == rev_b.new_identity_id
+                        except ValueError:
+                            pass
             finally:
                 if use_postgres:
                     async with pool.acquire() as conn:

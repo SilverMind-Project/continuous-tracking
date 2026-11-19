@@ -139,7 +139,7 @@ class IdentityRosterSyncService:
         """Run an initial sync pass and start the periodic background loop."""
         try:
             await self.sync_once()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("identity_roster_initial_sync_failed", exc_info=True)
         self._task = asyncio.create_task(self._loop(), name="identity-roster-sync")
 
@@ -158,5 +158,5 @@ class IdentityRosterSyncService:
                 await self.sync_once()
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("identity_roster_sync_failed", exc_info=True)

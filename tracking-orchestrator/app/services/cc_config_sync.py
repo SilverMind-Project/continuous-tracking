@@ -622,7 +622,7 @@ class CCConfigSyncService:
             retry=retry_if_exception_type(Exception),
             stop=stop_after_attempt(self._fetch_retry_attempts),
             wait=wait_exponential_jitter(
-                initial=self._fetch_retry_initial_s,
+                multiplier=self._fetch_retry_initial_s,
                 max=self._fetch_retry_max_s,
             ),
             before_sleep=_log_fetch_retry,

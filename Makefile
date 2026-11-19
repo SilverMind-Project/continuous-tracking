@@ -14,7 +14,7 @@ PROTO_FILES    := \
 	proto/continuoustracking/v1/signals.proto \
 	proto/continuoustracking/v1/scene.proto
 
-.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit hooks-test check-md docs-check
+.PHONY: help venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint check check-all check-toolchain deps-outdated deps-upgrade go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit hooks-test check-md docs-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -104,6 +104,15 @@ mypy: venv ## Type-check Python code
 import-lint: venv ## Enforce import layering
 	cd tracking-orchestrator && ../$(PY_BIN)/lint-imports
 
+check-toolchain: ## Verify Go/Python/tool pins stay aligned across .tool-versions, Dockerfiles, go.mod, Makefile, and CI
+	@bash scripts/check-toolchain-sync.sh
+
+deps-outdated: venv go-env-check ## List outdated Go modules and Python packages (read-only)
+	@bash scripts/deps-upgrade.sh --check
+
+deps-upgrade: venv go-env-check ## Upgrade Go modules and PyPI lockfile in lockstep, then run the full quality gate
+	@bash scripts/deps-upgrade.sh --apply
+
 check: venv ## Run the Python quality gate
 	$(MAKE) lint
 	$(MAKE) format-check
@@ -113,6 +122,7 @@ check: venv ## Run the Python quality gate
 	$(MAKE) hooks-test
 	$(MAKE) check-md
 	$(MAKE) docs-check
+	$(MAKE) check-toolchain
 	@bash scripts/check-env-var-drift.sh
 
 test-integration: venv ## Run every integration-marked test (testcontainer Postgres required)
@@ -135,8 +145,8 @@ go-env-check: ## Verify the project-pinned Go toolchain is active
 
 go-tools: go-env-check ## Install Go-based developer tools into ./tools/go-bin
 	@$(GO_ENV) go install github.com/bufbuild/buf/cmd/buf@v1.50.0
-	@$(GO_ENV) go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
-	@$(GO_ENV) go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+	@$(GO_ENV) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+	@$(GO_ENV) go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
 
 go-lint: go-env-check ## Lint Go code
 	cd rtsp-ingress && $(GO_ENV) golangci-lint run ./...

@@ -172,7 +172,7 @@ func TestReconnectBackoffDefaultsAndValidation(t *testing.T) {
 		t.Fatal("a backoff cap below the initial delay must be rejected")
 	}
 
-	var fromYAML Config = DefaultConfig()
+	fromYAML := DefaultConfig()
 	if err := yaml.Unmarshal([]byte("defaults:\n  reconnect_backoff_max_s: 30\n"), &fromYAML); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

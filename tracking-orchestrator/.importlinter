@@ -15,7 +15,6 @@ layers =
     app.inference
     app.storage
     app.domain
-optional = true
 
 
 [importlinter:contract:no-proto-leak]
