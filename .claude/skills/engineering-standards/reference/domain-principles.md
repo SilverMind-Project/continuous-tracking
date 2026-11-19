@@ -82,7 +82,8 @@ by parts availability, so vendor specifics must never leak past one adapter boun
   `horizontal_fov_deg`, `mounting_height_m`, `tilt_deg`, `ir_capable`, and stream pixel dimensions;
   `FaceIdentityStage.face_id_policy_for()` branches on declared role and capability (never vendor or
   model), and `app/calibration/floor_plane.py` delegates focal-length derivation to
-  `cts_contracts.optics.focal_length_px`.
+  `cts_contracts.optics.focal_length_px`. For the RF wearable tier decisions, node placement rules,
+  and adapter sequencing, see `docs/rf-hardware-decision.md`.
 - Privacy zones are CC configuration too. CTS holds them only in memory, so it restores them from
   CC before processing the first frame and re-applies them on every sync poll; a push from CC
   (`POST /internal/calibration/privacy_zones`) only makes a change take effect sooner.
