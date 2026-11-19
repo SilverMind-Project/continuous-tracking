@@ -135,7 +135,7 @@ go-env-check: ## Verify the project-pinned Go toolchain is active
 
 go-tools: go-env-check ## Install Go-based developer tools into ./tools/go-bin
 	@$(GO_ENV) go install github.com/bufbuild/buf/cmd/buf@v1.50.0
-	@$(GO_ENV) go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.63.4
+	@$(GO_ENV) go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
 	@$(GO_ENV) go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
 
 go-lint: go-env-check ## Lint Go code

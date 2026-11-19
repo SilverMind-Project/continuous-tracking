@@ -79,9 +79,12 @@ module = [
     "scipy.optimize",
     "shapely",
     "shapely.geometry",
-    "triton_shared.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["triton_shared.*"]
+follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
 module = ["app.proto.*"]

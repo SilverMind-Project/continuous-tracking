@@ -77,8 +77,8 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          # Pinned to the .pre-commit-config.yaml hook version so local hooks and CI agree.
-          version: v1.63.4
+          # Pinned to the same version installed by `make go-tools` (Go 1.24 compatible).
+          version: v1.64.8
           working-directory: rtsp-ingress
 
   go-test:
@@ -90,14 +90,21 @@ jobs:
           go-version: "1.24.5"
       - name: Pin GOTOOLCHAIN
         run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
-      - name: Run Go quality gate
+      - name: Run Go vet, tests, and build
         working-directory: rtsp-ingress
-        run: make check
+        run: make vet test build
 
   proto-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.5"
+      - name: Pin GOTOOLCHAIN
+        run: echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+      - name: Install protoc-gen-go
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
       - uses: bufbuild/buf-setup-action@v1
         with:
           version: "1.50.0"
