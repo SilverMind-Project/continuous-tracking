@@ -92,12 +92,14 @@ class CCIdentityAssertionSubscriber:
 
         while self._running:
             try:
+                # Keep block strictly below the shared Redis client's 5 s socket_timeout
+                # so idle polls return None instead of tripping redis-py 8's read timeout.
                 streams = await self._redis.xreadgroup(
                     groupname=GROUP,
                     consumername=CONSUMER,
                     streams={STREAM: ">"},
                     count=10,
-                    block=5000,
+                    block=2000,
                 )
             except Exception:
                 logger.exception("cc_identity_assertion_read_failed")
