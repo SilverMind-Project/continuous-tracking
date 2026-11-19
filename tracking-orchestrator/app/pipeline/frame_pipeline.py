@@ -71,6 +71,7 @@ from ..pipeline.types import (
     TransitDetectorProtocol,
 )
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
+from ..services.camera_profile_map import CameraProfileMap
 from ..services.camera_room_map import CameraRoomMap, RoomPolygonMap
 from ..services.face_templates import FaceTemplateService
 from ..services.identity_correction_service import IdentityCorrectionService
@@ -165,6 +166,7 @@ class FaceIdConfig:
 
     url: str = ""
     cooldown_s: float = 5.0
+    identification_point_cooldown_s: float = 1.0
     timeout_s: float = 2.0
     min_raw_similarity: float = 0.6
     enabled: bool = True
@@ -397,7 +399,9 @@ class FrameProcessingPipeline:
         self._live_config = LiveConfigHolder(
             camera_room_map=CameraRoomMap(),
             room_polygon_map=RoomPolygonMap(),
+            camera_profile_map=CameraProfileMap(),
         )
+        self._warned_stream_size_mismatch: set[tuple[str, int, int]] = set()
 
     @property
     def is_running(self) -> bool:
@@ -629,7 +633,10 @@ class FrameProcessingPipeline:
                 )
 
         # ---- Build the stage runner (order matters) ----
-        fetch_stage = FetchStage(frame_fetcher=self._frame_fetcher)
+        fetch_stage = FetchStage(
+            frame_fetcher=self._frame_fetcher,
+            on_stream_size=self._record_observed_stream_size,
+        )
         wt_cfg = self._config.world_tracker
         _high_threshold = (
             getattr(self._detector, "conf_threshold", 0.7) if self._detector is not None else 0.7
@@ -687,10 +694,12 @@ class FrameProcessingPipeline:
                 face_id_client=self._face_id_client,
                 gallery_repo=self._gallery_repo,
                 face_id_cooldown_s=self._config.face_id.cooldown_s,
+                identification_point_cooldown_s=self._config.face_id.identification_point_cooldown_s,
                 face_id_min_raw_similarity=self._config.face_id.min_raw_similarity,
                 evidence_policy=self._config.face_id.evidence_policy,
                 collect_template_faces=self._face_templates is not None,
                 face_id_camera_configs=self._config.face_id.camera_configs,
+                live_config=self._live_config,
                 last_face_id_by_tracklet=self._last_face_id_by_tracklet,
                 expected_arcface_model_version=self._config.face_id.expected_arcface_model_version,
                 expected_preprocessing_version=self._config.face_id.expected_preprocessing_version,
@@ -1283,6 +1292,32 @@ class FrameProcessingPipeline:
         Stages that need room attribution read from this map.
         """
         self._live_config.camera_room_map = camera_room_map
+
+    def set_camera_profile_map(self, camera_profile_map: CameraProfileMap) -> None:
+        """Replace the live CameraProfileMap read by pipeline stages."""
+        self._live_config.camera_profile_map = camera_profile_map
+
+    def _record_observed_stream_size(self, camera_id: str, width_px: int, height_px: int) -> None:
+        """Record observed frame pixel size and log once if it differs from the CC profile."""
+        calibration_state.record_observed_stream_size(camera_id, width_px, height_px)
+        profile = self._live_config.camera_profile_map.get_sync(camera_id)
+        if profile is None:
+            return
+        if (
+            profile.frame_natural_width_px != width_px
+            or profile.frame_natural_height_px != height_px
+        ):
+            key = (camera_id, width_px, height_px)
+            if key not in self._warned_stream_size_mismatch:
+                self._warned_stream_size_mismatch.add(key)
+                logger.warning(
+                    "camera_stream_size_mismatch",
+                    camera_id=camera_id,
+                    observed_width_px=width_px,
+                    observed_height_px=height_px,
+                    configured_width_px=profile.frame_natural_width_px,
+                    configured_height_px=profile.frame_natural_height_px,
+                )
 
     def set_overlap_groups(self, overlap_groups: Sequence[OverlapGroup]) -> None:
         """Apply camera overlap groups from the CC config sync to every consumer.

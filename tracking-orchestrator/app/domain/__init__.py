@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 
 import numpy as np
 import numpy.typing as npt
+from cts_contracts import CameraRole
 
 # ---------------------------------------------------------------------------
 # Spatial calibration
@@ -1478,3 +1479,27 @@ class Keyframe:
     floor_y_mm: float | None = None
     pose_class: str | None = None
     reid_confidence: float | None = None
+
+
+@dataclass(frozen=True)
+class CameraProfile:
+    """Hardware-neutral capability and placement profile for one CTS camera.
+
+    Populated by ``CCConfigSyncService`` from Cognitive Companion's camera registry.
+    Dimensional fields name their units: ``horizontal_fov_deg`` is the lens horizontal
+    field of view in degrees, ``mounting_height_m`` is the lens height above the floor in
+    metres (household floor-plan vertical frame), ``tilt_deg`` is the downward pitch angle
+    in degrees (0 horizontal, -90 straight down), and ``frame_natural_width_px`` /
+    ``frame_natural_height_px`` are the camera stream dimensions in native image pixels.
+    """
+
+    camera_id: str
+    role: CameraRole = CameraRole.SURVEILLANCE
+    face_id_enabled: bool = True
+    face_id_min_raw_similarity: float | None = None
+    horizontal_fov_deg: float | None = None
+    mounting_height_m: float | None = None
+    tilt_deg: float | None = None
+    ir_capable: bool | None = None
+    frame_natural_width_px: int | None = None
+    frame_natural_height_px: int | None = None

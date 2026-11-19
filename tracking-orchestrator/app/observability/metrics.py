@@ -45,6 +45,13 @@ class RevisionReasonKind(StrEnum):
     OTHER = "other"
 
 
+class CameraProfileRejectReason(StrEnum):
+    """Bounded label set for ``cts_camera_profile_rejected_total{reason}``."""
+
+    UNKNOWN_ROLE = "unknown_role"
+    MALFORMED_FIELD = "malformed_field"
+
+
 _REVISION_REASON_PREFIX_MAP: dict[str, RevisionReasonKind] = {
     "initial_assignment": RevisionReasonKind.INITIAL_ASSIGNMENT,
     "demoted_to_unknown": RevisionReasonKind.DEMOTED_TO_UNKNOWN,
@@ -109,6 +116,7 @@ class Metrics:
     posterior_entropy: Histogram
     homography_rejected_total: Counter
     homography_warning_total: Counter
+    camera_profile_rejected_total: Counter
 
     # ---- Calibration and transit metrics -----------------------------------
     worldtracker_observations_by_calibration_total: Counter  # labels: camera_id, calibrated
@@ -409,6 +417,11 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_homography_warning_total",
             "Homography matrices accepted with warnings during CC sync.",
             ["reason", "camera_id"],
+        ),
+        camera_profile_rejected_total=_counter(
+            "cts_camera_profile_rejected_total",
+            "Camera profile entries rejected during CC config sync (e.g. unknown role).",
+            ["camera_id", "reason"],
         ),
         # ---- Calibration and transit metrics ------------------------------------
         worldtracker_observations_by_calibration_total=_counter(

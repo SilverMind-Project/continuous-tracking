@@ -45,6 +45,9 @@ class CalibrationState:
     # arbitrary metadata per camera (e.g. reprojection error)
     camera_meta: dict[str, dict[str, Any]] = field(default_factory=dict)
 
+    # Observed native frame dimensions (width_px, height_px) reported by FetchStage.
+    observed_stream_sizes: dict[str, tuple[int, int]] = field(default_factory=dict)
+
     # Monotonic version incremented on every calibration mutation.
     version: int = 0
 
@@ -125,6 +128,19 @@ class CalibrationState:
     def calibrated_camera_ids(self) -> frozenset[str]:
         """Cameras whose floor homography is in use right now."""
         return frozenset(self.homographies)
+
+    def record_observed_stream_size(self, camera_id: str, width_px: int, height_px: int) -> bool:
+        """Record observed frame pixel dimensions for *camera_id*.
+
+        Returns ``True`` when the recorded size is new or changed.
+        """
+        if width_px <= 0 or height_px <= 0:
+            return False
+        size = (width_px, height_px)
+        if self.observed_stream_sizes.get(camera_id) == size:
+            return False
+        self.observed_stream_sizes[camera_id] = size
+        return True
 
     def snapshot(self) -> dict[str, Any]:
         return {

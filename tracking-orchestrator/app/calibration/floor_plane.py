@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
+from cts_contracts.optics import focal_length_px
 
 # ---------------------------------------------------------------------------
 # Typed result
@@ -141,7 +142,7 @@ class FloorPlaneFitter:
         rng = rng or np.random.default_rng()
 
         h, w = depth_map.shape[:2]
-        fx = fy = w / (2.0 * math.tan(math.radians(self._fov_deg / 2.0)))
+        fx = fy = focal_length_px(w, self._fov_deg)
         cx, cy = w / 2.0, h / 2.0
 
         pts3d, row_col = self._back_project(depth_map, fx, fy, cx, cy, h, w)

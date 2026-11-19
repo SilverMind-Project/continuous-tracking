@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 from structlog import get_logger
 
@@ -15,8 +17,13 @@ logger = get_logger(__name__)
 class FetchStage(FrameStage):
     name = "fetch"
 
-    def __init__(self, frame_fetcher: FrameImageFetcher | None = None) -> None:
+    def __init__(
+        self,
+        frame_fetcher: FrameImageFetcher | None = None,
+        on_stream_size: Callable[[str, int, int], None] | None = None,
+    ) -> None:
         self._frame_fetcher = frame_fetcher
+        self._on_stream_size = on_stream_size
 
     async def run(self, ctx: FrameContext) -> None:
         if self._frame_fetcher is not None:
@@ -38,3 +45,9 @@ class FetchStage(FrameStage):
             )
             ctx.effective_width = img_w
             ctx.effective_height = img_h
+        if (
+            self._on_stream_size is not None
+            and ctx.effective_width > 0
+            and ctx.effective_height > 0
+        ):
+            self._on_stream_size(ctx.frame.camera_id, ctx.effective_width, ctx.effective_height)

@@ -6,7 +6,7 @@ pipeline orchestrator and the individual stage classes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
@@ -15,6 +15,7 @@ import numpy.typing as npt
 
 from ..domain import RoomTransitionEvent, TransitZone
 from ..inference.schemas import Embedding
+from ..services.camera_profile_map import CameraProfileMap
 from ..services.camera_room_map import CameraRoomMap, RoomPolygonMap
 from ..services.transit_zone_map import TransitZoneMap
 
@@ -92,6 +93,7 @@ class LiveConfigHolder:
 
     camera_room_map: CameraRoomMap
     room_polygon_map: RoomPolygonMap
+    camera_profile_map: CameraProfileMap = field(default_factory=CameraProfileMap)
     transit_detector: TransitDetectorProtocol | None = None
     transit_zone_map: TransitZoneMap | None = None
     room_transition_publisher: RoomTransitionPublisherProtocol | None = None

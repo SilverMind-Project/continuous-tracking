@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 import numpy.typing as npt
+from cts_contracts import CameraRole
 from structlog import get_logger
 
 from ...domain import (
@@ -34,7 +35,7 @@ from ...tracking.identity.face_template_buffer import BufferedFace
 from ..crops import FaceCropPadding, crop_detection_from_bbox, face_crop_box
 from ..face_attribution import FaceAttribution, HeadRegionPolicy, assign_face_to_person
 from ..frame_context import FrameContext
-from ..types import FaceIdCameraConfig
+from ..types import FaceIdCameraConfig, LiveConfigHolder
 from .base import FrameStage
 
 logger = get_logger(__name__)
@@ -122,6 +123,21 @@ def _crossing_indices(detections: list[Detection]) -> frozenset[int]:
     return frozenset(flagged)
 
 
+@dataclass(frozen=True)
+class FaceIdCameraPolicy:
+    """Effective per-camera face identification policy.
+
+    ``enabled`` comes from ``face_id_enabled`` (camera role never disables face ID).
+    ``cooldown_s`` is shortened to ``identification_point_cooldown_s`` for cameras whose
+    declared role is ``face_capable``, and uses ``face_id_cooldown_s`` for all other roles.
+    """
+
+    enabled: bool
+    cooldown_s: float
+    min_raw_similarity: float | None
+    role: CameraRole
+
+
 class FaceIdentityStage(FrameStage):
     name = "face_identity"
 
@@ -131,8 +147,10 @@ class FaceIdentityStage(FrameStage):
         face_id_client: FaceIdentificationClient | None = None,
         gallery_repo: GalleryRepository | None = None,
         face_id_cooldown_s: float = 5.0,
+        identification_point_cooldown_s: float = 1.0,
         face_id_min_raw_similarity: float = 0.5,
         face_id_camera_configs: dict[str, FaceIdCameraConfig] | None = None,
+        live_config: LiveConfigHolder | None = None,
         last_face_id_by_tracklet: dict[str, datetime] | None = None,
         face_service_version: str = "",
         expected_arcface_model_version: str = "",
@@ -155,8 +173,10 @@ class FaceIdentityStage(FrameStage):
         self._face_stats_repo = face_stats_repo
         self._gallery_repo = gallery_repo
         self._face_id_cooldown_s = face_id_cooldown_s
+        self._identification_point_cooldown_s = identification_point_cooldown_s
         self._face_id_min_raw_similarity = face_id_min_raw_similarity
         self._face_id_camera_configs = face_id_camera_configs or {}
+        self._live_config = live_config
         self._face_service_version = face_service_version
         self._expected_arcface_model_version = expected_arcface_model_version
         self._expected_preprocessing_version = expected_preprocessing_version
@@ -172,8 +192,36 @@ class FaceIdentityStage(FrameStage):
         # are kept so stale entries cannot persist across camera restarts.
         self._camera_tracks: dict[str, list[_TrackEntry]] = {}
 
-    def _get_face_id_config(self, camera_id: str) -> FaceIdCameraConfig:
-        return self._face_id_camera_configs.get(camera_id, FaceIdCameraConfig())
+    def face_id_policy_for(self, camera_id: str) -> FaceIdCameraPolicy:
+        """Resolve per-camera face-ID enablement, cooldown, and raw-similarity floor.
+
+        Reads the live CC-synced ``CameraProfile`` when available, falling back to static
+        startup ``face_id_camera_configs`` when no profile has synced yet (or in unit tests).
+        """
+        profile = (
+            self._live_config.camera_profile_map.get_sync(camera_id)
+            if self._live_config is not None
+            else None
+        )
+        if profile is not None:
+            cooldown_s = (
+                self._identification_point_cooldown_s
+                if profile.role is CameraRole.FACE_CAPABLE
+                else self._face_id_cooldown_s
+            )
+            return FaceIdCameraPolicy(
+                enabled=profile.face_id_enabled,
+                cooldown_s=cooldown_s,
+                min_raw_similarity=profile.face_id_min_raw_similarity,
+                role=profile.role,
+            )
+        cam_cfg = self._face_id_camera_configs.get(camera_id, FaceIdCameraConfig())
+        return FaceIdCameraPolicy(
+            enabled=cam_cfg.enabled,
+            cooldown_s=self._face_id_cooldown_s,
+            min_raw_similarity=cam_cfg.min_raw_similarity,
+            role=CameraRole.SURVEILLANCE,
+        )
 
     def _resolve_calibrated_confidence(self, face: FaceResult) -> float | None:
         """Return calibrated_confidence only when the service reports ready and versions match.
@@ -202,8 +250,8 @@ class FaceIdentityStage(FrameStage):
         camera_id = ctx.frame.camera_id
         now = datetime.now(UTC)
 
-        cam_cfg = self._get_face_id_config(camera_id)
-        if not cam_cfg.enabled:
+        camera_policy = self.face_id_policy_for(camera_id)
+        if not camera_policy.enabled:
             return
         if self._face_id_client is None:
             return
@@ -253,13 +301,13 @@ class FaceIdentityStage(FrameStage):
                 last_call = self._last_face_id_by_tracklet.get(track_id)
                 if last_call is not None:
                     elapsed = (now - last_call).total_seconds()
-                    if elapsed < self._face_id_cooldown_s:
+                    if elapsed < camera_policy.cooldown_s:
                         _metrics.metrics.face_id_cooldown_skips_total.inc()
                         logger.debug(
                             "face_id_cooldown_skip",
                             track_id=track_id,
                             elapsed_s=round(elapsed, 1),
-                            cooldown_s=self._face_id_cooldown_s,
+                            cooldown_s=camera_policy.cooldown_s,
                         )
                         continue
 
@@ -338,8 +386,8 @@ class FaceIdentityStage(FrameStage):
         if self._face_id_client is None or not crops:
             return [], [], []
 
-        cam_cfg = self._get_face_id_config(camera_id)
-        if not cam_cfg.enabled:
+        camera_policy = self.face_id_policy_for(camera_id)
+        if not camera_policy.enabled:
             return [], [], []
 
         # Normalized coordinates of the padded crops actually sent, so face boxes map back to
@@ -434,7 +482,7 @@ class FaceIdentityStage(FrameStage):
                     attribution,
                     self._evidence_policy,
                     global_min_raw_similarity=self._face_id_min_raw_similarity,
-                    camera_min_raw_similarity=cam_cfg.min_raw_similarity,
+                    camera_min_raw_similarity=camera_policy.min_raw_similarity,
                 )
                 if outcome is None:
                     continue

@@ -60,11 +60,13 @@ minio:
   secure: false
 
 # Face identification via person-identification-service (ArcFace)
-# Per-camera overrides (face_id_enabled, face_id_min_raw_similarity) are fetched from
-# cognitive-companion at startup.
+# Per-camera profiles (role, face_id_enabled, face_id_min_raw_similarity, FOV, height, tilt)
+# are fetched from cognitive-companion at startup and refreshed on every CC config sync poll.
 face_id:
   url: "${PERSON_ID_SERVICE_URL}"
   cooldown_s: 5.0
+  # Shorter face-ID cooldown for cameras declared with role "face_capable" (identification points).
+  identification_point_cooldown_s: 1.0
   timeout_s: 2.0
   # Face-ID emission gate under the "legacy" evidence policy: recognized faces whose raw ArcFace
   # cosine similarity is below this floor are dropped before becoming face anchors. Resolver

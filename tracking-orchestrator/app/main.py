@@ -23,7 +23,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from structlog import get_logger
 
 from .config import SettingNotFoundError, Settings, SettingsSection, settings
-from .domain import FaceEvidencePolicy, OverlapGroup
+from .domain import CameraProfile, FaceEvidencePolicy, OverlapGroup
 from .observability.logging_config import configure_logging
 from .tracking.identity.face_template_buffer import FaceTemplateMode, FaceTemplatePolicy
 
@@ -67,7 +67,9 @@ from .routers.topology import set_topology_repo
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
 from .sampling.keyframe_sampler import SamplerConfig
+from .services.camera_profile_map import CameraProfileMap
 from .services.cc_client import CognitiveCompanionClient
+from .services.cc_config_sync import parse_camera_profile
 from .services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
 from .services.overlap_group_sync import fetch_overlap_groups
@@ -160,38 +162,59 @@ def _normalize_dsn(dsn: str) -> str:
     return dsn
 
 
-async def _fetch_cc_camera_configs(
+async def _fetch_cc_camera_profiles(
     client: CognitiveCompanionClient,
-) -> dict[str, FaceIdCameraConfig]:
-    """Fetch per-camera face-id configs from cognitive-companion's camera API.
+) -> list[CameraProfile]:
+    """Fetch initial hardware-neutral camera profiles from cognitive-companion.
 
-    CC is the primary source for per-camera face-id settings: the enabled flag and an optional
-    raw-similarity floor (``face_id_min_raw_similarity``, usually unset). A CC that predates the
-    field sends no floor, which is the same as "no per-camera floor".
+    Delegates parsing to :func:`parse_camera_profile` so startup and periodic sync share
+    one decode boundary. Unknown camera roles fail loudly with a warning and metric.
     """
+    from .observability import metrics as _m
+
     try:
         cameras: list[dict[str, Any]] = await client.get("/api/v1/cts/cameras")
     except Exception as exc:
         logger.exception("cc_camera_config_fetch_failed")
         raise RuntimeError("Failed to fetch camera configs from CC") from exc
 
-    cfgs: dict[str, FaceIdCameraConfig] = {}
-    for cam in cameras:
-        cam_id = cam.get("id")
-        enabled = cam.get("face_id_enabled")
-        if not cam_id or not isinstance(enabled, bool):
+    profiles: list[CameraProfile] = []
+    for index, cam in enumerate(cameras):
+        if not isinstance(cam, dict) or not cam.get("id"):
             logger.warning("Skipped malformed CC camera config", camera=cam)
             continue
-        min_raw_similarity = cam.get("face_id_min_raw_similarity")
-        cfgs[str(cam_id)] = FaceIdCameraConfig(
-            enabled=enabled,
-            min_raw_similarity=(
-                float(min_raw_similarity) if min_raw_similarity is not None else None
-            ),
-        )
+        profile, reject_reason = parse_camera_profile(cam, context=f"/api/v1/cts/cameras[{index}]")
+        if reject_reason is not None or profile is None:
+            reason_val = reject_reason.value if reject_reason is not None else "malformed_field"
+            logger.warning(
+                "cc_config_sync_camera_profile_rejected",
+                camera_id=str(cam.get("id")),
+                reason=reason_val,
+                raw_role=cam.get("role"),
+            )
+            _m.metrics.camera_profile_rejected_total.labels(
+                camera_id=str(cam.get("id")),
+                reason=reason_val,
+            ).inc()
+            continue
+        profiles.append(profile)
 
-    logger.info("Fetched face-id configs from CC", camera_count=len(cfgs))
-    return cfgs
+    logger.info("Fetched camera profiles from CC", camera_count=len(profiles))
+    return profiles
+
+
+async def _fetch_cc_camera_configs(
+    client: CognitiveCompanionClient,
+) -> dict[str, FaceIdCameraConfig]:
+    """Fetch per-camera face-id configs from cognitive-companion's camera API."""
+    profiles = await _fetch_cc_camera_profiles(client)
+    return {
+        p.camera_id: FaceIdCameraConfig(
+            enabled=p.face_id_enabled,
+            min_raw_similarity=p.face_id_min_raw_similarity,
+        )
+        for p in profiles
+    }
 
 
 def _build_transport_config(s: Settings) -> TransportConfig:
@@ -527,6 +550,7 @@ def _build_face_id_config(
     return FaceIdConfig(
         url=url,
         cooldown_s=fi.as_float("cooldown_s"),
+        identification_point_cooldown_s=fi.as_float("identification_point_cooldown_s"),
         timeout_s=fi.as_float("timeout_s"),
         min_raw_similarity=fi.as_float("min_raw_similarity"),
         enabled=fi.as_bool("enabled"),
@@ -597,11 +621,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     transport_config = _build_transport_config(settings)
 
-    # Per-camera face-id config: CC is the primary source.
+    # Per-camera profiles and face-id config: CC is the primary source.
     cc_url = settings.as_str("cognitive_companion.url")
     cc_api_key = settings.as_str("cognitive_companion.api_key")
     cc_client = CognitiveCompanionClient(cc_url, cc_api_key)
-    face_id_camera_configs = await _fetch_cc_camera_configs(cc_client)
+    initial_camera_profiles = await _fetch_cc_camera_profiles(cc_client)
+    face_id_camera_configs = {
+        p.camera_id: FaceIdCameraConfig(
+            enabled=p.face_id_enabled,
+            min_raw_similarity=p.face_id_min_raw_similarity,
+        )
+        for p in initial_camera_profiles
+    }
 
     declared_overlap_groups: list[OverlapGroup] = []
     try:
@@ -951,7 +982,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await _pipeline.start()
 
-    # CC config sync service (camera-to-room map + homography sync).
+    # CC config sync service (camera-to-room map + camera profiles + homography sync).
     from .services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from .services.cc_config_sync import CCConfigSyncService
     from .services.transit_zone_map import TransitZoneMap
@@ -959,6 +990,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     camera_room_map = CameraRoomMap()
     room_polygon_map = RoomPolygonMap()
     transit_zone_map = TransitZoneMap()
+    camera_profile_map = CameraProfileMap(initial_camera_profiles)
+    _pipeline.set_camera_profile_map(camera_profile_map)
     _poll_s = settings.as_float("cc_sync.poll_interval_s")
     cc_sync_service = CCConfigSyncService(
         client=cc_client,
@@ -968,12 +1001,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         transit_zone_map=transit_zone_map,
         poll_interval_s=_poll_s,
         overlap_group_sink=_pipeline.set_overlap_groups,
+        camera_profile_map=camera_profile_map,
     )
     app.state.cc_sync_service = cc_sync_service
     app.state.cc_sync_task = asyncio.create_task(cc_sync_service.run())
     app.state.camera_room_map = camera_room_map
     app.state.room_polygon_map = room_polygon_map
     app.state.transit_zone_map = transit_zone_map
+    app.state.camera_profile_map = camera_profile_map
     # Wire CameraRoomMap into the pipeline so stages read room bindings.
     _pipeline.set_camera_room_map(camera_room_map)
     _pipeline.set_room_polygon_map(room_polygon_map)

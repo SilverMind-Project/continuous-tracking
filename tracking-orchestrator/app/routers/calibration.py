@@ -106,11 +106,19 @@ class PrivacyZonesRequest(BaseModel):
     zones: list[PrivacyZoneIn]
 
 
+class StreamSizeOut(BaseModel):
+    """Observed native frame pixel dimensions reported by the frame pipeline."""
+
+    width_px: int = Field(gt=0)
+    height_px: int = Field(gt=0)
+
+
 class CalibrationStatusResponse(BaseModel):
     cameras_with_homography: int
     homography_camera_ids: list[str] = []
     cameras_with_privacy_zones: int
     last_reload_at: str | None
+    observed_stream_sizes: dict[str, StreamSizeOut] = Field(default_factory=dict)
 
 
 class CalibrationPoint(BaseModel):
@@ -547,6 +555,10 @@ async def get_status() -> CalibrationStatusResponse:
         # A camera whose zones were cleared keeps an empty entry; it has no zones.
         cameras_with_privacy_zones=sum(1 for zones in state.privacy_zones.values() if zones),
         last_reload_at=state.last_reload_at,
+        observed_stream_sizes={
+            cam_id: StreamSizeOut(width_px=dims[0], height_px=dims[1])
+            for cam_id, dims in sorted(state.observed_stream_sizes.items())
+        },
     )
 
 

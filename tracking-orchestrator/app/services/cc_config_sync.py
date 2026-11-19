@@ -14,6 +14,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, get_args
 
+from cts_contracts import CameraRole
 from structlog import get_logger
 from tenacity import (
     AsyncRetrying,
@@ -25,8 +26,10 @@ from tenacity import (
 
 from ..calibration.state import CalibrationState, PrivacyZoneConfig
 from ..calibration.validator import validate_homography
-from ..domain import OverlapGroup, PrivacyPolicy, TransitZone
+from ..domain import CameraProfile, OverlapGroup, PrivacyPolicy, TransitZone
 from ..observability import metrics as _m
+from ..observability.metrics import CameraProfileRejectReason
+from ..services.camera_profile_map import CameraProfileMap
 from ..services.camera_room_map import (
     CameraRoomBinding,
     CameraRoomMap,
@@ -104,6 +107,79 @@ def _optional_float(data: dict[str, Any], key: str, *, context: str) -> float | 
     if value is None:
         return None
     return _require_number(value, context=f"{context}.{key}")
+
+
+def _optional_bool(data: dict[str, Any], key: str, *, context: str) -> bool | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise CCConfigSyncContractError(f"{context}.{key} must be a boolean")
+    return value
+
+
+def _optional_positive_int(data: dict[str, Any], key: str, *, context: str) -> int | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise CCConfigSyncContractError(f"{context}.{key} must be a positive integer")
+    return value
+
+
+def parse_camera_profile(
+    cam: dict[str, Any], *, context: str
+) -> tuple[CameraProfile | None, CameraProfileRejectReason | None]:
+    """Decode one CC camera dict into a frozen :class:`CameraProfile`.
+
+    Missing optional fields decode to ``None``; a missing ``role`` defaults to
+    ``CameraRole.SURVEILLANCE`` and a missing ``face_id_enabled`` defaults to ``True``.
+    An explicit unknown ``role`` is rejected loudly with
+    ``CameraProfileRejectReason.UNKNOWN_ROLE`` and never silently defaults.
+    """
+    camera_id = _require_non_empty_str(cam, "id", context=context)
+
+    raw_role = cam.get("role")
+    if raw_role is None:
+        role = CameraRole.SURVEILLANCE
+    elif not isinstance(raw_role, str):
+        return None, CameraProfileRejectReason.UNKNOWN_ROLE
+    else:
+        parsed_role = CameraRole.from_wire(raw_role)
+        if parsed_role is None:
+            return None, CameraProfileRejectReason.UNKNOWN_ROLE
+        role = parsed_role
+
+    try:
+        face_id_enabled_opt = _optional_bool(cam, "face_id_enabled", context=context)
+        face_id_enabled = True if face_id_enabled_opt is None else face_id_enabled_opt
+        min_raw_similarity = _optional_float(cam, "face_id_min_raw_similarity", context=context)
+        horizontal_fov_deg = _optional_float(cam, "horizontal_fov_deg", context=context)
+        mounting_height_m = _optional_float(cam, "mounting_height_m", context=context)
+        tilt_deg = _optional_float(cam, "tilt_deg", context=context)
+        ir_capable = _optional_bool(cam, "ir_capable", context=context)
+        frame_natural_width_px = _optional_positive_int(cam, "frame_natural_width", context=context)
+        frame_natural_height_px = _optional_positive_int(
+            cam, "frame_natural_height", context=context
+        )
+    except CCConfigSyncContractError:
+        return None, CameraProfileRejectReason.MALFORMED_FIELD
+
+    return (
+        CameraProfile(
+            camera_id=camera_id,
+            role=role,
+            face_id_enabled=face_id_enabled,
+            face_id_min_raw_similarity=min_raw_similarity,
+            horizontal_fov_deg=horizontal_fov_deg,
+            mounting_height_m=mounting_height_m,
+            tilt_deg=tilt_deg,
+            ir_capable=ir_capable,
+            frame_natural_width_px=frame_natural_width_px,
+            frame_natural_height_px=frame_natural_height_px,
+        ),
+        None,
+    )
 
 
 def _optional_float_list(data: dict[str, Any], key: str, *, context: str) -> list[float] | None:
@@ -259,22 +335,32 @@ class CCConfigSyncService:
         fetch_retry_initial_s: float = 3.0,
         fetch_retry_max_s: float = 15.0,
         overlap_group_sink: Callable[[Sequence[OverlapGroup]], None] | None = None,
+        camera_profile_map: CameraProfileMap | None = None,
     ) -> None:
         self._client = client
         self._calibration_state = calibration_state
         self._camera_room_map = camera_room_map
         self._room_polygon_map = room_polygon_map
         self._transit_zone_map = transit_zone_map
+        self._camera_profile_map = (
+            camera_profile_map if camera_profile_map is not None else CameraProfileMap()
+        )
         self._poll_interval_s = poll_interval_s
         self._fetch_retry_attempts = fetch_retry_attempts
         self._fetch_retry_initial_s = fetch_retry_initial_s
         self._fetch_retry_max_s = fetch_retry_max_s
         self._stop_event = asyncio.Event()
         self._warned_privacy_zones_unavailable = False
+        self._warned_uncalibrated_id_cameras: set[str] = set()
         self._overlap_group_sink = overlap_group_sink
         self._applied_overlap_groups: tuple[OverlapGroup, ...] | None = None
         if overlap_group_sink is None:
             logger.warning("cc_config_sync_overlap_groups_not_wired")
+
+    @property
+    def camera_profile_map(self) -> CameraProfileMap:
+        """Live map of synced camera profiles."""
+        return self._camera_profile_map
 
     async def run(self) -> None:
         """Run the poll loop until stopped."""
@@ -318,6 +404,7 @@ class CCConfigSyncService:
             logger.warning("cc_config_sync_privacy_zones_unavailable")
 
         bindings: list[CameraRoomBinding] = []
+        profiles: list[CameraProfile] = []
         calibrated_camera_ids: set[str] = set()
 
         for index, cam_raw in enumerate(cameras):
@@ -326,6 +413,26 @@ class CCConfigSyncService:
             camera_id = _require_non_empty_str(cam, "id", context=context)
             if not _require_bool(cam, "enabled", context=context):
                 continue
+
+            profile, reject_reason = parse_camera_profile(cam, context=context)
+            if reject_reason is not None or profile is None:
+                reason_value = (
+                    reject_reason.value
+                    if reject_reason is not None
+                    else CameraProfileRejectReason.MALFORMED_FIELD.value
+                )
+                logger.warning(
+                    "cc_config_sync_camera_profile_rejected",
+                    camera_id=camera_id,
+                    reason=reason_value,
+                    raw_role=cam.get("role"),
+                )
+                _m.metrics.camera_profile_rejected_total.labels(
+                    camera_id=camera_id,
+                    reason=reason_value,
+                ).inc()
+                continue
+            profiles.append(profile)
 
             # Camera→room binding.
             room_id = cam.get("room_id")
@@ -406,6 +513,24 @@ class CCConfigSyncService:
         if removed:
             logger.info("cc_config_sync_homography_removed", camera_ids=removed)
 
+        active_profile_ids = {p.camera_id for p in profiles}
+        self._warned_uncalibrated_id_cameras &= active_profile_ids
+        for profile in profiles:
+            if (
+                profile.role is CameraRole.FACE_CAPABLE
+                and profile.camera_id not in calibrated_camera_ids
+            ):
+                if profile.camera_id not in self._warned_uncalibrated_id_cameras:
+                    logger.warning(
+                        "identification_camera_uncalibrated",
+                        camera_id=profile.camera_id,
+                        role=profile.role.value,
+                    )
+                    self._warned_uncalibrated_id_cameras.add(profile.camera_id)
+            else:
+                self._warned_uncalibrated_id_cameras.discard(profile.camera_id)
+
+        await self._camera_profile_map.set_all(profiles)
         await self._camera_room_map.set_all(bindings)
         logger.debug(
             "cc_config_sync_applied",
