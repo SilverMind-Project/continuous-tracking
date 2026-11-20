@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from rf_ingress.adapters.base import AdapterDeps, AnyAdapter
+from rf_ingress.adapters.device_ranging_mqtt import build_device_ranging_mqtt_adapter
 from rf_ingress.adapters.simulator import build_simulator_adapter
 from rf_ingress.config import AdapterConfig
 
@@ -55,7 +56,8 @@ class AdapterRegistry:
 
 
 def build_default_registry() -> AdapterRegistry:
-    """Create the default registry with the hardware-free built-in adapters."""
+    """Create the default registry with the built-in rf-ingress adapters."""
     registry = AdapterRegistry()
     registry.register("simulator", build_simulator_adapter)
+    registry.register("device_ranging_mqtt", build_device_ranging_mqtt_adapter)
     return registry

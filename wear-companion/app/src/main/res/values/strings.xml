@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SilverMind Beacon</string>
+    <string name="tile_label">Beacon Status</string>
+    <string name="notification_channel_name">Beacon Service</string>
+    <string name="notification_title">SilverMind Beacon active</string>
+    <string name="notification_text">Advertising while worn on wrist</string>
+    <string name="status_unpaired">Not paired</string>
+    <string name="status_advertising">Advertising</string>
+    <string name="status_idle_not_worn">Idle (not worn)</string>
+    <string name="status_bluetooth_off">Bluetooth off</string>
+    <string name="reset_identifier">Reset ID</string>
+</resources>

@@ -29,6 +29,9 @@ RESOLVE_ROOTS: tuple[str, ...] = (
     "tracking-orchestrator/app",
     "rf-ingress",
     "rf-ingress/rf_ingress",
+    "wear-companion",
+    "wear-companion/core",
+    "wear-companion/app",
     "rtsp-ingress",
 )
 
@@ -61,6 +64,9 @@ EXTENSIONS = (
     ".json",
     ".sh",
     ".go",
+    ".kt",
+    ".kts",
+    ".xml",
     ".proto",
     ".pbtxt",
     ".txt",

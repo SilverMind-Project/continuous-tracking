@@ -34,6 +34,9 @@ rf-ingress/.pytest_cache/
 rf-ingress/*.egg-info/
 rf-ingress/recordings/
 *.replay.jsonl
+wear-companion/.gradle/
+wear-companion/**/build/
+wear-companion/local.properties
 # Jetson-generated TensorRT engines are device and TensorRT-version specific.
 triton-models-jetson/**/1/*.plan
 triton-models-jetson/**/1/*.engine

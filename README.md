@@ -27,7 +27,8 @@ Results are streamed via Redis Streams (protobuf) to [Cognitive Companion](../co
 | --- | --- | --- |
 | `go2rtc` | 1984 | RTSP proxy sidecar |
 | `rtsp-ingress` | 8090 | Go RTSP ingest: camera registration, motion gating, MinIO upload |
-| `rf-ingress` | 8095 | Python hardware-neutral RF ingress (opt-in `--profile wearables`): adapter registry, multilateration solver, `wearable.fixes` protobuf publisher |
+| `rf-ingress` | 8095 | Python hardware-neutral RF ingress (opt-in `--profile wearables`): adapter registry (`simulator`, `device_ranging_mqtt`), multilateration solver, `wearable.fixes` protobuf publisher |
+| `wear-companion` | watch app | Kotlin Wear OS companion (`:core` pure JVM + `:app` `bleOnly`/`dualMode` flavors): static BLE iBeacon + opt-in motion-duty-cycled UWB burst controller |
 | `tracking-orchestrator` | 8500 | Python ML pipeline: detection, tracking, identity, signals |
 | `triton` | 8701 | Model serving for YOLO, SOLIDER, RTMPose, and the five Buffalo_L face graphs |
 

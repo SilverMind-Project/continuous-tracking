@@ -1,11 +1,12 @@
 ---
-paths: ["**/tracking-orchestrator/**/*.py", "**/rf-ingress/**/*.py", "**/rtsp-ingress/**/*.go"]
+paths: ["**/tracking-orchestrator/**/*.py", "**/rf-ingress/**/*.py", "**/rtsp-ingress/**/*.go", "**/wear-companion/**/*.kt"]
 ---
 
 # Time
 
 - Timestamps are timezone-aware UTC: `datetime.now(UTC)` (`from datetime import UTC`), Go
-  `time.Now().UTC()`. A naive datetime breaks TimescaleDB `timestamptz` columns.
+  `time.Now().UTC()`, Kotlin monotonic `elapsedRealtimeNanos` anchored to boot UTC Unix nanoseconds.
+  A naive datetime breaks TimescaleDB `timestamptz` columns.
 - Pipeline code uses the domain time: `ctx.capture_time` for the physical observation,
   `ctx.event_time` for processing; `datetime.now(UTC)` only for true wall-clock side effects
   (for example `emitted_at`).

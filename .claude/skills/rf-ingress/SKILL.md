@@ -28,8 +28,9 @@ Hardware-neutral Python ingestion service (`continuous-tracking/rf-ingress/`, po
 | `rf_ingress/domain.py` | Frozen dataclasses (`RfNodeGeometry`, `RangeMeasurement`, `PositionReport`, `RoomReport`, `RangeEpoch`, `SolveResult`, `EmittedFix`, `SiteConfigSnapshot`); zero internal imports |
 | `rf_ingress/config.py` | Pydantic v2 settings models; YAML + `${ENV}` interpolation (defaulted `${VAR:-x}` disallowed) |
 | `rf_ingress/adapters/base.py` | `RangeAdapter`, `PositionAdapter`, `RoomAdapter` protocols, `AdapterDeps`, `AdapterHealth` |
-| `rf_ingress/adapters/registry.py` | `AdapterRegistry` mapping `kind` to factory; unknown `kind` or `payload_profile` fails startup |
+| `rf_ingress/adapters/registry.py` | `AdapterRegistry` mapping `kind` to factory (`simulator`, `device_ranging_mqtt`); unknown `kind` or `payload_profile` fails startup |
 | `rf_ingress/adapters/simulator.py` | Seeded deterministic simulator (all 3 protocols, UWB/CS/BLE-RSSI technology classes, burst batching, NLOS/body shadow) and JSONL replay |
+| `rf_ingress/adapters/device_ranging_mqtt.py` | MQTT `RangeAdapter` (`payload_profile: device_ranging_v1`) unpacking micro-batched UWB / BLE Channel Sounding epochs from `rf/devices/+/ranges` with `sent_at` for `BurstClockOffsetTracker`, `device_local` azimuth telemetry, and injectable `MqttMessageStream` (`AiomqttMessageStream` / `InMemoryMqttMessageStream`) |
 | `rf_ingress/solver/epoch.py` | `EpochBuilder` and `room_fallback_from_epoch` |
 | `rf_ingress/solver/multilateration.py` | Pure numpy/scipy `MultilaterationSolver` (3D when >= 4 nodes with vertical spread >= 0.5 m, else 2D at `assumed_tag_height_m=1.0` with `tag_height_sigma_m=0.3` vertical-Jacobian variance inflation; leave-one-out chi-square 99% outlier drop; `cov = inv(J.T W J) * max(1, chi2_red)`) |
 | `rf_ingress/solver/frame_transform.py` | 2D similarity transform (`fit_similarity_transform`) for vendor-frame `PositionReport`s |

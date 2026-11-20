@@ -11,7 +11,8 @@ Guidance for Claude Code agents working in this repository.
 | `.claude/skills/cts-signals/SKILL.md` | Dementia signals, detectors, baselines, robust z-scores, hysteresis, severity, protobuf/CC kind plumbing, and signal tests |
 | `.claude/skills/cts-spatial-fusion/SKILL.md` | Floor-plane localization, homography Jacobian, measurement covariance, cross-camera fusion, Kalman/ZUPT, primary camera selection, and posture geometry weighting |
 | `.claude/skills/cts-identity-governance/SKILL.md` | PH identity evidence, the identity resolver, authority order, ReID gallery lifecycle, revisions, operator corrections, external identity evidence, and identity provenance |
-| `.claude/skills/rf-ingress/SKILL.md` | `rf-ingress/` adapters, conformance kit, multilateration solver, clock offset tracking, replay CLI, and wearable stream publishing |
+| `.claude/skills/rf-ingress/SKILL.md` | `rf-ingress/` adapters (`simulator`, `device_ranging_mqtt`), conformance kit, multilateration solver, clock offset tracking, replay CLI, and wearable stream publishing |
+| `.claude/skills/wear-companion/SKILL.md` | `wear-companion/` Wear OS companion app (`:core` pure Kotlin FSMs/batcher, `:app` `bleOnly`/`dualMode` flavors, zero-network manifest invariant) |
 | `/home/sriram/code/nanai/.claude/skills/nanai-workspace/SKILL.md` | Any change spanning more than one repository: repo map, gates, proto two-repo rule, milestone workflow |
 
 `engineering-standards` lists its rules as one-liners and keeps the detail in `reference/` beside
@@ -51,6 +52,7 @@ settings coupling rule, and the CTS-to-CC wire contract. The CC-side companion d
 ├── rtsp-ingress/                  Go RTSP ingest service (cmd/server, internal/{config,go2rtc,imageops,
 │                                  media,metrics,motion,poll,reconciler,supervisor})
 ├── rf-ingress/                    Python hardware-neutral RF ingress (rf_ingress/{adapters,solver,clock,site_config,publish,pipeline,health,replay,proto}, config/scenarios/, tests/conformance/)
+├── wear-companion/                Kotlin Wear OS companion (:core pure JVM FSMs/batcher, :app bleOnly + dualMode flavors)
 ├── tracking-orchestrator/         Python ML orchestration service
 │   ├── app/domain/                Frozen dataclasses (Detection, WorldObservation, PersonHypothesis, …)
 │   ├── app/inference/             Triton gRPC client (delegates to triton_shared) + ReID/Pose wrappers
@@ -132,7 +134,7 @@ Run before every PR. CI runs the same checks.
 
 ```bash
 make check        # Python: ruff check + ruff format --check + mypy + import-linter + pytest (fast local gate)
-make check-all    # Python + Go (golangci-lint + go test -race + go build) + buf lint
+make check-all    # Python + Go (golangci-lint + go test -race + go build) + buf lint + wear-check
 make ci           # Authoritative gate: check-all + every integration-marked test (requires Docker)
 make install-hooks  # Install the git pre-commit hooks (once per clone; includes the em-dash check)
 make check-md       # Markdown has no em-dashes (also in make check and CI)

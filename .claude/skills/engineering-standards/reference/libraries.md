@@ -40,8 +40,21 @@ Do not introduce `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a *
 | `structlog` | Structured JSON logging |
 | `prometheus-client` | Central metrics exposition |
 | `pyyaml` | Settings and simulator scenario loading |
+| `aiomqtt` | Async MQTT client for `device_ranging_mqtt` (`device_ranging.v1` wearable range batches) |
 | `hypothesis` (dev) | Property tests for noise-free solver accuracy |
 | `testcontainers` (dev) | Ephemeral `redis:7-alpine` container for `make rf-test-integration` |
+
+## Kotlin / Gradle (`wear-companion/gradle/libs.versions.toml`)
+
+| Library | Role |
+| --- | --- |
+| `kotlinx-coroutines-core` | Async burst lifecycle and engine flows in `:core` and `:app` |
+| `kotlinx-serialization-json` | Strict `device_ranging.v1` JSON micro-batch encoding in `EpochBatchPublisher` |
+| `junit-jupiter` (test) | JUnit 5 unit tests in `:core` (pure JVM, no Android SDK required) |
+| `ktlint` + `detekt` | Formatting and static analysis (`make wear-lint`, `make wear-check`) |
+| `androidx.wear.tiles` + `androidx.wear.protolayout` | Wear OS companion status tile (`:app`) |
+| `play-services-nearby` / `androidx.core:core-uwb` | FiRa 2.0 UWB controller engines (`dualMode` flavor only) |
+| `org.eclipse.paho.client.mqttv3` | LAN-only MQTT batch transport (`dualMode` flavor only) |
 
 ## Go (`rtsp-ingress/go.mod`)
 

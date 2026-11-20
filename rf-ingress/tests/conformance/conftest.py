@@ -7,6 +7,7 @@ Every adapter added to rf-ingress (present and future) adds one or more
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -22,6 +23,10 @@ from cts_contracts.wearables import (
 )
 
 from rf_ingress.adapters.base import AdapterDeps, AnyAdapter
+from rf_ingress.adapters.device_ranging_mqtt import (
+    DeviceRangingMqttAdapter,
+    InMemoryMqttMessageStream,
+)
 from rf_ingress.adapters.simulator import (
     SimulatorAdapter,
     build_site_config_from_scenario,
@@ -34,6 +39,7 @@ from rf_ingress.domain import (
     SiteConfigSnapshot,
     SiteDevice,
 )
+from rf_ingress.publish import datetime_to_unix_ns
 from rf_ingress.replay import serialize_report_jsonl
 from rf_ingress.site_config import InMemorySiteConfigProvider
 
@@ -190,6 +196,118 @@ def _build_simulator_replay_with_malformed_and_unregistered_case() -> AdapterCon
     )
 
 
+def _build_device_ranging_mqtt_case() -> AdapterConformanceContext:
+    t0 = datetime(2026, 11, 19, 12, 0, 0, tzinfo=UTC)
+    snap = SiteConfigSnapshot(
+        floor_plan_id="household:1",
+        nodes=(
+            RfNodeGeometry(
+                anchor_id="living-room-uwb-1",
+                x_m=0.2,
+                y_m=0.2,
+                z_m=2.4,
+                adapter_id="watch-uwb-1",
+                node_role=RfNodeRole.RANGING_ANCHOR,
+                technology=RangingTechnology.UWB,
+                room_id="1",
+                uwb_address_hex="00:01",
+            ),
+        ),
+        devices=(
+            SiteDevice(
+                tag_id="watch-pw5-1",
+                adapter_id="watch-uwb-1",
+                hardware_key="watch-pw5-1",
+                device_kind=DeviceKind.WATCH,
+                is_active=True,
+            ),
+        ),
+        bindings=(
+            SiteBinding(
+                tag_id="watch-pw5-1",
+                member_id="caregiver-1",
+                valid_from=t0 - timedelta(hours=1),
+                valid_to=None,
+            ),
+        ),
+        version="conf:uwb:v1",
+    )
+    provider = InMemorySiteConfigProvider(snap)
+    valid_batch = json.dumps(
+        {
+            "schema": "device_ranging.v1",
+            "tag_id": "watch-pw5-1",
+            "sent_at_unix_ns": datetime_to_unix_ns(t0 + timedelta(seconds=3)),
+            "wear_state": "on_body",
+            "motion_state": "moving",
+            "battery_fraction": 0.78,
+            "epochs": [
+                {
+                    "epoch_seq": 1,
+                    "measured_at_unix_ns": datetime_to_unix_ns(t0),
+                    "ranges": [
+                        {
+                            "anchor_id": "living-room-uwb-1",
+                            "uwb_address_hex": "00:01",
+                            "distance_m": 2.41,
+                            "azimuth_deg": -14.2,
+                            "elevation_deg": 8.5,
+                            "los_confidence": 0.94,
+                        }
+                    ],
+                },
+                {
+                    "epoch_seq": 2,
+                    "measured_at_unix_ns": datetime_to_unix_ns(t0 + timedelta(seconds=1)),
+                    "ranges": [
+                        {
+                            "anchor_id": "living-room-uwb-1",
+                            "uwb_address_hex": "00:01",
+                            "distance_m": 2.10,
+                        }
+                    ],
+                },
+            ],
+        }
+    ).encode("utf-8")
+    unregistered_batch = json.dumps(
+        {
+            "schema": "device_ranging.v1",
+            "tag_id": "watch-stranger",
+            "sent_at_unix_ns": datetime_to_unix_ns(t0 + timedelta(seconds=4)),
+            "wear_state": "on_body",
+            "motion_state": "moving",
+            "epochs": [
+                {
+                    "epoch_seq": 1,
+                    "measured_at_unix_ns": datetime_to_unix_ns(t0 + timedelta(seconds=2)),
+                    "ranges": [{"anchor_id": "living-room-uwb-1", "distance_m": 1.8}],
+                }
+            ],
+        }
+    ).encode("utf-8")
+    stream = InMemoryMqttMessageStream(
+        [
+            ("rf/devices/watch-pw5-1/ranges", valid_batch),
+            ("rf/devices/watch-pw5-1/ranges", b"{not valid json"),
+            ("rf/devices/watch-pw5-1/ranges", b'{"schema":"wrong.v0"}'),
+            ("rf/devices/watch-stranger/ranges", unregistered_batch),
+        ]
+    )
+    adapter = DeviceRangingMqttAdapter(
+        adapter_id="watch-uwb-1",
+        deps=AdapterDeps(site_config=provider),
+        stream=stream,
+    )
+    return AdapterConformanceContext(
+        adapter=adapter,
+        site_config=provider,
+        expected_registered_tags=frozenset({"watch-pw5-1"}),
+        expected_unregistered_tags=frozenset({"watch-stranger"}),
+        expects_malformed_drop=True,
+    )
+
+
 CONFORMANCE_CASES: tuple[AdapterConformanceCase, ...] = (
     AdapterConformanceCase(name="simulator-range", build=_build_simulator_range_case),
     AdapterConformanceCase(
@@ -199,6 +317,10 @@ CONFORMANCE_CASES: tuple[AdapterConformanceCase, ...] = (
     AdapterConformanceCase(
         name="simulator-replay-malformed-and-unregistered",
         build=_build_simulator_replay_with_malformed_and_unregistered_case,
+    ),
+    AdapterConformanceCase(
+        name="device-ranging-mqtt-v1",
+        build=_build_device_ranging_mqtt_case,
     ),
 )
 
