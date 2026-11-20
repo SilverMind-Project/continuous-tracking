@@ -20,10 +20,11 @@ from typing import Any, cast
 from fastapi import FastAPI
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from redis import asyncio as aioredis
 from structlog import get_logger
 
 from .config import SettingNotFoundError, Settings, SettingsSection, settings
-from .domain import CameraProfile, FaceEvidencePolicy, OverlapGroup
+from .domain import CameraProfile, FaceEvidencePolicy, OverlapGroup, WearableMode
 from .observability.logging_config import configure_logging
 from .tracking.identity.face_template_buffer import FaceTemplateMode, FaceTemplatePolicy
 
@@ -66,14 +67,22 @@ from .routers.topology import router as topology_router
 from .routers.topology import set_topology_repo
 from .routers.trajectory import router as trajectory_router
 from .routers.trajectory import set_context as set_trajectory_context
+from .routers.wearables import router as wearables_router
 from .sampling.keyframe_sampler import SamplerConfig
 from .services.camera_profile_map import CameraProfileMap
 from .services.cc_client import CognitiveCompanionClient
 from .services.cc_config_sync import parse_camera_profile
+from .services.cc_identity_assertion_subscriber import (
+    CCIdentityAssertionSubscriber,
+    IdentityAssertionCache,
+)
 from .services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
 from .services.overlap_group_sync import fetch_overlap_groups
 from .services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
+from .services.wearable_fix_buffer import WearableFixBuffer
+from .services.wearable_fix_subscriber import WearableFixSubscriber
+from .services.wearable_site_config_map import WearableSiteConfigMap
 from .storage.migrations import MigrationRunner
 from .storage.postgres.appearance_repo import PostgresDailyAppearanceRepo
 from .storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
@@ -86,9 +95,15 @@ from .storage.postgres.ph_repo import PostgresPHRepository, PostgresWorldObserva
 from .storage.postgres.settings_repo import PostgresSettingsRepository
 from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
+from .storage.postgres.wearable_association_repo import PostgresWearableAssociationRepository
+from .storage.wearable_associations import (
+    InMemoryWearableAssociationRepository,
+    WearableAssociationRepository,
+)
 from .tracking.identity.candidate_eligibility import CandidatePolicy
 from .tracking.identity_resolver import FaceQualityMode, ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
+from .tracking.world.wearable_config import WearableConfig
 from .trajectory.appearance_profile import AppearanceSettings
 from .trajectory.dementia_signals import SignalConfig
 from .trajectory.depth_posture_strategy import DepthPostureStrategy
@@ -583,6 +598,46 @@ def _build_identity_policy_snapshot(config: PipelineConfig) -> IdentityPolicySna
         cc_assertion_mode=config.resolver.cc_assertion_mode,
         expected_arcface_model_version=config.face_id.expected_arcface_model_version or None,
         expected_quality_version=config.face_id.expected_quality_version,
+        wearable_mode=config.wearable.mode,
+    )
+
+
+def _build_wearable_config(s: Settings) -> WearableConfig:
+    """Build WearableConfig from required settings.yaml keys."""
+    w = s.section("wearable")
+    return WearableConfig(
+        mode=cast(WearableMode, w.as_str("mode")),
+        window_s=w.as_float("window_s"),
+        min_fixes=w.as_int("min_fixes"),
+        min_window_llr=w.as_float("min_window_llr"),
+        min_margin_llr=w.as_float("min_margin_llr"),
+        gate_chi2=w.as_float("gate_chi2"),
+        gate_penalty_llr=w.as_float("gate_penalty_llr"),
+        timing_sigma_s=w.as_float("timing_sigma_s"),
+        bias_floor_m=w.as_float("bias_floor_m"),
+        max_fix_age_s=w.as_float("max_fix_age_s"),
+        buffer_max_age_s=w.as_float("buffer_max_age_s"),
+        max_extrapolation_s=w.as_float("max_extrapolation_s"),
+        max_fix_buffer_per_tag=w.as_int("max_fix_buffer_per_tag"),
+        trajectory_max_sigma_m=w.as_float("trajectory_max_sigma_m"),
+        room_min_mass=w.as_float("room_min_mass"),
+        room_polygon_min_mass=w.as_float("room_polygon_min_mass"),
+        room_match_eps=w.as_float("room_match_eps"),
+        parked_after_s=w.as_float("parked_after_s"),
+        tag_disagreement_window_s=w.as_float("tag_disagreement_window_s"),
+        trajectory_attest_min_duration_s=w.as_float("trajectory_attest_min_duration_s"),
+        trajectory_attest_min_fixes=w.as_int("trajectory_attest_min_fixes"),
+        room_attest_min_duration_s=w.as_float("room_attest_min_duration_s"),
+        room_entry_window_s=w.as_float("room_entry_window_s"),
+        attest_min_llr=w.as_float("attest_min_llr"),
+        weight_multiplier=w.as_float("weight_multiplier"),
+        p_max=w.as_float("p_max"),
+        p_max_room=w.as_float("p_max_room"),
+        llr_mid=w.as_float("llr_mid"),
+        llr_scale=w.as_float("llr_scale"),
+        duplicate_guard_min_probability=w.as_float("duplicate_guard_min_probability"),
+        swap_conflict_count=w.as_int("swap_conflict_count"),
+        swap_conflict_window_s=w.as_float("swap_conflict_window_s"),
     )
 
 
@@ -646,12 +701,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Build config objects from settings (env-interpolated YAML).
     resolver_config = _build_resolver_config(settings)
     world_tracker_config = _build_world_tracker_config(settings)
+    wearable_config = _build_wearable_config(settings)
     sampler_config = _build_sampler_config(settings)
 
     config = PipelineConfig(
         transport=transport_config,
         resolver=resolver_config,
         world_tracker=world_tracker_config,
+        wearable=wearable_config,
         sampler=sampler_config,
         signals=_build_signal_config(settings),
         signals_enabled=settings.as_bool("signal.enabled"),
@@ -939,6 +996,58 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         copresence_repo_obj = InMemoryCoPresenceRepository()
     set_topology_repo(topology_repo_obj)
 
+    # CC identity assertion cache and subscriber constructed before the pipeline
+    # so WorldTrackingStage receives ExternalIdentityEvidenceSource via constructor
+    # injection rather than post-init attribute mutation.
+    cc_assertion_cache: IdentityAssertionCache | None = None
+    cc_assertion_subscriber: CCIdentityAssertionSubscriber | None = None
+    redis_url = settings.as_str("redis.url")
+    if redis_url:
+        try:
+            cc_assertion_cache = IdentityAssertionCache()
+            # Use a dedicated Redis client for the subscriber so it does not
+            # share the pipeline's pub/sub connection.
+            _cc_redis = aioredis.from_url(redis_url, decode_responses=False)
+            cc_assertion_subscriber = CCIdentityAssertionSubscriber(
+                redis_client=_cc_redis,
+                cache=cc_assertion_cache,
+            )
+        except Exception:
+            logger.exception("cc_assertion_subscriber_init_failed")
+            cc_assertion_cache = None
+            cc_assertion_subscriber = None
+
+    wearable_site_config_map = WearableSiteConfigMap()
+    wearable_association_repo: WearableAssociationRepository = (
+        PostgresWearableAssociationRepository(_pool)
+        if _pool is not None
+        else InMemoryWearableAssociationRepository()
+    )
+    app.state.wearable_association_repo = wearable_association_repo
+
+    wearable_fix_buffer: WearableFixBuffer | None = None
+    wearable_fix_subscriber: WearableFixSubscriber | None = None
+    if wearable_config.mode != "off":
+        wearable_fix_buffer = WearableFixBuffer(
+            max_age_s=wearable_config.buffer_max_age_s,
+            max_per_tag=wearable_config.max_fix_buffer_per_tag,
+        )
+        if redis_url:
+            try:
+                _wearable_redis = aioredis.from_url(redis_url, decode_responses=False)
+                wearable_fix_subscriber = WearableFixSubscriber(
+                    redis_client=_wearable_redis,
+                    buffer=wearable_fix_buffer,
+                    site_config_map=wearable_site_config_map,
+                    stream=transport_config.wearable_fixes_stream,
+                    group=transport_config.consumer_group,
+                    consumer=transport_config.consumer_name,
+                    max_fix_age_s=wearable_config.max_fix_age_s,
+                )
+            except Exception:
+                logger.exception("wearable_fix_subscriber_init_failed")
+                wearable_fix_subscriber = None
+
     deps = PipelineDependencies(
         detector=detector,
         gallery_repo=gallery_repo,
@@ -963,6 +1072,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         face_stats_repo=face_stats_repo,
         identity_provenance_repo=identity_decision_repo,
         identity_correction_service=correction_service,
+        external_evidence=cc_assertion_cache,
+        wearable_fix_source=wearable_fix_buffer,
+        wearable_association_repo=wearable_association_repo,
     )
     await _pipeline.initialize(deps)
 
@@ -988,13 +1100,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from .services.camera_room_map import CameraRoomMap, RoomPolygonMap
     from .services.cc_config_sync import CCConfigSyncService
     from .services.transit_zone_map import TransitZoneMap
-    from .services.wearable_site_config_map import WearableSiteConfigMap
 
     camera_room_map = CameraRoomMap()
     room_polygon_map = RoomPolygonMap()
     transit_zone_map = TransitZoneMap()
     camera_profile_map = CameraProfileMap(initial_camera_profiles)
-    wearable_site_config_map = WearableSiteConfigMap()
     _pipeline.set_camera_profile_map(camera_profile_map)
     _pipeline.set_wearable_site_config_map(wearable_site_config_map)
     _poll_s = settings.as_float("cc_sync.poll_interval_s")
@@ -1038,40 +1148,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         room_transition_publisher=_room_transition_pub,
     )
 
-    # CC identity assertion subscriber (bidirectional identity flow).
-    cc_assertion_cache: object | None = None
-    cc_assertion_subscriber: object | None = None
-    redis_url = settings.as_str("redis.url")
-    if redis_url:
+    # Start CC identity assertion subscriber (cache was already injected into
+    # WorldTrackingStage via PipelineDependencies.external_evidence).
+    if cc_assertion_subscriber is not None:
         try:
-            from .services.cc_identity_assertion_subscriber import (
-                CCIdentityAssertionSubscriber,
-                IdentityAssertionCache,
-            )
-
-            cc_assertion_cache = IdentityAssertionCache()
-            # Use a dedicated Redis client for the subscriber so it does not
-            # share the pipeline's pub/sub connection.
-            import redis.asyncio as aioredis
-
-            _cc_redis = aioredis.from_url(redis_url, decode_responses=False)
-            cc_assertion_subscriber = CCIdentityAssertionSubscriber(
-                redis_client=_cc_redis,
-                cache=cc_assertion_cache,
-            )
             await cc_assertion_subscriber.start()
             logger.info("cc_assertion_subscriber_started", stream="cc.identity_assertions")
         except Exception:
-            logger.exception("cc_assertion_subscriber_init_failed")
-            cc_assertion_cache = None
+            logger.exception("cc_assertion_subscriber_start_failed")
             cc_assertion_subscriber = None
 
-    # Inject assertion cache into the WorldTrackingStage for CC identity flow.
-    if cc_assertion_cache is not None and _pipeline._stage_runner is not None:
-        for stage in _pipeline._stage_runner._stages:
-            if stage.name == "world_tracking":
-                stage._assertion_cache = cc_assertion_cache  # type: ignore[attr-defined]
-                break
+    # Start wearable fix subscriber only when wearable mode is shadow or enabled.
+    if wearable_fix_subscriber is not None:
+        try:
+            await wearable_fix_subscriber.start()
+        except Exception:
+            logger.exception("wearable_fix_subscriber_start_failed")
+            wearable_fix_subscriber = None
 
     # Keyframe revalidator background task.
     if bbox_repo is not None:
@@ -1117,6 +1210,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             identity_resolver=_pipeline._identity_resolver if _pipeline is not None else None,
             face_templates=_pipeline.face_templates if _pipeline is not None else None,
             wearable_site_config=wearable_site_config_map,
+            wearable_fix_buffer=wearable_fix_buffer,
+            wearable_association_repo=wearable_association_repo,
             interval_s=60.0,
         )
         await roster_sync_service.start()
@@ -1143,6 +1238,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         camera_room_map=camera_room_map,
         overlap_groups=_pipeline,
         gallery_repo=gallery_repo,
+        wearable_associations=_pipeline,
     )
 
     if signal_repo is not None and trajectory_repo is not None and keyframe_repo is not None:
@@ -1192,7 +1288,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Stop CC assertion subscriber.
     if cc_assertion_subscriber is not None:
-        await cc_assertion_subscriber.stop()  # type: ignore[attr-defined]
+        await cc_assertion_subscriber.stop()
+
+    # Stop wearable fix subscriber.
+    if wearable_fix_subscriber is not None:
+        await wearable_fix_subscriber.stop()
 
     # Disconnect room transition publisher.
     if "_room_transition_pub" in dir():
@@ -1228,6 +1328,7 @@ def create_app() -> FastAPI:
     )
     # Set by the lifespan once the pipeline is built; the route answers 503 until then.
     app.state.identity_readiness_service = None
+    app.state.wearable_association_repo = None
     # Internal calibration endpoints consumed by the CC BFF.
     # Reserved for future use: separate :8510 listener
     # they live on the same app under /internal/ to keep the routing simple.
@@ -1237,6 +1338,7 @@ def create_app() -> FastAPI:
     app.include_router(gallery_router)
     app.include_router(reid_review_router)
     app.include_router(readiness_router)
+    app.include_router(wearables_router)
     app.include_router(live_router)
     app.include_router(ph_router)
     app.include_router(trajectory_router)

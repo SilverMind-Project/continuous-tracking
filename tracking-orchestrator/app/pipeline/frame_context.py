@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         ObservationGeometry,
         OrientationBin,
         PostureType,
+        WearableAssociationTransition,
         WorldFrameSnapshot,
     )
     from ..inference.evidence import (
@@ -133,6 +134,11 @@ class FrameContext:
     active_ph_ids: set[str] = field(default_factory=set)
     # Producer: WorldTrackingStage. Consumers: ClosePHStage, TrajectoryStage.
     revived_ph_ids: frozenset[str] = frozenset()
+    # Producer: WorldTrackingStage (primary context only).
+    # Consumer: WearableAssociationPersistStage.
+    wearable_association_transitions: list[WearableAssociationTransition] = field(
+        default_factory=list
+    )
 
     # --- Stage: publish ---
     identities: dict[str, tuple[str, float]] = field(default_factory=dict)

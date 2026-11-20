@@ -21,9 +21,29 @@ from __future__ import annotations
 import pytest
 
 from app.domain import PosteriorDist
-from app.tracking.identity.posterior import combine_posteriors
+from app.tracking.identity.channels import ChannelLikelihood
+from app.tracking.identity.posterior import combine_channels
 
 _TOL = 1e-9
+
+
+def combine_posteriors(
+    prior: PosteriorDist,
+    face: PosteriorDist,
+    reid: PosteriorDist,
+    height: PosteriorDist | None = None,
+    *,
+    face_weight_multiplier: float = 3.0,
+    height_weight_multiplier: float = 1.5,
+) -> PosteriorDist:
+    return combine_channels(
+        prior,
+        (
+            ChannelLikelihood("face", face, face_weight_multiplier),
+            ChannelLikelihood("gallery", reid, 1.0),
+            ChannelLikelihood("height", height or PosteriorDist({}), height_weight_multiplier),
+        ),
+    )
 
 
 def _check_valid(posterior: PosteriorDist) -> None:

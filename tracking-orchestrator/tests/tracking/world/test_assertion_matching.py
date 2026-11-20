@@ -1,7 +1,7 @@
-"""Tests for match_assertions_to_face_anchors (identity-continuity M09).
+"""Tests for match_assertions_to_face_anchors.
 
-Covers the spatial/temporal/confidence matching of CC identity assertions
-to WorldObservations, producing FaceAnchors for the identity resolver.
+Covers the spatial/temporal/confidence matching of typed ExternalIdentityAssertion
+records to WorldObservations, producing FaceAnchors for the identity resolver.
 """
 
 from __future__ import annotations
@@ -9,7 +9,13 @@ from __future__ import annotations
 import math
 from datetime import UTC, datetime, timedelta
 
-from app.domain import BoundingBox, FloorPoint, WorldObservation
+from app.domain import (
+    AnchorOrigin,
+    BoundingBox,
+    ExternalIdentityAssertion,
+    FloorPoint,
+    WorldObservation,
+)
 from app.tracking.world.assertion_matching import match_assertions_to_face_anchors
 
 
@@ -31,23 +37,43 @@ def _make_observation(
     )
 
 
-# ---------------------------------------------------------------------------
-# Floor-path regression gate (behavior unchanged for native-shaped assertions)
-# ---------------------------------------------------------------------------
+def _assertion(
+    *,
+    person_id: str,
+    confidence: float | None,
+    captured_at: datetime,
+    camera_id: str = "",
+    floor_x_m: float | None = None,
+    floor_y_m: float | None = None,
+    room_name: str | None = None,
+    yaw_deg: float | None = None,
+    quality: float | None = None,
+) -> ExternalIdentityAssertion:
+    return ExternalIdentityAssertion(
+        person_id=person_id,
+        calibrated_confidence=confidence,
+        camera_id=camera_id,
+        captured_at=captured_at,
+        floor_x_m=floor_x_m,
+        floor_y_m=floor_y_m,
+        room_name=room_name,
+        yaw_deg=yaw_deg,
+        quality=quality,
+    )
 
 
-def test_matching_assertion_produces_face_anchor():
+def test_matching_assertion_produces_face_anchor() -> None:
     """A matching assertion (within time, distance, confidence) becomes a FaceAnchor."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "alice",
-            "confidence": 0.85,
-            "camera_id": "cam-1",
-            "captured_at": now,
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-        }
+        _assertion(
+            person_id="alice",
+            confidence=0.85,
+            camera_id="cam-1",
+            captured_at=now,
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+        )
     ]
     observations = [_make_observation("cam-1", 1.0, 2.0)]
 
@@ -56,21 +82,21 @@ def test_matching_assertion_produces_face_anchor():
     assert anchors[0].person_id == "alice"
     assert anchors[0].detection_id == "det-1"
     assert anchors[0].match_score == 0.85
-    assert anchors[0].origin == "cc_assertion"
+    assert anchors[0].origin == AnchorOrigin.CC_ASSERTION
 
 
-def test_far_away_assertion_is_ignored():
+def test_far_away_assertion_is_ignored() -> None:
     """An assertion too far from the observation is not matched."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "bob",
-            "confidence": 0.9,
-            "camera_id": "cam-1",
-            "captured_at": now,
-            "floor_x_m": 10.0,  # 8m away
-            "floor_y_m": 10.0,  # 8m away
-        }
+        _assertion(
+            person_id="bob",
+            confidence=0.9,
+            camera_id="cam-1",
+            captured_at=now,
+            floor_x_m=10.0,
+            floor_y_m=10.0,
+        )
     ]
     observations = [_make_observation("cam-1", 1.0, 2.0)]
 
@@ -80,18 +106,18 @@ def test_far_away_assertion_is_ignored():
     assert len(anchors) == 0
 
 
-def test_old_assertion_is_ignored():
+def test_old_assertion_is_ignored() -> None:
     """An assertion outside the time window is not matched."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "carol",
-            "confidence": 0.9,
-            "camera_id": "cam-1",
-            "captured_at": now - timedelta(seconds=120),  # 2 minutes old
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-        }
+        _assertion(
+            person_id="carol",
+            confidence=0.9,
+            camera_id="cam-1",
+            captured_at=now - timedelta(seconds=120),
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+        )
     ]
     observations = [_make_observation("cam-1", 1.0, 2.0)]
 
@@ -101,18 +127,18 @@ def test_old_assertion_is_ignored():
     assert len(anchors) == 0
 
 
-def test_low_confidence_assertion_is_ignored():
+def test_low_confidence_assertion_is_ignored() -> None:
     """An assertion below min_confidence is not matched."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "dave",
-            "confidence": 0.3,
-            "camera_id": "cam-1",
-            "captured_at": now,
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-        }
+        _assertion(
+            person_id="dave",
+            confidence=0.3,
+            camera_id="cam-1",
+            captured_at=now,
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+        )
     ]
     observations = [_make_observation("cam-1", 1.0, 2.0)]
 
@@ -122,19 +148,18 @@ def test_low_confidence_assertion_is_ignored():
     assert len(anchors) == 0
 
 
-def test_camera_id_mismatch_is_ignored():
-    """A floor-point assertion with a different camera_id is not matched
-    (the camera-id gate applies inside the floor branch)."""
+def test_camera_id_mismatch_is_ignored() -> None:
+    """A floor-point assertion with a different camera_id is not matched."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "eve",
-            "confidence": 0.9,
-            "camera_id": "cam-2",  # different camera
-            "captured_at": now,
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-        }
+        _assertion(
+            person_id="eve",
+            confidence=0.9,
+            camera_id="cam-2",
+            captured_at=now,
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+        )
     ]
     observations = [_make_observation("cam-1", 1.0, 2.0)]
 
@@ -142,26 +167,26 @@ def test_camera_id_mismatch_is_ignored():
     assert len(anchors) == 0
 
 
-def test_strongest_assertion_per_observation_wins():
+def test_strongest_assertion_per_observation_wins() -> None:
     """When multiple assertions match, the highest-confidence one is used."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "alice",
-            "confidence": 0.7,
-            "camera_id": "cam-1",
-            "captured_at": now,
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-        },
-        {
-            "person_id": "bob",
-            "confidence": 0.95,
-            "camera_id": "cam-1",
-            "captured_at": now,
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-        },
+        _assertion(
+            person_id="alice",
+            confidence=0.7,
+            camera_id="cam-1",
+            captured_at=now,
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+        ),
+        _assertion(
+            person_id="bob",
+            confidence=0.95,
+            camera_id="cam-1",
+            captured_at=now,
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+        ),
     ]
     observations = [_make_observation("cam-1", 1.0, 2.0)]
 
@@ -171,29 +196,24 @@ def test_strongest_assertion_per_observation_wins():
     assert anchors[0].match_score == 0.95
 
 
-def test_empty_assertions_returns_empty():
+def test_empty_assertions_returns_empty() -> None:
     """No assertions produces no anchors."""
     observations = [_make_observation()]
     anchors = match_assertions_to_face_anchors([], observations, datetime.now(UTC))
     assert anchors == []
 
 
-# ---------------------------------------------------------------------------
-# Room-level matching
-# ---------------------------------------------------------------------------
-
-
-def test_room_match_creates_anchor_with_scaled_confidence():
+def test_room_match_creates_anchor_with_scaled_confidence() -> None:
     """A coordinate-free assertion matches by room and its confidence is scaled."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "grace",
-            "confidence": 0.9,
-            "camera_id": "recamera_kitchen",
-            "captured_at": now,
-            "room_name": "Kitchen",
-        }
+        _assertion(
+            person_id="grace",
+            confidence=0.9,
+            camera_id="recamera_kitchen",
+            captured_at=now,
+            room_name="Kitchen",
+        )
     ]
     observations = [_make_observation("cts-cam-3", 1.0, 2.0)]
 
@@ -207,21 +227,21 @@ def test_room_match_creates_anchor_with_scaled_confidence():
     assert len(anchors) == 1
     assert anchors[0].person_id == "grace"
     assert math.isclose(anchors[0].match_score, 0.9 * 0.8, rel_tol=1e-9)
-    assert anchors[0].origin == "cc_assertion"
+    assert anchors[0].origin == AnchorOrigin.CC_ASSERTION
 
 
-def test_room_mismatch_rejected():
+def test_room_mismatch_rejected() -> None:
     """A room-only assertion naming a different room than the observation's camera
     does not match, even though it has no floor point to disagree with."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "henry",
-            "confidence": 0.9,
-            "camera_id": "recamera_kitchen",
-            "captured_at": now,
-            "room_name": "Kitchen",
-        }
+        _assertion(
+            person_id="henry",
+            confidence=0.9,
+            camera_id="recamera_kitchen",
+            captured_at=now,
+            room_name="Kitchen",
+        )
     ]
     observations = [_make_observation("cts-cam-3", 1.0, 2.0)]
 
@@ -234,16 +254,15 @@ def test_room_mismatch_rejected():
     assert len(anchors) == 0
 
 
-def test_no_floor_no_room_rejected_never_housewide():
-    """An assertion with neither camera id, floor point, nor room name matches
-    nothing -- it must not anchor to every concurrent observation house-wide."""
+def test_no_floor_no_room_rejected_never_housewide() -> None:
+    """An assertion with neither floor point nor room name matches nothing."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "ivan",
-            "confidence": 0.95,
-            "captured_at": now,
-        }
+        _assertion(
+            person_id="ivan",
+            confidence=0.95,
+            captured_at=now,
+        )
     ]
     observations = [
         _make_observation("cam-1", 1.0, 2.0, detection_id="det-a"),
@@ -259,25 +278,20 @@ def test_no_floor_no_room_rejected_never_housewide():
     assert anchors == []
 
 
-def test_zero_zero_without_flag_is_not_a_position():
-    """An assertion dict with floor_x_m/floor_y_m explicitly None (the subscriber's
-    representation of "no position") must fall through to the room gate, never
-    match the (0, 0) origin as a real position."""
+def test_zero_zero_without_flag_is_not_a_position() -> None:
+    """Absent floor coordinates fall through to the room gate, never matching (0, 0)."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "jill",
-            "confidence": 0.9,
-            "camera_id": "recamera_kitchen",
-            "captured_at": now,
-            "floor_x_m": None,
-            "floor_y_m": None,
-            "room_name": "Kitchen",
-        }
+        _assertion(
+            person_id="jill",
+            confidence=0.9,
+            camera_id="recamera_kitchen",
+            captured_at=now,
+            floor_x_m=None,
+            floor_y_m=None,
+            room_name="Kitchen",
+        )
     ]
-    # Observation sits far from (0, 0); if the matcher treated the assertion's
-    # absent coordinates as (0, 0) it would reject on distance instead of
-    # falling through correctly to the room gate.
     observations = [_make_observation("cts-cam-9", 50.0, 60.0)]
 
     anchors = match_assertions_to_face_anchors(
@@ -290,26 +304,25 @@ def test_zero_zero_without_flag_is_not_a_position():
     assert anchors[0].person_id == "jill"
 
 
-def test_uncalibrated_assertion_never_matches():
-    """An assertion with no calibrated confidence (None) never matches, on
-    either spatial gate."""
+def test_uncalibrated_assertion_never_matches() -> None:
+    """An assertion with no calibrated confidence (None) never matches, on either spatial gate."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "kim",
-            "confidence": None,
-            "camera_id": "cam-1",
-            "captured_at": now,
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-        },
-        {
-            "person_id": "kim",
-            "confidence": None,
-            "camera_id": "recamera_kitchen",
-            "captured_at": now,
-            "room_name": "Kitchen",
-        },
+        _assertion(
+            person_id="kim",
+            confidence=None,
+            camera_id="cam-1",
+            captured_at=now,
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+        ),
+        _assertion(
+            person_id="kim",
+            confidence=None,
+            camera_id="recamera_kitchen",
+            captured_at=now,
+            room_name="Kitchen",
+        ),
     ]
     observations = [_make_observation("cam-1", 1.0, 2.0)]
 
@@ -322,45 +335,44 @@ def test_uncalibrated_assertion_never_matches():
     assert anchors == []
 
 
-def test_anchor_carries_origin_wire_yaw_quality_and_conservative_defaults():
+def test_anchor_carries_origin_wire_yaw_quality_and_conservative_defaults() -> None:
     """Anchor construction carries wire yaw/quality/captured_at when present,
     and falls back to the configured conservative defaults when absent."""
     now = datetime.now(UTC)
     captured = now - timedelta(seconds=5)
     assertions = [
-        {
-            "person_id": "leo",
-            "confidence": 0.9,
-            "camera_id": "cam-1",
-            "captured_at": captured,
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-            "yaw_deg": 12.0,
-            "quality": 0.75,
-        }
+        _assertion(
+            person_id="leo",
+            confidence=0.9,
+            camera_id="cam-1",
+            captured_at=captured,
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+            yaw_deg=12.0,
+            quality=0.75,
+        )
     ]
     observations = [_make_observation("cam-1", 1.0, 2.0)]
 
     anchors = match_assertions_to_face_anchors(assertions, observations, now)
     assert len(anchors) == 1
     anchor = anchors[0]
-    assert anchor.origin == "cc_assertion"
+    assert anchor.origin == AnchorOrigin.CC_ASSERTION
     assert anchor.calibrated_confidence is None
     assert anchor.recognition_state == "recognized"
     assert anchor.yaw_deg == 12.0
     assert anchor.quality == 0.75
     assert anchor.captured_at == captured
 
-    # Absent yaw/quality: never 0.0 (perfectly frontal) or 1.0 (perfect crop).
     assertions_no_meta = [
-        {
-            "person_id": "leo",
-            "confidence": 0.9,
-            "camera_id": "cam-1",
-            "captured_at": now,
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-        }
+        _assertion(
+            person_id="leo",
+            confidence=0.9,
+            camera_id="cam-1",
+            captured_at=now,
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+        )
     ]
     anchors2 = match_assertions_to_face_anchors(
         assertions_no_meta,
@@ -374,17 +386,17 @@ def test_anchor_carries_origin_wire_yaw_quality_and_conservative_defaults():
     assert anchors2[0].quality == 0.5
 
 
-def test_room_names_compared_case_normalized():
+def test_room_names_compared_case_normalized() -> None:
     """Room-name comparison is case-insensitive."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "maya",
-            "confidence": 0.9,
-            "camera_id": "recamera_kitchen",
-            "captured_at": now,
-            "room_name": "KITCHEN",
-        }
+        _assertion(
+            person_id="maya",
+            confidence=0.9,
+            camera_id="recamera_kitchen",
+            captured_at=now,
+            room_name="KITCHEN",
+        )
     ]
     observations = [_make_observation("cts-cam-3", 1.0, 2.0)]
 
@@ -398,26 +410,26 @@ def test_room_names_compared_case_normalized():
     assert anchors[0].person_id == "maya"
 
 
-def test_diagnostics_records_matched_and_rejected_reasons():
+def test_diagnostics_records_matched_and_rejected_reasons() -> None:
     """The optional diagnostics dict is populated for matches and rejections."""
     now = datetime.now(UTC)
     assertions = [
-        {
-            "person_id": "nora",
-            "confidence": 0.9,
-            "camera_id": "cam-1",
-            "captured_at": now,
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-        },
-        {
-            "person_id": "oscar",
-            "confidence": None,
-            "camera_id": "cam-1",
-            "captured_at": now,
-            "floor_x_m": 1.0,
-            "floor_y_m": 2.0,
-        },
+        _assertion(
+            person_id="nora",
+            confidence=0.9,
+            camera_id="cam-1",
+            captured_at=now,
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+        ),
+        _assertion(
+            person_id="oscar",
+            confidence=None,
+            camera_id="cam-1",
+            captured_at=now,
+            floor_x_m=1.0,
+            floor_y_m=2.0,
+        ),
     ]
     observations = [_make_observation("cam-1", 1.0, 2.0)]
     diagnostics: dict[str, int] = {}

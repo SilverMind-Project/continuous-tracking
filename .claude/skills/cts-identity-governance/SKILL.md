@@ -116,6 +116,11 @@ Face scores have four names, and each name means one thing:
   as calibrated evidence, grants authority only when its member faces agree, never enters
   association, contradiction, the duplicate bypass, or propagation, and its embeddings stay in
   memory. Read `reference/face-templates.md` before changing templates.
+- Wearable localization evidence (`WEARABLE` grade, `wearable.mode`: `off`, `shadow`, `enabled`)
+  refreshes the independent-evidence clock using `newest_fix_at`, ranks in the duplicate guard
+  without bypassing incumbents, never grants authority, and forces `Unknown` (`wearable_face`)
+  when a qualifying calibrated direct-face anchor disagrees. Read `reference/wearable-evidence.md`
+  before changing wearable association, attestation, or channel weighting.
 - ArcFace enrollment is a golden dataset. PH inference, operator identity correction, and ReID
   review never modify enrollment. Enrollment gains entries
   only via explicit enroll calls, explicit operator naming of a visitor cluster
@@ -314,23 +319,18 @@ production, with rows observably accumulating on ordinary days, before relying o
 
 ## External identity evidence
 
-`FaceAnchor.origin` distinguishes a same-frame native ArcFace anchor (`"native"`, the default)
-from an anchor matched from cognitive-companion's `cc.identity_assertions` stream
-(`"cc_assertion"`). External evidence is corroborating, never authoritative:
+Every `FaceAnchor`'s governance (authority, clock refresh, duplicate ranking, association,
+contradiction, propagation, calibration requirement, attachment precedence, and likelihood scale)
+is declared once per `(AnchorOrigin, AnchorAggregation)` in
+`app/tracking/identity/evidence_grades.py` and combined through `EvidenceChannel` and
+`combine_channels` (`app/tracking/identity/channels.py`, `app/tracking/identity/posterior.py`).
+Inline origin or aggregation checks outside `app/tracking/identity/evidence_grades.py` are defects enforced by
+`tests/architecture/test_evidence_grade_centralized.py`. Read
+`reference/evidence-grades-and-channels.md` before adding a grade or channel.
 
-- It votes in `_from_face_anchors`' likelihood at a configured scale
-  (`resolver.cc_assertion_likelihood_scale`, default 0.5) below native weight, with its real
-  wire yaw/quality flowing through the same frontality and `_p_face` math as native anchors.
-  Absent yaw/quality resolve to conservative configured defaults
-  (`resolver.cc_assertion_default_quality` 0.5, `resolver.cc_assertion_default_yaw_deg` 60°),
-  never the perfect-crop/perfectly-frontal defaults native code paths assume.
-- It is explicitly excluded from: ArcFace authority (`_check_arcface_authority`), the
-  independent-evidence clock (`collect_evidence_identity_ids(recognized_only=True)`),
-  duplicate-active-identity ranking (`_direct_face_similarity`), and the association vectors
-  that drive Hungarian assignment and hard-conflict gating
-  (`_unpack_observations` in `app/tracking/world/tracker.py`). `calibrated_confidence` stays
-  `None` on every `cc_assertion` anchor by construction, so ArcFace authority fails closed
-  structurally in addition to the explicit origin check.
+For `cc_assertion` anchors matched from `cc.identity_assertions` (`ExternalIdentityAssertion` via
+constructor-injected `ExternalIdentityEvidenceSource`):
+
 - `app/tracking/world/assertion_matching.py::match_assertions_to_face_anchors` is the sole
   matcher: a floor point (camera-id gated, same-fleet ids only) beats room-name agreement
   (case-normalized, confidence-scaled by `resolver.room_match_confidence_scale`) when no floor

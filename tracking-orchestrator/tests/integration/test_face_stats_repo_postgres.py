@@ -22,6 +22,14 @@ from tests.fixtures.face_stats import face_stat
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
+
+def _steps_through(version: int) -> int:
+    """Count migrations at or above *version* so adding newer migrations never shifts rollbacks."""
+    return sum(
+        1 for p in _MIGRATIONS_DIR.glob("*.up.sql") if int(p.name.split("_", 1)[0]) >= version
+    )
+
+
 _ROWS = [
     face_stat(0, "cam-1"),
     face_stat(5, "cam-2", FaceGateOutcome.DROPPED_MIN_SIMILARITY),
@@ -103,8 +111,8 @@ async def test_migration_0002_down_then_up(db_pool: asyncpg.Pool) -> None:
         assert await _face_stats_objects(conn) == (True, 1)
 
     try:
-        # 0003 to 0007 sit on top of 0002.
-        assert await runner.rollback(6) == 6
+        steps = _steps_through(2)
+        assert await runner.rollback(steps) == steps
         async with db_pool.acquire() as conn:
             assert await _face_stats_objects(conn) == (False, 0)
     finally:
@@ -137,8 +145,8 @@ async def test_migration_0003_widens_and_restores_outcome_check(db_pool: asyncpg
         await _insert_outcome(conn, "dropped_ambiguous")
 
     try:
-        # 0004 to 0007 sit on top of 0003.
-        assert await runner.rollback(5) == 5
+        steps = _steps_through(3)
+        assert await runner.rollback(steps) == steps
         async with db_pool.acquire() as conn:
             # The down migration removed the row it could no longer represent.
             assert (
@@ -174,8 +182,8 @@ async def test_migration_0004_renames_the_similarity_floor_outcome(db_pool: asyn
             await _insert_outcome(conn, "dropped_min_confidence")
 
     try:
-        # 0005 to 0007 sit on top of 0004.
-        assert await runner.rollback(4) == 4
+        steps = _steps_through(4)
+        assert await runner.rollback(steps) == steps
         async with db_pool.acquire() as conn:
             assert await _outcomes(conn) == ["dropped_min_confidence", "emitted"]
             with pytest.raises(asyncpg.CheckViolationError):
@@ -232,8 +240,8 @@ async def test_migration_0005_adds_checked_quality_columns(db_pool: asyncpg.Pool
                 await _insert_quality(conn, score, version)
 
     try:
-        # 0006 and 0007 sit on top of 0005.
-        assert await runner.rollback(3) == 3
+        steps = _steps_through(5)
+        assert await runner.rollback(steps) == steps
         async with db_pool.acquire() as conn:
             assert not await _has_quality_columns(conn)
             assert (
@@ -274,8 +282,8 @@ async def test_migration_0006_adds_a_checked_calibrated_confidence(db_pool: asyn
     with pytest.raises(asyncpg.CheckViolationError):
         await insert(1.5)
     try:
-        # 0007 sits on top of 0006.
-        assert await runner.rollback(2) == 2
+        steps = _steps_through(6)
+        assert await runner.rollback(steps) == steps
         async with db_pool.acquire() as conn:
             assert not await conn.fetchval(
                 """SELECT count(*) > 0 FROM information_schema.columns
@@ -297,7 +305,8 @@ async def test_migration_0007_admits_the_shadow_outcome_and_down_rewrites_it(
         await _insert_outcome(conn, "emitted")
 
     try:
-        assert await runner.rollback(1) == 1
+        steps = _steps_through(7)
+        assert await runner.rollback(steps) == steps
         async with db_pool.acquire() as conn:
             # A shadow-only face is what legacy recorded as dropped by the similarity floor.
             assert await _outcomes(conn) == ["dropped_min_similarity", "emitted"]

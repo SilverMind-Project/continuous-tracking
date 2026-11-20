@@ -100,6 +100,7 @@ class TestAllowlists:
             "identity_projection_acks",
             "reid_gallery",
             "gallery_review_events",
+            "wearable_associations",
         }
         assert set(rsd._CTS_DELETE_TABLES) == expected
 

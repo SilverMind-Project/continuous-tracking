@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import IntEnum, StrEnum
@@ -623,17 +624,65 @@ class IdentityRevision:
     revision_schema_version: str = ""
 
 
+class AnchorOrigin(StrEnum):
+    """Where a FaceAnchor originated. Governance flags live in evidence_grades.py."""
+
+    NATIVE = "native"
+    CC_ASSERTION = "cc_assertion"
+
+
+class AnchorAggregation(StrEnum):
+    """Whether a FaceAnchor comes from a single frame or a multi-frame PH template."""
+
+    FRAME = "frame"
+    TEMPLATE = "template"
+
+
+@dataclass(frozen=True)
+class ExternalIdentityAssertion:
+    """Typed external identity assertion received from cognitive-companion.
+
+    ``floor_x_m`` and ``floor_y_m`` are metres in the shared household floor-plan
+    frame when present. ``yaw_deg`` is head-pose yaw in degrees.
+    """
+
+    person_id: str
+    calibrated_confidence: float | None
+    camera_id: str
+    captured_at: datetime
+    floor_x_m: float | None = None
+    floor_y_m: float | None = None
+    room_name: str | None = None
+    yaw_deg: float | None = None
+    quality: float | None = None
+    raw_similarity: float = 0.0
+    calibration_status: str = ""
+    source: str = ""
+    model_version: str = ""
+    preprocessing_version: str = ""
+    received_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+class ExternalIdentityEvidenceSource(Protocol):
+    """Read-only source of recent external identity assertions for world tracking."""
+
+    async def recent(self, max_age_s: float = 30.0) -> Sequence[ExternalIdentityAssertion]: ...
+
+
 @dataclass(frozen=True)
 class FaceAnchor:
-    """A face-confirmed identity anchor from the face ID service.
+    """A face-recognition evidence anchor for identity resolution.
 
-    Face anchors are the strongest evidence source in the Bayesian
-    posterior. They carry a person_id from the face recognition service
-    along with a match score and quality metrics.
+    Governance (authority eligibility, evidence-clock refresh, duplicate-guard
+    ranking, association gating, propagation, and contradiction eligibility) is
+    declared once per ``(origin, aggregation)`` grade in
+    ``app/tracking/identity/evidence_grades.py``. Direct authority requires a
+    grade that grants authority plus a compatible calibrated confidence above
+    threshold.
 
     In the PH-native pipeline, detection_id replaces tracklet_id
     as the primary per-detection key. tracklet_id is kept for backward
-    compatibility with the legacy resolver evidence matching.
+    compatibility with resolver evidence matching.
     """
 
     person_id: IdentityId
@@ -656,12 +705,8 @@ class FaceAnchor:
     # Calibrated ArcFace confidence from model calibration pipeline.
     # None means no calibration available → authority fails closed.
     calibrated_confidence: float | None = None
-    # Evidence grade. "native" is a same-frame
-    # CTS ArcFace anchor; "cc_assertion" is a spatially-matched external
-    # assertion from cognitive-companion. External anchors are excluded from
-    # ArcFace authority, the independent-evidence clock, duplicate-identity
-    # ranking, and association vectors -- see cts-identity-governance skill.
-    origin: str = "native"
+    # Origin enum ("native" or "cc_assertion"); governance flags live in evidence_grades.py.
+    origin: AnchorOrigin | str = AnchorOrigin.NATIVE
     # Face detector score for this face, in [0, 1]. Not yet read by policy.
     det_score: float = 0.0
     # Face image quality in [0, 1] measured by person-identification-service (resolution,
@@ -677,11 +722,8 @@ class FaceAnchor:
     # the resolver's shadow evaluation and never reach live evidence; delete the field with the
     # "shadow" policy once "calibrated" is live.
     shadow_only: bool = False
-    # "frame": one face seen in one frame. "template": several faces of one PH matched together
-    # by person-id; a template is always weighed and gated as calibrated evidence (its raw
-    # similarity is inflated by averaging) and never enters association, contradiction, the
-    # duplicate-guard bypass, or propagation.
-    aggregation: str = "frame"
+    # Aggregation enum ("frame" or "template"); governance flags live in evidence_grades.py.
+    aggregation: AnchorAggregation | str = AnchorAggregation.FRAME
     # False when this anchor may vote but must not grant ArcFace authority (a template whose member
     # faces were recognized as someone other than the template's identity).
     authority_eligible: bool = True
@@ -1506,13 +1548,40 @@ class CameraProfile:
 
 
 from .wearables import (  # noqa: E402
+    WEARABLE_MODES as WEARABLE_MODES,
+)
+from .wearables import (  # noqa: E402
     RfNode as RfNode,
+)
+from .wearables import (  # noqa: E402
+    WearableAssociationSegment as WearableAssociationSegment,
+)
+from .wearables import (  # noqa: E402
+    WearableAssociationTransition as WearableAssociationTransition,
+)
+from .wearables import (  # noqa: E402
+    WearableAttestationGrade as WearableAttestationGrade,
 )
 from .wearables import (  # noqa: E402
     WearableBinding as WearableBinding,
 )
 from .wearables import (  # noqa: E402
     WearableDevice as WearableDevice,
+)
+from .wearables import (  # noqa: E402
+    WearableEvidence as WearableEvidence,
+)
+from .wearables import (  # noqa: E402
+    WearableEvidenceClass as WearableEvidenceClass,
+)
+from .wearables import (  # noqa: E402
+    WearableFix as WearableFix,
+)
+from .wearables import (  # noqa: E402
+    WearableFixSource as WearableFixSource,
+)
+from .wearables import (  # noqa: E402
+    WearableMode as WearableMode,
 )
 from .wearables import (  # noqa: E402
     WearableSiteConfig as WearableSiteConfig,

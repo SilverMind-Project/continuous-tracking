@@ -17,6 +17,7 @@ from .reid_candidates import ReIDCandidateStage
 from .revisions import RevisionsStage
 from .spatial_projection import SpatialProjectionStage
 from .trajectory import ClosePHStage, TrajectoryStage
+from .wearable_associations import WearableAssociationPersistStage
 from .world_tracking import WorldTrackingStage
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "StageRunner",
     "TrailsStage",
     "TrajectoryStage",
+    "WearableAssociationPersistStage",
     "WorldTrackingStage",
     "timed_phase",
 ]

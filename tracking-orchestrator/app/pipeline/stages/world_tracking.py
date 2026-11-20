@@ -14,16 +14,20 @@ from structlog import get_logger
 from ...calibration.state import calibration_state
 from ...domain import (
     BoundingBox,
+    ExternalIdentityEvidenceSource,
     FaceAnchor,
     FloorPoint,
     ObservationGeometry,
     OrientationBin,
+    WearableFixSource,
     WorldObservation,
 )
 from ...inference.evidence import FaceEvidence
 from ...observability import metrics as _metrics
 from ...services.face_templates import FaceTemplateService
 from ...tracking.floor_projector import FloorProjector
+from ...tracking.identity.evidence_grades import grade_of
+from ...tracking.world.assertion_matching import match_assertions_to_face_anchors
 from ...tracking.world.config import WorldTrackerConfig
 from ...tracking.world.observation_model import (
     footpoint_reliable,
@@ -115,7 +119,7 @@ class WorldTrackingStage(FrameStage):
         live_config: LiveConfigHolder,
         config: WorldTrackerConfig | None = None,
         enabled: bool = True,
-        assertion_cache: object | None = None,
+        external_evidence: ExternalIdentityEvidenceSource | None = None,
         anchor_match_window_s: float = 30.0,
         anchor_match_distance_m: float = 5.0,
         anchor_min_confidence: float = 0.5,
@@ -125,14 +129,18 @@ class WorldTrackingStage(FrameStage):
         cc_assertion_default_quality: float = 0.5,
         cc_assertion_default_yaw_deg: float = 60.0,
         face_templates: FaceTemplateService | None = None,
+        wearable_fix_source: WearableFixSource | None = None,
+        wearable_fix_window_s: float = 15.0,
     ) -> None:
         self._tracker = tracker
         # None while face_templates.mode is off: no template anchors, no buffer.
         self._face_templates = face_templates
+        self._wearable_fix_source = wearable_fix_source
+        self._wearable_fix_window_s = wearable_fix_window_s
         self._config = config or WorldTrackerConfig()
         self._live_config = live_config
         self._enabled = enabled
-        self._assertion_cache = assertion_cache
+        self._external_evidence = external_evidence
         self._anchor_match_window_s = anchor_match_window_s
         self._anchor_match_distance_m = anchor_match_distance_m
         self._anchor_min_confidence = anchor_min_confidence
@@ -223,6 +231,15 @@ class WorldTrackingStage(FrameStage):
             else ([], [])
         )
 
+        wearable_fixes = (
+            self._wearable_fix_source.recent(
+                now=batch_time,
+                max_age_s=self._wearable_fix_window_s,
+            )
+            if self._wearable_fix_source is not None
+            else ()
+        )
+
         result = await self._tracker.step(
             observations=observations_with_faces,
             now=batch_time,
@@ -232,6 +249,7 @@ class WorldTrackingStage(FrameStage):
             face_anchors=all_face_anchors + shadow_face_anchors + template_anchors,
             face_evidence=(face_evidence + template_evidence) or None,
             low_band_observations=low_band_observations or None,
+            wearable_fixes=wearable_fixes or None,
         )
 
         # Every execution path reaches the tracker through this method, so feeding the template
@@ -418,17 +436,16 @@ class WorldTrackingStage(FrameStage):
         now: datetime,
         camera_room_lookup: Mapping[str, str | None],
     ) -> list[FaceAnchor]:
-        from ...tracking.world.assertion_matching import match_assertions_to_face_anchors
-
-        # off preserves pre-behavior exactly: the matcher is not
-        # consulted at all, not even for metrics.
+        # off skips external assertion matching entirely, including metrics.
         if self._cc_assertion_mode == "off":
             return []
 
         cc_face_anchors: list[FaceAnchor] = []
-        if self._assertion_cache is not None:
+        if self._external_evidence is not None:
             try:
-                recent_assertions = await self._assertion_cache.get_recent()  # type: ignore[attr-defined]
+                recent_assertions = await self._external_evidence.recent(
+                    max_age_s=self._anchor_match_window_s
+                )
                 diagnostics: dict[str, int] = {}
                 cc_face_anchors = match_assertions_to_face_anchors(
                     assertions=recent_assertions,
@@ -541,11 +558,24 @@ class WorldTrackingStage(FrameStage):
                 continue
             existing = face_by_detection.get(fa.detection_id)
             if existing is not None:
-                # One face per person crop makes this unreachable for native anchors; if two
-                # sources ever collide, keep the stronger match and make the collision visible.
-                _metrics.metrics.cts_face_anchor_duplicate_detection_total.inc()
-                if existing.similarity >= fa.similarity:
+                existing_grade = grade_of(existing)
+                new_grade = grade_of(fa)
+                if existing_grade.attach_precedence == new_grade.attach_precedence:
+                    # Same-grade collision: keep the stronger raw similarity and count the defect.
+                    _metrics.metrics.cts_face_anchor_duplicate_detection_total.inc()
+                    if existing.similarity >= fa.similarity:
+                        continue
+                elif existing_grade.attach_precedence > new_grade.attach_precedence:
+                    _metrics.metrics.cts_face_anchor_grade_overlap_total.labels(
+                        kept=str(existing_grade.name),
+                        dropped=str(new_grade.name),
+                    ).inc()
                     continue
+                else:
+                    _metrics.metrics.cts_face_anchor_grade_overlap_total.labels(
+                        kept=str(new_grade.name),
+                        dropped=str(existing_grade.name),
+                    ).inc()
             face_by_detection[fa.detection_id] = fa
 
         observations_with_faces: list[WorldObservation] = []
@@ -634,6 +664,9 @@ class WorldTrackingStage(FrameStage):
         ctx.ph_born_at_by_id = {ph.ph_id: ph.born_at for ph in result.updated_phs}
         # revived PH ids so ClosePHStage and TrajectoryStage can reconcile.
         ctx.revived_ph_ids = result.revived_ph_ids
+        ctx.wearable_association_transitions = (
+            list(result.wearable_association_transitions) if include_revisions else []
+        )
 
         # Store snapshots on the context for downstream stages.
         ctx.world_snapshots = list(result.snapshots)

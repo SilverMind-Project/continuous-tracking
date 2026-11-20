@@ -58,6 +58,54 @@ class CCSyncResource(StrEnum):
     WEARABLES = "wearables"
 
 
+class WearableFixKindLabel(StrEnum):
+    """Bounded label set for ``cts_wearable_fixes_total{kind}``."""
+
+    POSITION = "position"
+    ROOM = "room"
+    PROXIMITY = "proximity"
+    UNSPECIFIED = "unspecified"
+
+
+class WearableFixIngestResult(StrEnum):
+    """Bounded label set for ``cts_wearable_fixes_total{result}``."""
+
+    ACCEPTED = "accepted"
+    DROPPED_OFF_BODY = "dropped_off_body"
+    DROPPED_STALE = "dropped_stale"
+    DROPPED_UNBOUND = "dropped_unbound"
+    DROPPED_MALFORMED = "dropped_malformed"
+
+
+class WearableAssociationOutcome(StrEnum):
+    """Bounded label set for ``cts_wearable_associations_total{result}``."""
+
+    ACCEPTED = "accepted"
+    AMBIGUOUS_TWO_PHS = "ambiguous_two_phs"
+    AMBIGUOUS_TWO_TAGS = "ambiguous_two_tags"
+    AMBIGUOUS_TIE = "ambiguous_tie"
+    UNCALIBRATED_SHARED_ROOM = "uncalibrated_shared_room"
+    PARKED = "parked"
+    TAG_DISAGREEMENT = "tag_disagreement"
+    REJECTED_GATE = "rejected_gate"
+    INSUFFICIENT_FIXES = "insufficient_fixes"
+
+
+class WearableShadowOutcome(StrEnum):
+    """Bounded label set for ``cts_wearable_shadow_outcomes_total{outcome}``."""
+
+    AGREES = "agrees"
+    WOULD_NAME_UNKNOWN = "would_name_unknown"
+    WOULD_CHANGE_IDENTITY = "would_change_identity"
+    WOULD_CONFLICT = "would_conflict"
+
+
+class DeadLetterStream(StrEnum):
+    """Bounded label set for ``cts_messages_dead_lettered_total{stream}``."""
+
+    WEARABLE_FIXES = "wearable_fixes"
+
+
 _REVISION_REASON_PREFIX_MAP: dict[str, RevisionReasonKind] = {
     "initial_assignment": RevisionReasonKind.INITIAL_ASSIGNMENT,
     "demoted_to_unknown": RevisionReasonKind.DEMOTED_TO_UNKNOWN,
@@ -220,6 +268,7 @@ class Metrics:
     cts_face_stats_write_failures_total: Counter
     cts_face_attribution_total: Counter
     cts_face_anchor_duplicate_detection_total: Counter
+    cts_face_anchor_grade_overlap_total: Counter
     cts_face_shadow_outcomes_total: Counter
     cts_face_template_requests_total: Counter
     cts_face_template_buffer_size: Histogram
@@ -293,6 +342,14 @@ class Metrics:
     # ---- identity roster reconciliation ----
     # labels: mode (shadow|enabled), action (bounded RosterAction set)
     identity_roster_reconcile_total: Counter
+
+    # ---- wearable association and evidence ----
+    cts_wearable_fixes_total: Counter  # labels: kind, result
+    cts_wearable_associations_total: Counter  # label: result
+    cts_wearable_assoc_residual_m: Histogram  # label: room_id
+    cts_wearable_face_conflict_total: Counter
+    cts_wearable_shadow_outcomes_total: Counter  # label: outcome
+    cts_messages_dead_lettered_total: Counter  # label: stream
 
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
@@ -767,7 +824,12 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         ),
         cts_face_anchor_duplicate_detection_total=_counter(
             "cts_face_anchor_duplicate_detection_total",
-            "Face anchors that collided on one detection_id; the weaker match was dropped.",
+            "Same-grade face anchors that collided on one detection_id; weaker match dropped.",
+        ),
+        cts_face_anchor_grade_overlap_total=_counter(
+            "cts_face_anchor_grade_overlap_total",
+            "Cross-grade face anchors that overlapped on one detection_id; higher precedence kept.",
+            ["kept", "dropped"],
         ),
         cts_face_template_requests_total=_counter(
             "cts_face_template_requests_total",
@@ -977,6 +1039,37 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "post-resolve committed identity. Only recorded when "
             "resolver.cc_assertion_mode == 'shadow'.",
             ["outcome"],
+        ),
+        cts_wearable_fixes_total=_counter(
+            "cts_wearable_fixes_total",
+            "Wearable TagFix messages processed from wearable.fixes, by fix kind and result.",
+            ["kind", "result"],
+        ),
+        cts_wearable_associations_total=_counter(
+            "cts_wearable_associations_total",
+            "Wearable-to-PH association evaluations, by bounded outcome.",
+            ["result"],
+        ),
+        cts_wearable_assoc_residual_m=_hist(
+            "cts_wearable_assoc_residual_m",
+            "Trajectory-class wearable-to-PH mean floor residual in metres, by room.",
+            (0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0),
+            ["room_id"],
+        ),
+        cts_wearable_face_conflict_total=_counter(
+            "cts_wearable_face_conflict_total",
+            "Rounds where a qualifying calibrated direct-face anchor disagreed with accepted "
+            "wearable evidence on the same PH, forcing Unknown.",
+        ),
+        cts_wearable_shadow_outcomes_total=_counter(
+            "cts_wearable_shadow_outcomes_total",
+            "Shadow-mode wearable counterfactual outcomes against the live resolver decision.",
+            ["outcome"],
+        ),
+        cts_messages_dead_lettered_total=_counter(
+            "cts_messages_dead_lettered_total",
+            "Malformed stream messages acknowledged and discarded without silent fallback.",
+            ["stream"],
         ),
     )
 

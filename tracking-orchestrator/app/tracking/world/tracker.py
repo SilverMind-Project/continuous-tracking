@@ -32,6 +32,9 @@ from ...domain import (
     PersonHypothesis,
     PHContinuationCandidate,
     ViewPrototype,
+    WearableAssociationTransition,
+    WearableEvidence,
+    WearableFix,
     WorldFrameSnapshot,
     WorldObservation,
     tuple_to_cov2x2,
@@ -44,6 +47,7 @@ from ...storage.base import (
     PHRepositoryProtocol,
     WorldObservationRepositoryProtocol,
 )
+from ..identity.evidence_grades import grade_of
 from ..orientation import update_view_prototypes
 from .appearance_policy import AppearanceDecision, evaluate_appearance_update
 from .association import associate
@@ -66,8 +70,11 @@ from .kalman import (
     update,
     zero_velocity_update,
 )
+from .ph_floor_history import PHFloorHistory
 from .revival import select_revival_candidate
 from .topology import record_handoff
+from .wearable_association import WearableAssociationTracker
+from .wearable_config import WearableConfig
 
 logger = get_logger(__name__)
 
@@ -167,6 +174,8 @@ class WorldTrackerResult:
     det_to_observation_id: dict[str, str] = field(default_factory=dict)
     revived_ph_ids: frozenset[str] = frozenset()
     coasting_ph_ids: frozenset[str] = frozenset()
+    wearable_association_transitions: tuple[WearableAssociationTransition, ...] = ()
+    wearable_evidence_by_ph: Mapping[str, WearableEvidence] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -229,28 +238,30 @@ def _record_appearance_rejection(
 def _unpack_observations(observations: list[WorldObservation]) -> _ObsVectors:
     """Unpack a deduped observation list into parallel arrays for association.
 
-    Only recognized face anchors are forwarded to the identity-conflict gate;
-    candidate and unrecognized anchors are weak-positive signals that must not
-    trigger a hard conflict. External evidence (``origin == "cc_assertion"``,
-    identity-continuity M09) is excluded from the association vectors
-    entirely: a CC assertion must not drive PH association or hard-conflict
-    splits, only the resolver's posterior.
+    Only recognized face anchors whose evidence grade allows association
+    (``grade_of(fa).enters_association``) are forwarded to the identity-conflict
+    gate; candidate, unrecognized, template, and external anchors never drive PH
+    association or hard-conflict splits.
     """
     floor_points = [
         (obs.floor_point.x_mm / 1000.0, obs.floor_point.y_mm / 1000.0) for obs in observations
     ]
     embeddings: list[list[float] | None] = [obs.embedding or None for obs in observations]
 
-    def _native_recognized(obs: WorldObservation) -> bool:
+    def _association_recognized(obs: WorldObservation) -> bool:
         fa = obs.face_anchor
-        return fa is not None and fa.recognition_state == "recognized" and fa.origin == "native"
+        return (
+            fa is not None
+            and fa.recognition_state == "recognized"
+            and grade_of(fa).enters_association
+        )
 
     face_person_ids: list[str | None] = [
-        obs.face_anchor.person_id if _native_recognized(obs) and obs.face_anchor else None
+        obs.face_anchor.person_id if _association_recognized(obs) and obs.face_anchor else None
         for obs in observations
     ]
     face_confidences: list[float] = [
-        obs.face_anchor.match_score if _native_recognized(obs) and obs.face_anchor else 0.0
+        obs.face_anchor.match_score if _association_recognized(obs) and obs.face_anchor else 0.0
         for obs in observations
     ]
     return _ObsVectors(
@@ -293,6 +304,7 @@ class WorldTracker:
         topology_repo: CameraTopologyRepository | None = None,
         copresence_repo: CoPresenceRepository | None = None,
         overlap_groups: list[OverlapGroup] | None = None,
+        wearable_config: WearableConfig | None = None,
     ) -> None:
         self._ph_repo = ph_repo
         self._obs_repo = obs_repo
@@ -303,6 +315,15 @@ class WorldTracker:
         self._topology_repo = topology_repo
         self._copresence_repo = copresence_repo
         self._overlap_groups: list[OverlapGroup] = list(overlap_groups or [])
+        self._wearable_config = wearable_config or WearableConfig()
+        self._ph_floor_history = PHFloorHistory(
+            max_span_s=self._config.ph_close_grace_s + self._config.revive_max_age_s,
+        )
+        self._wearable_tracker: WearableAssociationTracker | None = (
+            WearableAssociationTracker(self._wearable_config)
+            if self._wearable_config.mode != "off"
+            else None
+        )
         # In-process cache of each PH's last positive identity confidence.
         # On coasting / unresolved frames the resolver produces no decision for a
         # PH, so its per-frame posterior is absent (0.0). Replaying the last
@@ -326,6 +347,26 @@ class WorldTracker:
         Empty until the first step() completes.
         """
         return self._last_open_phs
+
+    @property
+    def ph_floor_history(self) -> PHFloorHistory:
+        """Calibrated floor-plane history maintained for wearable trajectory association."""
+        return self._ph_floor_history
+
+    def active_wearable_association_count(self) -> int:
+        """Return the number of currently active wearable-to-PH association segments."""
+        if self._wearable_tracker is None:
+            return 0
+        return self._wearable_tracker.active_segment_count
+
+    def reset_ph_wearable_state(
+        self, ph_id: str, *, now: datetime, reason: str = "ph_split_or_merge"
+    ) -> list[WearableAssociationTransition]:
+        """Clear calibrated floor history and close any open wearable segment on *ph_id*."""
+        self._ph_floor_history.reset_ph(ph_id)
+        if self._wearable_tracker is None:
+            return []
+        return self._wearable_tracker.reset_ph(ph_id, now=now, reason=reason)
 
     async def _resolve_verified_reid_identities(
         self, observations: list[WorldObservation]
@@ -389,6 +430,7 @@ class WorldTracker:
         face_anchors: list[FaceAnchor] | None = None,
         face_evidence: list[FaceEvidence] | None = None,
         low_band_observations: list[WorldObservation] | None = None,
+        wearable_fixes: Sequence[WearableFix] | None = None,
     ) -> WorldTrackerResult:
         """Run one frame of the world tracker.
 
@@ -1143,6 +1185,38 @@ class WorldTracker:
         for ph in updated_phs:
             await self._ph_repo.save(ph)
 
+        # 8a. Update calibrated PH floor history (only rounds updated by calibrated
+        #     observations; never virtual-cell points or unobserved predictions) and
+        #     run wearable-to-PH association when wearable mode is shadow or enabled.
+        for ph in updated_phs:
+            if ph.closed_at is None and ph_floor_calibrated.get(ph.ph_id, False):
+                self._ph_floor_history.record(
+                    ph.ph_id,
+                    captured_at=ph.last_seen_at,
+                    x_m=ph.state_mean[0],
+                    y_m=ph.state_mean[1],
+                    cov_m2=(ph.state_cov[0], ph.state_cov[1], ph.state_cov[4], ph.state_cov[5]),
+                    speed_m_s=ph.last_floor_speed_m_s,
+                )
+        self._ph_floor_history.prune(now)
+
+        wearable_evidence_by_ph: dict[str, WearableEvidence] = {}
+        wearable_transitions: list[WearableAssociationTransition] = []
+        if self._wearable_tracker is not None:
+            open_phs_now = [ph for ph in updated_phs if ph.closed_at is None]
+            closed_ph_ids_now = [ph.ph_id for ph in updated_phs if ph.closed_at is not None]
+            wearable_round = self._wearable_tracker.step(
+                fixes=wearable_fixes or (),
+                open_phs=open_phs_now,
+                closed_ph_ids=closed_ph_ids_now,
+                ph_history=self._ph_floor_history,
+                room_polygons=room_polygons,
+                camera_room_map=camera_room_map,
+                now=now,
+            )
+            wearable_evidence_by_ph = dict(wearable_round.evidence_by_ph)
+            wearable_transitions.extend(wearable_round.transitions)
+
         # 9. Identity resolution: run the Bayesian resolver on PHs that
         #    received observations this frame.  Pass the full open-PH identity
         #    occupancy (updated_phs is a superset of all open PHs) so the
@@ -1163,9 +1237,25 @@ class WorldTracker:
             det_to_ph=det_to_ph,
             face_evidence=face_evidence,
             open_ph_identities=open_ph_identities,
+            wearable_evidence=wearable_evidence_by_ph or None,
             now=now,
             config=cfg,
         )
+
+        # Notify wearable attestation tracker of any calibrated-face vs. wearable
+        # conflicts so attestation breaks and repeated conflicts flag swap_suspected.
+        if self._wearable_tracker is not None:
+            for decision in identity_decisions:
+                if decision.conflict == "wearable_face":
+                    wev = wearable_evidence_by_ph.get(decision.ph_id)
+                    if wev is not None:
+                        wearable_transitions.extend(
+                            self._wearable_tracker.record_face_conflict(
+                                ph_id=decision.ph_id,
+                                tag_id=wev.tag_id,
+                                at=now,
+                            )
+                        )
 
         # Update the held-identity confidence cache: record a positive committed
         # confidence; clear it on a genuine demotion to UNKNOWN.
@@ -1302,6 +1392,8 @@ class WorldTracker:
             det_to_observation_id=det_to_observation_id,
             revived_ph_ids=frozenset(revived_ph_ids),
             coasting_ph_ids=frozenset(coasting_ph_ids),
+            wearable_association_transitions=tuple(wearable_transitions),
+            wearable_evidence_by_ph=wearable_evidence_by_ph,
         )
 
     def _update_primary_camera(self, ph_id: str, best_camera: str) -> None:
@@ -1490,6 +1582,7 @@ async def _resolve_identities(
     det_to_ph: dict[str, str] | None = None,
     face_evidence: list[FaceEvidence] | None = None,
     open_ph_identities: Mapping[str, str] | None = None,
+    wearable_evidence: Mapping[str, WearableEvidence] | None = None,
     now: datetime,
     config: WorldTrackerConfig,
 ) -> tuple[list[IdentityDecision], list[IdentityRevision], dict[str, dict[str, object]]]:
@@ -1567,6 +1660,7 @@ async def _resolve_identities(
             ph_qualities={ph.ph_id: ph.mean_quality for ph in resolvable_phs},
             face_evidence=face_evidence,
             open_ph_identities=open_ph_identities or {},
+            wearable_evidence=wearable_evidence,
         )
     except Exception:
         logger.exception("identity_resolution_failed")

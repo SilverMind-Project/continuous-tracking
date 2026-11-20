@@ -29,6 +29,7 @@ class IdentityPolicySnapshot:
     # None when the pipeline accepts any ArcFace model version.
     expected_arcface_model_version: str | None
     expected_quality_version: str
+    wearable_mode: str = "off"
 
 
 @dataclass(frozen=True)
@@ -56,10 +57,16 @@ class IdentityReadinessSnapshot:
     overlap_group_count: int | None
     # None when this process runs without a gallery repository.
     identities_known: int | None
+    # Count of currently open wearable-to-PH association segments; None when not wired.
+    wearable_active_associations: int | None = None
 
 
 class OverlapGroupSource(Protocol):
     def overlap_group_count(self) -> int | None: ...
+
+
+class WearableAssociationCountSource(Protocol):
+    def active_wearable_association_count(self) -> int | None: ...
 
 
 class IdentityReadinessService:
@@ -71,12 +78,14 @@ class IdentityReadinessService:
         camera_room_map: CameraRoomMap,
         overlap_groups: OverlapGroupSource,
         gallery_repo: GalleryRepository | None = None,
+        wearable_associations: WearableAssociationCountSource | None = None,
     ) -> None:
         self._policy = policy
         self._calibration_state = calibration_state
         self._camera_room_map = camera_room_map
         self._overlap_groups = overlap_groups
         self._gallery_repo = gallery_repo
+        self._wearable_associations = wearable_associations
 
     async def snapshot(self) -> IdentityReadinessSnapshot:
         calibrated_ids = self._calibration_state.calibrated_camera_ids()
@@ -97,10 +106,16 @@ class IdentityReadinessService:
                 rejected=by_state.get("rejected", 0),
             )
             identities_known = len(await self._gallery_repo.list_identities(active_only=True))
+        wearable_active = (
+            self._wearable_associations.active_wearable_association_count()
+            if self._wearable_associations is not None
+            else None
+        )
         return IdentityReadinessSnapshot(
             policy=self._policy,
             reid_gallery_counts=counts,
             cameras=cameras,
             overlap_group_count=self._overlap_groups.overlap_group_count(),
             identities_known=identities_known,
+            wearable_active_associations=wearable_active,
         )

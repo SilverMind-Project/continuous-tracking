@@ -15,7 +15,8 @@ import sys
 from pathlib import Path
 
 from app.domain import PosteriorDist
-from app.tracking.identity.posterior import combine_posteriors
+from app.tracking.identity.channels import ChannelLikelihood
+from app.tracking.identity.posterior import combine_channels
 
 _ROOT = Path(__file__).resolve().parents[3]
 
@@ -25,9 +26,16 @@ _ROOT = Path(__file__).resolve().parents[3]
 _TIE_SCRIPT = """
 import json, sys
 from app.domain import PosteriorDist
-from app.tracking.identity.posterior import combine_posteriors
+from app.tracking.identity.channels import ChannelLikelihood
+from app.tracking.identity.posterior import combine_channels
 prior = PosteriorDist({"zeta-resident": 0.5, "alpha-resident": 0.5, "UNKNOWN": 0.05})
-combined = combine_posteriors(prior, PosteriorDist({}), PosteriorDist({}))
+combined = combine_channels(
+    prior,
+    (
+        ChannelLikelihood("face", PosteriorDist({}), 3.0),
+        ChannelLikelihood("gallery", PosteriorDist({}), 1.0),
+    ),
+)
 (top_id, _), margin = combined.top_with_margin()
 json.dump({"top_identity": combined.top_identity()[0], "top_with_margin": top_id,
            "margin": margin, "keys": list(combined.distribution)}, sys.stdout)
@@ -74,6 +82,12 @@ def test_combined_keys_are_sorted_regardless_of_input_order() -> None:
     prior = PosteriorDist({"zeta": 0.4, "alpha": 0.4, "UNKNOWN": 0.2})
     face = PosteriorDist({"mid": 0.6, "UNKNOWN": 0.4})
 
-    combined = combine_posteriors(prior, face, PosteriorDist({}))
+    combined = combine_channels(
+        prior,
+        (
+            ChannelLikelihood("face", face, 3.0),
+            ChannelLikelihood("gallery", PosteriorDist({}), 1.0),
+        ),
+    )
 
     assert list(combined.distribution) == sorted(combined.distribution)

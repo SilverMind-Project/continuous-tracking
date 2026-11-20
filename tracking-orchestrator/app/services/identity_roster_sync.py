@@ -40,9 +40,15 @@ class FaceTemplateIdentityReset(Protocol):
 
 
 class WearableIdentityPurge(Protocol):
-    """Drops in-memory wearable bindings tied to a purged identity."""
+    """Drops in-memory wearable state tied to a purged identity."""
 
     def purge_identity(self, identity_id: str) -> int: ...
+
+
+class WearableAssociationIdentityPurge(Protocol):
+    """Deletes stored wearable association segments tied to a purged identity."""
+
+    async def purge_identity(self, identity_id: str) -> int: ...
 
 
 class IdentityRosterSyncService:
@@ -57,12 +63,16 @@ class IdentityRosterSyncService:
         gallery_cache: GalleryCache | None = None,
         face_templates: FaceTemplateIdentityReset | None = None,
         wearable_site_config: WearableIdentityPurge | None = None,
+        wearable_fix_buffer: WearableIdentityPurge | None = None,
+        wearable_association_repo: WearableAssociationIdentityPurge | None = None,
         interval_s: float = 60.0,
     ) -> None:
         self._gallery_repo = gallery_repo
         # Face templates hold faces recognized as the purged identity; they go with it.
         self._face_templates = face_templates
         self._wearable_site_config = wearable_site_config
+        self._wearable_fix_buffer = wearable_fix_buffer
+        self._wearable_association_repo = wearable_association_repo
         self._members_source = members_source
         self._identity_resolver = identity_resolver
         self._gallery_cache = gallery_cache
@@ -73,11 +83,16 @@ class IdentityRosterSyncService:
         """Purge one unenrolled identity and invalidate in-memory caches."""
         removed = await self._gallery_repo.purge_identity(identity_id)
         wearable_removed = self._purge_wearable_bindings(identity_id)
-        if removed or wearable_removed > 0:
+        assoc_removed = await self._purge_wearable_associations(identity_id)
+        if removed or wearable_removed > 0 or assoc_removed > 0:
             self._invalidate_caches()
             self._reset_face_templates(identity_id)
-            logger.info("identity_purged_from_roster", wearable_bindings_purged=wearable_removed)
-        return removed or wearable_removed > 0
+            logger.info(
+                "identity_purged_from_roster",
+                wearable_bindings_purged=wearable_removed,
+                wearable_associations_purged=assoc_removed,
+            )
+        return removed or wearable_removed > 0 or assoc_removed > 0
 
     async def sync_once(self) -> tuple[int, int]:
         """Run one roster reconciliation pass.
@@ -123,6 +138,7 @@ class IdentityRosterSyncService:
                 ):
                     self._reset_face_templates(ident.identity_id)
                     self._purge_wearable_bindings(ident.identity_id)
+                    await self._purge_wearable_associations(ident.identity_id)
                     purged += 1
 
         if upserted > 0 or purged > 0:
@@ -140,9 +156,17 @@ class IdentityRosterSyncService:
             self._face_templates.reset_identity(identity_id)
 
     def _purge_wearable_bindings(self, identity_id: str) -> int:
-        if self._wearable_site_config is None:
+        removed = 0
+        if self._wearable_site_config is not None:
+            removed += self._wearable_site_config.purge_identity(identity_id)
+        if self._wearable_fix_buffer is not None:
+            self._wearable_fix_buffer.purge_identity(identity_id)
+        return removed
+
+    async def _purge_wearable_associations(self, identity_id: str) -> int:
+        if self._wearable_association_repo is None:
             return 0
-        return self._wearable_site_config.purge_identity(identity_id)
+        return await self._wearable_association_repo.purge_identity(identity_id)
 
     def _invalidate_caches(self) -> None:
         if self._identity_resolver is not None:

@@ -24,9 +24,11 @@ from ..calibration.state import calibration_state
 from ..domain import (
     FACE_EVIDENCE_POLICIES,
     CameraConfig,
+    ExternalIdentityEvidenceSource,
     FaceEvidencePolicy,
     Identity,
     OverlapGroup,
+    WearableFixSource,
 )
 from ..inference.detector import PersonDetector
 from ..inference.face_id_client import FaceIdentificationClient
@@ -58,6 +60,7 @@ from ..pipeline.stages import (
     StageRunner,
     TrailsStage,
     TrajectoryStage,
+    WearableAssociationPersistStage,
     WorldTrackingStage,
     timed_phase,
 )
@@ -114,6 +117,10 @@ from ..storage.face_stats import (
     FaceObservationStatsRepository,
     InMemoryFaceObservationStatsRepository,
 )
+from ..storage.wearable_associations import (
+    InMemoryWearableAssociationRepository,
+    WearableAssociationRepository,
+)
 from ..tracking.floor_projector import FloorProjector
 from ..tracking.identity.candidate_eligibility import CandidatePolicy
 from ..tracking.identity.face_template_buffer import FaceTemplatePolicy
@@ -121,6 +128,7 @@ from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
 from ..tracking.world.config import WorldTrackerConfig
 from ..tracking.world.tracker import WorldTracker
+from ..tracking.world.wearable_config import WearableConfig
 from ..trajectory.appearance_profile import AppearanceEvaluator, AppearanceSettings
 from ..trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
 from ..trajectory.gait import GaitAggregator, GaitConfig, WalkingBoutSegmenter
@@ -229,6 +237,9 @@ class PipelineDependencies:
     # depend on it through ordinary constructor injection rather than a
     # post-init reach-in into an already-built stage.
     identity_correction_service: IdentityCorrectionService | None = None
+    external_evidence: ExternalIdentityEvidenceSource | None = None
+    wearable_fix_source: WearableFixSource | None = None
+    wearable_association_repo: WearableAssociationRepository | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -251,6 +262,7 @@ class PipelineConfig:
 
     # --- Tracking ---
     world_tracker: WorldTrackerConfig = field(default_factory=WorldTrackerConfig)
+    wearable: WearableConfig = field(default_factory=WearableConfig)
 
     # --- Identity resolution ---
     resolver: ResolverConfig = field(default_factory=ResolverConfig)
@@ -467,6 +479,7 @@ class FrameProcessingPipeline:
             identities=self._config.known_identities,
             config=self._config.resolver,
             gallery_cache=self._gallery_cache,
+            wearable_config=self._config.wearable,
         )
 
         self._revision_publisher = RevisionPublisher(
@@ -513,6 +526,7 @@ class FrameProcessingPipeline:
             topology_repo=deps.topology_repo if deps else None,
             copresence_repo=deps.copresence_repo if deps else None,
             overlap_groups=deps.overlap_groups if deps else None,
+            wearable_config=self._config.wearable,
         )
 
         # ---- Trajectory writer + keyframe sampler ----
@@ -654,12 +668,17 @@ class FrameProcessingPipeline:
             tracker=self._world_tracker,
             live_config=self._live_config,
             config=self._config.world_tracker,
+            external_evidence=deps.external_evidence,
             floor_projector=self._floor_projector,
             cc_assertion_mode=self._config.resolver.cc_assertion_mode,
             room_match_confidence_scale=self._config.resolver.room_match_confidence_scale,
             cc_assertion_default_quality=self._config.resolver.cc_assertion_default_quality,
             cc_assertion_default_yaw_deg=self._config.resolver.cc_assertion_default_yaw_deg,
             face_templates=self._face_templates,
+            wearable_fix_source=deps.wearable_fix_source,
+            wearable_fix_window_s=max(
+                self._config.wearable.window_s, self._config.wearable.max_fix_age_s
+            ),
         )
 
         # Named stage groups — replace fragile integer slices so adding
@@ -730,6 +749,13 @@ class FrameProcessingPipeline:
                 identity_provenance_repo=self._identity_provenance_repo
             )
 
+        wearable_persist_stage: WearableAssociationPersistStage | None = None
+        if self._config.wearable.mode != "off" or deps.wearable_association_repo is not None:
+            wearable_repo = (
+                deps.wearable_association_repo or InMemoryWearableAssociationRepository()
+            )
+            wearable_persist_stage = WearableAssociationPersistStage(repo=wearable_repo)
+
         post_world_stages = [
             DetectionBackfillStage(),
             ClosePHStage(
@@ -775,6 +801,7 @@ class FrameProcessingPipeline:
                 if self._provenance_persist_stage is not None
                 else []
             ),
+            *([wearable_persist_stage] if wearable_persist_stage is not None else []),
             # crop_storage: FrameImageFetcher only declares fetch_rgb, but the
             # concrete MinioFrameFetcher main.py injects also has put_bytes/delete_object
             # (CropStorageProtocol) -- same cross-protocol looseness as detect_stage above.
@@ -1342,6 +1369,12 @@ class FrameProcessingPipeline:
         if self._world_tracker is None:
             return None
         return self._world_tracker.overlap_group_count()
+
+    def active_wearable_association_count(self) -> int | None:
+        """Open wearable-to-PH association segments; None before the tracker is built."""
+        if self._world_tracker is None:
+            return None
+        return self._world_tracker.active_wearable_association_count()
 
     def set_room_polygon_map(self, room_polygon_map: RoomPolygonMap) -> None:
         """Replace the live room polygon map read by WorldTrackingStage."""

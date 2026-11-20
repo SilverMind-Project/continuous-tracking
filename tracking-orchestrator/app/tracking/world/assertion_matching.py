@@ -8,12 +8,12 @@ Assertions must pass spatial, temporal, and confidence gates before they
 become evidence. This prevents a far-away, room-mismatched, stale, or
 uncalibrated assertion from contaminating the identity posterior.
 
-Spatial gates fail closed (identity-continuity M09): evidence without a
-floor point may match at room granularity with a confidence haircut, and
-evidence with neither floor point nor room matches nothing. The camera-id
-equality gate only applies inside the floor branch, where same-fleet camera
-ids are actually meaningful; a reCamera assertion carrying a CC sensor id
-would otherwise never pass a CTS camera-id comparison in the room branch.
+Spatial gates fail closed: evidence without a floor point may match at room
+granularity with a confidence haircut, and evidence with neither floor point
+nor room matches nothing. The camera-id equality gate only applies inside the
+floor branch, where same-fleet camera ids are actually meaningful; a reCamera
+assertion carrying a CC sensor id would otherwise never pass a CTS camera-id
+comparison in the room branch.
 
 This module is pure and synchronous: no I/O, no Prometheus calls. Callers
 that want match/rejection metrics pass a ``diagnostics`` dict and increment
@@ -22,11 +22,16 @@ counters from its contents themselves.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any
 
-from ...domain import FaceAnchor, WorldObservation
+from app.domain import (
+    AnchorAggregation,
+    AnchorOrigin,
+    ExternalIdentityAssertion,
+    FaceAnchor,
+    WorldObservation,
+)
 
 # Rejection reason labels (mirrors cc_assertions_rejected_total{reason=...}).
 _REASON_NO_SPATIAL_EVIDENCE = "no_spatial_evidence"
@@ -45,21 +50,8 @@ def _bump(diagnostics: dict[str, int] | None, key: str) -> None:
     diagnostics[key] = diagnostics.get(key, 0) + 1
 
 
-def _parse_captured_at(raw: object) -> datetime | None:
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        try:
-            return datetime.fromisoformat(raw)
-        except (ValueError, TypeError):
-            return None
-    if isinstance(raw, datetime):
-        return raw
-    return None
-
-
 def _evaluate_gate(
-    assertion: Mapping[str, Any],
+    assertion: ExternalIdentityAssertion,
     obs: WorldObservation,
     now: datetime,
     *,
@@ -80,55 +72,46 @@ def _evaluate_gate(
     room agreement; an assertion with neither position evidence matches
     nothing, never everything.
     """
-    raw_confidence = assertion.get("confidence")
-    if raw_confidence is None:
+    if assertion.calibrated_confidence is None:
         _bump(diagnostics, _REASON_UNCALIBRATED)
         return None
-    confidence = float(raw_confidence)
+    confidence = float(assertion.calibrated_confidence)
     if confidence < anchor_min_confidence:
         _bump(diagnostics, _REASON_LOW_CONFIDENCE)
         return None
 
-    a_time = _parse_captured_at(assertion.get("captured_at"))
-    if a_time is None:
-        _bump(diagnostics, _REASON_STALE)
-        return None
-    if abs((now - a_time).total_seconds()) > anchor_match_window_s:
+    if abs((now - assertion.captured_at).total_seconds()) > anchor_match_window_s:
         _bump(diagnostics, _REASON_STALE)
         return None
 
-    fx = assertion.get("floor_x_m")
-    fy = assertion.get("floor_y_m")
-    if fx is not None and fy is not None:
-        a_camera = str(assertion.get("camera_id") or "")
-        if a_camera and a_camera != obs.camera_id:
+    if assertion.floor_x_m is not None and assertion.floor_y_m is not None:
+        if assertion.camera_id and assertion.camera_id != obs.camera_id:
             _bump(diagnostics, _REASON_NO_SPATIAL_EVIDENCE)
             return None
         obs_x = obs.floor_point.x_mm / 1000.0
         obs_y = obs.floor_point.y_mm / 1000.0
-        dist = ((obs_x - float(fx)) ** 2 + (obs_y - float(fy)) ** 2) ** 0.5
+        dist = ((obs_x - assertion.floor_x_m) ** 2 + (obs_y - assertion.floor_y_m) ** 2) ** 0.5
         if dist > anchor_match_distance_m:
             _bump(diagnostics, _REASON_NO_SPATIAL_EVIDENCE)
             return None
         return _GATE_FLOOR, confidence
 
-    room_name = assertion.get("room_name")
-    if not room_name:
+    if not assertion.room_name:
         _bump(diagnostics, _REASON_NO_SPATIAL_EVIDENCE)
         return None
     obs_room = camera_room_lookup.get(obs.camera_id)
     if not obs_room:
         _bump(diagnostics, _REASON_NO_SPATIAL_EVIDENCE)
         return None
-    if str(room_name).strip().casefold() != str(obs_room).strip().casefold():
+    if assertion.room_name.strip().casefold() != obs_room.strip().casefold():
         _bump(diagnostics, _REASON_ROOM_MISMATCH)
         return None
     return _GATE_ROOM, confidence * room_match_confidence_scale
 
 
 def match_assertions_to_face_anchors(
-    assertions: list[dict[str, Any]],
-    observations: list[WorldObservation],
+    assertions: Sequence[ExternalIdentityAssertion],
+    observations: Sequence[WorldObservation],
     now: datetime,
     anchor_match_window_s: float = 30.0,
     anchor_match_distance_m: float = 5.0,
@@ -155,8 +138,8 @@ def match_assertions_to_face_anchors(
     Each matched (assertion, observation) pair creates one FaceAnchor, built
     with the assertion's own captured_at, wire yaw/quality (or the
     configured conservative defaults when absent), and
-    ``origin="cc_assertion"``. ``calibrated_confidence`` stays None by
-    design so ArcFace authority keeps failing closed structurally on
+    ``origin=AnchorOrigin.CC_ASSERTION``. ``calibrated_confidence`` stays None
+    by design so ArcFace authority keeps failing closed structurally on
     external evidence. A room-matched anchor's confidence is scaled by
     room_match_confidence_scale. Only the strongest assertion per
     observation is kept.
@@ -171,9 +154,9 @@ def match_assertions_to_face_anchors(
         best_conf = -1.0
         best_gate: str | None = None
 
-        for a in assertions:
+        for assertion in assertions:
             outcome = _evaluate_gate(
-                a,
+                assertion,
                 obs,
                 now,
                 anchor_match_window_s=anchor_match_window_s,
@@ -189,25 +172,21 @@ def match_assertions_to_face_anchors(
             if effective_confidence <= best_conf:
                 continue
 
-            person_id = str(a.get("person_id", ""))
-            if not person_id:
+            if not assertion.person_id:
                 continue
 
-            yaw_deg = a.get("yaw_deg")
-            quality = a.get("quality")
-            captured_at = _parse_captured_at(a.get("captured_at")) or now
-
             best = FaceAnchor(
-                person_id=person_id,
+                person_id=assertion.person_id,
                 match_score=effective_confidence,
-                quality=float(quality) if quality is not None else default_quality,
+                quality=assertion.quality if assertion.quality is not None else default_quality,
                 detection_id=obs.detection_id,
                 camera_id=obs.camera_id,
-                captured_at=captured_at,
+                captured_at=assertion.captured_at,
                 recognition_state="recognized",
-                yaw_deg=float(yaw_deg) if yaw_deg is not None else default_yaw_deg,
+                yaw_deg=assertion.yaw_deg if assertion.yaw_deg is not None else default_yaw_deg,
                 calibrated_confidence=None,
-                origin="cc_assertion",
+                origin=AnchorOrigin.CC_ASSERTION,
+                aggregation=AnchorAggregation.FRAME,
             )
             best_conf = effective_confidence
             best_gate = gate

@@ -25,6 +25,7 @@ from structlog import get_logger
 from ...domain import FloorPoint
 from ...domain import cov2x2_to_tuple as _cov2x2_to_tuple
 from ...domain import tuple_to_cov2x2 as _tuple_to_cov2x2
+from ..identity.evidence_grades import grade_of
 from .helpers import cosine_similarity
 from .observation_model import (
     bias_floor_from_residual,
@@ -211,8 +212,7 @@ def _faces_conflict(
     for fa in (fa_i, fa_j):
         if (
             fa.recognition_state != "recognized"
-            or fa.origin != "native"
-            or fa.aggregation != "frame"
+            or not grade_of(fa).enters_association
             or not fa.person_id
             or fa.match_score < cfg.face_conflict_min_similarity
         ):

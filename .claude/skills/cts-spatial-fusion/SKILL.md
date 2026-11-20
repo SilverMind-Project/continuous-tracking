@@ -83,6 +83,14 @@ R*   = ( Σ (J Σ_px Jᵀ)ᵢ⁻¹ )⁻¹  +  R_bias_floor
   `now` (`max(ctx.capture_time)`) are transient for association and `coasting=True` snapshots,
   and matched updates predict from `last_seen_at` to `obs.captured_at` (see
   `reference/time-model.md`).
+- **Wearable-to-PH association innovation covariance.** Trajectory-class wearable fixes
+  (`sqrt(lambda_max(Sigma_f)) <= wearable.trajectory_max_sigma_m`, default `0.75 m`) score
+  against calibrated PH floor history (`tracking-orchestrator/app/tracking/world/ph_floor_history.py`,
+  appended only on calibrated rounds, never synthetic virtual tiles or coasting predictions)
+  interpolated at `fix.measured_at` with innovation covariance
+  `S = Sigma_f + Sigma_j + (v_j * sigma_t)^2 * I + sigma_bias^2 * I` (`sigma_t = 0.5 s`,
+  `sigma_bias = 0.15 m`, chi-square gate `9.21`). Wide-covariance fixes reduce their 2D
+  Gaussian over room polygons and use sole-occupant room rules.
 
 ## Primary-camera selection
 

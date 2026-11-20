@@ -1,12 +1,14 @@
-"""WorldTrackingStage CC assertion mode-gating tests (identity-continuity M09).
+"""WorldTrackingStage CC assertion mode-gating tests.
 
 Covers the resolver.cc_assertion_mode contract: off (matcher not consulted),
 shadow (matched but not injected; outcome metrics recorded), enabled
-(matched anchors injected as evidence), and the room-lookup/scale wiring.
+(matched anchors injected as evidence), and the room-lookup/scale wiring
+using constructor-injected ExternalIdentityEvidenceSource.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -14,7 +16,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from prometheus_client import CollectorRegistry
 
-from app.domain import BoundingBox, Detection, FloorPoint, PersonHypothesis
+from app.domain import (
+    AnchorOrigin,
+    BoundingBox,
+    Detection,
+    ExternalIdentityAssertion,
+    FloorPoint,
+    PersonHypothesis,
+)
 from app.observability import metrics as metrics_pkg
 from app.observability.metrics import build_metrics
 from app.pipeline.frame_context import FrameContext
@@ -25,13 +34,13 @@ from app.tracking.world.tracker import WorldTrackerResult
 from app.transport.redis_streams import FrameReady
 
 
-class _FakeAssertionCache:
-    def __init__(self, assertions: list[dict[str, Any]]) -> None:
-        self._assertions = assertions
-        self.get_recent_calls = 0
+class _FakeExternalEvidenceSource:
+    def __init__(self, assertions: Sequence[ExternalIdentityAssertion]) -> None:
+        self._assertions = tuple(assertions)
+        self.recent_calls = 0
 
-    async def get_recent(self, max_age_s: float | None = None) -> list[dict[str, Any]]:
-        self.get_recent_calls += 1
+    async def recent(self, max_age_s: float = 30.0) -> Sequence[ExternalIdentityAssertion]:
+        self.recent_calls += 1
         return self._assertions
 
 
@@ -70,19 +79,18 @@ def _make_ctx(now: datetime, camera_id: str = "cam-1") -> FrameContext:
 def _make_stage(
     *,
     mode: str,
-    assertion_cache: _FakeAssertionCache,
+    external_evidence: _FakeExternalEvidenceSource,
     tracker_mock: MagicMock,
     camera_room_map: CameraRoomMap,
     room_match_confidence_scale: float = 0.8,
 ) -> WorldTrackingStage:
-    stage = WorldTrackingStage(
+    return WorldTrackingStage(
         tracker=tracker_mock,
         live_config=LiveConfigHolder(camera_room_map, RoomPolygonMap()),
+        external_evidence=external_evidence,
         cc_assertion_mode=mode,
         room_match_confidence_scale=room_match_confidence_scale,
     )
-    stage._assertion_cache = assertion_cache  # type: ignore[attr-defined]
-    return stage
 
 
 def _mock_tracker(result: WorldTrackerResult) -> tuple[MagicMock, list[Any]]:
@@ -99,40 +107,17 @@ def _mock_tracker(result: WorldTrackerResult) -> tuple[MagicMock, list[Any]]:
 
 @pytest.mark.asyncio
 async def test_off_mode_matcher_not_consulted() -> None:
-    """off preserves pre-M09 behavior exactly: the assertion cache is never queried."""
+    """off skips external assertion matching entirely."""
     now = datetime.now(UTC)
-    cache = _FakeAssertionCache(
-        [{"person_id": "alice", "confidence": 0.9, "captured_at": now, "room_name": "Kitchen"}]
-    )
-    result = WorldTrackerResult(updated_phs=[], snapshots=[], continuations=[])
-    tracker_mock, captured = _mock_tracker(result)
-    room_map = CameraRoomMap()
-    await room_map.set_all(
-        [CameraRoomBinding(camera_id="cam-1", room_id="r1", room_name="Kitchen", bound_at=now)]
-    )
-    stage = _make_stage(
-        mode="off", assertion_cache=cache, tracker_mock=tracker_mock, camera_room_map=room_map
-    )
-
-    await stage.run_many([_make_ctx(now)])
-
-    assert cache.get_recent_calls == 0
-    assert captured[0] == []
-
-
-@pytest.mark.asyncio
-async def test_enabled_mode_injects_matched_anchors() -> None:
-    """enabled mode passes matched CC anchors to WorldTracker.step()."""
-    now = datetime.now(UTC)
-    cache = _FakeAssertionCache(
+    source = _FakeExternalEvidenceSource(
         [
-            {
-                "person_id": "alice",
-                "confidence": 0.9,
-                "captured_at": now,
-                "room_name": "Kitchen",
-                "camera_id": "recamera_kitchen",
-            }
+            ExternalIdentityAssertion(
+                person_id="alice",
+                calibrated_confidence=0.9,
+                camera_id="recamera_kitchen",
+                captured_at=now,
+                room_name="Kitchen",
+            )
         ]
     )
     result = WorldTrackerResult(updated_phs=[], snapshots=[], continuations=[])
@@ -142,33 +127,31 @@ async def test_enabled_mode_injects_matched_anchors() -> None:
         [CameraRoomBinding(camera_id="cam-1", room_id="r1", room_name="Kitchen", bound_at=now)]
     )
     stage = _make_stage(
-        mode="enabled", assertion_cache=cache, tracker_mock=tracker_mock, camera_room_map=room_map
+        mode="off",
+        external_evidence=source,
+        tracker_mock=tracker_mock,
+        camera_room_map=room_map,
     )
 
     await stage.run_many([_make_ctx(now)])
 
-    assert cache.get_recent_calls == 1
-    injected = captured[0]
-    assert len(injected) == 1
-    assert injected[0].person_id == "alice"
-    assert injected[0].origin == "cc_assertion"
+    assert source.recent_calls == 0
+    assert captured[0] == []
 
 
 @pytest.mark.asyncio
-async def test_stage_passes_room_lookup_and_configured_scale_to_matcher() -> None:
-    """Wiring assertion: the stage resolves the camera->room lookup itself and
-    threads its configured room_match_confidence_scale into the matcher, so a
-    room-matched anchor's confidence reflects the stage's own constructor value."""
+async def test_enabled_mode_injects_matched_anchors() -> None:
+    """enabled mode passes matched CC anchors to WorldTracker.step()."""
     now = datetime.now(UTC)
-    cache = _FakeAssertionCache(
+    source = _FakeExternalEvidenceSource(
         [
-            {
-                "person_id": "alice",
-                "confidence": 0.9,
-                "captured_at": now,
-                "room_name": "Kitchen",
-                "camera_id": "recamera_kitchen",
-            }
+            ExternalIdentityAssertion(
+                person_id="alice",
+                calibrated_confidence=0.9,
+                camera_id="recamera_kitchen",
+                captured_at=now,
+                room_name="Kitchen",
+            )
         ]
     )
     result = WorldTrackerResult(updated_phs=[], snapshots=[], continuations=[])
@@ -179,7 +162,45 @@ async def test_stage_passes_room_lookup_and_configured_scale_to_matcher() -> Non
     )
     stage = _make_stage(
         mode="enabled",
-        assertion_cache=cache,
+        external_evidence=source,
+        tracker_mock=tracker_mock,
+        camera_room_map=room_map,
+    )
+
+    await stage.run_many([_make_ctx(now)])
+
+    assert source.recent_calls == 1
+    injected = captured[0]
+    assert len(injected) == 1
+    assert injected[0].person_id == "alice"
+    assert injected[0].origin == AnchorOrigin.CC_ASSERTION
+
+
+@pytest.mark.asyncio
+async def test_stage_passes_room_lookup_and_configured_scale_to_matcher() -> None:
+    """Wiring assertion: the stage resolves the camera->room lookup itself and
+    threads its configured room_match_confidence_scale into the matcher."""
+    now = datetime.now(UTC)
+    source = _FakeExternalEvidenceSource(
+        [
+            ExternalIdentityAssertion(
+                person_id="alice",
+                calibrated_confidence=0.9,
+                camera_id="recamera_kitchen",
+                captured_at=now,
+                room_name="Kitchen",
+            )
+        ]
+    )
+    result = WorldTrackerResult(updated_phs=[], snapshots=[], continuations=[])
+    tracker_mock, captured = _mock_tracker(result)
+    room_map = CameraRoomMap()
+    await room_map.set_all(
+        [CameraRoomBinding(camera_id="cam-1", room_id="r1", room_name="Kitchen", bound_at=now)]
+    )
+    stage = _make_stage(
+        mode="enabled",
+        external_evidence=source,
         tracker_mock=tracker_mock,
         camera_room_map=room_map,
         room_match_confidence_scale=0.4,
@@ -202,15 +223,15 @@ async def test_shadow_mode_does_not_inject_but_records_outcomes(
     monkeypatch.setattr(metrics_pkg, "metrics", fresh_metrics)
 
     now = datetime.now(UTC)
-    cache = _FakeAssertionCache(
+    source = _FakeExternalEvidenceSource(
         [
-            {
-                "person_id": "alice",
-                "confidence": 0.9,
-                "captured_at": now,
-                "room_name": "Kitchen",
-                "camera_id": "recamera_kitchen",
-            }
+            ExternalIdentityAssertion(
+                person_id="alice",
+                calibrated_confidence=0.9,
+                camera_id="recamera_kitchen",
+                captured_at=now,
+                room_name="Kitchen",
+            )
         ]
     )
     ph = PersonHypothesis(
@@ -221,7 +242,7 @@ async def test_shadow_mode_does_not_inject_but_records_outcomes(
         last_seen_at=now,
         last_seen_camera="cam-1",
         observation_count=1,
-        current_identity_id=None,  # PH still Unknown post-resolve
+        current_identity_id=None,
     )
     result = WorldTrackerResult(
         updated_phs=[ph],
@@ -235,17 +256,17 @@ async def test_shadow_mode_does_not_inject_but_records_outcomes(
         [CameraRoomBinding(camera_id="cam-1", room_id="r1", room_name="Kitchen", bound_at=now)]
     )
     stage = _make_stage(
-        mode="shadow", assertion_cache=cache, tracker_mock=tracker_mock, camera_room_map=room_map
+        mode="shadow",
+        external_evidence=source,
+        tracker_mock=tracker_mock,
+        camera_room_map=room_map,
     )
 
     await stage.run_many([_make_ctx(now)])
 
-    assert cache.get_recent_calls == 1
-    # Not injected: the tracker never sees the cc_assertion anchor.
+    assert source.recent_calls == 1
     assert captured[0] == []
-    # Flow metrics always-on.
     assert fresh_metrics.cc_assertions_matched_total.labels(gate="room")._value.get() == 1.0
-    # Shadow outcome: PH resolved to Unknown -> would_name_unknown.
     assert (
         fresh_metrics.cc_assertions_shadow_total.labels(outcome="would_name_unknown")._value.get()
         == 1.0
@@ -259,15 +280,15 @@ async def test_shadow_mode_disagrees_outcome(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(metrics_pkg, "metrics", fresh_metrics)
 
     now = datetime.now(UTC)
-    cache = _FakeAssertionCache(
+    source = _FakeExternalEvidenceSource(
         [
-            {
-                "person_id": "alice",
-                "confidence": 0.9,
-                "captured_at": now,
-                "room_name": "Kitchen",
-                "camera_id": "recamera_kitchen",
-            }
+            ExternalIdentityAssertion(
+                person_id="alice",
+                calibrated_confidence=0.9,
+                camera_id="recamera_kitchen",
+                captured_at=now,
+                room_name="Kitchen",
+            )
         ]
     )
     ph = PersonHypothesis(
@@ -278,7 +299,7 @@ async def test_shadow_mode_disagrees_outcome(monkeypatch: pytest.MonkeyPatch) ->
         last_seen_at=now,
         last_seen_camera="cam-1",
         observation_count=1,
-        current_identity_id="bob",  # resolved (natively) to someone else
+        current_identity_id="bob",
     )
     result = WorldTrackerResult(
         updated_phs=[ph], snapshots=[], continuations=[], det_to_ph={"det-1": "ph-1"}
@@ -289,7 +310,10 @@ async def test_shadow_mode_disagrees_outcome(monkeypatch: pytest.MonkeyPatch) ->
         [CameraRoomBinding(camera_id="cam-1", room_id="r1", room_name="Kitchen", bound_at=now)]
     )
     stage = _make_stage(
-        mode="shadow", assertion_cache=cache, tracker_mock=tracker_mock, camera_room_map=room_map
+        mode="shadow",
+        external_evidence=source,
+        tracker_mock=tracker_mock,
+        camera_room_map=room_map,
     )
 
     await stage.run_many([_make_ctx(now)])
@@ -304,8 +328,16 @@ async def test_uncalibrated_assertion_rejected_metric(monkeypatch: pytest.Monkey
     monkeypatch.setattr(metrics_pkg, "metrics", fresh_metrics)
 
     now = datetime.now(UTC)
-    cache = _FakeAssertionCache(
-        [{"person_id": "alice", "confidence": None, "captured_at": now, "room_name": "Kitchen"}]
+    source = _FakeExternalEvidenceSource(
+        [
+            ExternalIdentityAssertion(
+                person_id="alice",
+                calibrated_confidence=None,
+                camera_id="recamera_kitchen",
+                captured_at=now,
+                room_name="Kitchen",
+            )
+        ]
     )
     result = WorldTrackerResult(updated_phs=[], snapshots=[], continuations=[])
     tracker_mock, captured = _mock_tracker(result)
@@ -314,7 +346,10 @@ async def test_uncalibrated_assertion_rejected_metric(monkeypatch: pytest.Monkey
         [CameraRoomBinding(camera_id="cam-1", room_id="r1", room_name="Kitchen", bound_at=now)]
     )
     stage = _make_stage(
-        mode="shadow", assertion_cache=cache, tracker_mock=tracker_mock, camera_room_map=room_map
+        mode="shadow",
+        external_evidence=source,
+        tracker_mock=tracker_mock,
+        camera_room_map=room_map,
     )
 
     await stage.run_many([_make_ctx(now)])

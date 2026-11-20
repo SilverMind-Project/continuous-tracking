@@ -27,7 +27,7 @@ from typing import Protocol
 
 from structlog import get_logger
 
-from app.domain import FaceAnchor
+from app.domain import AnchorAggregation, FaceAnchor
 from app.inference.evidence import FaceEvidence
 from app.inference.face_id_client import (
     TEMPLATE_PROFILE,
@@ -189,7 +189,7 @@ def template_anchor(
         face_quality=result.quality.score,
         face_quality_version=f"{result.aggregator_version}/{result.quality_version}",
         shadow_only=shadow_only,
-        aggregation="template",
+        aggregation=AnchorAggregation.TEMPLATE,
         authority_eligible=blocked != "member_disagreement",
     )
     evidence = (

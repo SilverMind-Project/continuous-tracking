@@ -816,6 +816,52 @@ hygiene:
     # can still act today.
     evaluate_local_hour: 11
 
+# Wearable localization association and identity evidence
+wearable:
+  # Rollout mode: "off" skips stream consumption and association; "shadow" evaluates
+  # associations and counterfactual resolver outcomes without changing live identity;
+  # "enabled" feeds accepted wearable evidence into the Bayesian resolver.
+  mode: "off"
+  window_s: 10.0
+  min_fixes: 5
+  min_window_llr: 6.0
+  min_margin_llr: 4.0
+  gate_chi2: 9.21
+  gate_penalty_llr: -4.0
+  # Timing uncertainty for RF-to-camera clock alignment and burst batching (seconds).
+  timing_sigma_s: 0.5
+  # Floor-frame systematic bias floor in metres.
+  bias_floor_m: 0.15
+  # Maximum fix age at ingest (seconds); accommodates micro-batched bursts.
+  max_fix_age_s: 15.0
+  buffer_max_age_s: 30.0
+  max_extrapolation_s: 0.5
+  max_fix_buffer_per_tag: 128
+  # Major-axis covariance threshold (metres) separating trajectory-class from room-class fixes.
+  trajectory_max_sigma_m: 0.75
+  room_min_mass: 0.7
+  room_polygon_min_mass: 0.05
+  room_match_eps: 0.1
+  # Stationary tags parked without room change for this duration yield zero evidence.
+  parked_after_s: 600.0
+  tag_disagreement_window_s: 10.0
+  # Graded attestation thresholds for trajectory-class and room-class segments.
+  trajectory_attest_min_duration_s: 10.0
+  trajectory_attest_min_fixes: 8
+  room_attest_min_duration_s: 60.0
+  room_entry_window_s: 20.0
+  attest_min_llr: 15.0
+  # Wearable channel log-likelihood power weight and probability curve parameters.
+  weight_multiplier: 2.0
+  p_max: 0.97
+  p_max_room: 0.90
+  llr_mid: 8.0
+  llr_scale: 3.0
+  # Duplicate-active guard ranking floor and swap-suspected escalation threshold.
+  duplicate_guard_min_probability: 0.90
+  swap_conflict_count: 3
+  swap_conflict_window_s: 600.0
+
 # Environment label (dev / staging / production)
 env: production
 

@@ -1,0 +1,151 @@
+"""Postgres implementation of :class:`WearableAssociationRepository`."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import asyncpg
+
+from app.domain import WearableAssociationSegment, WearableAttestationGrade
+
+_SQL_UPSERT_SEGMENT = """
+    INSERT INTO continuous_tracking.wearable_associations (
+        segment_id, ph_id, tag_id, identity_id, started_at, ended_at,
+        attestation_grade, window_llr, margin_llr, matched_fixes,
+        mean_residual_m, swap_suspected, close_reason
+    ) VALUES (
+        $1::uuid, $2::uuid, $3, $4, $5, $6,
+        $7, $8, $9, $10,
+        $11, $12, $13
+    )
+    ON CONFLICT (segment_id) DO UPDATE SET
+        ended_at = EXCLUDED.ended_at,
+        attestation_grade = EXCLUDED.attestation_grade,
+        window_llr = EXCLUDED.window_llr,
+        margin_llr = EXCLUDED.margin_llr,
+        matched_fixes = EXCLUDED.matched_fixes,
+        mean_residual_m = EXCLUDED.mean_residual_m,
+        swap_suspected = EXCLUDED.swap_suspected,
+        close_reason = EXCLUDED.close_reason,
+        updated_at = now()
+"""
+
+_SQL_SELECT_COLUMNS = """
+    segment_id, ph_id, tag_id, identity_id, started_at, ended_at,
+    attestation_grade, window_llr, margin_llr, matched_fixes,
+    mean_residual_m, swap_suspected, close_reason
+"""
+
+
+def _row_to_segment(row: asyncpg.Record) -> WearableAssociationSegment:
+    return WearableAssociationSegment(
+        segment_id=str(row["segment_id"]),
+        ph_id=str(row["ph_id"]),
+        tag_id=str(row["tag_id"]),
+        identity_id=str(row["identity_id"]),
+        started_at=row["started_at"],
+        ended_at=row["ended_at"],
+        attestation_grade=WearableAttestationGrade(str(row["attestation_grade"])),
+        window_llr=float(row["window_llr"]),
+        margin_llr=float(row["margin_llr"]),
+        matched_fixes=int(row["matched_fixes"]),
+        mean_residual_m=(
+            float(row["mean_residual_m"]) if row["mean_residual_m"] is not None else None
+        ),
+        swap_suspected=bool(row["swap_suspected"]),
+        close_reason=str(row["close_reason"]) if row["close_reason"] is not None else None,
+    )
+
+
+class PostgresWearableAssociationRepository:
+    """Asyncpg-backed repository for ``continuous_tracking.wearable_associations``."""
+
+    def __init__(self, pool: asyncpg.Pool) -> None:
+        self._pool = pool
+
+    async def save_segment(self, segment: WearableAssociationSegment) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                _SQL_UPSERT_SEGMENT,
+                segment.segment_id,
+                segment.ph_id,
+                segment.tag_id,
+                segment.identity_id,
+                segment.started_at,
+                segment.ended_at,
+                str(segment.attestation_grade),
+                segment.window_llr,
+                segment.margin_llr,
+                segment.matched_fixes,
+                segment.mean_residual_m,
+                segment.swap_suspected,
+                segment.close_reason,
+            )
+
+    async def get_segment(self, segment_id: str) -> WearableAssociationSegment | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT {_SQL_SELECT_COLUMNS} "
+                "FROM continuous_tracking.wearable_associations "
+                "WHERE segment_id = $1::uuid",
+                segment_id,
+            )
+        return _row_to_segment(row) if row is not None else None
+
+    async def list_by_ph(self, ph_id: str, *, limit: int = 50) -> list[WearableAssociationSegment]:
+        return await self.list_recent(ph_id=ph_id, limit=limit)
+
+    async def list_active(self, *, limit: int = 50) -> list[WearableAssociationSegment]:
+        return await self.list_recent(active_only=True, limit=limit)
+
+    async def list_recent(
+        self,
+        *,
+        tag_id: str | None = None,
+        ph_id: str | None = None,
+        active_only: bool = False,
+        limit: int = 50,
+    ) -> list[WearableAssociationSegment]:
+        predicates: list[str] = []
+        params: list[Any] = []
+        idx = 1
+
+        if tag_id is not None:
+            predicates.append(f"tag_id = ${idx}")
+            params.append(tag_id)
+            idx += 1
+        if ph_id is not None:
+            predicates.append(f"ph_id = ${idx}::uuid")
+            params.append(ph_id)
+            idx += 1
+        if active_only:
+            predicates.append("ended_at IS NULL")
+
+        where = ("WHERE " + " AND ".join(predicates)) if predicates else ""
+        params.append(limit)
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT {_SQL_SELECT_COLUMNS} "
+                f"FROM continuous_tracking.wearable_associations {where} "
+                f"ORDER BY started_at DESC, segment_id DESC LIMIT ${idx}",
+                *params,
+            )
+        return [_row_to_segment(r) for r in rows]
+
+    async def purge_identity(self, identity_id: str) -> int:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "DELETE FROM continuous_tracking.wearable_associations "
+                "WHERE identity_id = $1 RETURNING segment_id",
+                identity_id,
+            )
+        return len(rows)
+
+    async def purge_ph(self, ph_id: str) -> int:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "DELETE FROM continuous_tracking.wearable_associations "
+                "WHERE ph_id = $1::uuid RETURNING segment_id",
+                ph_id,
+            )
+        return len(rows)

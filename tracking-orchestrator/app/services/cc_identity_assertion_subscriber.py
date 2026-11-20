@@ -1,21 +1,23 @@
 """Subscribes to ``cc.identity_assertions`` Redis stream.
 
-Cognitive-companion publishes face-anchor-equivalent assertions from the
-recamera VLM path.  This subscriber consumes them and caches the most
-recent assertions for the orchestrator's FaceIdentityStage to inject as
-evidence into the Bayesian identity resolver.
+Cognitive-companion publishes external identity assertions from the recamera
+VLM path. This subscriber consumes them and caches the most recent typed
+:class:`ExternalIdentityAssertion` records for ``WorldTrackingStage`` to match
+spatially and temporally into corroborating face anchors.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
 from structlog import get_logger
 
-from ..proto.continuoustracking.v1.tracking_pb2 import CCIdentityAssertion
+from app.domain import ExternalIdentityAssertion
+from app.proto.continuoustracking.v1.tracking_pb2 import CCIdentityAssertion
 
 logger = get_logger(__name__)
 
@@ -29,31 +31,31 @@ ASSERTION_TTL_S = 30.0
 
 
 class IdentityAssertionCache:
-    """Thread-safe cache of recent CC identity assertions.
+    """Async-safe cache of recent CC identity assertions.
 
-    The FaceIdentityStage reads this cache to find assertions that
-    match a PH within the spatial/temporal window.
+    Implements :class:`ExternalIdentityEvidenceSource`. ``WorldTrackingStage``
+    reads this cache to find assertions that match observations within the
+    spatial and temporal window.
     """
 
     def __init__(self) -> None:
-        self._assertions: list[dict[str, Any]] = []
+        self._assertions: list[ExternalIdentityAssertion] = []
         self._lock = asyncio.Lock()
 
-    async def add(self, assertion: dict[str, Any]) -> None:
+    async def add(self, assertion: ExternalIdentityAssertion) -> None:
         async with self._lock:
             self._assertions.append(assertion)
 
-    async def get_recent(self, max_age_s: float = ASSERTION_TTL_S) -> list[dict[str, Any]]:
-        """Return assertions not older than *max_age_s*."""
+    async def recent(
+        self, max_age_s: float = ASSERTION_TTL_S
+    ) -> Sequence[ExternalIdentityAssertion]:
+        """Return assertions whose ``received_at`` is not older than *max_age_s*."""
         now = datetime.now(UTC)
         async with self._lock:
-            # Prune expired.
             self._assertions = [
-                a
-                for a in self._assertions
-                if (now - a["_received_at"]).total_seconds() <= max_age_s
+                a for a in self._assertions if (now - a.received_at).total_seconds() <= max_age_s
             ]
-            return list(self._assertions)
+            return tuple(self._assertions)
 
 
 class CCIdentityAssertionSubscriber:
@@ -86,7 +88,6 @@ class CCIdentityAssertionSubscriber:
 
     async def _consume_loop(self) -> None:
         """Poll cc.identity_assertions stream in a loop."""
-        # Create consumer group if not exists.
         with suppress(Exception):
             await self._redis.xgroup_create(STREAM, GROUP, id="0", mkstream=True)
 
@@ -132,13 +133,14 @@ class CCIdentityAssertionSubscriber:
         if not msg.person_id:
             return
 
-        # No 0.7 fallback: an assertion without a
-        # calibrated confidence is cached with confidence=None and can never
-        # become an anchor (the matcher's confidence gate reads calibrated
-        # confidence only), but it still counts in shadow metrics so an
-        # uncalibrated deployment is visible instead of silently voting at a
-        # fixed trust.
-        confidence = msg.calibrated_confidence if msg.HasField("calibrated_confidence") else None
+        # No fixed-trust fallback: an assertion without a calibrated confidence is
+        # cached with calibrated_confidence=None and can never become an anchor
+        # (the matcher's confidence gate reads calibrated confidence only), while
+        # still counting in shadow/rejection metrics so uncalibrated deployments
+        # stay visible.
+        calibrated_confidence = (
+            msg.calibrated_confidence if msg.HasField("calibrated_confidence") else None
+        )
 
         captured_at = (
             datetime.fromtimestamp(msg.captured_at_unix_ns / 1e9, tz=UTC)
@@ -147,35 +149,38 @@ class CCIdentityAssertionSubscriber:
         )
 
         # Presence flags are authoritative: a nonzero value without its flag
-        # set is treated as absent (proto3 scalar floats cannot represent
-        # "unset", and only this milestone's publisher sets these fields).
+        # set is treated as absent because proto3 scalar floats cannot represent unset.
         floor_x_m = msg.floor_x_m if msg.has_floor_point else None
         floor_y_m = msg.floor_y_m if msg.has_floor_point else None
         room_name = msg.room_name or None
         yaw_deg = msg.yaw_deg if msg.has_yaw else None
         quality = msg.quality if msg.has_quality else None
 
-        assertion = {
-            "person_id": msg.person_id,
-            "confidence": confidence,
-            "camera_id": msg.camera_id,
-            "captured_at": captured_at,
-            "floor_x_m": floor_x_m,
-            "floor_y_m": floor_y_m,
-            "room_name": room_name,
-            "yaw_deg": yaw_deg,
-            "quality": quality,
-            "raw_similarity": msg.raw_similarity,
-            "calibration_status": msg.calibration_status,
-            "source": msg.source,
-            "model_version": msg.model_version,
-            "preprocessing_version": msg.preprocessing_version,
-            "_received_at": datetime.now(UTC),
-        }
+        assertion = ExternalIdentityAssertion(
+            person_id=msg.person_id,
+            calibrated_confidence=calibrated_confidence,
+            camera_id=msg.camera_id,
+            captured_at=captured_at,
+            floor_x_m=floor_x_m,
+            floor_y_m=floor_y_m,
+            room_name=room_name,
+            yaw_deg=yaw_deg,
+            quality=quality,
+            raw_similarity=msg.raw_similarity,
+            calibration_status=msg.calibration_status,
+            source=msg.source,
+            model_version=msg.model_version,
+            preprocessing_version=msg.preprocessing_version,
+            received_at=datetime.now(UTC),
+        )
         await self._cache.add(assertion)
         logger.debug(
             "cc_identity_assertion_received",
             person_id=msg.person_id,
-            confidence=confidence if confidence is None else round(confidence, 3),
+            confidence=(
+                calibrated_confidence
+                if calibrated_confidence is None
+                else round(calibrated_confidence, 3)
+            ),
             camera_id=msg.camera_id,
         )

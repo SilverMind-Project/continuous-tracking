@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from structlog import get_logger
 
 from ...domain import FaceAnchor, IdentityResolvableEntity, PosteriorDist
+from .evidence_grades import grade_of
 from .policy import CommitPolicy
 
 if TYPE_CHECKING:
@@ -135,22 +136,20 @@ def collect_evidence_identity_ids(
     - The ReID argmax qualifies when the distribution is non-empty, the
       argmax is not ``"UNKNOWN"``, and its score is > 0.3 (the same floor
       ``_build_evidence_ledger`` already uses).
-    - External evidence (``FaceAnchor.origin == "cc_assertion"``, identity-
-      continuity M09) never advances the independent-evidence clock: excluded
-      whenever ``recognized_only`` is True. It still qualifies for general
-      commit eligibility (``recognized_only`` False) — the whole point of
-      admitting it into the posterior is that it can drive a commit; only the
-      30s authority clock is denied to it.
+    - External evidence grades with ``refreshes_evidence_clock=False`` never
+      advance the independent-evidence clock: excluded whenever
+      ``recognized_only`` is True. They still qualify for general commit
+      eligibility (``recognized_only`` False) so corroborating assertions can
+      drive a commit without refreshing the 30 s authority clock.
     - ``calibrated_faces_only`` (the "calibrated" face evidence policy): a face
       anchor qualifies only when it is recognized and carries a calibrated
       confidence. Every other face (candidate, recognized without calibration,
       propagated, external) corroborates through the likelihood but is never
       evidence, so it can neither establish nor switch an identity nor advance
       the clock. ReID qualifies as before.
-    - A face template (``aggregation == "template"``) always follows the
-      ``calibrated_faces_only`` rule, whatever the policy: its raw similarity is
-      inflated by averaging, so only its template-profile calibrated confidence
-      makes it evidence.
+    - Grades with ``requires_calibration=True`` (such as face templates) always
+      follow the ``calibrated_faces_only`` rule, whatever the policy: averaging
+      inflates raw similarity, so only calibrated confidence makes them evidence.
     """
     ids = {
         fa.person_id
@@ -185,12 +184,12 @@ def identity_evidence_time(
 
     Uses exactly the predicate of ``collect_evidence_identity_ids`` with the same flags, so an
     identity is in that set if and only if this returns a time. A frame anchor or a ReID vote is
-    this round's evidence (``round_time``). A face template is as old as its newest member face
-    (``FaceAnchor.captured_at``): a template matched in the background and applied rounds later
-    must not make the identity look freshly observed.
+    this round's evidence (``round_time``). A grade with ``uses_own_capture_time=True`` (such as a
+    face template) uses its own ``FaceAnchor.captured_at`` so background-matched templates never
+    make the identity look freshly observed.
     """
     times = [
-        fa.captured_at if fa.aggregation == "template" else round_time
+        fa.captured_at if grade_of(fa).uses_own_capture_time else round_time
         for fa in _evidence_face_anchors(
             entity_obs_ids=entity_obs_ids,
             entity_id=entity_id,
@@ -220,7 +219,8 @@ def _evidence_face_anchors(
         fe.detection_id: fe for fe in face_evidence if fe.detection_id
     }
     for fa in face_anchors:
-        if recognized_only and fa.origin == "cc_assertion":
+        grade = grade_of(fa)
+        if recognized_only and not grade.refreshes_evidence_clock:
             continue
         matched = (
             fa.tracklet_id in entity_obs_ids
@@ -229,7 +229,7 @@ def _evidence_face_anchors(
         )
         if not matched or not fa.person_id or fa.person_id == "unknown":
             continue
-        if (calibrated_faces_only or fa.aggregation == "template") and (
+        if (calibrated_faces_only or grade.requires_calibration) and (
             fa.recognition_state != "recognized" or fa.calibrated_confidence is None
         ):
             continue

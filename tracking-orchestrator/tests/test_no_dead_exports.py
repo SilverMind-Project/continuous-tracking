@@ -11,20 +11,26 @@ from __future__ import annotations
 import app.tracking.identity as identity_pkg
 
 _EXPECTED_ALL = (
+    "ChannelLikelihood",
     "CommitEvaluation",
     "CommitPolicy",
+    "EvidenceChannel",
+    "EvidenceGrade",
+    "EvidenceGradeName",
     "EvidencePosterior",
     "EvidenceSource",
     "GalleryScoringConfig",
     "IdentityAuthority",
     "IdentityEvidence",
+    "ResolverInputs",
     "ScoredHit",
     "aggregate_max_over_views",
     "aggregate_mean",
     "cap_votes",
-    "combine_posteriors",
+    "combine_channels",
     "compute_contradiction",
     "evaluate_commit",
+    "grade_of",
     "score_hits",
 )
 

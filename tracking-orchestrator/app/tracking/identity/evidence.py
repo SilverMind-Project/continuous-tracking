@@ -31,6 +31,7 @@ class EvidenceSource(StrEnum):
     # Several faces of one PH matched together; recorded for provenance. Whether it counted as
     # evidence is the resolver's calibrated-template rule, not this source.
     FACE_TEMPLATE = "face_template"
+    WEARABLE = "wearable"
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,30 @@ class IdentityEvidence:
         )
 
     @classmethod
+    def wearable(
+        cls,
+        identity_id: str,
+        confidence: float,
+        tag_id: str,
+        captured_at: datetime,
+        evidence_class: str,
+        attestation_grade: str,
+    ) -> IdentityEvidence:
+        """Create wearable association evidence provenance."""
+        return cls(
+            source=EvidenceSource.WEARABLE,
+            identity_id=identity_id,
+            confidence=confidence,
+            quality=1.0,
+            captured_at=captured_at,
+            metadata={
+                "tag_id": tag_id,
+                "evidence_class": evidence_class,
+                "attestation_grade": attestation_grade,
+            },
+        )
+
+    @classmethod
     def operator_correction(
         cls,
         identity_id: str,
@@ -194,7 +219,12 @@ class IdentityEvidence:
     def can_advance_evidence_clock(self) -> bool:
         """Return True when this evidence qualifies to refresh the identity clock.
 
-        Only direct face recognition and verified ReID advance the clock;
-        propagated face (ASSOCIATION_HINT) and height proxy never do.
+        Direct face recognition, verified ReID, and accepted wearable evidence
+        advance the clock; propagated face (ASSOCIATION_HINT) and height proxy
+        never do.
         """
-        return self.source in {EvidenceSource.DIRECT_FACE, EvidenceSource.REID}
+        return self.source in {
+            EvidenceSource.DIRECT_FACE,
+            EvidenceSource.REID,
+            EvidenceSource.WEARABLE,
+        }

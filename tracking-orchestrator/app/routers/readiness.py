@@ -43,6 +43,7 @@ class IdentityReadinessResponse(BaseModel):
     face_templates_mode: str = Field(description="face_templates.mode")
     face_quality_mode: str = Field(description="resolver.face_quality_mode")
     cc_assertion_mode: str = Field(description="resolver.cc_assertion_mode")
+    wearable_mode: str = Field(default="off", description="wearable.mode")
     expected_arcface_model_version: str | None = Field(
         description="ArcFace model version calibrated faces must carry; null accepts any"
     )
@@ -59,6 +60,11 @@ class IdentityReadinessResponse(BaseModel):
     identities_known: int | None = Field(
         ge=0, description="Active identities CTS knows; null without a gallery repository"
     )
+    wearable_active_associations: int | None = Field(
+        default=None,
+        ge=0,
+        description="Open wearable-to-PH associations; null before the world tracker is built",
+    )
 
 
 @router.get("/readiness", response_model=IdentityReadinessResponse)
@@ -72,6 +78,7 @@ async def get_identity_readiness(
         face_templates_mode=snap.policy.face_templates_mode,
         face_quality_mode=snap.policy.face_quality_mode,
         cc_assertion_mode=snap.policy.cc_assertion_mode,
+        wearable_mode=snap.policy.wearable_mode,
         expected_arcface_model_version=snap.policy.expected_arcface_model_version,
         expected_quality_version=snap.policy.expected_quality_version,
         reid_gallery_counts=None
@@ -88,4 +95,5 @@ async def get_identity_readiness(
         ],
         overlap_group_count=snap.overlap_group_count,
         identities_known=snap.identities_known,
+        wearable_active_associations=snap.wearable_active_associations,
     )

@@ -143,7 +143,7 @@ That focused skill is normative for identity work; this section remains the arch
 - **Gallery labels are governed.** Tentative commits → quarantine → promotion after stable evidence, not immediate trust.
 - **Revisions are idempotent.** Stable IDs and evidence summaries so CC can apply once and explain in the UI.
 - **Spatial gates fail closed: evidence without a floor point may match at room granularity with a confidence haircut, and evidence with neither floor point nor room matches nothing. Proto3 scalar floats cannot represent "unset"; any optional value on the wire carries an explicit presence flag, and (0,0) is a real position, never a sentinel.**
-- **External identity evidence (`FaceAnchor.origin != 'native'`) is its own grade: it votes in the likelihood with a configured scale and real quality/frontality, and it is explicitly excluded from ArcFace authority, the independent-evidence clock, duplicate-identity ranking, and association vectors. Absent metadata defaults conservative (worst-case yaw, mid quality), never perfect. New external sources ship shadow-first with outcome metrics before they may influence the posterior.**
+- **Evidence grades and channels are centralized.** Governance per `(AnchorOrigin, AnchorAggregation)` lives only in `app/tracking/identity/evidence_grades.py` (enforced by `tests/architecture/test_evidence_grade_centralized.py`), and posterior combination runs over ordered `EvidenceChannel` outputs via `combine_channels` (`app/tracking/identity/channels.py`, `app/tracking/identity/posterior.py`). New evidence sources add a grade or channel and ship shadow-first; see `cts-identity-governance` `reference/evidence-grades-and-channels.md`.
 
 ### Clinical and dementia signals
 

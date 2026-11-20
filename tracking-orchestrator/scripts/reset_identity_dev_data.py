@@ -64,6 +64,7 @@ _CTS_DELETE_TABLES: tuple[str, ...] = (
     "identity_projection_acks",
     "reid_gallery",
     "gallery_review_events",
+    "wearable_associations",
 )
 
 # CTS tables that must never be deleted (household registry + topology).
