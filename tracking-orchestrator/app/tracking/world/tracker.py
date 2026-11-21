@@ -31,6 +31,7 @@ from ...domain import (
     IdentityResolvableEntity,
     IdentityRevision,
     ImageOnlyEvaluation,
+    OpenPHOccupancy,
     OverlapGroup,
     PersonHypothesis,
     PHContinuationCandidate,
@@ -50,6 +51,7 @@ from ...storage.base import (
     PHRepositoryProtocol,
     WorldObservationRepositoryProtocol,
 )
+from ..identity.closed_world_channel import ClosedWorldConfig, canonical_ph_pair
 from ..identity.evidence_grades import grade_of
 from ..orientation import update_view_prototypes
 from .appearance_policy import AppearanceDecision, evaluate_appearance_update
@@ -308,6 +310,7 @@ class WorldTracker:
         copresence_repo: CoPresenceRepository | None = None,
         overlap_groups: list[OverlapGroup] | None = None,
         wearable_config: WearableConfig | None = None,
+        closed_world_config: ClosedWorldConfig | None = None,
     ) -> None:
         self._ph_repo = ph_repo
         self._obs_repo = obs_repo
@@ -319,6 +322,7 @@ class WorldTracker:
         self._copresence_repo = copresence_repo
         self._overlap_groups: list[OverlapGroup] = list(overlap_groups or [])
         self._wearable_config = wearable_config or WearableConfig()
+        self._closed_world_config = closed_world_config or ClosedWorldConfig()
         self._ph_floor_history = PHFloorHistory(
             max_span_s=self._config.ph_close_grace_s + self._config.revive_max_age_s,
         )
@@ -334,6 +338,11 @@ class WorldTracker:
         # for a held identity instead of emitting a sentinel 0.0 that the UI shows
         # as null. Lost on restart (self-heals on next resolution); pruned on close.
         self._last_identity_confidence: dict[str, float] = {}
+        # Tracks PHs whose current identity was supported solely by room-class
+        # wearable evidence (excluded from closed-world joint elimination), plus
+        # each PH's latest non-room-wearable evidence timestamp.
+        self._room_wearable_only_phs: set[str] = set()
+        self._last_elim_eligible_evidence_at: dict[str, datetime] = {}
         # Snapshot of open PHs from the most recent step call. Exposed via
         # last_open_phs so ReidNeedPolicy (InferenceStage) can evaluate proximity
         # without issuing an async DB query. Empty until the first step.
@@ -341,6 +350,12 @@ class WorldTracker:
         self._still_counter: dict[str, int] = {}
         self._primary_camera: dict[str, str] = {}
         self._primary_challenger: dict[str, tuple[str, int]] = {}
+
+    def purge_identity(self, identity_id: str) -> int:
+        """Purge in-memory per-identity tracker state (wearable presence timestamps)."""
+        if self._wearable_tracker is None:
+            return 0
+        return self._wearable_tracker.purge_identity(identity_id)
 
     @property
     def last_open_phs(self) -> list[PersonHypothesis]:
@@ -1231,12 +1246,66 @@ class WorldTracker:
         #    received observations this frame.  Pass the full open-PH identity
         #    occupancy (updated_phs is a superset of all open PHs) so the
         #    duplicate-active-identity guard also protects incumbents that were
-        #    not observed this frame.
+        #    not observed this frame, and closed-world joint elimination can
+        #    verify simultaneous observation and spatial separation.
+        open_phs_all = [ph for ph in updated_phs if ph.closed_at is None]
         open_ph_identities = {
-            ph.ph_id: ph.current_identity_id
-            for ph in updated_phs
-            if ph.closed_at is None and ph.current_identity_id
+            ph.ph_id: ph.current_identity_id for ph in open_phs_all if ph.current_identity_id
         }
+        open_ph_occupancies: dict[str, OpenPHOccupancy] = {}
+        for ph in open_phs_all:
+            is_coasting = ph.ph_id in coasting_ph_ids
+            primary_cam = self._primary_camera.get(ph.ph_id, ph.last_seen_camera)
+            occ_room_id, _ = resolve_room(
+                ph.state_mean[0],
+                ph.state_mean[1],
+                primary_cam,
+                room_polygons,
+                camera_room_map,
+                room_names,
+            )
+            if ph.ph_id in self._room_wearable_only_phs:
+                elim_ev_at = self._last_elim_eligible_evidence_at.get(ph.ph_id)
+                elim_eligible = elim_ev_at is not None
+            else:
+                elim_ev_at = ph.last_independent_identity_evidence_at
+                elim_eligible = True
+            open_ph_occupancies[ph.ph_id] = OpenPHOccupancy(
+                ph_id=ph.ph_id,
+                identity_id=ph.current_identity_id,
+                last_independent_evidence_at=elim_ev_at,
+                last_seen_at=ph.last_seen_at,
+                coasting=is_coasting,
+                floor_calibrated=bool(ph_floor_calibrated.get(ph.ph_id, False)),
+                floor_x_m=ph.state_mean[0],
+                floor_y_m=ph.state_mean[1],
+                room_id=occ_room_id,
+                last_seen_camera=primary_cam,
+                active_cameras=ph.active_cameras,
+                elim_eligible=elim_eligible,
+            )
+
+        copresence_pairs: set[tuple[str, str]] = set()
+        if (
+            self._closed_world_config.mode != "off"
+            and self._copresence_repo is not None
+            and len(open_phs_all) >= 2
+        ):
+            open_id_list = [ph.ph_id for ph in open_phs_all]
+            for idx_a, ph_a_id in enumerate(open_id_list):
+                for ph_b_id in open_id_list[idx_a + 1 :]:
+                    link = await self._copresence_repo.get_active_link(ph_a_id, ph_b_id)
+                    if link is not None:
+                        copresence_pairs.add(canonical_ph_pair(ph_a_id, ph_b_id))
+
+        wearable_present_identities = (
+            self._wearable_tracker.members_with_fresh_non_parked_fix(
+                now=now,
+                window_s=self._closed_world_config.wearable_home_window_s,
+            )
+            if self._wearable_tracker is not None
+            else frozenset()
+        )
         identity_decisions, revisions, identity_by_ph, image_only = await _resolve_identities(
             resolver=self._identity_resolver,
             obs_repo=self._obs_repo,
@@ -1248,9 +1317,33 @@ class WorldTracker:
             face_evidence=face_evidence,
             open_ph_identities=open_ph_identities,
             wearable_evidence=wearable_evidence_by_ph or None,
+            open_ph_occupancies=open_ph_occupancies,
+            copresence_pairs=frozenset(copresence_pairs),
+            overlap_groups=tuple(self._overlap_groups),
+            camera_room_map=camera_room_map,
+            wearable_present_identities=wearable_present_identities,
             now=now,
             config=cfg,
         )
+
+        # Update elimination-eligibility tracking from this round's decisions so
+        # room-class wearable evidence can never feed closed-world joint elimination.
+        for decision in identity_decisions:
+            if decision.identity_id is None:
+                self._room_wearable_only_phs.discard(decision.ph_id)
+                self._last_elim_eligible_evidence_at.pop(decision.ph_id, None)
+            elif decision.evidence_backed:
+                room_only = bool(
+                    isinstance(decision.evidence, dict)
+                    and decision.evidence.get("room_wearable_only", False)
+                )
+                if room_only:
+                    self._room_wearable_only_phs.add(decision.ph_id)
+                else:
+                    self._room_wearable_only_phs.discard(decision.ph_id)
+                    self._last_elim_eligible_evidence_at[decision.ph_id] = (
+                        decision.evidence_at or now
+                    )
 
         # Notify wearable attestation tracker of any calibrated-face vs. wearable
         # conflicts so attestation breaks and repeated conflicts flag swap_suspected.
@@ -1295,6 +1388,12 @@ class WorldTracker:
         self._primary_challenger = {
             pid: challenger
             for pid, challenger in self._primary_challenger.items()
+            if pid in open_ph_ids
+        }
+        self._room_wearable_only_phs &= open_ph_ids
+        self._last_elim_eligible_evidence_at = {
+            pid: ts
+            for pid, ts in self._last_elim_eligible_evidence_at.items()
             if pid in open_ph_ids
         }
 
@@ -1594,6 +1693,11 @@ async def _resolve_identities(
     face_evidence: list[FaceEvidence] | None = None,
     open_ph_identities: Mapping[str, str] | None = None,
     wearable_evidence: Mapping[str, WearableEvidence] | None = None,
+    open_ph_occupancies: Mapping[str, OpenPHOccupancy] | None = None,
+    copresence_pairs: frozenset[tuple[str, str]] | None = None,
+    overlap_groups: Sequence[OverlapGroup] | None = None,
+    camera_room_map: Mapping[str, str] | None = None,
+    wearable_present_identities: frozenset[str] | None = None,
     now: datetime,
     config: WorldTrackerConfig,
 ) -> tuple[
@@ -1683,6 +1787,11 @@ async def _resolve_identities(
             face_evidence=face_evidence,
             open_ph_identities=open_ph_identities or {},
             wearable_evidence=wearable_evidence,
+            open_ph_occupancies=open_ph_occupancies,
+            copresence_pairs=copresence_pairs,
+            overlap_groups=overlap_groups,
+            camera_room_map=camera_room_map,
+            wearable_present_identities=wearable_present_identities,
         )
     except Exception:
         logger.exception("identity_resolution_failed")

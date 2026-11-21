@@ -112,6 +112,10 @@ Siblings: `../cognitive-companion/` (BFF, its own CLAUDE.md), `../triton-shared/
 - **Wearable streams:** `wearable.fixes` (`TagFix`, field `"fix"`, 72-hour `MINID` trim) and
   `wearable.capabilities` (`AdapterCapability`, field `"capability"`) carry raw protobuf;
   `position.tracks` (`AnonymousPositionTrack`) is reserved and unused.
+- **Household presence stream:** CC publishes `HouseholdPresence` (field `"presence"`, using shared
+  `cts_contracts.household.PresenceStatus`) on `cc.household_presence`; CTS consumes it via
+  `HouseholdPresenceSubscriber` for `ClosedWorldChannel` (fails closed when `roster_complete` is
+  false; treats member statuses as unknown after 180 s).
 
 ## Claude Code guardrails
 

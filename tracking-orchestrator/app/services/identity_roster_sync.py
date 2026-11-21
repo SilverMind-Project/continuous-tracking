@@ -69,6 +69,8 @@ class IdentityRosterSyncService:
         image_only_evaluation: WearableAssociationIdentityPurge | None = None,
         face_attestation: WearableAssociationIdentityPurge | None = None,
         height_profile_repo: IdentityHeightProfileRepository | None = None,
+        household_presence_cache: WearableIdentityPurge | None = None,
+        world_tracker_state: WearableIdentityPurge | None = None,
         interval_s: float = 60.0,
     ) -> None:
         self._gallery_repo = gallery_repo
@@ -82,6 +84,8 @@ class IdentityRosterSyncService:
         # Pending face attestations name the identity they would label.
         self._face_attestation = face_attestation
         self._height_profile_repo = height_profile_repo
+        self._household_presence_cache = household_presence_cache
+        self._world_tracker_state = world_tracker_state
         self._members_source = members_source
         self._identity_resolver = identity_resolver
         self._gallery_cache = gallery_cache
@@ -170,6 +174,10 @@ class IdentityRosterSyncService:
             removed += self._wearable_site_config.purge_identity(identity_id)
         if self._wearable_fix_buffer is not None:
             self._wearable_fix_buffer.purge_identity(identity_id)
+        if self._household_presence_cache is not None:
+            self._household_presence_cache.purge_identity(identity_id)
+        if self._world_tracker_state is not None:
+            self._world_tracker_state.purge_identity(identity_id)
         return removed
 
     async def _purge_wearable_associations(self, identity_id: str) -> int:

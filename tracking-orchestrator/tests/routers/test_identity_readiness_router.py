@@ -4,18 +4,27 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from cts_contracts.household import PresenceStatus
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.calibration.state import CalibrationState
-from app.domain import GalleryEmbedding, GallerySeedSource, Identity
+from app.domain import (
+    GalleryEmbedding,
+    GallerySeedSource,
+    HouseholdPresenceSnapshot,
+    Identity,
+    MemberPresenceSnapshot,
+)
 from app.routers.readiness import router
 from app.services.camera_room_map import CameraRoomBinding, CameraRoomMap
+from app.services.household_presence_subscriber import HouseholdPresenceCache
 from app.services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
 from app.storage.gallery import InMemoryGalleryRepository
+from app.tracking.identity.closed_world_channel import ClosedWorldConfig
 
 T0 = datetime(2026, 11, 14, 9, 0, 0, tzinfo=UTC)
 _IDENTITY = "resident-one"
@@ -165,3 +174,104 @@ def test_unwired_service_is_503() -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "identity_readiness.unavailable"
+
+
+@pytest.mark.asyncio
+async def test_closed_world_readiness_reports_activity_and_gate_reason(
+    calibration: CalibrationState,
+) -> None:
+    cache = HouseholdPresenceCache()
+    cameras = await _cameras("kitchen")
+    gallery = await _gallery()
+    policy = IdentityPolicySnapshot(
+        face_evidence_policy="shadow",
+        face_templates_mode="off",
+        face_quality_mode="shadow",
+        cc_assertion_mode="shadow",
+        expected_arcface_model_version=None,
+        expected_quality_version="heuristic-v1",
+        closed_world_mode="shadow",
+    )
+    cw_cfg = ClosedWorldConfig(mode="shadow", presence_stale_after_s=180.0)
+    service = IdentityReadinessService(
+        policy=policy,
+        calibration_state=calibration,
+        camera_room_map=cameras,
+        overlap_groups=_Groups(count=0),
+        gallery_repo=gallery,
+        household_presence=cache,
+        closed_world_config=cw_cfg,
+        clock=lambda: T0 + timedelta(seconds=30),
+    )
+    client = next(_client(service))
+
+    # No snapshot received yet -> inactive with no_presence.
+    body = client.get("/internal/identity/readiness").json()
+    assert body["closed_world"]["mode"] == "shadow"
+    assert body["closed_world"]["active"] is False
+    assert body["closed_world"]["inactive_reason"] == "no_presence"
+
+    # Incomplete roster -> fail closed.
+    cache.update(
+        HouseholdPresenceSnapshot(
+            published_at=T0,
+            received_at=T0,
+            members=(
+                MemberPresenceSnapshot(
+                    member_id=_IDENTITY,
+                    status=PresenceStatus.PRESENT_HOME,
+                    confidence=1.0,
+                    room_id=None,
+                    inferred_at=T0,
+                ),
+            ),
+            visitors_present=False,
+            roster_complete=False,
+        )
+    )
+    body = client.get("/internal/identity/readiness").json()
+    assert body["closed_world"]["active"] is False
+    assert body["closed_world"]["inactive_reason"] == "roster_incomplete"
+    assert body["closed_world"]["roster_complete"] is False
+
+    # Complete roster -> active, no identity ids leaked.
+    cache.update(
+        HouseholdPresenceSnapshot(
+            published_at=T0,
+            received_at=T0,
+            members=(
+                MemberPresenceSnapshot(
+                    member_id=_IDENTITY,
+                    status=PresenceStatus.PRESENT_HOME,
+                    confidence=1.0,
+                    room_id=None,
+                    inferred_at=T0,
+                ),
+            ),
+            visitors_present=True,
+            roster_complete=True,
+        )
+    )
+    response = client.get("/internal/identity/readiness")
+    body = response.json()
+    assert body["closed_world"]["active"] is True
+    assert body["closed_world"]["inactive_reason"] is None
+    assert body["closed_world"]["roster_complete"] is True
+    assert body["closed_world"]["visitors_present"] is True
+    assert body["closed_world"]["presence_age_s"] == 30.0
+    assert _IDENTITY not in response.text
+
+    # Stale snapshot -> still active (falls back to UNKNOWN), surfaced as presence_stale.
+    stale_service = IdentityReadinessService(
+        policy=policy,
+        calibration_state=calibration,
+        camera_room_map=cameras,
+        overlap_groups=_Groups(count=0),
+        gallery_repo=gallery,
+        household_presence=cache,
+        closed_world_config=cw_cfg,
+        clock=lambda: T0 + timedelta(seconds=300),
+    )
+    stale_body = next(_client(stale_service)).get("/internal/identity/readiness").json()
+    assert stale_body["closed_world"]["active"] is True
+    assert stale_body["closed_world"]["inactive_reason"] == "presence_stale"

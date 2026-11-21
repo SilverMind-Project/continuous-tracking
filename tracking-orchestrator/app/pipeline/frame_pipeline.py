@@ -26,6 +26,7 @@ from ..domain import (
     CameraConfig,
     ExternalIdentityEvidenceSource,
     FaceEvidencePolicy,
+    HouseholdPresenceSource,
     Identity,
     OverlapGroup,
     WearableFixSource,
@@ -137,6 +138,7 @@ from ..storage.wearable_associations import (
 from ..storage.wearable_teaching_holds import WearableTeachingHoldRepository
 from ..tracking.floor_projector import FloorProjector
 from ..tracking.identity.candidate_eligibility import CandidatePolicy
+from ..tracking.identity.closed_world_channel import ClosedWorldConfig
 from ..tracking.identity.face_template_buffer import FaceTemplatePolicy
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
@@ -260,6 +262,7 @@ class PipelineDependencies:
     image_only_evaluation: ImageOnlyEvaluationSink | None = None
     height_profile_repo: IdentityHeightProfileRepository | None = None
     height_sample_repo: PHHeightSampleRepository | None = None
+    household_presence_source: HouseholdPresenceSource | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -283,6 +286,7 @@ class PipelineConfig:
     # --- Tracking ---
     world_tracker: WorldTrackerConfig = field(default_factory=WorldTrackerConfig)
     wearable: WearableConfig = field(default_factory=WearableConfig)
+    closed_world: ClosedWorldConfig = field(default_factory=ClosedWorldConfig)
     height_estimation: HeightEstimationConfig = field(default_factory=HeightEstimationConfig)
 
     # --- Identity resolution ---
@@ -509,6 +513,8 @@ class FrameProcessingPipeline:
             gallery_cache=self._gallery_cache,
             wearable_config=self._config.wearable,
             height_profile_repo=self._height_profile_repo,
+            closed_world_config=self._config.closed_world,
+            household_presence_source=deps.household_presence_source if deps else None,
         )
 
         self._revision_publisher = RevisionPublisher(
@@ -558,6 +564,7 @@ class FrameProcessingPipeline:
             copresence_repo=deps.copresence_repo if deps else None,
             overlap_groups=deps.overlap_groups if deps else None,
             wearable_config=self._config.wearable,
+            closed_world_config=self._config.closed_world,
         )
 
         # ---- Trajectory writer + keyframe sampler ----
@@ -1445,6 +1452,12 @@ class FrameProcessingPipeline:
         if self._world_tracker is None:
             return None
         return self._world_tracker.active_wearable_association_count()
+
+    def purge_identity(self, identity_id: str) -> int:
+        """Drop per-identity in-memory tracker state (e.g. non-parked wearable timestamps)."""
+        if self._world_tracker is None:
+            return 0
+        return self._world_tracker.purge_identity(identity_id)
 
     def set_room_polygon_map(self, room_polygon_map: RoomPolygonMap) -> None:
         """Replace the live room polygon map read by WorldTrackingStage."""

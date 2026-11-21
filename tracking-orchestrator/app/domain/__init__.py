@@ -1600,6 +1600,24 @@ class CameraProfile:
     frame_natural_height_px: int | None = None
 
 
+from .closed_world import (  # noqa: E402
+    CLOSED_WORLD_MODES as CLOSED_WORLD_MODES,
+)
+from .closed_world import (  # noqa: E402
+    ClosedWorldMode as ClosedWorldMode,
+)
+from .closed_world import (  # noqa: E402
+    HouseholdPresenceSnapshot as HouseholdPresenceSnapshot,
+)
+from .closed_world import (  # noqa: E402
+    HouseholdPresenceSource as HouseholdPresenceSource,
+)
+from .closed_world import (  # noqa: E402
+    MemberPresenceSnapshot as MemberPresenceSnapshot,
+)
+from .closed_world import (  # noqa: E402
+    OpenPHOccupancy as OpenPHOccupancy,
+)
 from .wearables import (  # noqa: E402
     WEARABLE_MODES as WEARABLE_MODES,
 )

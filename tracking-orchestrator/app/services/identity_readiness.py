@@ -16,13 +16,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from app.calibration.state import CalibrationState
-from app.domain import GallerySeedSource
+from app.domain import GallerySeedSource, HouseholdPresenceSource
 from app.services.camera_room_map import CameraRoomMap
 from app.services.image_only_evaluator import summarize_attribution_difference
 from app.storage.gallery import GalleryRepository
 from app.storage.image_only_evaluation import ImageOnlyEvaluationRepository
 from app.storage.wearable_associations import WearableAssociationRepository
 from app.storage.wearable_teaching_holds import WearableTeachingHoldRepository
+from app.tracking.identity.closed_world_channel import ClosedWorldConfig
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,19 @@ class IdentityPolicySnapshot:
     wearable_backfill_enabled: bool = False
     wearable_auto_on_swap: bool = True
     wearable_evaluation_sample_rate: float = 0.0
+    closed_world_mode: str = "off"
+
+
+@dataclass(frozen=True)
+class ClosedWorldReadiness:
+    """Read-only summary of closed-world prior shaping activity and gate status."""
+
+    mode: str
+    active: bool
+    inactive_reason: str | None
+    roster_complete: bool | None
+    visitors_present: bool | None
+    presence_age_s: float | None
 
 
 @dataclass(frozen=True)
@@ -93,6 +107,8 @@ class IdentityReadinessSnapshot:
     wearable_gallery_counts: GalleryStateCounts | None = None
     # Wearable-supervision learner flags, 14-day paired evaluation summary, and revocation holds.
     wearable_learners: WearableLearnersReadiness | None = None
+    # Closed-world channel activity and gate status (reported on the roster readiness step).
+    closed_world: ClosedWorldReadiness | None = None
 
 
 class OverlapGroupSource(Protocol):
@@ -116,6 +132,8 @@ class IdentityReadinessService:
         image_only_eval_repo: ImageOnlyEvaluationRepository | None = None,
         wearable_assoc_repo: WearableAssociationRepository | None = None,
         teaching_holds_repo: WearableTeachingHoldRepository | None = None,
+        household_presence: HouseholdPresenceSource | None = None,
+        closed_world_config: ClosedWorldConfig | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._policy = policy
@@ -127,6 +145,8 @@ class IdentityReadinessService:
         self._image_only_eval_repo = image_only_eval_repo
         self._wearable_assoc_repo = wearable_assoc_repo
         self._teaching_holds_repo = teaching_holds_repo
+        self._household_presence = household_presence
+        self._closed_world_config = closed_world_config
         self._clock = clock
 
     async def snapshot(self) -> IdentityReadinessSnapshot:
@@ -181,6 +201,7 @@ class IdentityReadinessService:
             open_teaching_holds=open_holds,
             revoked_segments_14d=revoked_14d,
         )
+        closed_world = self._closed_world_readiness(now=now, identities_known=identities_known)
         return IdentityReadinessSnapshot(
             policy=self._policy,
             reid_gallery_counts=counts,
@@ -190,6 +211,64 @@ class IdentityReadinessService:
             wearable_active_associations=wearable_active,
             wearable_gallery_counts=wearable_counts,
             wearable_learners=learners,
+            closed_world=closed_world,
+        )
+
+    def _closed_world_readiness(
+        self, *, now: datetime, identities_known: int | None
+    ) -> ClosedWorldReadiness:
+        mode = self._policy.closed_world_mode
+        if mode == "off":
+            return ClosedWorldReadiness(
+                mode=mode,
+                active=False,
+                inactive_reason="mode_off",
+                roster_complete=None,
+                visitors_present=None,
+                presence_age_s=None,
+            )
+        snap = self._household_presence.latest() if self._household_presence is not None else None
+        if snap is None:
+            return ClosedWorldReadiness(
+                mode=mode,
+                active=False,
+                inactive_reason="no_presence",
+                roster_complete=None,
+                visitors_present=None,
+                presence_age_s=None,
+            )
+        age_s = max(0.0, (now - snap.published_at).total_seconds())
+        stale_after = (
+            self._closed_world_config.presence_stale_after_s
+            if self._closed_world_config is not None
+            else 180.0
+        )
+        if not snap.roster_complete:
+            return ClosedWorldReadiness(
+                mode=mode,
+                active=False,
+                inactive_reason="roster_incomplete",
+                roster_complete=False,
+                visitors_present=snap.visitors_present,
+                presence_age_s=round(age_s, 1),
+            )
+        if identities_known is not None and identities_known == 0:
+            return ClosedWorldReadiness(
+                mode=mode,
+                active=False,
+                inactive_reason="no_identities",
+                roster_complete=True,
+                visitors_present=snap.visitors_present,
+                presence_age_s=round(age_s, 1),
+            )
+        inactive_reason = "presence_stale" if age_s > stale_after else None
+        return ClosedWorldReadiness(
+            mode=mode,
+            active=True,
+            inactive_reason=inactive_reason,
+            roster_complete=True,
+            visitors_present=snap.visitors_present,
+            presence_age_s=round(age_s, 1),
         )
 
 

@@ -128,6 +128,11 @@ Face scores have four names, and each name means one thing:
   person-id's operator-gated queue, backfill NULL history (trajectory only, flag off), and serve
   as image-only evaluation truth; never enrollment, authority, or unaudited calibration. Read
   `reference/sensor-attested-labels.md` before changing any wearable learner.
+- Closed-world prior shaping (`CLOSED_WORLD` grade, `ClosedWorldChannel`, `closed_world.mode`:
+  `off`, `shadow`, `enabled`) shapes priors only (`counts_as_commit_evidence = False`), fails
+  closed when `roster_complete` is false, enforces an explicit `UNKNOWN` guest floor, and requires
+  simultaneous observation plus spatial separation for joint elimination. Read
+  `reference/closed-world-evidence.md` before changing closed-world reasoning.
 - ArcFace enrollment is a golden dataset. PH inference, operator identity correction, and ReID
   review never modify enrollment. Enrollment gains entries
   only via explicit enroll calls, explicit operator naming of a visitor cluster

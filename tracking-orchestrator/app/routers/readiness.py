@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from ..services.identity_readiness import (
+    ClosedWorldReadiness,
     GalleryStateCounts,
     IdentityReadinessService,
     WearableLearnersReadiness,
@@ -62,12 +63,35 @@ class WearableLearnersReadinessOut(BaseModel):
     revoked_segments_14d: int = Field(ge=0)
 
 
+class ClosedWorldReadinessOut(BaseModel):
+    mode: str = Field(description="closed_world.mode")
+    active: bool = Field(description="Whether closed-world prior shaping is currently active")
+    inactive_reason: str | None = Field(
+        default=None,
+        description="Why closed-world prior shaping is inactive or degraded, if applicable",
+    )
+    roster_complete: bool | None = Field(
+        default=None,
+        description="Latest roster_complete flag received from cc.household_presence",
+    )
+    visitors_present: bool | None = Field(
+        default=None,
+        description="Latest visitors_present flag received from cc.household_presence",
+    )
+    presence_age_s: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Age in seconds of the latest household presence snapshot",
+    )
+
+
 class IdentityReadinessResponse(BaseModel):
     face_evidence_policy: str = Field(description="face_id.evidence_policy")
     face_templates_mode: str = Field(description="face_templates.mode")
     face_quality_mode: str = Field(description="resolver.face_quality_mode")
     cc_assertion_mode: str = Field(description="resolver.cc_assertion_mode")
     wearable_mode: str = Field(default="off", description="wearable.mode")
+    closed_world_mode: str = Field(default="off", description="closed_world.mode")
     expected_arcface_model_version: str | None = Field(
         description="ArcFace model version calibrated faces must carry; null accepts any"
     )
@@ -103,6 +127,10 @@ class IdentityReadinessResponse(BaseModel):
             "revocation/hold counts"
         ),
     )
+    closed_world: ClosedWorldReadinessOut | None = Field(
+        default=None,
+        description="Closed-world prior-shaping mode, gate status, and presence freshness",
+    )
 
 
 @router.get("/readiness", response_model=IdentityReadinessResponse)
@@ -116,6 +144,7 @@ async def get_identity_readiness(
         face_quality_mode=snap.policy.face_quality_mode,
         cc_assertion_mode=snap.policy.cc_assertion_mode,
         wearable_mode=snap.policy.wearable_mode,
+        closed_world_mode=snap.policy.closed_world_mode,
         expected_arcface_model_version=snap.policy.expected_arcface_model_version,
         expected_quality_version=snap.policy.expected_quality_version,
         reid_gallery_counts=_counts_out(snap.reid_gallery_counts),
@@ -128,6 +157,7 @@ async def get_identity_readiness(
         wearable_active_associations=snap.wearable_active_associations,
         wearable_gallery_counts=_counts_out(snap.wearable_gallery_counts),
         wearable_learners=_learners_out(snap.wearable_learners),
+        closed_world=_closed_world_out(snap.closed_world),
     )
 
 
@@ -159,4 +189,19 @@ def _learners_out(
         attribution_difference_14d=learners.attribution_difference_14d,
         open_teaching_holds=learners.open_teaching_holds,
         revoked_segments_14d=learners.revoked_segments_14d,
+    )
+
+
+def _closed_world_out(
+    closed_world: ClosedWorldReadiness | None,
+) -> ClosedWorldReadinessOut | None:
+    if closed_world is None:
+        return None
+    return ClosedWorldReadinessOut(
+        mode=closed_world.mode,
+        active=closed_world.active,
+        inactive_reason=closed_world.inactive_reason,
+        roster_complete=closed_world.roster_complete,
+        visitors_present=closed_world.visitors_present,
+        presence_age_s=closed_world.presence_age_s,
     )

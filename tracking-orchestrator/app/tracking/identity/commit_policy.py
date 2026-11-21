@@ -220,6 +220,8 @@ def _evidence_face_anchors(
     }
     for fa in face_anchors:
         grade = grade_of(fa)
+        if not grade.counts_as_commit_evidence:
+            continue
         if recognized_only and not grade.refreshes_evidence_clock:
             continue
         matched = (

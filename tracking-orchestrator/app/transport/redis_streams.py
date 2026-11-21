@@ -67,6 +67,7 @@ class TransportConfig:
     scene_samples_stream: str = "scene.samples"
     wearable_fixes_stream: str = "wearable.fixes"
     wearable_capabilities_stream: str = "wearable.capabilities"
+    household_presence_stream: str = "cc.household_presence"
 
 
 # Re-export proto FrameReady so callers use the wire type directly without

@@ -19,9 +19,12 @@ from structlog import get_logger
 
 from app.domain import (
     FaceAnchor,
+    HouseholdPresenceSnapshot,
     Identity,
     IdentityHeightProfile,
     IdentityResolvableEntity,
+    OpenPHOccupancy,
+    OverlapGroup,
     PosteriorDist,
     WearableEvidence,
 )
@@ -109,6 +112,7 @@ class ChannelLikelihood:
     evidence_at: datetime | None = None
     clock_evidence_ids: frozenset[str] = frozenset()
     evidence_at_by_identity: Mapping[str, datetime] = field(default_factory=dict)
+    counts_as_commit_evidence: bool = True
 
 
 @dataclass(frozen=True)
@@ -155,6 +159,12 @@ class ResolverInputs:
     raw_face_evidence: tuple[FaceEvidence, ...] = ()
     wearable_evidence: Mapping[str, WearableEvidence] = field(default_factory=dict)
     vote_window: VoteWindow | None = None
+    open_ph_occupancies: Mapping[str, OpenPHOccupancy] = field(default_factory=dict)
+    copresence_pairs: frozenset[tuple[str, str]] = frozenset()
+    overlap_groups: tuple[OverlapGroup, ...] = ()
+    camera_room_map: Mapping[str, str] = field(default_factory=dict)
+    household_presence: HouseholdPresenceSnapshot | None = None
+    wearable_present_identities: frozenset[str] = frozenset()
 
 
 class EvidenceChannel(Protocol):

@@ -36,7 +36,8 @@ pairs fail loudly with `KeyError` from `grade_of(anchor)`.
   log-likelihood power `max(0.01, exp(-0.5 * w * z^2))` with `support_multiplier = 1.0`,
   `"UNKNOWN": 0.5` neutral baseline, `evidence_at = None`, governed by `resolver.height_mode`:
   `off`, `shadow`, `enabled`; profiles from `identity_height_profiles` where `learned` overrides
-  `operator`), and `WearableChannel` (`wearable.mode`).
+  `operator`), `WearableChannel` (`wearable.mode`), and `ClosedWorldChannel` (`closed_world.mode`,
+  `CLOSED_WORLD` grade with `counts_as_commit_evidence = False`; see `closed-world-evidence.md`).
 - For each identity, `combine_channels` multiplies `prior(id)` by each channel's factor in order:
   `1.0` when the channel is empty, `dist[id] * support_multiplier` when present, and Laplace fill
   `1 / (n + 1)` when absent from a non-empty channel.

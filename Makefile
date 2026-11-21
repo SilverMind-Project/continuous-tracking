@@ -17,7 +17,8 @@ PROTO_FILES    := \
 	proto/continuoustracking/v1/signals.proto \
 	proto/continuoustracking/v1/scene.proto \
 	proto/continuoustracking/v1/wearable.proto \
-	proto/continuoustracking/v1/position_sensor.proto
+	proto/continuoustracking/v1/position_sensor.proto \
+	proto/continuoustracking/v1/household.proto
 
 .PHONY: help venv rf-venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint rf-lint rf-format rf-format-check rf-mypy rf-import-lint rf-test rf-test-integration rf-check rf-audit wear-format wear-lint wear-test wear-check check check-all check-toolchain deps-outdated deps-upgrade go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit hooks-test check-md docs-check
 

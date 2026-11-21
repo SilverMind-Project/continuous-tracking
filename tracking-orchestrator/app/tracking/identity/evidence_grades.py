@@ -23,11 +23,12 @@ class EvidenceGradeName(StrEnum):
     NATIVE_TEMPLATE = "native_template"
     CC_ASSERTION = "cc_assertion"
     WEARABLE = "wearable"
+    CLOSED_WORLD = "closed_world"
 
 
 @dataclass(frozen=True)
 class EvidenceGrade:
-    """Governance flags for one ``(origin, aggregation)`` face-anchor kind."""
+    """Governance flags for one evidence kind."""
 
     name: EvidenceGradeName
     grants_authority: bool
@@ -42,6 +43,7 @@ class EvidenceGrade:
     applies_missing_face_quality_default: bool
     attach_precedence: int
     likelihood_scale_key: str | None = None
+    counts_as_commit_evidence: bool = True
 
 
 NATIVE_FRAME = EvidenceGrade(
@@ -106,6 +108,24 @@ WEARABLE = EvidenceGrade(
     applies_missing_face_quality_default=False,
     attach_precedence=0,
     likelihood_scale_key=None,
+    counts_as_commit_evidence=True,
+)
+
+CLOSED_WORLD = EvidenceGrade(
+    name=EvidenceGradeName.CLOSED_WORLD,
+    grants_authority=False,
+    refreshes_evidence_clock=False,
+    ranks_in_duplicate_guard=False,
+    grants_duplicate_bypass=False,
+    enters_association=False,
+    enters_contradiction=False,
+    propagates=False,
+    requires_calibration=False,
+    uses_own_capture_time=False,
+    applies_missing_face_quality_default=False,
+    attach_precedence=0,
+    likelihood_scale_key=None,
+    counts_as_commit_evidence=False,
 )
 
 # Convenience aliases for single-frame native and external assertion grades.

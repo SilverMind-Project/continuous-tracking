@@ -24,7 +24,13 @@ from redis import asyncio as aioredis
 from structlog import get_logger
 
 from .config import SettingNotFoundError, Settings, SettingsSection, settings
-from .domain import CameraProfile, FaceEvidencePolicy, OverlapGroup, WearableMode
+from .domain import (
+    CameraProfile,
+    ClosedWorldMode,
+    FaceEvidencePolicy,
+    OverlapGroup,
+    WearableMode,
+)
 from .observability.logging_config import configure_logging
 from .tracking.identity.face_template_buffer import FaceTemplateMode, FaceTemplatePolicy
 
@@ -89,6 +95,10 @@ from .services.height_profile_learner import (
     HeightProfileLearnerConfig,
     PostgresHeightSampleSource,
 )
+from .services.household_presence_subscriber import (
+    HouseholdPresenceCache,
+    HouseholdPresenceSubscriber,
+)
 from .services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
 from .services.image_only_evaluator import ImageOnlyEvaluationService
@@ -136,6 +146,7 @@ from .storage.wearable_teaching_holds import (
     WearableTeachingHoldRepository,
 )
 from .tracking.identity.candidate_eligibility import CandidatePolicy
+from .tracking.identity.closed_world_channel import ClosedWorldConfig
 from .tracking.identity_resolver import FaceQualityMode, HeightMode, ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
 from .tracking.world.wearable_config import FaceAttestationMode, WearableConfig
@@ -289,6 +300,7 @@ def _build_transport_config(s: Settings) -> TransportConfig:
         scene_samples_stream=s.as_str("redis.scene_samples_stream"),
         wearable_fixes_stream=s.as_str("redis.wearable_fixes_stream"),
         wearable_capabilities_stream=s.as_str("redis.wearable_capabilities_stream"),
+        household_presence_stream=s.as_str("redis.household_presence_stream"),
     )
 
 
@@ -703,6 +715,27 @@ def _build_identity_policy_snapshot(config: PipelineConfig) -> IdentityPolicySna
         wearable_backfill_enabled=config.resolver.enable_wearable_backfill,
         wearable_auto_on_swap=config.wearable.revocation_auto_on_swap,
         wearable_evaluation_sample_rate=config.wearable.evaluation_sample_rate,
+        closed_world_mode=config.closed_world.mode,
+    )
+
+
+def _build_closed_world_config(s: Settings) -> ClosedWorldConfig:
+    """Build ClosedWorldConfig from required settings.yaml keys."""
+    cw = s.section("closed_world")
+    return ClosedWorldConfig(
+        mode=cast(ClosedWorldMode, cw.as_str("mode")),
+        away_factor=cw.as_float("away_factor"),
+        away_min_confidence=cw.as_float("away_min_confidence"),
+        wearable_home_window_s=cw.as_float("wearable_home_window_s"),
+        occupied_factor=cw.as_float("occupied_factor"),
+        occupancy_fresh_s=cw.as_float("occupancy_fresh_s"),
+        simultaneous_obs_max_skew_s=cw.as_float("simultaneous_obs_max_skew_s"),
+        min_elimination_distance_m=cw.as_float("min_elimination_distance_m"),
+        guest_floor=cw.as_float("guest_floor"),
+        guest_floor_visitors=cw.as_float("guest_floor_visitors"),
+        presence_stale_after_s=cw.as_float("presence_stale_after_s"),
+        factor_floor=cw.as_float("factor_floor"),
+        factor_ceiling=cw.as_float("factor_ceiling"),
     )
 
 
@@ -813,6 +846,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     resolver_config = _build_resolver_config(settings)
     world_tracker_config = _build_world_tracker_config(settings)
     wearable_config = _build_wearable_config(settings)
+    closed_world_config = _build_closed_world_config(settings)
     sampler_config = _build_sampler_config(settings)
 
     config = PipelineConfig(
@@ -820,6 +854,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resolver=resolver_config,
         world_tracker=world_tracker_config,
         wearable=wearable_config,
+        closed_world=closed_world_config,
         reid_candidates=_build_candidate_policy(settings, wearable_config),
         sampler=sampler_config,
         signals=_build_signal_config(settings),
@@ -1193,6 +1228,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.exception("wearable_fix_subscriber_init_failed")
                 wearable_fix_subscriber = None
 
+    household_presence_cache: HouseholdPresenceCache | None = None
+    household_presence_subscriber: HouseholdPresenceSubscriber | None = None
+    if closed_world_config.mode != "off":
+        household_presence_cache = HouseholdPresenceCache()
+        if redis_url:
+            try:
+                _presence_redis = aioredis.from_url(redis_url, decode_responses=False)
+                household_presence_subscriber = HouseholdPresenceSubscriber(
+                    redis_client=_presence_redis,
+                    cache=household_presence_cache,
+                    stream=transport_config.household_presence_stream,
+                    group=transport_config.consumer_group,
+                    consumer=transport_config.consumer_name,
+                )
+            except Exception:
+                logger.exception("household_presence_subscriber_init_failed")
+                household_presence_subscriber = None
+
     height_profile_repo: IdentityHeightProfileRepository = (
         PostgresIdentityHeightProfileRepository(_pool)
         if _pool is not None
@@ -1237,6 +1290,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         image_only_evaluation=image_only_evaluation,
         height_profile_repo=height_profile_repo,
         height_sample_repo=height_sample_repo,
+        household_presence_source=household_presence_cache,
     )
     await _pipeline.initialize(deps)
 
@@ -1341,6 +1395,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.exception("wearable_fix_subscriber_start_failed")
             wearable_fix_subscriber = None
 
+    # Start household presence subscriber only when closed_world.mode is shadow or enabled.
+    if household_presence_subscriber is not None:
+        try:
+            await household_presence_subscriber.start()
+        except Exception:
+            logger.exception("household_presence_subscriber_start_failed")
+            household_presence_subscriber = None
+
     # Keyframe revalidator background task.
     if bbox_repo is not None:
         from .services.keyframe_revalidator import KeyframeRevalidator
@@ -1390,6 +1452,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             image_only_evaluation=image_only_evaluation,
             face_attestation=_pipeline.face_attestation if _pipeline is not None else None,
             height_profile_repo=height_profile_repo,
+            household_presence_cache=household_presence_cache,
+            world_tracker_state=_pipeline,
             interval_s=60.0,
         )
         await roster_sync_service.start()
@@ -1428,6 +1492,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         image_only_eval_repo=image_only_eval_repo,
         wearable_assoc_repo=wearable_association_repo,
         teaching_holds_repo=wearable_teaching_hold_repo,
+        household_presence=household_presence_cache,
+        closed_world_config=closed_world_config,
     )
 
     if signal_repo is not None and trajectory_repo is not None and keyframe_repo is not None:
@@ -1504,6 +1570,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Stop wearable fix subscriber.
     if wearable_fix_subscriber is not None:
         await wearable_fix_subscriber.stop()
+
+    # Stop household presence subscriber.
+    if household_presence_subscriber is not None:
+        await household_presence_subscriber.stop()
 
     # Disconnect room transition publisher.
     if "_room_transition_pub" in dir():

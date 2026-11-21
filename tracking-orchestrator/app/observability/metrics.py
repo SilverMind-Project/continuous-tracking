@@ -170,6 +170,23 @@ class DeadLetterStream(StrEnum):
     """Bounded label set for ``cts_messages_dead_lettered_total{stream}``."""
 
     WEARABLE_FIXES = "wearable_fixes"
+    HOUSEHOLD_PRESENCE = "household_presence"
+
+
+class ClosedWorldInactiveReason(StrEnum):
+    """Bounded label set for ``cts_closed_world_inactive_total{reason}``."""
+
+    ROSTER_INCOMPLETE = "roster_incomplete"
+    NO_PRESENCE = "no_presence"
+    NO_IDENTITIES = "no_identities"
+
+
+class ClosedWorldShadowOutcome(StrEnum):
+    """Bounded label set for ``cts_closed_world_shadow_outcomes_total{outcome}``."""
+
+    WOULD_NAME_UNKNOWN = "would_name_unknown"
+    WOULD_CHANGE = "would_change"
+    AGREES = "agrees"
 
 
 _REVISION_REASON_PREFIX_MAP: dict[str, RevisionReasonKind] = {
@@ -428,6 +445,10 @@ class Metrics:
     # labels: state (GalleryRetentionState), mode (GalleryRetentionModeLabel)
     cts_gallery_retention_rows_total: Counter
     cts_gallery_retention_crop_delete_failures_total: Counter
+
+    # ---- closed-world prior shaping ----
+    cts_closed_world_inactive_total: Counter  # label: reason (ClosedWorldInactiveReason)
+    cts_closed_world_shadow_outcomes_total: Counter  # label: outcome (ClosedWorldShadowOutcome)
 
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
@@ -1181,6 +1202,16 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         cts_gallery_retention_crop_delete_failures_total=_counter(
             "cts_gallery_retention_crop_delete_failures_total",
             "Crop deletion failures during ReID gallery retention sweeps (retried on next tick).",
+        ),
+        cts_closed_world_inactive_total=_counter(
+            "cts_closed_world_inactive_total",
+            "Closed-world channel evaluations skipped because a readiness gate was not satisfied.",
+            ["reason"],
+        ),
+        cts_closed_world_shadow_outcomes_total=_counter(
+            "cts_closed_world_shadow_outcomes_total",
+            "Shadow-mode closed-world counterfactual outcomes against the live resolver decision.",
+            ["outcome"],
         ),
     )
 

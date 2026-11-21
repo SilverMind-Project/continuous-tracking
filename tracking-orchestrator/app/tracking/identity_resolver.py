@@ -44,20 +44,25 @@ from ..domain import (
     FaceEvidencePolicy,
     GalleryEmbedding,
     GallerySeedSource,
+    HouseholdPresenceSnapshot,
+    HouseholdPresenceSource,
     Identity,
     IdentityDecision,
     IdentityHeightProfile,
     IdentityResolvableEntity,
     IdentityRevision,
     ImageOnlyEvaluation,
+    OpenPHOccupancy,
+    OverlapGroup,
     PosteriorDist,
     ResolveOutcome,
     ViewPrototype,
     WearableEvidence,
+    WearableEvidenceClass,
 )
 from ..inference.evidence import FaceEvidence
 from ..observability import metrics
-from ..observability.metrics import WearableShadowOutcome
+from ..observability.metrics import ClosedWorldShadowOutcome, WearableShadowOutcome
 from ..storage.base import VOTING_STATES, GalleryRepository
 from ..storage.height_profiles import IdentityHeightProfileRepository
 from .identity.channels import (
@@ -69,6 +74,7 @@ from .identity.channels import (
     ResolverInputs,
     VoteWindow,
 )
+from .identity.closed_world_channel import ClosedWorldChannel, ClosedWorldConfig
 from .identity.commit_policy import (
     CommitEvaluation,
     compute_contradiction,
@@ -77,7 +83,13 @@ from .identity.commit_policy import (
     evaluate_commit as _evaluate_commit_pure,
 )
 from .identity.evidence import IdentityEvidence
-from .identity.evidence_grades import NATIVE_TEMPLATE, WEARABLE, EvidenceGrade, grade_of
+from .identity.evidence_grades import (
+    CLOSED_WORLD,
+    NATIVE_TEMPLATE,
+    WEARABLE,
+    EvidenceGrade,
+    grade_of,
+)
 from .identity.gallery_scoring import (
     GalleryScoringConfig,
     aggregate_max_over_views,
@@ -569,12 +581,16 @@ class IdentityResolver:
         wearable_config: WearableConfig | None = None,
         height_profile_repo: IdentityHeightProfileRepository | None = None,
         height_profiles: Sequence[IdentityHeightProfile] | None = None,
+        closed_world_config: ClosedWorldConfig | None = None,
+        household_presence_source: HouseholdPresenceSource | None = None,
     ) -> None:
         self._gallery_repo = gallery_repo
         self._height_profile_repo = height_profile_repo
         self._config = config or ResolverConfig()
         self._gallery_cache = gallery_cache
         self._wearable_config = wearable_config or WearableConfig()
+        self._closed_world_config = closed_world_config or ClosedWorldConfig()
+        self._household_presence_source = household_presence_source
         # Known identities for display names
         self._identities: dict[str, Identity] = {
             ident.identity_id: ident for ident in identities or []
@@ -588,7 +604,8 @@ class IdentityResolver:
         )
         # Revision rate limiter: global_track_id -> list of revision timestamps
         self._revision_log: dict[str, list[datetime]] = defaultdict(list)
-        # Evidence channels in canonical order: face -> gallery -> height -> wearable.
+        # Evidence channels in canonical order:
+        # face -> gallery -> height -> wearable -> closed_world.
         self._face_channel = FaceChannel(
             config=self._config,
             identities_getter=lambda: self._identities,
@@ -605,11 +622,16 @@ class IdentityResolver:
             config=self._wearable_config,
             identities_getter=lambda: self._identities,
         )
+        self._closed_world_channel = ClosedWorldChannel(
+            config=self._closed_world_config,
+            identities_getter=lambda: self._identities,
+        )
         self._channels: tuple[EvidenceChannel, ...] = (
             self._face_channel,
             self._gallery_channel,
             self._height_channel,
             self._wearable_channel,
+            self._closed_world_channel,
         )
 
     def likelihood_scale(self, grade: EvidenceGrade) -> float:
@@ -635,6 +657,12 @@ class IdentityResolver:
         open_ph_identities: Mapping[str, str] | None = None,
         wearable_evidence: Mapping[str, WearableEvidence] | None = None,
         ph_height_sigmas: dict[str, float] | None = None,
+        open_ph_occupancies: Mapping[str, OpenPHOccupancy] | None = None,
+        copresence_pairs: frozenset[tuple[str, str]] | None = None,
+        overlap_groups: Sequence[OverlapGroup] | None = None,
+        camera_room_map: Mapping[str, str] | None = None,
+        wearable_present_identities: frozenset[str] | None = None,
+        household_presence: HouseholdPresenceSnapshot | None = None,
     ) -> ResolveOutcome:
         """Resolve identities for a batch of tracked entities.
 
@@ -699,6 +727,15 @@ class IdentityResolver:
             as_of=captured_at,
             max_age_s=self._config.gallery_vote_max_age_s,
         )
+        effective_presence = (
+            household_presence
+            if household_presence is not None
+            else (
+                self._household_presence_source.latest()
+                if self._household_presence_source is not None
+                else None
+            )
+        )
         inputs = ResolverInputs(
             captured_at=captured_at,
             face_anchors=tuple(augmented_anchors),
@@ -710,10 +747,17 @@ class IdentityResolver:
             raw_face_evidence=tuple(face_evidence or ()),
             wearable_evidence=wearable_evidence or {},
             vote_window=vote_window,
+            open_ph_occupancies=open_ph_occupancies or {},
+            copresence_pairs=copresence_pairs or frozenset(),
+            overlap_groups=tuple(overlap_groups or ()),
+            camera_room_map=camera_room_map or {},
+            household_presence=effective_presence,
+            wearable_present_identities=wearable_present_identities or frozenset(),
         )
 
         wearable_mode = self._wearable_config.mode
         height_mode = self._config.height_mode
+        closed_world_mode = self._closed_world_config.mode
         empty_height_ch = ChannelLikelihood("height", PosteriorDist({}), 1.0)
         pending_decisions: list[_PendingIdentityDecision] = []
         outcome_image_only: list[ImageOnlyEvaluation] = []
@@ -744,11 +788,17 @@ class IdentityResolver:
             wearable_ch, wearable_prob = self._wearable_channel.evaluate_wearable(
                 entity, live_wearable_ev
             )
-            channels: tuple[ChannelLikelihood, ...] = (
-                (face_res.likelihood, gallery_ch, height_ch, wearable_ch)
-                if live_wearable_ev is not None
-                else (face_res.likelihood, gallery_ch, height_ch)
+            cw_eval = (
+                self._closed_world_channel.evaluate_closed_world(entity, inputs)
+                if closed_world_mode != "off"
+                else None
             )
+            channel_list: list[ChannelLikelihood] = [face_res.likelihood, gallery_ch, height_ch]
+            if live_wearable_ev is not None:
+                channel_list.append(wearable_ch)
+            if closed_world_mode == "enabled" and cw_eval is not None and cw_eval.active:
+                channel_list.append(cw_eval.likelihood)
+            channels: tuple[ChannelLikelihood, ...] = tuple(channel_list)
             face_likelihood = face_res.likelihood.distribution
             best_face_conf = face_res.best_face_similarity
             reid_likelihood = gallery_ch.distribution
@@ -760,17 +810,21 @@ class IdentityResolver:
             # for commit eligibility. Built once and reused across the live
             # evaluation and every shadow evaluation below so shadows compare
             # like against like (same evidence set, different posterior/reid).
-            commit_evidence_ids = self._face_channel.collect_commit_evidence_ids(
+            # Prior-shaping channels with counts_as_commit_evidence=False (such as
+            # CLOSED_WORLD) are intentionally excluded so they can never commit alone.
+            base_commit_evidence_ids = self._face_channel.collect_commit_evidence_ids(
                 entity,
                 face_anchors=augmented_anchors,
                 face_evidence=augmented_evidence,
                 reid_likelihood=reid_likelihood,
                 calibrated_faces_only=live_calibrated,
             )
-            if live_wearable_ev is not None:
+            commit_evidence_ids = base_commit_evidence_ids
+            if live_wearable_ev is not None and WEARABLE.counts_as_commit_evidence:
                 commit_evidence_ids = commit_evidence_ids | frozenset(
                     {live_wearable_ev.identity_id}
                 )
+            assert not CLOSED_WORLD.counts_as_commit_evidence
 
             # Shared "live" evaluation for both shadow comparisons below, computed
             # once instead of once per shadow block. contradicted=False matches
@@ -920,6 +974,32 @@ class IdentityResolver:
                     check_contradiction=True,
                 )
                 self._shadow_mismatch("height", decision.identity_id, height_shadow_eval)
+            # Closed-world shadow counterfactual: pure CPU over cached presence and open PHs;
+            # counts outcomes without altering live decisions or commit evidence eligibility.
+            if (
+                closed_world_mode == "shadow"
+                and arcface_authority is None
+                and cw_eval is not None
+                and cw_eval.active
+            ):
+                cw_shadow_channels = (*channels, cw_eval.likelihood)
+                cw_shadow_eval = self._evaluate_channels_counterfactual(
+                    entity,
+                    prior,
+                    cw_shadow_channels,
+                    face_likelihood=face_likelihood,
+                    reid_likelihood=reid_likelihood,
+                    best_face_similarity=best_face_conf,
+                    captured_at=captured_at,
+                    entity_quality=entity_quality,
+                    evidence_identity_ids=commit_evidence_ids,
+                    check_contradiction=True,
+                )
+                self._record_closed_world_shadow_outcome(
+                    entity,
+                    live_identity_id=decision.identity_id,
+                    shadow_identity_id=cw_shadow_eval.new_id,
+                )
             # Calibrated-policy shadow: pure CPU over this frame's anchors, so not sample-gated.
             if policy == "shadow" and self._has_recognized_face(
                 entity, augmented_anchors + shadow_face_anchors
@@ -1006,6 +1086,13 @@ class IdentityResolver:
                 face_evidence or [],
                 identity_id=decision.identity_id,
             )
+            room_wearable_only = bool(
+                decision.identity_id is not None
+                and live_wearable_ev is not None
+                and live_wearable_ev.identity_id == decision.identity_id
+                and live_wearable_ev.evidence_class == WearableEvidenceClass.ROOM
+                and decision.identity_id not in base_commit_evidence_ids
+            )
             decision = IdentityDecision(
                 ph_id=decision.ph_id,
                 identity_id=decision.identity_id,
@@ -1018,6 +1105,7 @@ class IdentityResolver:
                     "sources": ep.evidence_summary,
                     "direct_face_confidence": direct_face_confidence,
                     "posterior_entropy": ep.entropy,
+                    "room_wearable_only": room_wearable_only,
                 },
                 decision_id=decision.decision_id,
                 inferred_identity_id=decision.inferred_identity_id,
@@ -1604,6 +1692,32 @@ class IdentityResolver:
             f"{feature}_shadow_mismatch",
             entity_id=entity.entity_id,
             outcome=outcome,
+            live_identity_id=live_identity_id,
+            shadow_identity_id=shadow_identity_id,
+        )
+
+    @staticmethod
+    def _record_closed_world_shadow_outcome(
+        entity: IdentityResolvableEntity,
+        *,
+        live_identity_id: str | None,
+        shadow_identity_id: str | None,
+    ) -> None:
+        """Count closed-world shadow outcomes against live; log each disagreement for review."""
+        if shadow_identity_id == live_identity_id:
+            outcome = ClosedWorldShadowOutcome.AGREES
+        elif live_identity_id is None and shadow_identity_id is not None:
+            outcome = ClosedWorldShadowOutcome.WOULD_NAME_UNKNOWN
+        else:
+            outcome = ClosedWorldShadowOutcome.WOULD_CHANGE
+        metrics.metrics.cts_closed_world_shadow_outcomes_total.labels(outcome=str(outcome)).inc()
+        if outcome == ClosedWorldShadowOutcome.AGREES:
+            return
+        metrics.metrics.identity_shadow_mismatch_total.labels(feature="closed_world").inc()
+        logger.info(
+            "closed_world_shadow_mismatch",
+            entity_id=entity.entity_id,
+            outcome=str(outcome),
             live_identity_id=live_identity_id,
             shadow_identity_id=shadow_identity_id,
         )

@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package continuoustracking.v1;
+
+option go_package = "github.com/SilverMind-Project/continuous-tracking/proto/continuoustracking/v1";
+
+// Canonical presence status of a household member published on cc.household_presence.
+// Mirrors cts_contracts.household.PresenceStatus (values 1..6).
+enum PresenceStatus {
+  PRESENCE_STATUS_UNSPECIFIED = 0;
+  PRESENCE_STATUS_PRESENT_ROOM = 1;
+  PRESENCE_STATUS_PRESENT_HOME = 2;
+  PRESENCE_STATUS_AWAY = 3;
+  PRESENCE_STATUS_ASLEEP = 4;
+  PRESENCE_STATUS_UNKNOWN = 5;
+  PRESENCE_STATUS_STALE = 6;
+}
+
+// Per-member presence snapshot fused by Cognitive Companion's PresenceService.
+message MemberPresence {
+  string member_id = 1;
+  PresenceStatus status = 2;
+  float confidence = 3;
+  // Empty when room is unknown.
+  string room_id = 4;
+  fixed64 inferred_at_unix_ns = 5;
+}
+
+// Household-wide presence and roster-completeness snapshot published by
+// Cognitive Companion on the cc.household_presence Redis Stream (field "presence")
+// on any change and every 60 seconds.
+message HouseholdPresence {
+  repeated MemberPresence members = 1;
+  bool roster_complete = 2;
+  bool visitors_present = 3;
+  fixed64 published_at_unix_ns = 4;
+}

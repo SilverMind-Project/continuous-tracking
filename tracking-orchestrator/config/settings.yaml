@@ -24,6 +24,7 @@ redis:
   dwell_stream: tracking.dwell
   wearable_fixes_stream: wearable.fixes
   wearable_capabilities_stream: wearable.capabilities
+  household_presence_stream: cc.household_presence
   batch_max_wait_ms: 100
   batch_max_size: 8
   xack_timeout_ms: 5000
@@ -959,6 +960,38 @@ wearable:
     # compensate inferred backfill ranges, and hold further teaching until an operator resumes)
     # when a segment is first marked swap_suspected.
     auto_on_swap: true
+
+# Closed-world prior shaping (who is home, spatially verified joint elimination, guest slot).
+# Shapes Bayesian priors only; never commits an identity on its own or refreshes the evidence clock.
+closed_world:
+  # Rollout mode: "off" skips stream consumption and evaluation; "shadow" evaluates counterfactuals
+  # and records shadow outcomes without affecting live decisions; "enabled" joins the live posterior.
+  mode: "shadow"
+  # Factor applied to an enrolled member reported "away" with high confidence and no fresh
+  # non-parked wearable fix. Bounded away from zero so a left-behind phone slows commits rather
+  # than blocking them.
+  away_factor: 0.3
+  # Minimum PresenceService confidence before an "away" status down-weights a member.
+  away_min_confidence: 0.8
+  # Lookback window (seconds) for a fresh non-parked bound wearable fix that overrides CC "away".
+  wearable_home_window_s: 600.0
+  # Factor applied to an identity held by another simultaneously observed, spatially distinct open PH.
+  occupied_factor: 0.2
+  # Maximum capture-time age (seconds) of the other PH's independent evidence to count as fresh.
+  occupancy_fresh_s: 60.0
+  # Maximum capture-time difference (seconds) between two PHs' last_seen_at to count as simultaneous.
+  simultaneous_obs_max_skew_s: 1.0
+  # Minimum floor-plane distance (metres) separating calibrated open PHs without a CoPresenceLink.
+  min_elimination_distance_m: 2.0
+  # Minimum normalized channel share reserved for UNKNOWN (explicit guest slot) normally.
+  guest_floor: 0.10
+  # Elevated minimum UNKNOWN share when CC reports visitors present (named guest or recent visitor).
+  guest_floor_visitors: 0.30
+  # Age (seconds) after which household presence statuses are treated as unknown.
+  presence_stale_after_s: 180.0
+  # Hard lower and upper clamps on per-identity prior-shaping factors.
+  factor_floor: 0.05
+  factor_ceiling: 1.0
 
 # Environment label (dev / staging / production)
 env: production

@@ -574,11 +574,41 @@ class WearableAssociationTracker:
         self._active_by_ph: dict[str, _ActiveSegmentState] = {}
         self._tag_conflicts: dict[str, deque[datetime]] = {}
         self._last_evidence_by_ph: dict[str, WearableEvidence] = {}
+        # Latest capture-time measurement of any non-parked fix per member,
+        # used by ClosedWorldChannel to override CC "away" over a 10-minute window.
+        self._last_non_parked_fix_at_by_member: dict[str, datetime] = {}
 
     @property
     def active_segment_count(self) -> int:
         """Return count of currently open wearable association segments."""
         return len(self._active_by_ph)
+
+    def members_with_fresh_non_parked_fix(
+        self,
+        *,
+        now: datetime,
+        window_s: float,
+    ) -> frozenset[str]:
+        """Return member IDs with a non-parked tag fix within *window_s* of *now*."""
+        if window_s <= 0.0:
+            return frozenset()
+        fresh: set[str] = set()
+        expired: list[str] = []
+        for member_id, last_at in self._last_non_parked_fix_at_by_member.items():
+            age_s = (now - last_at).total_seconds()
+            if age_s <= window_s:
+                fresh.add(member_id)
+            elif age_s > max(window_s * 2.0, 1200.0):
+                expired.append(member_id)
+        for member_id in expired:
+            del self._last_non_parked_fix_at_by_member[member_id]
+        return frozenset(fresh)
+
+    def purge_identity(self, identity_id: str) -> int:
+        """Drop in-memory member state for a purged identity."""
+        removed = 1 if self._last_non_parked_fix_at_by_member.pop(identity_id, None) else 0
+        self._tag_disagreement_since.pop(identity_id, None)
+        return removed
 
     def reset_ph(
         self, ph_id: str, *, now: datetime, reason: str = "ph_reset"
@@ -687,6 +717,10 @@ class WearableAssociationTracker:
         ordered_fixes = sorted(fixes, key=lambda f: (f.measured_at, f.tag_id, f.epoch_seq))
         for fix in ordered_fixes:
             self._update_tag_motion(fix, room_polygons)
+            if not self.is_tag_parked(fix.tag_id):
+                prev_at = self._last_non_parked_fix_at_by_member.get(fix.member_id)
+                if prev_at is None or fix.measured_at > prev_at:
+                    self._last_non_parked_fix_at_by_member[fix.member_id] = fix.measured_at
 
         # 4. Filter fixes to the sliding window [now - window_s, now] and group by member/tag.
         window_fixes = [f for f in ordered_fixes if f.measured_at >= window_start]
