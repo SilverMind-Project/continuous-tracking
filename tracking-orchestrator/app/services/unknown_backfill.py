@@ -54,6 +54,7 @@ BACKFILL_SCHEMA_VERSION = "1"
 # operator "Set to Unknown", etc.), so the limiter is keyed on the pair, not
 # just the PH, with a short TTL rather than a per-process single-shot.
 _RATE_LIMIT_TTL_S = 600.0
+_AFTER_OPERATOR_RANGE = timedelta(microseconds=1)
 
 
 @dataclass(frozen=True)
@@ -248,9 +249,11 @@ class UnknownBackfillService:
         if operator_ranges:
             if any(r.range_start <= commit_time <= r.range_end for r in operator_ranges):
                 return SkipReason("operator_owns_live_edge")
-            latest_end = max(r.range_end for r in operator_ranges)
-            if latest_end > start:
-                start = latest_end
+            # Start strictly after the operator range: the conflict check in
+            # record_inferred_range treats a shared endpoint as an overlap.
+            after_operator = max(r.range_end for r in operator_ranges) + _AFTER_OPERATOR_RANGE
+            if after_operator > start:
+                start = after_operator
                 clip_reasons.append("clipped_operator_range")
 
         # 4. Cap the maximum span.

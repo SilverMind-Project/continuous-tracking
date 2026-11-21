@@ -392,3 +392,35 @@ async def test_rate_limit_one_per_ph_identity() -> None:
         event_time=commit_time + timedelta(seconds=1),
     )
     assert len(rewriter.backfill_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_binding_operator_clip_still_applies() -> None:
+    """When the operator range is the binding clip, the backfill starts just after it.
+
+    The conflict check treats a shared endpoint as an overlap, so a start equal to the operator
+    range's end used to abort every such backfill as an operator conflict.
+    """
+    svc, ph_repo, corr_repo, _decisions, rewriter, _publisher = _harness()
+    commit_time = T0 + timedelta(hours=2)
+    await ph_repo.save(_ph("ph-1", T0))
+    operator_end = T0 + timedelta(hours=1)
+    await corr_repo.save_range(
+        IdentityRevisionRange(
+            range_id="op-range-1",
+            revision_id="op-rev-1",
+            ph_id="ph-1",
+            authority="operator",
+            range_start=T0,
+            range_end=operator_end,
+            effective_identity_id="carol",
+        )
+    )
+    await svc.process(
+        outcome_decisions=[_decision("ph-1", "alice", previous_identity_id=None)],
+        ph_born_at_by_id={"ph-1": T0},
+        event_time=commit_time,
+    )
+    (call,) = rewriter.backfill_calls
+    assert call[3] == operator_end + timedelta(microseconds=1)
+    assert call[4] == commit_time
