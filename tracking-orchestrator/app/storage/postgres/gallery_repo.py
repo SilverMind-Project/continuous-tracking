@@ -397,6 +397,11 @@ class PostgresGalleryRepository(GalleryRepository):
                 identity_id,
             )
             await conn.execute(
+                "DELETE FROM continuous_tracking.appearance_training_samples "
+                "WHERE identity_id = $1",
+                identity_id,
+            )
+            await conn.execute(
                 """
                 UPDATE continuous_tracking.face_observation_stats
                 SET best_candidate_id = NULL

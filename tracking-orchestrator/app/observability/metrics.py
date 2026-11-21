@@ -144,6 +144,7 @@ class ImageOnlyArm(StrEnum):
 
     CONTROL = "control"
     TREATMENT = "treatment"
+    CLASSIFIER = "classifier"
 
 
 class ImageOnlyOutcome(StrEnum):
@@ -187,6 +188,38 @@ class ClosedWorldShadowOutcome(StrEnum):
     WOULD_NAME_UNKNOWN = "would_name_unknown"
     WOULD_CHANGE = "would_change"
     AGREES = "agrees"
+
+
+class HouseholdClassifierHealthLabel(StrEnum):
+    """Bounded label set for ``cts_household_classifier_health{state}``."""
+
+    OFF = "off"
+    READY = "ready"
+    DEGRADED_MISSING = "degraded_missing"
+    DEGRADED_INCOMPATIBLE = "degraded_incompatible"
+    DEGRADED_INVALID = "degraded_invalid"
+
+
+class HouseholdClassifierShadowOutcome(StrEnum):
+    """Bounded label set for ``cts_household_classifier_shadow_outcomes_total{outcome}``."""
+
+    WOULD_NAME_UNKNOWN = "would_name_unknown"
+    WOULD_CHANGE = "would_change"
+    AGREES = "agrees"
+
+
+class AppearanceSampleDropReason(StrEnum):
+    """Bounded label set for ``cts_appearance_training_samples_dropped_total{reason}``."""
+
+    NOT_ELIGIBLE = "not_eligible"
+    LOW_QUALITY = "low_quality"
+    NO_EMBEDDING = "no_embedding"
+    NON_FINITE_EMBEDDING = "non_finite_embedding"
+    DEDUP_WINDOW = "dedup_window"
+    NEGATIVE_DAILY_CAP = "negative_daily_cap"
+    TEACHING_HELD = "teaching_held"
+    FACE_CONFLICT = "face_conflict"
+    ROOM_GRADE_EXCLUDED = "room_grade_excluded"
 
 
 _REVISION_REASON_PREFIX_MAP: dict[str, RevisionReasonKind] = {
@@ -449,6 +482,12 @@ class Metrics:
     # ---- closed-world prior shaping ----
     cts_closed_world_inactive_total: Counter  # label: reason (ClosedWorldInactiveReason)
     cts_closed_world_shadow_outcomes_total: Counter  # label: outcome (ClosedWorldShadowOutcome)
+
+    # ---- household appearance classifier ----
+    cts_household_classifier_health: Gauge  # label: state (HouseholdClassifierHealthLabel)
+    cts_household_classifier_shadow_outcomes_total: Counter  # label: outcome
+    cts_appearance_training_samples_recorded_total: Counter  # label: source (AppearanceLabelSource)
+    cts_appearance_training_samples_dropped_total: Counter  # label: reason
 
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
@@ -1212,6 +1251,26 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_closed_world_shadow_outcomes_total",
             "Shadow-mode closed-world counterfactual outcomes against the live resolver decision.",
             ["outcome"],
+        ),
+        cts_household_classifier_health=_gauge(
+            "cts_household_classifier_health",
+            "Household appearance classifier readiness state (1 for active state, 0 otherwise).",
+            ["state"],
+        ),
+        cts_household_classifier_shadow_outcomes_total=_counter(
+            "cts_household_classifier_shadow_outcomes_total",
+            "Shadow-mode household appearance classifier outcomes against live decisions.",
+            ["outcome"],
+        ),
+        cts_appearance_training_samples_recorded_total=_counter(
+            "cts_appearance_training_samples_recorded_total",
+            "Body-appearance training samples recorded for offline classifier training, by source.",
+            ["source"],
+        ),
+        cts_appearance_training_samples_dropped_total=_counter(
+            "cts_appearance_training_samples_dropped_total",
+            "Candidate body-appearance training samples skipped, by bounded reason.",
+            ["reason"],
         ),
     )
 

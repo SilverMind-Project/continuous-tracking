@@ -23,6 +23,7 @@ Read before adding or replacing a dependency. Part of the `engineering-standards
 | `ruff` | Lint + format |
 | `import-linter` | Layering enforcement (`make check`, CI, pre-commit) |
 | `triton-shared` | Shared Triton client + YOLO/CLIP/Florence pre/post-processing (git source in `[tool.uv.sources]`, pinned by `uv.lock`) |
+| `scikit-learn` (`classifier-tools` optional extra) | Offline household appearance classifier training (`scripts/train_household_classifier.py`: balanced multinomial logistic regression with grouped CV); never imported by `app/` (enforced by `import-linter`) |
 
 Do not introduce `aiohttp`, `celery`, or `psycopg2`. `httpx` is permitted as a **test-only** dependency in `tracking-orchestrator`.
 

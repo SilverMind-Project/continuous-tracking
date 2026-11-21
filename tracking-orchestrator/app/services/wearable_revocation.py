@@ -37,6 +37,7 @@ from app.inference.face_id_client import (
     PromotedAttestationRef,
 )
 from app.services.identity_correction_service import IdentityCorrectionService
+from app.storage.appearance_samples import AppearanceSampleRepository
 from app.storage.corrections import IdentityCorrectionRepositoryProtocol
 from app.storage.gallery import GalleryRepository, ReviewConflictError
 from app.storage.wearable_associations import WearableAssociationRepository
@@ -109,6 +110,7 @@ class WearableTeachingRevocationService:
         correction_repo: IdentityCorrectionRepositoryProtocol | None = None,
         correction_service: IdentityCorrectionService | None = None,
         face_id_client: FaceRevocationClient | None = None,
+        appearance_sample_repo: AppearanceSampleRepository | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._assoc = association_repo
@@ -117,6 +119,7 @@ class WearableTeachingRevocationService:
         self._correction_repo = correction_repo
         self._correction_service = correction_service
         self._face_client = face_id_client
+        self._appearance_sample_repo = appearance_sample_repo
         self._clock = clock
 
     def set_face_id_client(self, client: FaceRevocationClient | None) -> None:
@@ -199,6 +202,14 @@ class WearableTeachingRevocationService:
                 if res is not None:
                     compensated += 1
 
+        # 3b. Revoke any appearance-classifier training samples sourced from this segment.
+        appearance_samples_revoked = 0
+        if self._appearance_sample_repo is not None:
+            appearance_samples_revoked = await self._appearance_sample_repo.revoke_by_association(
+                segment_id,
+                revoked_at=now,
+            )
+
         # 4. Hold further teaching for this tag until an operator explicitly resumes it.
         hold = await self._holds.create_hold(
             tag_id=segment.tag_id,
@@ -225,6 +236,7 @@ class WearableTeachingRevocationService:
             attested_faces_revoked=faces_revoked,
             already_promoted_faces=len(already_promoted),
             inferred_ranges_compensated=compensated,
+            appearance_samples_revoked=appearance_samples_revoked,
         )
         return RevocationSummary(
             segment_id=segment_id,

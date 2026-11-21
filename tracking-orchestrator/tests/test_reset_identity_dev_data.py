@@ -101,6 +101,7 @@ class TestAllowlists:
             "reid_gallery",
             "gallery_review_events",
             "wearable_associations",
+            "appearance_training_samples",
         }
         assert set(rsd._CTS_DELETE_TABLES) == expected
 

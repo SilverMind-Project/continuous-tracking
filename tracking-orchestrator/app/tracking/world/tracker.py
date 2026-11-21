@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 from app.tracking.camera_pose import update_ph_height_estimate
 
 from ...domain import (
+    AppearanceFeature,
+    AppearanceFeatureExtractor,
     BoundingBox,
     CameraTopologyEdge,
     CoPresenceLink,
@@ -32,6 +34,7 @@ from ...domain import (
     IdentityRevision,
     ImageOnlyEvaluation,
     OpenPHOccupancy,
+    OrientationBin,
     OverlapGroup,
     PersonHypothesis,
     PHContinuationCandidate,
@@ -311,6 +314,7 @@ class WorldTracker:
         overlap_groups: list[OverlapGroup] | None = None,
         wearable_config: WearableConfig | None = None,
         closed_world_config: ClosedWorldConfig | None = None,
+        appearance_feature_extractor: AppearanceFeatureExtractor | None = None,
     ) -> None:
         self._ph_repo = ph_repo
         self._obs_repo = obs_repo
@@ -323,6 +327,7 @@ class WorldTracker:
         self._overlap_groups: list[OverlapGroup] = list(overlap_groups or [])
         self._wearable_config = wearable_config or WearableConfig()
         self._closed_world_config = closed_world_config or ClosedWorldConfig()
+        self._appearance_feature_extractor = appearance_feature_extractor
         self._ph_floor_history = PHFloorHistory(
             max_span_s=self._config.ph_close_grace_s + self._config.revive_max_age_s,
         )
@@ -600,6 +605,9 @@ class WorldTracker:
         ph_obs_meta: dict[
             str, tuple[int, BoundingBox | None, float]
         ] = {}  # ph_id -> (frame_index, bbox, detection_confidence)
+        ph_obs_appearance: dict[
+            str, tuple[OrientationBin, list[float], float]
+        ] = {}  # ph_id -> (orientation, embedding, quality)
         ph_floor_calibrated: dict[str, bool] = {}  # ph_id -> obs.floor_point.calibrated this frame
         ph_confidence_meta: dict[
             str, tuple[int, bool]
@@ -772,6 +780,7 @@ class WorldTracker:
                 obs.bbox,
                 obs.detection_confidence,
             )
+            ph_obs_appearance[ph.ph_id] = (obs.orientation, obs.embedding, obs.quality)
             ph_floor_calibrated[ph.ph_id] = obs.floor_point.calibrated
             ph_confidence_meta[ph.ph_id] = (len(src_ids), obs.footpoint_reliable)
             # Map all source detection IDs (not just the representative) to this PH.
@@ -1013,6 +1022,7 @@ class WorldTracker:
                 obs.bbox,
                 obs.detection_confidence,
             )
+            ph_obs_appearance[new_ph.ph_id] = (obs.orientation, obs.embedding, obs.quality)
             ph_floor_calibrated[new_ph.ph_id] = obs.floor_point.calibrated
             ph_confidence_meta[new_ph.ph_id] = (len(spawn_src_ids), obs.footpoint_reliable)
             # Save the PH first so the FK constraint on world_observations is satisfied.
@@ -1306,6 +1316,23 @@ class WorldTracker:
             if self._wearable_tracker is not None
             else frozenset()
         )
+        ph_appearance_features: dict[str, AppearanceFeature] = {}
+        if self._appearance_feature_extractor is not None:
+            for ph in open_phs_all:
+                app_obs = ph_obs_appearance.get(ph.ph_id)
+                if app_obs is None:
+                    continue
+                obs_orient, obs_emb, obs_qual = app_obs
+                feature = self._appearance_feature_extractor.extract(
+                    view_prototypes=ph.view_prototypes,
+                    current_orientation=obs_orient,
+                    observation_embedding=obs_emb,
+                    gallery_mean=ph.gallery_mean,
+                    quality=obs_qual,
+                )
+                if feature is not None:
+                    ph_appearance_features[ph.ph_id] = feature
+
         identity_decisions, revisions, identity_by_ph, image_only = await _resolve_identities(
             resolver=self._identity_resolver,
             obs_repo=self._obs_repo,
@@ -1322,6 +1349,7 @@ class WorldTracker:
             overlap_groups=tuple(self._overlap_groups),
             camera_room_map=camera_room_map,
             wearable_present_identities=wearable_present_identities,
+            ph_appearance_features=ph_appearance_features or None,
             now=now,
             config=cfg,
         )
@@ -1698,6 +1726,7 @@ async def _resolve_identities(
     overlap_groups: Sequence[OverlapGroup] | None = None,
     camera_room_map: Mapping[str, str] | None = None,
     wearable_present_identities: frozenset[str] | None = None,
+    ph_appearance_features: Mapping[str, AppearanceFeature] | None = None,
     now: datetime,
     config: WorldTrackerConfig,
 ) -> tuple[
@@ -1792,6 +1821,7 @@ async def _resolve_identities(
             overlap_groups=overlap_groups,
             camera_room_map=camera_room_map,
             wearable_present_identities=wearable_present_identities,
+            ph_appearance_features=ph_appearance_features,
         )
     except Exception:
         logger.exception("identity_resolution_failed")

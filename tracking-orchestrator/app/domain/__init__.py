@@ -1618,6 +1618,27 @@ from .closed_world import (  # noqa: E402
 from .closed_world import (  # noqa: E402
     OpenPHOccupancy as OpenPHOccupancy,
 )
+from .household_classifier import (  # noqa: E402
+    HOUSEHOLD_CLASSIFIER_MODES as HOUSEHOLD_CLASSIFIER_MODES,
+)
+from .household_classifier import (  # noqa: E402
+    AppearanceFeature as AppearanceFeature,
+)
+from .household_classifier import (  # noqa: E402
+    AppearanceFeatureExtractor as AppearanceFeatureExtractor,
+)
+from .household_classifier import (  # noqa: E402
+    AppearanceLabelSource as AppearanceLabelSource,
+)
+from .household_classifier import (  # noqa: E402
+    AppearanceTrainingSample as AppearanceTrainingSample,
+)
+from .household_classifier import (  # noqa: E402
+    HouseholdClassifierHealthState as HouseholdClassifierHealthState,
+)
+from .household_classifier import (  # noqa: E402
+    HouseholdClassifierMode as HouseholdClassifierMode,
+)
 from .wearables import (  # noqa: E402
     WEARABLE_MODES as WEARABLE_MODES,
 )

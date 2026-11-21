@@ -1,5 +1,6 @@
 """Pipeline stage implementations."""
 
+from .appearance_samples import AppearanceSampleRecorderStage
 from .base import FrameStage, StageRunner, timed_phase
 from .detect import DetectStage
 from .detection_backfill import DetectionBackfillStage
@@ -24,6 +25,7 @@ from .wearable_face_attestation import WearableFaceAttestationStage
 from .world_tracking import WorldTrackingStage
 
 __all__ = [
+    "AppearanceSampleRecorderStage",
     "ClosePHStage",
     "DetectStage",
     "DetectionBackfillStage",

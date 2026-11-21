@@ -39,6 +39,11 @@ dev = [
 triton = [
     "tritonclient[all]>=2.51.0",
 ]
+# Offline household appearance classifier trainer only (scripts/train_household_classifier.py);
+# never imported by app/ (enforced by tests/architecture/test_no_sklearn_in_app.py).
+classifier-tools = [
+    "scikit-learn>=1.5,<1.7",
+]
 
 [project.scripts]
 cts-db = "app.cli:main"

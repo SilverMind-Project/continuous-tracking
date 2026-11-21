@@ -71,6 +71,7 @@ class IdentityRosterSyncService:
         height_profile_repo: IdentityHeightProfileRepository | None = None,
         household_presence_cache: WearableIdentityPurge | None = None,
         world_tracker_state: WearableIdentityPurge | None = None,
+        appearance_sample_repo: WearableAssociationIdentityPurge | None = None,
         interval_s: float = 60.0,
     ) -> None:
         self._gallery_repo = gallery_repo
@@ -86,6 +87,7 @@ class IdentityRosterSyncService:
         self._height_profile_repo = height_profile_repo
         self._household_presence_cache = household_presence_cache
         self._world_tracker_state = world_tracker_state
+        self._appearance_sample_repo = appearance_sample_repo
         self._members_source = members_source
         self._identity_resolver = identity_resolver
         self._gallery_cache = gallery_cache
@@ -192,6 +194,8 @@ class IdentityRosterSyncService:
             identity_id
         ):
             removed += 1
+        if self._appearance_sample_repo is not None:
+            removed += await self._appearance_sample_repo.purge_identity(identity_id)
         return removed
 
     def _invalidate_caches(self) -> None:

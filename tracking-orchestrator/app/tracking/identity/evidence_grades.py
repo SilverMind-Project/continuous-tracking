@@ -24,6 +24,7 @@ class EvidenceGradeName(StrEnum):
     CC_ASSERTION = "cc_assertion"
     WEARABLE = "wearable"
     CLOSED_WORLD = "closed_world"
+    HOUSEHOLD_CLASSIFIER = "household_classifier"
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,23 @@ CLOSED_WORLD = EvidenceGrade(
     attach_precedence=0,
     likelihood_scale_key=None,
     counts_as_commit_evidence=False,
+)
+
+HOUSEHOLD_CLASSIFIER = EvidenceGrade(
+    name=EvidenceGradeName.HOUSEHOLD_CLASSIFIER,
+    grants_authority=False,
+    refreshes_evidence_clock=False,
+    ranks_in_duplicate_guard=False,
+    grants_duplicate_bypass=False,
+    enters_association=False,
+    enters_contradiction=False,
+    propagates=False,
+    requires_calibration=False,
+    uses_own_capture_time=False,
+    applies_missing_face_quality_default=False,
+    attach_precedence=0,
+    likelihood_scale_key=None,
+    counts_as_commit_evidence=True,
 )
 
 # Convenience aliases for single-frame native and external assertion grades.

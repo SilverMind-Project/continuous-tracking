@@ -178,10 +178,13 @@ class ImageOnlyEvaluationService:
         grade = evaluation.attestation_grade
         day = evaluation.captured_at.date()
         truth = evaluation.truth_identity_id
-        for arm, decided in (
+        arms: list[tuple[ImageOnlyArm, str | None]] = [
             (ImageOnlyArm.CONTROL, evaluation.control_identity_id),
             (ImageOnlyArm.TREATMENT, evaluation.treatment_identity_id),
-        ):
+        ]
+        if evaluation.classifier_evaluated:
+            arms.append((ImageOnlyArm.CLASSIFIER, evaluation.classifier_identity_id))
+        for arm, decided in arms:
             outcome = classify(decided, truth)
             _metrics.metrics.cts_image_only_eval_seconds_total.labels(
                 arm=arm, outcome=outcome, grade=str(grade)

@@ -28,6 +28,7 @@ from .domain import (
     CameraProfile,
     ClosedWorldMode,
     FaceEvidencePolicy,
+    HouseholdClassifierMode,
     OverlapGroup,
     WearableMode,
 )
@@ -108,6 +109,10 @@ from .services.wearable_fix_buffer import WearableFixBuffer
 from .services.wearable_fix_subscriber import WearableFixSubscriber
 from .services.wearable_revocation import WearableTeachingRevocationService
 from .services.wearable_site_config_map import WearableSiteConfigMap
+from .storage.appearance_samples import (
+    AppearanceSampleRepository,
+    InMemoryAppearanceSampleRepository,
+)
 from .storage.height_profiles import (
     IdentityHeightProfileRepository,
     InMemoryIdentityHeightProfileRepository,
@@ -120,6 +125,7 @@ from .storage.image_only_evaluation import (
 )
 from .storage.migrations import MigrationRunner
 from .storage.postgres.appearance_repo import PostgresDailyAppearanceRepo
+from .storage.postgres.appearance_sample_repo import PostgresAppearanceSampleRepository
 from .storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
 from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
 from .storage.postgres.face_stats_repo import PostgresFaceObservationStatsRepository
@@ -147,6 +153,11 @@ from .storage.wearable_teaching_holds import (
 )
 from .tracking.identity.candidate_eligibility import CandidatePolicy
 from .tracking.identity.closed_world_channel import ClosedWorldConfig
+from .tracking.identity.household_classifier import (
+    HouseholdClassifierConfig,
+    HouseholdClassifierEvaluator,
+    SoliderFeatureExtractor,
+)
 from .tracking.identity_resolver import FaceQualityMode, HeightMode, ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
 from .tracking.world.wearable_config import FaceAttestationMode, WearableConfig
@@ -739,6 +750,22 @@ def _build_closed_world_config(s: Settings) -> ClosedWorldConfig:
     )
 
 
+def _build_household_classifier_config(s: Settings) -> HouseholdClassifierConfig:
+    """Build HouseholdClassifierConfig from required settings.yaml keys."""
+    hc = s.section("household_classifier")
+    return HouseholdClassifierConfig(
+        mode=cast(HouseholdClassifierMode, hc.as_str("mode")),
+        capture_enabled=hc.as_bool("capture_enabled"),
+        artifact_path=hc.as_str("artifact_path"),
+        weight_multiplier=hc.as_float("weight_multiplier"),
+        unknown_floor=hc.as_float("unknown_floor"),
+        commit_evidence_min_probability=hc.as_float("commit_evidence_min_probability"),
+        min_quality=hc.as_float("min_quality"),
+        dedup_window_s=hc.as_float("dedup_window_s"),
+        max_negatives_per_day=hc.as_int("max_negatives_per_day"),
+    )
+
+
 def _build_wearable_config(s: Settings) -> WearableConfig:
     """Build WearableConfig from required settings.yaml keys."""
     w = s.section("wearable")
@@ -847,6 +874,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     world_tracker_config = _build_world_tracker_config(settings)
     wearable_config = _build_wearable_config(settings)
     closed_world_config = _build_closed_world_config(settings)
+    household_classifier_config = _build_household_classifier_config(settings)
     sampler_config = _build_sampler_config(settings)
 
     config = PipelineConfig(
@@ -855,6 +883,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         world_tracker=world_tracker_config,
         wearable=wearable_config,
         closed_world=closed_world_config,
+        household_classifier=household_classifier_config,
         reid_candidates=_build_candidate_policy(settings, wearable_config),
         sampler=sampler_config,
         signals=_build_signal_config(settings),
@@ -1173,6 +1202,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.wearable_association_repo = wearable_association_repo
 
+    appearance_sample_repo: AppearanceSampleRepository = (
+        PostgresAppearanceSampleRepository(_pool)
+        if _pool is not None
+        else InMemoryAppearanceSampleRepository()
+    )
+    app.state.appearance_sample_repo = appearance_sample_repo
+
+    household_classifier_evaluator = HouseholdClassifierEvaluator.from_artifact_path(
+        household_classifier_config.artifact_path,
+        expected_feature_version=reid_model_name,
+        mode=household_classifier_config.mode,
+    )
+    app.state.household_classifier_evaluator = household_classifier_evaluator
+
     wearable_teaching_hold_repo: WearableTeachingHoldRepository = (
         PostgresWearableTeachingHoldRepository(_pool)
         if _pool is not None
@@ -1187,6 +1230,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             correction_repo=correction_repo_obj,
             correction_service=correction_service,
             face_id_client=None,
+            appearance_sample_repo=appearance_sample_repo,
         )
     app.state.wearable_revocation_service = wearable_revocation_service
 
@@ -1291,6 +1335,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         height_profile_repo=height_profile_repo,
         height_sample_repo=height_sample_repo,
         household_presence_source=household_presence_cache,
+        appearance_sample_repo=appearance_sample_repo,
+        household_classifier_evaluator=household_classifier_evaluator,
+        appearance_feature_extractor=SoliderFeatureExtractor(feature_version=reid_model_name),
     )
     await _pipeline.initialize(deps)
 
@@ -1454,6 +1501,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             height_profile_repo=height_profile_repo,
             household_presence_cache=household_presence_cache,
             world_tracker_state=_pipeline,
+            appearance_sample_repo=appearance_sample_repo,
             interval_s=60.0,
         )
         await roster_sync_service.start()
@@ -1719,6 +1767,20 @@ def create_app() -> FastAPI:
             "status": "ok" if face_id_ok else "info",
             "message": "configured" if face_id_ok else "not configured (optional)",
         }
+
+        # Household appearance classifier (optional corroborating channel)
+        hc_eval = getattr(app.state, "household_classifier_evaluator", None)
+        if hc_eval is not None:
+            checks["household_classifier"] = hc_eval.health_summary()
+        else:
+            checks["household_classifier"] = {
+                "status": "info",
+                "state": "off",
+                "message": "not configured (optional)",
+                "artifact_id": None,
+                "feature_version": None,
+                "class_count": 0,
+            }
 
         return {
             "status": overall,

@@ -34,7 +34,7 @@ from app.domain import ImageOnlyDailyTotal
 from app.services.image_only_evaluator import DayRates, daily_rates
 from app.storage.postgres.image_only_evaluation_repo import PostgresImageOnlyEvaluationRepository
 
-_ARMS = ("control", "treatment")
+_ARMS = ("control", "treatment", "classifier")
 
 
 def _rates(total: ImageOnlyDailyTotal | None) -> DayRates:
@@ -57,7 +57,7 @@ def bootstrap_mean_interval(
 def build_report(
     totals: Sequence[ImageOnlyDailyTotal], *, samples: int = 2000, seed: int = 0
 ) -> list[dict[str, object]]:
-    """Per (identity, grade): daily rates per arm and the paired treatment-minus-control effect."""
+    """Per (identity, grade): daily rates per arm and paired differences."""
     by_key: dict[tuple[str, str], dict[date, dict[str, ImageOnlyDailyTotal]]] = defaultdict(
         lambda: defaultdict(dict)
     )
@@ -69,13 +69,23 @@ def build_report(
         daily: list[dict[str, object]] = []
         attribution_diffs: list[float] = []
         wrong_diffs: list[float] = []
+        classifier_attr_diffs: list[float] = []
+        classifier_wrong_diffs: list[float] = []
         for day in sorted(days):
             rates = {arm: _rates(days[day].get(arm)) for arm in _ARMS}
-            control, treatment = rates["control"], rates["treatment"]
+            control, treatment, classifier = (
+                rates["control"],
+                rates["treatment"],
+                rates["classifier"],
+            )
             if control.attribution is not None and treatment.attribution is not None:
                 attribution_diffs.append(treatment.attribution - control.attribution)
             if control.wrong is not None and treatment.wrong is not None:
                 wrong_diffs.append(treatment.wrong - control.wrong)
+            if treatment.attribution is not None and classifier.attribution is not None:
+                classifier_attr_diffs.append(classifier.attribution - treatment.attribution)
+            if treatment.wrong is not None and classifier.wrong is not None:
+                classifier_wrong_diffs.append(classifier.wrong - treatment.wrong)
             daily.append(
                 {
                     "day": day.isoformat(),
@@ -97,6 +107,12 @@ def build_report(
                 "wrong_rate_difference": bootstrap_mean_interval(
                     wrong_diffs, samples=samples, seed=seed
                 ),
+                "classifier_attribution_difference": bootstrap_mean_interval(
+                    classifier_attr_diffs, samples=samples, seed=seed
+                ),
+                "classifier_wrong_rate_difference": bootstrap_mean_interval(
+                    classifier_wrong_diffs, samples=samples, seed=seed
+                ),
             }
         )
     return report
@@ -117,17 +133,48 @@ def render_table(report: Sequence[dict[str, object]]) -> str:
     lines: list[str] = []
     for entry in report:
         lines.append(f"identity {entry['identity_id']} ({entry['attestation_grade']} grade)")
-        lines.append("  day         control attr  treatment attr  control wrong  treatment wrong")
+        has_classifier = entry.get("classifier_attribution_difference") is not None or any(
+            day.get("classifier_seconds", 0.0)
+            for day in entry["days"]  # type: ignore[union-attr]
+        )
+        if has_classifier:
+            lines.append(
+                "  day         control attr  treatment attr  classifier attr  "
+                "control wrong  treatment wrong  classifier wrong"
+            )
+        else:
+            lines.append(
+                "  day         control attr  treatment attr  control wrong  treatment wrong"
+            )
         days = entry["days"]
         assert isinstance(days, list)
         for day in days:
-            lines.append(
-                f"  {day['day']}  {_fmt(day['control_attribution']):>12}  "
-                f"{_fmt(day['treatment_attribution']):>14}  {_fmt(day['control_wrong']):>13}  "
-                f"{_fmt(day['treatment_wrong']):>15}"
-            )
+            if has_classifier:
+                lines.append(
+                    f"  {day['day']}  {_fmt(day['control_attribution']):>12}  "
+                    f"{_fmt(day['treatment_attribution']):>14}  "
+                    f"{_fmt(day['classifier_attribution']):>15}  "
+                    f"{_fmt(day['control_wrong']):>13}  "
+                    f"{_fmt(day['treatment_wrong']):>15}  "
+                    f"{_fmt(day['classifier_wrong']):>16}"
+                )
+            else:
+                lines.append(
+                    f"  {day['day']}  {_fmt(day['control_attribution']):>12}  "
+                    f"{_fmt(day['treatment_attribution']):>14}  {_fmt(day['control_wrong']):>13}  "
+                    f"{_fmt(day['treatment_wrong']):>15}"
+                )
         lines.append(f"  attribution difference: {_fmt(entry['attribution_difference'])}")
         lines.append(f"  wrong-rate difference:  {_fmt(entry['wrong_rate_difference'])}")
+        if has_classifier:
+            lines.append(
+                "  classifier vs treatment attr:  "
+                f"{_fmt(entry['classifier_attribution_difference'])}"
+            )
+            lines.append(
+                "  classifier vs treatment wrong: "
+                f"{_fmt(entry['classifier_wrong_rate_difference'])}"
+            )
     return "\n".join(lines) if lines else "no image-only evaluations recorded"
 
 

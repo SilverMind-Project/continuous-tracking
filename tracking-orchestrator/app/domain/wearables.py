@@ -227,10 +227,12 @@ class WearableAssociationTransition:
 class ImageOnlyEvaluation:
     """What image-only identity decided for one attested PH in one sampled round.
 
-    The truth is the attested tag's member. Both decisions leave out the wearable channel and
+    The truth is the attested tag's member. All arms leave out the wearable channel and
     every gallery row seen after ``captured_at - exclusion``; ``control_identity_id`` also leaves
-    out every wearable-taught row, ``treatment_identity_id`` keeps them. ``None`` is Unknown.
-    ``captured_at`` is the round's capture time.
+    out every wearable-taught row, ``treatment_identity_id`` keeps them, and when
+    ``classifier_evaluated`` is True ``classifier_identity_id`` additionally includes the
+    household appearance classifier channel. ``None`` is Unknown. ``captured_at`` is the round's
+    capture time.
     """
 
     ph_id: str
@@ -239,6 +241,8 @@ class ImageOnlyEvaluation:
     control_identity_id: str | None
     treatment_identity_id: str | None
     captured_at: datetime
+    classifier_identity_id: str | None = None
+    classifier_evaluated: bool = False
 
 
 @dataclass(frozen=True)

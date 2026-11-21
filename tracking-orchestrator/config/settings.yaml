@@ -993,6 +993,34 @@ closed_world:
   factor_floor: 0.05
   factor_ceiling: 1.0
 
+# Multi-day closed-set household appearance classifier (corroborating channel).
+# Learns long-lived body cues across days from frozen embeddings labeled only by
+# trajectory-attested wearables, direct-face authority, or operator approval.
+# Ships dark (mode: off, capture_enabled: false) until the image-only attribution
+# necessity gate triggers after wearable rollout.
+household_classifier:
+  # Rollout mode: "off" skips runtime evaluation; "shadow" evaluates counterfactuals
+  # and the image-only classifier arm without changing live decisions; "enabled" joins
+  # the live Bayesian posterior as a non-authoritative corroborating channel.
+  mode: "off"
+  # Opt-in gate for recording labeled body embeddings to appearance_training_samples
+  # (60-day retention, deletable per person). Keep false until collection is intended.
+  capture_enabled: false
+  # Path to the versioned JSON classifier artifact written by scripts/train_household_classifier.py.
+  artifact_path: ""
+  # Pre-softmax logit scale applied as (weight_multiplier / temperature) with support_multiplier=1.0.
+  weight_multiplier: 1.0
+  # Minimum UNKNOWN probability mass reserved for open-set safety against visitors.
+  unknown_floor: 0.2
+  # Calibrated class probability floor required before a class counts as commit evidence.
+  commit_evidence_min_probability: 0.8
+  # Minimum crop quality [0, 1] required to persist a training sample.
+  min_quality: 0.35
+  # Per-(PH, orientation) capture-time deduplication interval in seconds.
+  dedup_window_s: 10.0
+  # Daily cap on open-set negative training samples recorded per local calendar day.
+  max_negatives_per_day: 500
+
 # Environment label (dev / staging / production)
 env: production
 

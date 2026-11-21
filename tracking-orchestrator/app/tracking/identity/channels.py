@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from structlog import get_logger
 
 from app.domain import (
+    AppearanceFeature,
     FaceAnchor,
     HouseholdPresenceSnapshot,
     Identity,
@@ -113,6 +114,7 @@ class ChannelLikelihood:
     clock_evidence_ids: frozenset[str] = frozenset()
     evidence_at_by_identity: Mapping[str, datetime] = field(default_factory=dict)
     counts_as_commit_evidence: bool = True
+    commit_evidence_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -165,6 +167,7 @@ class ResolverInputs:
     camera_room_map: Mapping[str, str] = field(default_factory=dict)
     household_presence: HouseholdPresenceSnapshot | None = None
     wearable_present_identities: frozenset[str] = frozenset()
+    ph_appearance_features: Mapping[str, AppearanceFeature] = field(default_factory=dict)
 
 
 class EvidenceChannel(Protocol):

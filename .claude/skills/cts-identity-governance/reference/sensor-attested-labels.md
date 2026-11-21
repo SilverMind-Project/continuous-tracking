@@ -14,6 +14,7 @@ the grade it says.
 | Face exemplars (person-id) | operator-gated `attested` captures | same, tagged with the grade | `WearableFaceAttestationService`, person-id `POST /api/v1/calibration/attestations` |
 | Unknown-history backfill | NULL-only, over the attested segment, behind `resolver.enable_wearable_backfill` (owner confirmation pending) | never | `UnknownBackfillService._handle_wearable_segment` |
 | Image-only evaluation truth | yes | yes, reported separately | `IdentityResolver._image_only_evaluation`, `ImageOnlyEvaluationService` |
+| Training the household appearance classifier | direct capture (`label_source = wearable_attested`, audited `>= 100` spot-check with Wilson 95% lower bound `>= 0.99`) | only after operator approval (`operator_verified` room-grade gallery rows imported offline) | `AppearanceSampleRecorder`, `scripts/train_household_classifier.py` |
 
 ## Where it may never be used
 
@@ -65,10 +66,14 @@ undoes everything a single association segment (`segment_id`) taught, idempotent
    `IdentityCorrectionService.compensate_inferred_range` (setting `source_association_id = None` on
    the compensating range, clearing backfilled rows to `NULL` via `IdentityRewriter.clear_identity_rows`,
    and publishing a compensating `IdentityRevision`).
-4. Opens a teaching hold on `segment.tag_id` in `wearable_teaching_holds` (at most one open hold
-   per tag). While held, gallery seeding, face attestation, and wearable backfill skip that tag
-   until an operator clears the hold via `POST /internal/wearables/tags/{tag_id}/resume-teaching`.
-5. Stamps `revoked_at`, `revoked_by`, and `revoke_reason` on the association segment.
+4. Marks any `appearance_training_samples` rows with `seed_association_id = segment_id` as revoked
+   (`revoked_at` stamped via `AppearanceSampleRepository.revoke_by_association`), excluding them
+   from offline classifier training.
+5. Opens a teaching hold on `segment.tag_id` in `wearable_teaching_holds` (at most one open hold
+   per tag). While held, gallery seeding, face attestation, wearable backfill, and appearance
+   training sample capture skip that tag until an operator clears the hold via
+   `POST /internal/wearables/tags/{tag_id}/resume-teaching`.
+6. Stamps `revoked_at`, `revoked_by`, and `revoke_reason` on the association segment.
 
 When `wearable.revocation.auto_on_swap` is true (default), `WearableAssociationPersistStage`
 invokes `revoke_for_swap(segment_id, window_s=wearable.swap_conflict_window_s)` whenever a

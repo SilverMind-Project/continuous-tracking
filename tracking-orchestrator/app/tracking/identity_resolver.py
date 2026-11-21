@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 
 from ..domain import (
     FACE_EVIDENCE_POLICIES,
+    AppearanceFeature,
     FaceAnchor,
     FaceEvidencePolicy,
     GalleryEmbedding,
@@ -62,7 +63,11 @@ from ..domain import (
 )
 from ..inference.evidence import FaceEvidence
 from ..observability import metrics
-from ..observability.metrics import ClosedWorldShadowOutcome, WearableShadowOutcome
+from ..observability.metrics import (
+    ClosedWorldShadowOutcome,
+    HouseholdClassifierShadowOutcome,
+    WearableShadowOutcome,
+)
 from ..storage.base import VOTING_STATES, GalleryRepository
 from ..storage.height_profiles import IdentityHeightProfileRepository
 from .identity.channels import (
@@ -85,6 +90,7 @@ from .identity.commit_policy import (
 from .identity.evidence import IdentityEvidence
 from .identity.evidence_grades import (
     CLOSED_WORLD,
+    HOUSEHOLD_CLASSIFIER,
     NATIVE_TEMPLATE,
     WEARABLE,
     EvidenceGrade,
@@ -96,6 +102,11 @@ from .identity.gallery_scoring import (
     aggregate_mean,
     cap_votes,
     score_hits,
+)
+from .identity.household_classifier import (
+    HouseholdClassifierChannel,
+    HouseholdClassifierConfig,
+    HouseholdClassifierEvaluator,
 )
 from .identity.policy import CommitPolicy as _CommitPolicy
 from .identity.posterior import EvidencePosterior, combine_channels
@@ -583,6 +594,8 @@ class IdentityResolver:
         height_profiles: Sequence[IdentityHeightProfile] | None = None,
         closed_world_config: ClosedWorldConfig | None = None,
         household_presence_source: HouseholdPresenceSource | None = None,
+        household_classifier_config: HouseholdClassifierConfig | None = None,
+        household_classifier_evaluator: HouseholdClassifierEvaluator | None = None,
     ) -> None:
         self._gallery_repo = gallery_repo
         self._height_profile_repo = height_profile_repo
@@ -591,6 +604,10 @@ class IdentityResolver:
         self._wearable_config = wearable_config or WearableConfig()
         self._closed_world_config = closed_world_config or ClosedWorldConfig()
         self._household_presence_source = household_presence_source
+        self._household_classifier_config = (
+            household_classifier_config or HouseholdClassifierConfig()
+        )
+        self._household_classifier_evaluator = household_classifier_evaluator
         # Known identities for display names
         self._identities: dict[str, Identity] = {
             ident.identity_id: ident for ident in identities or []
@@ -605,7 +622,7 @@ class IdentityResolver:
         # Revision rate limiter: global_track_id -> list of revision timestamps
         self._revision_log: dict[str, list[datetime]] = defaultdict(list)
         # Evidence channels in canonical order:
-        # face -> gallery -> height -> wearable -> closed_world.
+        # face -> gallery -> height -> wearable -> closed_world -> household_classifier.
         self._face_channel = FaceChannel(
             config=self._config,
             identities_getter=lambda: self._identities,
@@ -626,12 +643,17 @@ class IdentityResolver:
             config=self._closed_world_config,
             identities_getter=lambda: self._identities,
         )
+        self._household_classifier_channel = HouseholdClassifierChannel(
+            config=self._household_classifier_config,
+            evaluator=self._household_classifier_evaluator,
+        )
         self._channels: tuple[EvidenceChannel, ...] = (
             self._face_channel,
             self._gallery_channel,
             self._height_channel,
             self._wearable_channel,
             self._closed_world_channel,
+            self._household_classifier_channel,
         )
 
     def likelihood_scale(self, grade: EvidenceGrade) -> float:
@@ -663,6 +685,7 @@ class IdentityResolver:
         camera_room_map: Mapping[str, str] | None = None,
         wearable_present_identities: frozenset[str] | None = None,
         household_presence: HouseholdPresenceSnapshot | None = None,
+        ph_appearance_features: Mapping[str, AppearanceFeature] | None = None,
     ) -> ResolveOutcome:
         """Resolve identities for a batch of tracked entities.
 
@@ -753,11 +776,13 @@ class IdentityResolver:
             camera_room_map=camera_room_map or {},
             household_presence=effective_presence,
             wearable_present_identities=wearable_present_identities or frozenset(),
+            ph_appearance_features=ph_appearance_features or {},
         )
 
         wearable_mode = self._wearable_config.mode
         height_mode = self._config.height_mode
         closed_world_mode = self._closed_world_config.mode
+        classifier_mode = self._household_classifier_config.mode
         empty_height_ch = ChannelLikelihood("height", PosteriorDist({}), 1.0)
         pending_decisions: list[_PendingIdentityDecision] = []
         outcome_image_only: list[ImageOnlyEvaluation] = []
@@ -793,11 +818,18 @@ class IdentityResolver:
                 if closed_world_mode != "off"
                 else None
             )
+            hc_eval = (
+                self._household_classifier_channel.evaluate_classifier(entity, inputs)
+                if classifier_mode != "off"
+                else None
+            )
             channel_list: list[ChannelLikelihood] = [face_res.likelihood, gallery_ch, height_ch]
             if live_wearable_ev is not None:
                 channel_list.append(wearable_ch)
             if closed_world_mode == "enabled" and cw_eval is not None and cw_eval.active:
                 channel_list.append(cw_eval.likelihood)
+            if classifier_mode == "enabled" and hc_eval is not None and hc_eval.active:
+                channel_list.append(hc_eval.likelihood)
             channels: tuple[ChannelLikelihood, ...] = tuple(channel_list)
             face_likelihood = face_res.likelihood.distribution
             best_face_conf = face_res.best_face_similarity
@@ -806,7 +838,7 @@ class IdentityResolver:
             posterior = combine_channels(prior, channels)
             entity_quality = inputs.ph_qualities.get(entity.entity_id, 1.0)
 
-            # Identities with real (non-smoothed) face/ReID/wearable support this frame,
+            # Identities with real (non-smoothed) face/ReID/wearable/classifier support this frame,
             # for commit eligibility. Built once and reused across the live
             # evaluation and every shadow evaluation below so shadows compare
             # like against like (same evidence set, different posterior/reid).
@@ -824,6 +856,14 @@ class IdentityResolver:
                 commit_evidence_ids = commit_evidence_ids | frozenset(
                     {live_wearable_ev.identity_id}
                 )
+            if (
+                classifier_mode == "enabled"
+                and hc_eval is not None
+                and hc_eval.active
+                and HOUSEHOLD_CLASSIFIER.counts_as_commit_evidence
+                and hc_eval.likelihood.commit_evidence_ids
+            ):
+                commit_evidence_ids = commit_evidence_ids | hc_eval.likelihood.commit_evidence_ids
             assert not CLOSED_WORLD.counts_as_commit_evidence
 
             # Shared "live" evaluation for both shadow comparisons below, computed
@@ -1000,6 +1040,35 @@ class IdentityResolver:
                     live_identity_id=decision.identity_id,
                     shadow_identity_id=cw_shadow_eval.new_id,
                 )
+            # Household appearance classifier shadow counterfactual: pure CPU over
+            # the validated JSON artifact; records outcomes without altering live decisions.
+            if (
+                classifier_mode == "shadow"
+                and arcface_authority is None
+                and hc_eval is not None
+                and hc_eval.active
+            ):
+                hc_shadow_channels = (*channels, hc_eval.likelihood)
+                hc_shadow_evidence_ids = (
+                    commit_evidence_ids | hc_eval.likelihood.commit_evidence_ids
+                )
+                hc_shadow_eval = self._evaluate_channels_counterfactual(
+                    entity,
+                    prior,
+                    hc_shadow_channels,
+                    face_likelihood=face_likelihood,
+                    reid_likelihood=reid_likelihood,
+                    best_face_similarity=best_face_conf,
+                    captured_at=captured_at,
+                    entity_quality=entity_quality,
+                    evidence_identity_ids=hc_shadow_evidence_ids,
+                    check_contradiction=True,
+                )
+                self._record_household_classifier_shadow_outcome(
+                    entity,
+                    live_identity_id=decision.identity_id,
+                    shadow_identity_id=hc_shadow_eval.new_id,
+                )
             # Calibrated-policy shadow: pure CPU over this frame's anchors, so not sample-gated.
             if policy == "shadow" and self._has_recognized_face(
                 entity, augmented_anchors + shadow_face_anchors
@@ -1043,6 +1112,11 @@ class IdentityResolver:
                 and raw_wearable_ev.attested
                 and _sampled(self._wearable_config.evaluation_sample_rate)
             ):
+                classifier_arm_likelihood = (
+                    hc_eval.likelihood
+                    if (classifier_mode != "off" and hc_eval is not None and hc_eval.active)
+                    else None
+                )
                 outcome_image_only.append(
                     await self._image_only_evaluation(
                         entity,
@@ -1055,6 +1129,7 @@ class IdentityResolver:
                         window=vote_window,
                         calibrated=live_calibrated,
                         face_quality_mode=live_quality_mode,
+                        classifier_likelihood=classifier_arm_likelihood,
                     )
                 )
             # Attach evidence summary.
@@ -1561,6 +1636,7 @@ class IdentityResolver:
         *,
         calibrated: bool,
         face_quality_mode: FaceQualityMode,
+        extra_channels: Sequence[ChannelLikelihood] = (),
     ) -> str | None:
         """The identity ``_commit`` would decide from these anchors, purely for measurement.
 
@@ -1581,10 +1657,11 @@ class IdentityResolver:
             face_quality_mode=face_quality_mode,
             calibrated=calibrated,
         )
-        channels = (
+        channels: tuple[ChannelLikelihood, ...] = (
             face_res.likelihood,
             self._gallery_channel.wrap(reid_likelihood, captured_at=captured_at),
             ChannelLikelihood("height", height_likelihood, 1.0),
+            *extra_channels,
         )
         evidence_ids = self._face_channel.collect_commit_evidence_ids(
             entity,
@@ -1593,6 +1670,9 @@ class IdentityResolver:
             reid_likelihood=reid_likelihood,
             calibrated_faces_only=calibrated,
         )
+        for extra in extra_channels:
+            if extra.counts_as_commit_evidence and extra.commit_evidence_ids:
+                evidence_ids = evidence_ids | extra.commit_evidence_ids
         return self._evaluate_channels_counterfactual(
             entity,
             prior,
@@ -1619,46 +1699,79 @@ class IdentityResolver:
         window: VoteWindow,
         calibrated: bool,
         face_quality_mode: FaceQualityMode,
+        classifier_likelihood: ChannelLikelihood | None = None,
     ) -> ImageOnlyEvaluation:
-        """Decide this PH twice without the wearable channel, for scoring against the tag.
+        """Decide this PH without the wearable channel, for scoring against the tag.
 
         Control: no wearable-taught gallery row exists (what the cameras would know untaught).
-        Treatment: wearable-taught rows vote too. In both arms no row seen in the last exclusion
-        window votes, so rows minted from this stretch cannot vote for themselves and the arms
-        differ only in the wearable-taught rows older than the window. Both arms see this round's
-        faces and height and decide as for a PH holding no identity (:class:`_UnheldEntity`).
+        Treatment: wearable-taught rows vote too. Classifier (when active): treatment plus the
+        household appearance classifier channel. In all arms no row seen in the last exclusion
+        window votes, so rows minted from this stretch cannot vote for themselves. All arms see
+        this round's faces and height and decide as for a PH holding no identity
+        (:class:`_UnheldEntity`).
         """
         unheld = _UnheldEntity(entity)
         prior = self._build_prior(unheld, captured_at)
         cutoff = captured_at - timedelta(seconds=self._wearable_config.evaluation_exclusion_s)
-        arms = (
-            _GalleryArm(exclude_seed_sources=_WEARABLE_TAUGHT_SOURCES, seen_before=cutoff),
-            _GalleryArm(seen_before=cutoff),
+        control_reid = await self._from_gallery(
+            unheld,
+            window,
+            arm=_GalleryArm(exclude_seed_sources=_WEARABLE_TAUGHT_SOURCES, seen_before=cutoff),
         )
-        decided: list[str | None] = []
-        for arm in arms:
-            reid = await self._from_gallery(unheld, window, arm=arm)
-            decided.append(
-                self._counterfactual_identity(
-                    unheld,
-                    face_anchors,
-                    face_evidence,
-                    prior,
-                    reid,
-                    height_likelihood,
-                    captured_at,
-                    entity_quality,
-                    calibrated=calibrated,
-                    face_quality_mode=face_quality_mode,
-                )
+        treatment_reid = await self._from_gallery(
+            unheld,
+            window,
+            arm=_GalleryArm(seen_before=cutoff),
+        )
+        control_id = self._counterfactual_identity(
+            unheld,
+            face_anchors,
+            face_evidence,
+            prior,
+            control_reid,
+            height_likelihood,
+            captured_at,
+            entity_quality,
+            calibrated=calibrated,
+            face_quality_mode=face_quality_mode,
+        )
+        treatment_id = self._counterfactual_identity(
+            unheld,
+            face_anchors,
+            face_evidence,
+            prior,
+            treatment_reid,
+            height_likelihood,
+            captured_at,
+            entity_quality,
+            calibrated=calibrated,
+            face_quality_mode=face_quality_mode,
+        )
+        classifier_id: str | None = None
+        classifier_evaluated = classifier_likelihood is not None
+        if classifier_likelihood is not None:
+            classifier_id = self._counterfactual_identity(
+                unheld,
+                face_anchors,
+                face_evidence,
+                prior,
+                treatment_reid,
+                height_likelihood,
+                captured_at,
+                entity_quality,
+                calibrated=calibrated,
+                face_quality_mode=face_quality_mode,
+                extra_channels=(classifier_likelihood,),
             )
         return ImageOnlyEvaluation(
             ph_id=entity.entity_id,
             truth_identity_id=wearable_evidence.identity_id,
             attestation_grade=wearable_evidence.attestation_grade,
-            control_identity_id=decided[0],
-            treatment_identity_id=decided[1],
+            control_identity_id=control_id,
+            treatment_identity_id=treatment_id,
             captured_at=captured_at,
+            classifier_identity_id=classifier_id,
+            classifier_evaluated=classifier_evaluated,
         )
 
     @staticmethod
@@ -1716,6 +1829,34 @@ class IdentityResolver:
         metrics.metrics.identity_shadow_mismatch_total.labels(feature="closed_world").inc()
         logger.info(
             "closed_world_shadow_mismatch",
+            entity_id=entity.entity_id,
+            outcome=str(outcome),
+            live_identity_id=live_identity_id,
+            shadow_identity_id=shadow_identity_id,
+        )
+
+    @staticmethod
+    def _record_household_classifier_shadow_outcome(
+        entity: IdentityResolvableEntity,
+        *,
+        live_identity_id: str | None,
+        shadow_identity_id: str | None,
+    ) -> None:
+        """Count household classifier shadow outcomes against live; log disagreements."""
+        if shadow_identity_id == live_identity_id:
+            outcome = HouseholdClassifierShadowOutcome.AGREES
+        elif live_identity_id is None and shadow_identity_id is not None:
+            outcome = HouseholdClassifierShadowOutcome.WOULD_NAME_UNKNOWN
+        else:
+            outcome = HouseholdClassifierShadowOutcome.WOULD_CHANGE
+        metrics.metrics.cts_household_classifier_shadow_outcomes_total.labels(
+            outcome=str(outcome)
+        ).inc()
+        if outcome == HouseholdClassifierShadowOutcome.AGREES:
+            return
+        metrics.metrics.identity_shadow_mismatch_total.labels(feature="household_classifier").inc()
+        logger.info(
+            "household_classifier_shadow_mismatch",
             entity_id=entity.entity_id,
             outcome=str(outcome),
             live_identity_id=live_identity_id,

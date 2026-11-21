@@ -133,6 +133,13 @@ Face scores have four names, and each name means one thing:
   closed when `roster_complete` is false, enforces an explicit `UNKNOWN` guest floor, and requires
   simultaneous observation plus spatial separation for joint elimination. Read
   `reference/closed-world-evidence.md` before changing closed-world reasoning.
+- Household appearance classifier (`HOUSEHOLD_CLASSIFIER` grade, `HouseholdClassifierChannel`,
+  `household_classifier.mode`: `off`, `shadow`, `enabled`) is a non-authoritative corroborating
+  channel loaded from a versioned JSON artifact (no pickle or scikit-learn in `app/`), counts as
+  commit evidence only at calibrated probability >= 0.8, never refreshes the evidence clock, and
+  trains only from audited trajectory-attested wearable, direct-face authority, and
+  operator-approved samples. Read `reference/household-appearance-classifier.md` before changing
+  the classifier or sample capture.
 - ArcFace enrollment is a golden dataset. PH inference, operator identity correction, and ReID
   review never modify enrollment. Enrollment gains entries
   only via explicit enroll calls, explicit operator naming of a visitor cluster

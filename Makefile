@@ -26,7 +26,7 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 venv: ## Create or sync the project venv at tracking-orchestrator/.venv
-	cd tracking-orchestrator && $(UV) sync --frozen --extra dev
+	cd tracking-orchestrator && $(UV) sync --frozen --extra dev --extra classifier-tools
 
 rf-venv: ## Create or sync the rf-ingress venv at rf-ingress/.venv
 	cd rf-ingress && $(UV) sync --frozen --extra dev
@@ -58,7 +58,7 @@ audit: ## Audit tracking-orchestrator's locked Python dependencies for published
 	@req=$$(mktemp); trap 'rm -f "$$req"' EXIT; \
 	cd tracking-orchestrator && $(UV) export --frozen --no-emit-project \
 		--no-emit-package triton-shared --no-emit-package cts-contracts \
-		--extra dev --format requirements-txt > "$$req" && \
+		--extra dev --extra classifier-tools --format requirements-txt > "$$req" && \
 	$(UV) tool run pip-audit --desc --disable-pip -r "$$req"
 
 proto: proto-go proto-py ## Generate protobuf code (Go + Python)

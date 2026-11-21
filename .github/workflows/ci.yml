@@ -16,7 +16,7 @@ jobs:
           activate-environment: true
       - name: Install tracking-orchestrator
         working-directory: tracking-orchestrator
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra classifier-tools
       - name: Assert venv-only invocation
         working-directory: tracking-orchestrator
         run: |
@@ -75,7 +75,7 @@ jobs:
           activate-environment: true
       - name: Install tracking-orchestrator
         working-directory: tracking-orchestrator
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra classifier-tools
       - name: Install rf-ingress
         working-directory: rf-ingress
         run: uv sync --frozen --extra dev
@@ -174,7 +174,7 @@ jobs:
           activate-environment: true
       - name: Install tracking-orchestrator
         working-directory: tracking-orchestrator
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra classifier-tools
       # `make audit` exports uv.lock and audits every pinned PyPI package.
       - name: pip-audit (locked Python dependencies)
         run: make audit

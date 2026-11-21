@@ -23,6 +23,7 @@ from structlog import get_logger
 from ..calibration.state import calibration_state
 from ..domain import (
     FACE_EVIDENCE_POLICIES,
+    AppearanceFeatureExtractor,
     CameraConfig,
     ExternalIdentityEvidenceSource,
     FaceEvidencePolicy,
@@ -42,6 +43,7 @@ from ..pipeline.frame_context import FrameContext
 from ..pipeline.gallery_cache import GalleryCache
 from ..pipeline.reid_policy import AdaptiveReidConfig, ReidNeedPolicy
 from ..pipeline.stages import (
+    AppearanceSampleRecorderStage,
     ClosePHStage,
     DetectionBackfillStage,
     DetectStage,
@@ -79,6 +81,10 @@ from ..pipeline.types import (
     TransitDetectorProtocol,
 )
 from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
+from ..services.appearance_sample_recorder import (
+    AppearanceSampleRecorder,
+    AppearanceSampleRecorderConfig,
+)
 from ..services.camera_profile_map import CameraProfileMap
 from ..services.camera_room_map import CameraRoomMap, RoomPolygonMap
 from ..services.face_templates import FaceTemplateService
@@ -94,6 +100,10 @@ from ..services.wearable_face_attestation import WearableFaceAttestationService
 from ..services.wearable_revocation import WearableTeachingRevocationService
 from ..services.wearable_site_config_map import WearableSiteConfigMap
 from ..storage.appearance import DailyAppearanceRepo, InMemoryDailyAppearanceRepo
+from ..storage.appearance_samples import (
+    AppearanceSampleRepository,
+    InMemoryAppearanceSampleRepository,
+)
 from ..storage.base import (
     BboxAnnotationRepository,
     BehaviorBaselineRepository,
@@ -140,6 +150,11 @@ from ..tracking.floor_projector import FloorProjector
 from ..tracking.identity.candidate_eligibility import CandidatePolicy
 from ..tracking.identity.closed_world_channel import ClosedWorldConfig
 from ..tracking.identity.face_template_buffer import FaceTemplatePolicy
+from ..tracking.identity.household_classifier import (
+    HouseholdClassifierConfig,
+    HouseholdClassifierEvaluator,
+    SoliderFeatureExtractor,
+)
 from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
 from ..tracking.spatial_projection import SpatialProjectionService
 from ..tracking.world.config import WorldTrackerConfig
@@ -263,6 +278,9 @@ class PipelineDependencies:
     height_profile_repo: IdentityHeightProfileRepository | None = None
     height_sample_repo: PHHeightSampleRepository | None = None
     household_presence_source: HouseholdPresenceSource | None = None
+    appearance_sample_repo: AppearanceSampleRepository | None = None
+    household_classifier_evaluator: HouseholdClassifierEvaluator | None = None
+    appearance_feature_extractor: AppearanceFeatureExtractor | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -287,6 +305,9 @@ class PipelineConfig:
     world_tracker: WorldTrackerConfig = field(default_factory=WorldTrackerConfig)
     wearable: WearableConfig = field(default_factory=WearableConfig)
     closed_world: ClosedWorldConfig = field(default_factory=ClosedWorldConfig)
+    household_classifier: HouseholdClassifierConfig = field(
+        default_factory=HouseholdClassifierConfig
+    )
     height_estimation: HeightEstimationConfig = field(default_factory=HeightEstimationConfig)
 
     # --- Identity resolution ---
@@ -515,6 +536,8 @@ class FrameProcessingPipeline:
             height_profile_repo=self._height_profile_repo,
             closed_world_config=self._config.closed_world,
             household_presence_source=deps.household_presence_source if deps else None,
+            household_classifier_config=self._config.household_classifier,
+            household_classifier_evaluator=(deps.household_classifier_evaluator if deps else None),
         )
 
         self._revision_publisher = RevisionPublisher(
@@ -553,6 +576,17 @@ class FrameProcessingPipeline:
         )
         await self._ph_continuation_publisher.connect()
 
+        feature_extractor: AppearanceFeatureExtractor | None = (
+            deps.appearance_feature_extractor
+            if deps and deps.appearance_feature_extractor is not None
+            else (
+                SoliderFeatureExtractor(
+                    feature_version=self._config.reid_candidates.model_version or "reid-solider"
+                )
+                if self._config.household_classifier.mode != "off"
+                else None
+            )
+        )
         self._world_tracker = WorldTracker(
             ph_repo=self._ph_repo,
             obs_repo=self._obs_repo,
@@ -565,6 +599,7 @@ class FrameProcessingPipeline:
             overlap_groups=deps.overlap_groups if deps else None,
             wearable_config=self._config.wearable,
             closed_world_config=self._config.closed_world,
+            appearance_feature_extractor=feature_extractor,
         )
 
         # ---- Trajectory writer + keyframe sampler ----
@@ -820,6 +855,23 @@ class FrameProcessingPipeline:
             if deps.image_only_evaluation is not None
             else None
         )
+        appearance_sample_stage: AppearanceSampleRecorderStage | None = None
+        if self._config.household_classifier.capture_enabled:
+            sample_repo = deps.appearance_sample_repo or InMemoryAppearanceSampleRepository()
+            hc_cfg = self._config.household_classifier
+            recorder = AppearanceSampleRecorder(
+                repo=sample_repo,
+                config=AppearanceSampleRecorderConfig(
+                    enabled=True,
+                    feature_version=self._config.reid_candidates.model_version or "reid-solider",
+                    tz_name=self._config.signals.tz_name,
+                    min_quality=hc_cfg.min_quality,
+                    dedup_window_s=hc_cfg.dedup_window_s,
+                    max_negatives_per_day=hc_cfg.max_negatives_per_day,
+                ),
+                teaching_holds=deps.wearable_teaching_hold_repo if deps else None,
+            )
+            appearance_sample_stage = AppearanceSampleRecorderStage(recorder)
 
         post_world_stages = [
             DetectionBackfillStage(),
@@ -873,6 +925,7 @@ class FrameProcessingPipeline:
                 if self._face_attestation is not None
                 else []
             ),
+            *([appearance_sample_stage] if appearance_sample_stage is not None else []),
             # crop_storage: FrameImageFetcher only declares fetch_rgb, but the
             # concrete MinioFrameFetcher main.py injects also has put_bytes/delete_object
             # (CropStorageProtocol) -- same cross-protocol looseness as detect_stage above.
