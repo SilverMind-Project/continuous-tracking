@@ -412,6 +412,7 @@ class FaceIdentityStage(FrameStage):
                     captured_at=captured_at,
                     crop_pad_top_frac=self._crop_padding.top_frac,
                     crop_pad_side_frac=self._crop_padding.side_frac,
+                    detection_ids=tuple(d.detection_id for d in crop_detections),
                 ),
                 return_embedding=self._collect_template_faces,
             )

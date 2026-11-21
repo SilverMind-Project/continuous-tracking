@@ -7,7 +7,14 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
-from ..domain import GalleryEmbedding, Identity, NewReviewCandidate, ReviewCandidate, ReviewEvent
+from ..domain import (
+    GalleryEmbedding,
+    GallerySeedSource,
+    Identity,
+    NewReviewCandidate,
+    ReviewCandidate,
+    ReviewEvent,
+)
 
 
 class ReviewNotFoundError(Exception):
@@ -52,6 +59,12 @@ VOTING_STATES: Final[frozenset[str]] = frozenset({"operator_verified", "auto_ver
 PENDING_AND_VERIFIED: Final[frozenset[str]] = frozenset(
     {"pending_review", "operator_verified", "auto_verified"}
 )
+
+
+# Default for the provenance filters on the vote-path reads: exclude nothing. The live resolver
+# never narrows by provenance; only the image-only evaluation arms do (a control arm that removes
+# wearable-taught rows, a treatment arm that removes rows seen after a cutoff).
+NO_SEED_SOURCE_EXCLUSION: Final[frozenset[str]] = frozenset()
 
 
 class GalleryRepository(ABC):
@@ -134,6 +147,8 @@ class GalleryRepository(ABC):
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
         states: frozenset[str] | None = VOTING_STATES,
+        exclude_seed_sources: frozenset[str] = NO_SEED_SOURCE_EXCLUSION,
+        seen_before: datetime | None = None,
     ) -> list[tuple[GalleryEmbedding, float]]:
         """Nearest-neighbor search over gallery embeddings.
 
@@ -155,6 +170,8 @@ class GalleryRepository(ABC):
                 multipliers). ``states=None`` means no filter and is reserved
                 for administrative/service callers, each of which must carry
                 a one-line justification comment.
+            exclude_seed_sources: drop rows whose ``seed_source`` is in this set.
+            seen_before: keep only rows with ``seen_at`` strictly before this capture time.
         """
 
     @abstractmethod
@@ -164,6 +181,8 @@ class GalleryRepository(ABC):
         limit: int = 20,
         allowed_states: frozenset[str] | None = VOTING_STATES,
         model_versions: set[str] | None = None,
+        exclude_seed_sources: frozenset[str] = NO_SEED_SOURCE_EXCLUSION,
+        seen_before: datetime | None = None,
     ) -> list[GalleryEmbedding]:
         """List gallery entries whose origin_tracklet_id is in *tracklet_ids*.
 
@@ -198,6 +217,21 @@ class GalleryRepository(ABC):
         which must carry a one-line justification comment at the call site.
         """
 
+    async def count_seeded_entries(
+        self,
+        *,
+        identity_id: str,
+        seed_source: GallerySeedSource,
+        seen_since: datetime,
+        states: frozenset[str] | None = PENDING_AND_VERIFIED,
+    ) -> int:
+        """Count rows of one identity and seed source with ``seen_at >= seen_since``.
+
+        Bounds how many wearable-seeded rows one identity may mint per day, so a reviewer's
+        queue stays reviewable. Never counts ``rejected`` rows under the default.
+        """
+        return 0
+
     async def phs_with_pending_reid(self, ph_ids: list[str]) -> set[str]:
         """PHs in *ph_ids* that have a ``pending_review`` ReID candidate (M07).
 
@@ -220,6 +254,7 @@ class GalleryRepository(ABC):
         camera_id: str | None = None,
         model_version: str | None = None,
         source_type: str | None = None,
+        seed_source: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -236,10 +271,13 @@ class GalleryRepository(ABC):
         """Immutable review history for one candidate, oldest first."""
         return []
 
-    async def count_review_queue(self) -> dict[str, int]:
+    async def count_review_queue(
+        self, *, seed_sources: frozenset[str] | None = None
+    ) -> dict[str, int]:
         """Counts by lifecycle state (``pending_review``/``auto_verified``/
 
-        ``operator_verified``/``rejected``).
+        ``operator_verified``/``rejected``), over every row or only rows whose ``seed_source``
+        is in *seed_sources*.
         """
         return {}
 
@@ -406,6 +444,8 @@ class InMemoryGalleryRepository(GalleryRepository):
             review_reason=None,
             review_note=None,
             audit_version=1,
+            seed_source=candidate.seed_source,
+            seed_association_id=candidate.seed_association_id,
         )
         self._events.setdefault(candidate.candidate_id, [])
         # Mirror the same row into the lean voting dict so
@@ -427,6 +467,8 @@ class InMemoryGalleryRepository(GalleryRepository):
             state=candidate.state,
             source_episode_id=candidate.source_episode_id,
             ph_id=candidate.ph_id,
+            seed_source=candidate.seed_source,
+            seed_association_id=candidate.seed_association_id,
         )
         return candidate.candidate_id
 
@@ -441,6 +483,23 @@ class InMemoryGalleryRepository(GalleryRepository):
             for entry in self._entries.values()
             if entry.identity_id == identity_id
             and entry.orientation == orientation
+            and (states is None or entry.state in states)
+        )
+
+    async def count_seeded_entries(
+        self,
+        *,
+        identity_id: str,
+        seed_source: GallerySeedSource,
+        seen_since: datetime,
+        states: frozenset[str] | None = PENDING_AND_VERIFIED,
+    ) -> int:
+        return sum(
+            1
+            for entry in self._entries.values()
+            if entry.identity_id == identity_id
+            and entry.seed_source == seed_source
+            and entry.seen_at >= seen_since
             and (states is None or entry.state in states)
         )
 
@@ -468,6 +527,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         camera_id: str | None = None,
         model_version: str | None = None,
         source_type: str | None = None,
+        seed_source: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -482,6 +542,8 @@ class InMemoryGalleryRepository(GalleryRepository):
             rows = [c for c in rows if c.model_version == model_version]
         if source_type is not None:
             rows = [c for c in rows if c.candidate_reason == source_type]
+        if seed_source is not None:
+            rows = [c for c in rows if c.seed_source == seed_source]
         if since is not None:
             rows = [c for c in rows if c.capture_time is not None and c.capture_time >= since]
         if until is not None:
@@ -499,7 +561,9 @@ class InMemoryGalleryRepository(GalleryRepository):
         events.sort(key=lambda e: e.event_time)
         return events
 
-    async def count_review_queue(self) -> dict[str, int]:
+    async def count_review_queue(
+        self, *, seed_sources: frozenset[str] | None = None
+    ) -> dict[str, int]:
         counts: dict[str, int] = {
             "pending_review": 0,
             "auto_verified": 0,
@@ -512,6 +576,13 @@ class InMemoryGalleryRepository(GalleryRepository):
         for row_id in self._entries.keys() | self._candidates.keys():
             candidate = self._candidates.get(row_id)
             state = candidate.state if candidate is not None else self._entries[row_id].state
+            source = (
+                candidate.seed_source
+                if candidate is not None
+                else self._entries[row_id].seed_source
+            )
+            if seed_sources is not None and source not in seed_sources:
+                continue
             counts[state] = counts.get(state, 0) + 1
         return counts
 
@@ -711,6 +782,8 @@ class InMemoryGalleryRepository(GalleryRepository):
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
         states: frozenset[str] | None = VOTING_STATES,
+        exclude_seed_sources: frozenset[str] = NO_SEED_SOURCE_EXCLUSION,
+        seen_before: datetime | None = None,
     ) -> list[tuple[GalleryEmbedding, float]]:
         entries = await self.list_gallery_entries(states=None)
         if camera_id is not None:
@@ -723,6 +796,7 @@ class InMemoryGalleryRepository(GalleryRepository):
             entries = [e for e in entries if e.seen_at > cutoff]
         if states is not None:
             entries = [e for e in entries if e.state in states]
+        entries = _apply_provenance_filters(entries, exclude_seed_sources, seen_before)
         scored = [(entry, _entry_cosine_sim(embedding, entry.embedding)) for entry in entries]
         scored.sort(key=lambda item: item[1], reverse=True)
         return scored[:limit]
@@ -733,6 +807,8 @@ class InMemoryGalleryRepository(GalleryRepository):
         limit: int = 20,
         allowed_states: frozenset[str] | None = VOTING_STATES,
         model_versions: set[str] | None = None,
+        exclude_seed_sources: frozenset[str] = NO_SEED_SOURCE_EXCLUSION,
+        seen_before: datetime | None = None,
     ) -> list[GalleryEmbedding]:
         if not tracklet_ids:
             return []
@@ -749,6 +825,7 @@ class InMemoryGalleryRepository(GalleryRepository):
                 for entry in self._entries.values()
                 if entry.origin_tracklet_id in tracklet_ids
             ]
+        entries = _apply_provenance_filters(entries, exclude_seed_sources, seen_before)
         entries.sort(key=lambda e: e.seen_at, reverse=True)
         return entries[:limit]
 
@@ -771,6 +848,19 @@ class InMemoryGalleryRepository(GalleryRepository):
         if not entries_a or not entries_b:
             return 0.5
         return self._cosine_between_centroids(entries_a, entries_b)
+
+
+def _apply_provenance_filters(
+    entries: list[GalleryEmbedding],
+    exclude_seed_sources: frozenset[str],
+    seen_before: datetime | None,
+) -> list[GalleryEmbedding]:
+    """The InMemory twin of the Postgres ``seed_source <> ALL`` and ``seen_at <`` predicates."""
+    if exclude_seed_sources:
+        entries = [e for e in entries if e.seed_source not in exclude_seed_sources]
+    if seen_before is not None:
+        entries = [e for e in entries if e.seen_at < seen_before]
+    return entries
 
 
 def _entry_cosine_sim(a: list[float], b: list[float]) -> float:

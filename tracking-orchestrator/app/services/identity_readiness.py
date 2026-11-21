@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.calibration.state import CalibrationState
+from app.domain import GallerySeedSource
 from app.services.camera_room_map import CameraRoomMap
 from app.storage.gallery import GalleryRepository
 
@@ -59,6 +60,9 @@ class IdentityReadinessSnapshot:
     identities_known: int | None
     # Count of currently open wearable-to-PH association segments; None when not wired.
     wearable_active_associations: int | None = None
+    # Gallery rows a wearable taught (trajectory- or room-attested seeds), by state; None without
+    # a gallery repository.
+    wearable_gallery_counts: GalleryStateCounts | None = None
 
 
 class OverlapGroupSource(Protocol):
@@ -96,14 +100,12 @@ class IdentityReadinessService:
             for binding in await self._camera_room_map.snapshot()
         )
         counts: GalleryStateCounts | None = None
+        wearable_counts: GalleryStateCounts | None = None
         identities_known: int | None = None
         if self._gallery_repo is not None:
-            by_state = await self._gallery_repo.count_review_queue()
-            counts = GalleryStateCounts(
-                pending_review=by_state.get("pending_review", 0),
-                auto_verified=by_state.get("auto_verified", 0),
-                operator_verified=by_state.get("operator_verified", 0),
-                rejected=by_state.get("rejected", 0),
+            counts = _state_counts(await self._gallery_repo.count_review_queue())
+            wearable_counts = _state_counts(
+                await self._gallery_repo.count_review_queue(seed_sources=_WEARABLE_SEED_SOURCES)
             )
             identities_known = len(await self._gallery_repo.list_identities(active_only=True))
         wearable_active = (
@@ -118,4 +120,19 @@ class IdentityReadinessService:
             overlap_group_count=self._overlap_groups.overlap_group_count(),
             identities_known=identities_known,
             wearable_active_associations=wearable_active,
+            wearable_gallery_counts=wearable_counts,
         )
+
+
+_WEARABLE_SEED_SOURCES: frozenset[str] = frozenset(
+    {str(GallerySeedSource.WEARABLE_ATTESTED), str(GallerySeedSource.WEARABLE_ROOM_ATTESTED)}
+)
+
+
+def _state_counts(by_state: dict[str, int]) -> GalleryStateCounts:
+    return GalleryStateCounts(
+        pending_review=by_state.get("pending_review", 0),
+        auto_verified=by_state.get("auto_verified", 0),
+        operator_verified=by_state.get("operator_verified", 0),
+        rejected=by_state.get("rejected", 0),
+    )

@@ -48,6 +48,7 @@ from ..pipeline.stages import (
     FallDetectionConfig,
     FallDetectionStage,
     FetchStage,
+    ImageOnlyEvaluationStage,
     InferenceStage,
     KeyframeStage,
     PostureStage,
@@ -61,6 +62,7 @@ from ..pipeline.stages import (
     TrailsStage,
     TrajectoryStage,
     WearableAssociationPersistStage,
+    WearableFaceAttestationStage,
     WorldTrackingStage,
     timed_phase,
 )
@@ -82,8 +84,10 @@ from ..services.identity_rewriter import (
     IdentityRewriter,
     InMemoryIdentityRewriter,
 )
+from ..services.image_only_evaluator import ImageOnlyEvaluationSink
 from ..services.transit_zone_map import TransitZoneMap
 from ..services.unknown_backfill import BackfillConfig, UnknownBackfillService
+from ..services.wearable_face_attestation import WearableFaceAttestationService
 from ..services.wearable_site_config_map import WearableSiteConfigMap
 from ..storage.appearance import DailyAppearanceRepo, InMemoryDailyAppearanceRepo
 from ..storage.base import (
@@ -240,6 +244,8 @@ class PipelineDependencies:
     external_evidence: ExternalIdentityEvidenceSource | None = None
     wearable_fix_source: WearableFixSource | None = None
     wearable_association_repo: WearableAssociationRepository | None = None
+    # Wired only while the wearable channel runs (shadow or enabled); measurement only.
+    image_only_evaluation: ImageOnlyEvaluationSink | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -370,6 +376,8 @@ class FrameProcessingPipeline:
         self._stop_event = asyncio.Event()
         # Face identification (via person-identification-service)
         self._face_id_client: FaceIdentificationClient | None = None
+        # Offers faces of wearable-attested PHs to person-id; built with the face client.
+        self._face_attestation: WearableFaceAttestationService | None = None
         self._face_templates: FaceTemplateService | None = None
         # Per-tracklet face ID cooldown.  Each tracklet independently throttled
         # so a newly-appeared person gets an immediate call even when another
@@ -508,6 +516,7 @@ class FrameProcessingPipeline:
                     enabled=resolver_cfg.enable_unknown_backfill,
                     shadow=resolver_cfg.backfill_shadow,
                     max_range_s=resolver_cfg.backfill_max_range_s,
+                    wearable_enabled=resolver_cfg.enable_wearable_backfill,
                 ),
             )
 
@@ -646,6 +655,11 @@ class FrameProcessingPipeline:
                     self._face_id_client,
                     expected_quality_version=self._config.face_id.expected_quality_version,
                 )
+            if (
+                self._config.wearable.mode != "off"
+                and self._config.wearable.face_attestation == "enabled"
+            ):
+                self._face_attestation = WearableFaceAttestationService(self._face_id_client)
 
         # ---- Build the stage runner (order matters) ----
         fetch_stage = FetchStage(
@@ -755,6 +769,11 @@ class FrameProcessingPipeline:
                 deps.wearable_association_repo or InMemoryWearableAssociationRepository()
             )
             wearable_persist_stage = WearableAssociationPersistStage(repo=wearable_repo)
+        image_only_stage = (
+            ImageOnlyEvaluationStage(deps.image_only_evaluation)
+            if deps.image_only_evaluation is not None
+            else None
+        )
 
         post_world_stages = [
             DetectionBackfillStage(),
@@ -802,6 +821,12 @@ class FrameProcessingPipeline:
                 else []
             ),
             *([wearable_persist_stage] if wearable_persist_stage is not None else []),
+            *([image_only_stage] if image_only_stage is not None else []),
+            *(
+                [WearableFaceAttestationStage(self._face_attestation)]
+                if self._face_attestation is not None
+                else []
+            ),
             # crop_storage: FrameImageFetcher only declares fetch_rgb, but the
             # concrete MinioFrameFetcher main.py injects also has put_bytes/delete_object
             # (CropStorageProtocol) -- same cross-protocol looseness as detect_stage above.
@@ -863,6 +888,11 @@ class FrameProcessingPipeline:
             self._tasks.append(asyncio.create_task(self._signal_loop()))
         self._frame_semaphore = asyncio.Semaphore(max(1, self._config.max_concurrent_frames))
         logger.info("Pipeline started")
+
+    @property
+    def face_attestation(self) -> WearableFaceAttestationService | None:
+        """Pending wearable face attestations; None unless enabled and face ID is on."""
+        return self._face_attestation
 
     @property
     def face_templates(self) -> FaceTemplateService | None:

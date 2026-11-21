@@ -43,6 +43,8 @@ Current orchestration side effects are placed as follows:
 | Failure metrics | `_finish_frame` increments `frames_failed_total` before `ack_frame` | Same, through `_finish_frame` | Same, through `_finish_frame` on every failure branch |
 | Face template buffer feed | `WorldTrackingStage.run` delegates to `run_many`, which feeds it (`reference/face-template-buffer.md`) | Same, through `_process_frame` | `world_tracking_stage.run_many` feeds it once per round |
 | Wearable association persist | `WorldTrackingStage` attaches transitions to context; `WearableAssociationPersistStage` runs before `PublishStage` (`reference/wearable-evidence-round.md`) | Same, through `_process_frame` | Transitions attach to primary context only; `WearableAssociationPersistStage` writes once per round |
+| Image-only evaluation | `ImageOnlyEvaluationStage` hands the round's sampled evaluations to `ImageOnlyEvaluationService` before `PublishStage` | Same, through `_process_frame` | Evaluations attach to the primary context only; every context still passes its capture time (flushes run on capture time) |
+| Wearable face attestation | `WearableFaceAttestationStage` offers emitted faces of attested PHs, batched per segment | Same, through `_process_frame` | Runs on every context (each holds its own detections; evidence is per PH and on every context) |
 
 `_begin_tracker_round` is the required chokepoint for work that must happen exactly once before world tracking, such as invalidating the per-round `GalleryCache`. Any new route that can reach `WorldTrackingStage` must call it. Do not add a cache invalidation directly to an individual stage.
 
@@ -80,8 +82,10 @@ The list is configuration-dependent. A conditional stage must name its enabling 
 | 15 | `TrailsStage` | `posture_trails.py` | Always | Maintains per-PH foot-point ring buffer published in `TrackingEvent` |
 | 16 | `ProvenancePersistStage` | `provenance.py` | `identity_provenance_repo` configured | Durably persists every `revises_previous` identity decision, unconditionally (no throttle) |
 | 17 | `WearableAssociationPersistStage` | `tracking-orchestrator/app/pipeline/stages/wearable_associations.py` | `wearable.mode != "off"` or `wearable_association_repo` configured | Persists wearable-to-PH association segment transitions once per tracker round ahead of `PublishStage` (`reference/wearable-evidence-round.md`) |
-| 18 | `ReIDCandidateStage` | `reid_candidates.py` | `reid_candidates.enabled` (default `true`; fail-closed in practice behind `require_calibrated_face`) | The only pipeline write path into `reid_gallery`; creates `pending_review` candidates from committed, face-matched detections via `evaluate_candidate` (`app/tracking/identity/candidate_eligibility.py`) |
-| 19 | `PublishStage` | `publish.py` | Always | Assembles and publishes `TrackingEvent` proto to `tracking.events` Redis stream |
+| 18 | `ImageOnlyEvaluationStage` | `tracking-orchestrator/app/pipeline/stages/image_only_evaluation.py` | an `ImageOnlyEvaluationSink` is wired (`wearable.mode != "off"`) | Accounts sampled image-only evaluations of attested PHs (seconds per arm, outcome, grade) and flushes daily totals |
+| 19 | `WearableFaceAttestationStage` | `tracking-orchestrator/app/pipeline/stages/wearable_face_attestation.py` | `wearable.mode != "off"`, `wearable.supervision.face_attestation: enabled`, face ID on | Offers emitted faces of attested PHs to person-id's attested-exemplar queue, batched per segment and grade |
+| 20 | `ReIDCandidateStage` | `reid_candidates.py` | `reid_candidates.enabled` (default `true`; fail-closed in practice behind `require_calibrated_face`) | The only pipeline write path into `reid_gallery`; creates candidates from committed, face-matched detections, or (with `reid_candidates.wearable_seeding_enabled`) from attested wearable evidence, via `evaluate_candidate` (`app/tracking/identity/candidate_eligibility.py`) |
+| 21 | `PublishStage` | `publish.py` | Always | Assembles and publishes `TrackingEvent` proto to `tracking.events` Redis stream |
 
 ## FrameContext: shared state between stages
 
@@ -95,6 +99,8 @@ The list is configuration-dependent. A conditional stage must name its enabling 
 | `world_snapshots`, `outcome_decisions`, `committed_ids`, `det_to_ph`, `active_ph_ids`, `new_revisions`, `ph_born_at_by_id` | `WorldTrackingStage._populate_context` | `DetectionBackfillStage`, `ClosePHStage`, `TrajectoryStage`, `RevisionsStage`, `PublishStage` (there is no single `world_tracker_result` field; the result is fanned out into these named fields) |
 | `face_anchors`, `_face_evidence` | `FaceIdentityStage` | `WorldTrackingStage` |
 | `shadow_face_anchors` | `FaceIdentityStage` (only under `face_id.evidence_policy: shadow`) | `WorldTrackingStage`, which forwards them to identity resolution only (never to association or any other stage) |
+| `wearable_evidence_by_ph` | `WorldTrackingStage` (every context of the round) | `ReIDCandidateStage`, `WearableFaceAttestationStage` |
+| `image_only_evaluations` | `WorldTrackingStage` (primary context only) | `ImageOnlyEvaluationStage` |
 | `face_template_faces` | `FaceIdentityStage` (only while `face_templates.mode` is not `off`) | `WorldTrackingStage`, which feeds them to the per-PH face template buffer after association (`reference/face-template-buffer.md`); embeddings, never logged or persisted |
 | `event_time` | Initialized at context creation | All stages (do not use `datetime.now(UTC)` inside a stage unless you specifically need wall-clock time) |
 

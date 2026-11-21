@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Literal, Protocol
 
@@ -171,6 +171,9 @@ class WearableEvidence:
     matched_fixes: int
     mean_residual_m: float | None
     newest_fix_at: datetime
+    # Persisted association segment this evidence belongs to; provenance for anything the
+    # evidence teaches (gallery seeds, attested faces), so a wrong binding is undone per segment.
+    segment_id: str | None = None
 
     @property
     def attested(self) -> bool:
@@ -203,6 +206,37 @@ class WearableAssociationTransition:
 
     action: Literal["open", "update", "close"]
     segment: WearableAssociationSegment
+
+
+@dataclass(frozen=True)
+class ImageOnlyEvaluation:
+    """What image-only identity decided for one attested PH in one sampled round.
+
+    The truth is the attested tag's member. Both decisions leave out the wearable channel and
+    every gallery row seen after ``captured_at - exclusion``; ``control_identity_id`` also leaves
+    out every wearable-taught row, ``treatment_identity_id`` keeps them. ``None`` is Unknown.
+    ``captured_at`` is the round's capture time.
+    """
+
+    ph_id: str
+    truth_identity_id: str
+    attestation_grade: WearableAttestationGrade
+    control_identity_id: str | None
+    treatment_identity_id: str | None
+    captured_at: datetime
+
+
+@dataclass(frozen=True)
+class ImageOnlyDailyTotal:
+    """Accumulated image-only seconds for one identity, UTC day, arm, and attestation grade."""
+
+    day: date
+    identity_id: str
+    arm: str
+    attestation_grade: WearableAttestationGrade
+    correct_s: float = 0.0
+    wrong_s: float = 0.0
+    unknown_s: float = 0.0
 
 
 class WearableFixSource(Protocol):

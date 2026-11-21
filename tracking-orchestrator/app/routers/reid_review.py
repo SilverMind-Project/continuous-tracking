@@ -28,7 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
-from ..domain import ReviewCandidate, ReviewEvent
+from ..domain import GallerySeedSource, ReviewCandidate, ReviewEvent
 from ..services.reid_review_service import Eligibility, ReIDReviewService, ReviewIneligibleError
 from ..storage.gallery import ReviewConflictError, ReviewNotFoundError
 
@@ -115,6 +115,11 @@ class CandidateModel(BaseModel):
     review_reason: str | None
     review_note: str | None
     audit_version: int
+    # Where the row's identity label came from; wearable_room_attested rows always wait for an
+    # operator, wearable_attested rows vote at a reduced trust until an operator approves them.
+    seed_source: GallerySeedSource = GallerySeedSource.FACE
+    # Wearable association segment that seeded the row, for demoting a wrong binding at once.
+    seed_association_id: str | None = None
 
 
 class CandidateListResponse(BaseModel):
@@ -242,6 +247,7 @@ async def list_candidates(
     camera_id: str | None = None,
     model_version: str | None = None,
     source_type: str | None = None,
+    seed_source: GallerySeedSource | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
     limit: int = 50,
@@ -257,6 +263,7 @@ async def list_candidates(
         camera_id=camera_id,
         model_version=model_version,
         source_type=source_type,
+        seed_source=str(seed_source) if seed_source is not None else None,
         since=since,
         until=until,
         limit=limit,

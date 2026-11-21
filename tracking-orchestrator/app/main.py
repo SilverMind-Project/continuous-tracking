@@ -78,11 +78,13 @@ from .services.cc_identity_assertion_subscriber import (
 )
 from .services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
+from .services.image_only_evaluator import ImageOnlyEvaluationService
 from .services.overlap_group_sync import fetch_overlap_groups
 from .services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
 from .services.wearable_fix_buffer import WearableFixBuffer
 from .services.wearable_fix_subscriber import WearableFixSubscriber
 from .services.wearable_site_config_map import WearableSiteConfigMap
+from .storage.image_only_evaluation import InMemoryImageOnlyEvaluationRepository
 from .storage.migrations import MigrationRunner
 from .storage.postgres.appearance_repo import PostgresDailyAppearanceRepo
 from .storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
@@ -90,6 +92,7 @@ from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
 from .storage.postgres.face_stats_repo import PostgresFaceObservationStatsRepository
 from .storage.postgres.gait_repo import PostgresGaitDailyRepository
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
+from .storage.postgres.image_only_evaluation_repo import PostgresImageOnlyEvaluationRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
 from .storage.postgres.ph_repo import PostgresPHRepository, PostgresWorldObservationRepository
 from .storage.postgres.settings_repo import PostgresSettingsRepository
@@ -103,7 +106,7 @@ from .storage.wearable_associations import (
 from .tracking.identity.candidate_eligibility import CandidatePolicy
 from .tracking.identity_resolver import FaceQualityMode, ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
-from .tracking.world.wearable_config import WearableConfig
+from .tracking.world.wearable_config import FaceAttestationMode, WearableConfig
 from .trajectory.appearance_profile import AppearanceSettings
 from .trajectory.dementia_signals import SignalConfig
 from .trajectory.depth_posture_strategy import DepthPostureStrategy
@@ -286,6 +289,7 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         identified_entry_min_likelihood=r.as_float("identified_entry_min_likelihood"),
         gallery_verified_trust_multiplier=r.as_float("gallery_verified_trust_multiplier"),
         gallery_auto_verified_trust_multiplier=r.as_float("gallery_auto_verified_trust_multiplier"),
+        gallery_wearable_trust_multiplier=r.as_float("gallery_wearable_trust_multiplier"),
         gallery_recency_half_life_days=r.as_float("gallery_recency_half_life_days"),
         gallery_vote_max_age_s=_optional_max_age_s(s, "resolver.gallery_vote_max_age_s"),
         enable_embedding_coherence_boost=r.as_bool("enable_embedding_coherence_boost"),
@@ -313,6 +317,7 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         seed_orientation_min_confidence=r.as_float("seed_orientation_min_confidence"),
         enable_unknown_backfill=r.as_bool("enable_unknown_backfill"),
         backfill_shadow=r.as_bool("backfill_shadow"),
+        enable_wearable_backfill=r.as_bool("enable_wearable_backfill"),
         backfill_max_range_s=r.as_float("backfill_max_range_s"),
         cc_assertion_likelihood_scale=r.as_float("cc_assertion_likelihood_scale"),
         cc_assertion_mode=r.as_str("cc_assertion_mode"),
@@ -329,10 +334,14 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
     )
 
 
-def _build_candidate_policy(s: Settings) -> CandidatePolicy:
-    """Build CandidatePolicy from required settings.yaml keys (M04)."""
+def _build_candidate_policy(s: Settings, wearable: WearableConfig) -> CandidatePolicy:
+    """Build CandidatePolicy from required settings.yaml keys.
+
+    Refuses wearable seeding unless the wearable channel is enabled: an auto_verified seed votes
+    at once, so seeding under a shadow channel would change live identity.
+    """
     rc = s.section("reid_candidates")
-    return CandidatePolicy(
+    policy = CandidatePolicy(
         enabled=rc.as_bool("enabled"),
         require_calibrated_face=rc.as_bool("require_calibrated_face"),
         calibrated_confidence_min=rc.as_float("calibrated_confidence_min"),
@@ -343,7 +352,17 @@ def _build_candidate_policy(s: Settings) -> CandidatePolicy:
         model_version=s.as_str("triton.reid_model"),
         preprocessing_version=rc.as_str("preprocessing_version"),
         auto_verify_min_confidence=rc.as_float("auto_verify_min_confidence"),
+        wearable_seeding_enabled=rc.as_bool("wearable_seeding_enabled"),
+        wearable_min_seed_interval_s=rc.as_float("wearable_min_seed_interval_s"),
+        wearable_max_similarity_to_recent=rc.as_float("wearable_max_similarity_to_recent"),
+        wearable_room_grade_max_per_day=rc.as_int("wearable_room_grade_max_per_day"),
     )
+    if policy.wearable_seeding_enabled and wearable.mode != "enabled":
+        raise ValueError(
+            "reid_candidates.wearable_seeding_enabled requires wearable.mode 'enabled' "
+            f"(got {wearable.mode!r})"
+        )
+    return policy
 
 
 def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
@@ -638,6 +657,12 @@ def _build_wearable_config(s: Settings) -> WearableConfig:
         duplicate_guard_min_probability=w.as_float("duplicate_guard_min_probability"),
         swap_conflict_count=w.as_int("swap_conflict_count"),
         swap_conflict_window_s=w.as_float("swap_conflict_window_s"),
+        evaluation_sample_rate=s.as_float("wearable.evaluation.sample_rate"),
+        evaluation_exclusion_s=s.as_float("wearable.evaluation.exclusion_s"),
+        evaluation_max_gap_s=s.as_float("wearable.evaluation.max_gap_s"),
+        face_attestation=cast(
+            FaceAttestationMode, s.as_str("wearable.supervision.face_attestation")
+        ),
     )
 
 
@@ -709,7 +734,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resolver=resolver_config,
         world_tracker=world_tracker_config,
         wearable=wearable_config,
-        reid_candidates=_build_candidate_policy(settings),
+        reid_candidates=_build_candidate_policy(settings, wearable_config),
         sampler=sampler_config,
         signals=_build_signal_config(settings),
         signals_enabled=settings.as_bool("signal.enabled"),
@@ -1026,6 +1051,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.wearable_association_repo = wearable_association_repo
 
+    # Image-only evaluation runs only while the wearable channel does; its sample rate (0.0 by
+    # default) decides whether the resolver produces any evaluations at all.
+    image_only_evaluation: ImageOnlyEvaluationService | None = None
+    if wearable_config.mode != "off":
+        image_only_evaluation = ImageOnlyEvaluationService(
+            PostgresImageOnlyEvaluationRepository(_pool)
+            if _pool is not None
+            else InMemoryImageOnlyEvaluationRepository(),
+            max_gap_s=wearable_config.evaluation_max_gap_s,
+        )
+    app.state.image_only_evaluation = image_only_evaluation
+
     wearable_fix_buffer: WearableFixBuffer | None = None
     wearable_fix_subscriber: WearableFixSubscriber | None = None
     if wearable_config.mode != "off":
@@ -1076,6 +1113,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         external_evidence=cc_assertion_cache,
         wearable_fix_source=wearable_fix_buffer,
         wearable_association_repo=wearable_association_repo,
+        image_only_evaluation=image_only_evaluation,
     )
     await _pipeline.initialize(deps)
 
@@ -1213,6 +1251,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             wearable_site_config=wearable_site_config_map,
             wearable_fix_buffer=wearable_fix_buffer,
             wearable_association_repo=wearable_association_repo,
+            image_only_evaluation=image_only_evaluation,
+            face_attestation=_pipeline.face_attestation if _pipeline is not None else None,
             interval_s=60.0,
         )
         await roster_sync_service.start()
@@ -1308,6 +1348,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await _pipeline.stop()
         _pipeline = None
 
+    # Totals accumulate between flushes; write the last ones while the pool is still open.
+    _image_only = getattr(app.state, "image_only_evaluation", None)
+    if _image_only is not None:
+        await _image_only.flush()
+
     if _frame_fetcher is not None:
         await _frame_fetcher.disconnect()
         _frame_fetcher = None
@@ -1330,6 +1375,7 @@ def create_app() -> FastAPI:
     # Set by the lifespan once the pipeline is built; the route answers 503 until then.
     app.state.identity_readiness_service = None
     app.state.wearable_association_repo = None
+    app.state.image_only_evaluation = None
     # Internal calibration endpoints consumed by the CC BFF.
     # Reserved for future use: separate :8510 listener
     # they live on the same app under /internal/ to keep the routing simple.

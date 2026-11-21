@@ -11,9 +11,17 @@ from datetime import datetime
 
 import asyncpg
 
-from ...domain import GalleryEmbedding, Identity, NewReviewCandidate, ReviewCandidate, ReviewEvent
+from ...domain import (
+    GalleryEmbedding,
+    GallerySeedSource,
+    Identity,
+    NewReviewCandidate,
+    ReviewCandidate,
+    ReviewEvent,
+)
 from ..base import GalleryRepository
 from ..gallery import (
+    NO_SEED_SOURCE_EXCLUSION,
     PENDING_AND_VERIFIED,
     REVIEWABLE_STATES,
     VERIFIED_ONLY,
@@ -30,7 +38,8 @@ _REVIEW_COLUMNS = """
     crop_width, crop_height, ph_id, observation_id, keyframe_id, camera_id,
     capture_time, confidence, orientation, quality, is_truncated, is_occluded,
     source_episode_id, created_actor, created_at, seen_at, reviewed_actor,
-    reviewed_time, review_reason, review_note, audit_version
+    reviewed_time, review_reason, review_note, audit_version, seed_source,
+    seed_association_id
 """
 
 # ---------------------------------------------------------------------------
@@ -92,7 +101,7 @@ _SQL_GET_GALLERY_ENTRY = """
 _SQL_LIST_GALLERY_ENTRIES = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
            rg.seen_at, rg.face_confirmed, rg.orientation, rg.state,
-           rg.source_episode_id, rg.camera_id
+           rg.source_episode_id, rg.camera_id, rg.seed_source, rg.seed_association_id
     FROM continuous_tracking.reid_gallery rg
     INNER JOIN continuous_tracking.identities i ON rg.identity_id = i.identity_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
@@ -109,6 +118,7 @@ _SQL_SEARCH_SIMILAR = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality,
            rg.origin_tracklet_id, rg.seen_at, rg.face_confirmed,
            rg.orientation, rg.camera_id, rg.state, rg.source_episode_id,
+           rg.seed_source, rg.seed_association_id,
            1.0 - (rg.embedding <=> $3::vector) AS similarity
     FROM continuous_tracking.reid_gallery rg
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
@@ -124,6 +134,8 @@ _SQL_SEARCH_SIMILAR = """
           $7::continuous_tracking.gallery_entry_state[] IS NULL
           OR rg.state = ANY($7::continuous_tracking.gallery_entry_state[])
       )
+      AND rg.seed_source <> ALL($8::text[])
+      AND ($9::timestamptz IS NULL OR rg.seen_at < $9)
     ORDER BY rg.embedding <=> $3::vector
     LIMIT $6
 """
@@ -135,13 +147,13 @@ _SQL_INSERT_REVIEW_CANDIDATE = """
          source_frame_key, crop_key, frame_hash, crop_hash, ph_id, observation_id,
          keyframe_id, camera_id, capture_time, confidence, is_truncated, is_occluded,
          candidate_reason, source_episode_id, created_actor, origin_tracklet_id,
-         orientation, seen_at)
+         orientation, seen_at, seed_source, seed_association_id)
     VALUES ($1, $2, $3, $4::vector, $5, $6::continuous_tracking.gallery_entry_state,
             $7, $8, $9, $10, $11,
             $12, $13, $14, $15, $16, $17,
             $18, $19, $20, $21, $22, $23,
             $24, $25, $26, $27,
-            $28, $29)
+            $28, $29, $30, $31)
     ON CONFLICT (id) DO NOTHING
 """
 
@@ -155,16 +167,29 @@ _SQL_COUNT_GALLERY_ENTRIES = """
       )
 """
 
+_SQL_COUNT_SEEDED_ENTRIES = """
+    SELECT count(*) FROM continuous_tracking.reid_gallery
+    WHERE identity_id = $1
+      AND seed_source = $2
+      AND seen_at >= $3
+      AND (
+          $4::continuous_tracking.gallery_entry_state[] IS NULL
+          OR state = ANY($4::continuous_tracking.gallery_entry_state[])
+      )
+"""
+
 _SQL_LIST_GALLERY_FOR_TRACKLETS = """
     SELECT rg.id, rg.identity_id, rg.embedding, rg.quality, rg.origin_tracklet_id,
            rg.seen_at, rg.face_confirmed, rg.orientation, rg.state,
-           rg.source_episode_id, rg.camera_id
+           rg.source_episode_id, rg.camera_id, rg.seed_source, rg.seed_association_id
     FROM continuous_tracking.reid_gallery rg
     WHERE rg.origin_tracklet_id = ANY($1::uuid[])
       AND (
           $3::continuous_tracking.gallery_entry_state[] IS NULL
           OR rg.state = ANY($3::continuous_tracking.gallery_entry_state[])
       )
+      AND rg.seed_source <> ALL($4::text[])
+      AND ($5::timestamptz IS NULL OR rg.seen_at < $5)
     ORDER BY rg.seen_at DESC
     LIMIT $2
 """
@@ -504,6 +529,8 @@ class PostgresGalleryRepository(GalleryRepository):
                 origin_tracklet_id,
                 candidate.orientation,
                 candidate.capture_time,  # seen_at: same value as capture_time at creation
+                str(candidate.seed_source),
+                uuid.UUID(candidate.seed_association_id) if candidate.seed_association_id else None,
             )
         return candidate.candidate_id
 
@@ -518,6 +545,24 @@ class PostgresGalleryRepository(GalleryRepository):
                 _SQL_COUNT_GALLERY_ENTRIES,
                 identity_id,
                 orientation,
+                sorted(states) if states is not None else None,
+            )
+        return int(count or 0)
+
+    async def count_seeded_entries(
+        self,
+        *,
+        identity_id: str,
+        seed_source: GallerySeedSource,
+        seen_since: datetime,
+        states: frozenset[str] | None = PENDING_AND_VERIFIED,
+    ) -> int:
+        async with self._pool.acquire() as conn:
+            count = await conn.fetchval(
+                _SQL_COUNT_SEEDED_ENTRIES,
+                identity_id,
+                str(seed_source),
+                seen_since,
                 sorted(states) if states is not None else None,
             )
         return int(count or 0)
@@ -565,6 +610,8 @@ class PostgresGalleryRepository(GalleryRepository):
                 source_episode_id=(
                     str(row["source_episode_id"]) if row.get("source_episode_id") else None
                 ),
+                seed_source=_seed_source(row),
+                seed_association_id=_seed_association_id(row),
             )
             for row in rows
         ]
@@ -576,6 +623,8 @@ class PostgresGalleryRepository(GalleryRepository):
         camera_id: str | None = None,
         max_age_seconds: int | None = None,
         states: frozenset[str] | None = VOTING_STATES,
+        exclude_seed_sources: frozenset[str] = NO_SEED_SOURCE_EXCLUSION,
+        seen_before: datetime | None = None,
     ) -> list[tuple[GalleryEmbedding, float]]:
         embedding_str = _embedding_to_pgvector(embedding)
         async with self._pool.acquire() as conn:
@@ -588,6 +637,8 @@ class PostgresGalleryRepository(GalleryRepository):
                 max_age_seconds,  # $5: interval seconds value
                 limit,  # $6: LIMIT
                 sorted(states) if states is not None else None,  # $7: state filter
+                sorted(exclude_seed_sources),  # $8: provenance exclusion (empty keeps all)
+                seen_before,  # $9: capture-time upper bound
             )
         return [
             (
@@ -605,6 +656,8 @@ class PostgresGalleryRepository(GalleryRepository):
                     source_episode_id=(
                         str(row["source_episode_id"]) if row.get("source_episode_id") else None
                     ),
+                    seed_source=_seed_source(row),
+                    seed_association_id=_seed_association_id(row),
                 ),
                 float(row["similarity"]),
             )
@@ -617,6 +670,8 @@ class PostgresGalleryRepository(GalleryRepository):
         limit: int = 20,
         allowed_states: frozenset[str] | None = VOTING_STATES,
         model_versions: set[str] | None = None,
+        exclude_seed_sources: frozenset[str] = NO_SEED_SOURCE_EXCLUSION,
+        seen_before: datetime | None = None,
     ) -> list[GalleryEmbedding]:
         # model_versions is accepted for protocol parity; no production caller
         # partitions by model version yet (tracked separately from state filtering).
@@ -628,6 +683,8 @@ class PostgresGalleryRepository(GalleryRepository):
                 list(tracklet_ids),
                 limit,
                 sorted(allowed_states) if allowed_states is not None else None,
+                sorted(exclude_seed_sources),
+                seen_before,
             )
         return [
             GalleryEmbedding(
@@ -639,6 +696,8 @@ class PostgresGalleryRepository(GalleryRepository):
                 origin_tracklet_id=row["origin_tracklet_id"] or "",
                 face_confirmed=row["face_confirmed"],
                 orientation=row.get("orientation", 4),
+                seed_source=_seed_source(row),
+                seed_association_id=_seed_association_id(row),
             )
             for row in rows
         ]
@@ -673,6 +732,7 @@ class PostgresGalleryRepository(GalleryRepository):
         camera_id: str | None = None,
         model_version: str | None = None,
         source_type: str | None = None,
+        seed_source: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -688,8 +748,18 @@ class PostgresGalleryRepository(GalleryRepository):
               AND ($5::text IS NULL OR candidate_reason = $5)
               AND ($6::timestamptz IS NULL OR capture_time >= $6)
               AND ($7::timestamptz IS NULL OR capture_time <= $7)
+              AND ($8::text IS NULL OR seed_source = $8)
         """
-        params = [state, identity_id, camera_id, model_version, source_type, since, until]
+        params = [
+            state,
+            identity_id,
+            camera_id,
+            model_version,
+            source_type,
+            since,
+            until,
+            seed_source,
+        ]
         async with self._pool.acquire() as conn:
             total = await conn.fetchval(
                 f"SELECT count(*) FROM continuous_tracking.reid_gallery {where}",
@@ -701,7 +771,7 @@ class PostgresGalleryRepository(GalleryRepository):
                 FROM continuous_tracking.reid_gallery
                 {where}
                 ORDER BY created_at ASC NULLS LAST, seen_at ASC
-                LIMIT $8 OFFSET $9
+                LIMIT $9 OFFSET $10
                 """,
                 *params,
                 limit,
@@ -744,14 +814,18 @@ class PostgresGalleryRepository(GalleryRepository):
             for r in rows
         ]
 
-    async def count_review_queue(self) -> dict[str, int]:
+    async def count_review_queue(
+        self, *, seed_sources: frozenset[str] | None = None
+    ) -> dict[str, int]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT state, count(*) AS n
                 FROM continuous_tracking.reid_gallery
+                WHERE ($1::text[] IS NULL OR seed_source = ANY($1::text[]))
                 GROUP BY state
-                """
+                """,
+                sorted(seed_sources) if seed_sources is not None else None,
             )
         counts = {
             "pending_review": 0,
@@ -1013,7 +1087,19 @@ def _row_to_review_candidate(row: asyncpg.Record) -> ReviewCandidate:
         review_reason=row["review_reason"],
         review_note=row["review_note"],
         audit_version=row["audit_version"],
+        seed_source=_seed_source(row),
+        seed_association_id=_seed_association_id(row),
     )
+
+
+def _seed_source(row: asyncpg.Record) -> GallerySeedSource:
+    """Provenance of a row; shared by the voting rows and the review projection."""
+    return GallerySeedSource(row["seed_source"])
+
+
+def _seed_association_id(row: asyncpg.Record) -> str | None:
+    association = row["seed_association_id"]
+    return str(association) if association else None
 
 
 def _embedding_to_pgvector(embedding: list[float]) -> str:

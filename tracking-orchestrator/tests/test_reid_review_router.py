@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.domain import ReviewCandidate
+from app.domain import GallerySeedSource, ReviewCandidate
 from app.routers.reid_review import router as reid_review_router
 from app.routers.reid_review import set_context
 from app.services.reid_review_service import ReIDReviewService
@@ -305,3 +306,31 @@ def test_compensate_unverifies(client_repo):
     # Original approval event is retained, plus the compensating event.
     events = client.get("/internal/reid-review/candidates/c1/events").json()["events"]
     assert [e["new_state"] for e in events] == ["operator_verified", "pending_review"]
+
+
+def test_seed_source_is_returned_and_filterable(client_repo):
+    client, repo = client_repo
+    repo.seed_review_candidate(_candidate("face-1"))
+    repo.seed_review_candidate(
+        replace(
+            _candidate("room-1", reason="wearable_room_attested"),
+            seed_source=GallerySeedSource.WEARABLE_ROOM_ATTESTED,
+            seed_association_id="55555555-5555-5555-5555-555555555555",
+            confidence=None,
+        )
+    )
+
+    body = client.get("/internal/reid-review/candidates").json()
+    by_id = {c["candidate_id"]: c for c in body["candidates"]}
+    assert by_id["face-1"]["seed_source"] == "face"
+    assert by_id["room-1"]["seed_source"] == "wearable_room_attested"
+    assert by_id["room-1"]["seed_association_id"] == "55555555-5555-5555-5555-555555555555"
+
+    filtered = client.get(
+        "/internal/reid-review/candidates", params={"seed_source": "wearable_room_attested"}
+    ).json()
+    assert [c["candidate_id"] for c in filtered["candidates"]] == ["room-1"]
+    assert filtered["total"] == 1
+
+    bad = client.get("/internal/reid-review/candidates", params={"seed_source": "guess"})
+    assert bad.status_code == 422

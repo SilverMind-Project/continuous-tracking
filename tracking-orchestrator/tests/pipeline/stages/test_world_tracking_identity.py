@@ -130,7 +130,7 @@ class TestWorldTrackingEmitsRevisions:
 
         ph_obs_meta = {"ph-1": (1, BoundingBox(0, 0, 100, 200), 0.9)}
 
-        _decisions, revisions, _identity_by_ph = await _resolve_identities(
+        _decisions, revisions, _identity_by_ph, _image_only = await _resolve_identities(
             resolver=resolver,
             obs_repo=obs_repo,
             ph_repo=ph_repo,
@@ -176,7 +176,7 @@ class TestWorldTrackingEmitsRevisions:
 
         ph_obs_meta = {"ph-1": (1, BoundingBox(0, 0, 100, 200), 0.9)}
 
-        _decisions, revisions, _identity_by_ph = await _resolve_identities(
+        _decisions, revisions, _identity_by_ph, _image_only = await _resolve_identities(
             resolver=resolver,
             obs_repo=obs_repo,
             ph_repo=ph_repo,
@@ -240,7 +240,7 @@ class TestWorldTrackingEmitsRevisions:
         # WorldTracker.step builds during the association step.
         det_to_ph = {detection_uuid: "ph-existing"}
 
-        _decisions, revisions, identity_by_ph = await _resolve_identities(
+        _decisions, revisions, identity_by_ph, _image_only = await _resolve_identities(
             resolver=resolver,
             obs_repo=obs_repo,
             ph_repo=ph_repo,

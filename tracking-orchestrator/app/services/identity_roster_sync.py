@@ -65,6 +65,8 @@ class IdentityRosterSyncService:
         wearable_site_config: WearableIdentityPurge | None = None,
         wearable_fix_buffer: WearableIdentityPurge | None = None,
         wearable_association_repo: WearableAssociationIdentityPurge | None = None,
+        image_only_evaluation: WearableAssociationIdentityPurge | None = None,
+        face_attestation: WearableAssociationIdentityPurge | None = None,
         interval_s: float = 60.0,
     ) -> None:
         self._gallery_repo = gallery_repo
@@ -73,6 +75,10 @@ class IdentityRosterSyncService:
         self._wearable_site_config = wearable_site_config
         self._wearable_fix_buffer = wearable_fix_buffer
         self._wearable_association_repo = wearable_association_repo
+        # Image-only evaluation totals (stored and pending) are per identity; they go with it.
+        self._image_only_evaluation = image_only_evaluation
+        # Pending face attestations name the identity they would label.
+        self._face_attestation = face_attestation
         self._members_source = members_source
         self._identity_resolver = identity_resolver
         self._gallery_cache = gallery_cache
@@ -164,9 +170,14 @@ class IdentityRosterSyncService:
         return removed
 
     async def _purge_wearable_associations(self, identity_id: str) -> int:
-        if self._wearable_association_repo is None:
-            return 0
-        return await self._wearable_association_repo.purge_identity(identity_id)
+        removed = 0
+        if self._wearable_association_repo is not None:
+            removed += await self._wearable_association_repo.purge_identity(identity_id)
+        if self._image_only_evaluation is not None:
+            removed += await self._image_only_evaluation.purge_identity(identity_id)
+        if self._face_attestation is not None:
+            removed += await self._face_attestation.purge_identity(identity_id)
+        return removed
 
     def _invalidate_caches(self) -> None:
         if self._identity_resolver is not None:

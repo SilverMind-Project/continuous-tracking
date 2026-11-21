@@ -13,6 +13,7 @@ from app.domain import FaceAnchor, OrientationBin
 from app.tracking.identity.candidate_eligibility import (
     CandidateEligibility,
     CandidatePolicy,
+    FaceSeed,
     evaluate_candidate,
 )
 
@@ -45,6 +46,9 @@ def _eval(**overrides: object) -> CandidateEligibility:
         "cfg": _CFG,
     }
     kwargs.update(overrides)
+    face_anchor = kwargs.pop("face_anchor")
+    assert face_anchor is None or isinstance(face_anchor, FaceAnchor)
+    kwargs["seed"] = FaceSeed(face_anchor) if face_anchor is not None else None
     return evaluate_candidate(**kwargs)  # type: ignore[arg-type]
 
 

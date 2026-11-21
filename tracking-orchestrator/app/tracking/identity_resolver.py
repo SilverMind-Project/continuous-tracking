@@ -29,8 +29,8 @@ import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, TypedDict, get_args
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, get_args
 
 import numpy as np
 from structlog import get_logger
@@ -43,10 +43,12 @@ from ..domain import (
     FaceAnchor,
     FaceEvidencePolicy,
     GalleryEmbedding,
+    GallerySeedSource,
     Identity,
     IdentityDecision,
     IdentityResolvableEntity,
     IdentityRevision,
+    ImageOnlyEvaluation,
     PosteriorDist,
     ResolveOutcome,
     ViewPrototype,
@@ -93,10 +95,89 @@ _CommitEvaluation = CommitEvaluation
 
 
 class _GallerySearchKwargs(TypedDict):
-    """Kwargs shape returned by ``IdentityResolver._gallery_search_kwargs``."""
+    """Kwargs shape returned by ``IdentityResolver._gallery_search_kwargs``.
+
+    The provenance keys appear only for an image-only evaluation arm; the live vote path never
+    narrows by provenance.
+    """
 
     max_age_seconds: int | None
     states: frozenset[str] | None
+    exclude_seed_sources: NotRequired[frozenset[str]]
+    seen_before: NotRequired[datetime]
+
+
+# Rows a wearable taught: the image-only control arm votes without any of them.
+_WEARABLE_TAUGHT_SOURCES: frozenset[str] = frozenset(
+    {str(GallerySeedSource.WEARABLE_ATTESTED), str(GallerySeedSource.WEARABLE_ROOM_ATTESTED)}
+)
+
+
+@dataclass(frozen=True)
+class _GalleryArm:
+    """Provenance filter for one image-only evaluation arm's gallery reads.
+
+    ``exclude_seed_sources`` applies to every read, including the PH's own rows that build its
+    query embedding: in the control arm's world wearable rows were never minted. ``seen_before``
+    applies to the votes only: it stops rows from the current stretch voting for themselves,
+    while the PH's recent rows still describe what it looks like now.
+    """
+
+    exclude_seed_sources: frozenset[str] = frozenset()
+    seen_before: datetime | None = None
+
+
+@dataclass(frozen=True)
+class _UnheldEntity:
+    """An entity viewed as if it held no identity, for image-only evaluation.
+
+    A held identity may itself come from the wearable, and the temporal prior and sticky
+    maintenance would carry it into the "image-only" decision. Both arms therefore decide from
+    this round's image evidence alone, which keeps them paired and free of the wearable.
+    """
+
+    inner: IdentityResolvableEntity
+
+    @property
+    def entity_id(self) -> str:
+        return self.inner.entity_id
+
+    @property
+    def observation_ids(self) -> list[str]:
+        return self.inner.observation_ids
+
+    @property
+    def camera_ids(self) -> list[str]:
+        return self.inner.camera_ids
+
+    @property
+    def current_identity_id(self) -> str | None:
+        return None
+
+    @property
+    def current_identity_committed_at(self) -> datetime | None:
+        return None
+
+    @property
+    def last_independent_identity_evidence_at(self) -> datetime | None:
+        return None
+
+    @property
+    def last_seen_at(self) -> datetime:
+        return self.inner.last_seen_at
+
+    @property
+    def started_at(self) -> datetime:
+        return self.inner.started_at
+
+    @property
+    def view_prototypes(self) -> tuple[ViewPrototype, ...]:
+        return self.inner.view_prototypes
+
+
+def _sampled(rate: float) -> bool:
+    """The one sample gate for shadow work that issues I/O: off unless the rate is positive."""
+    return rate > 0.0 and random.random() < rate
 
 
 @dataclass(frozen=True)
@@ -277,6 +358,10 @@ class ResolverConfig:
     # directly at candidate creation, below operator_verified's full trust.
     gallery_auto_verified_trust_multiplier: float = 1.5
 
+    # Trust multiplier for auto_verified rows minted from a trajectory-attested wearable
+    # association: below a face-minted row, because the wearable never saw the face.
+    gallery_wearable_trust_multiplier: float = 1.25
+
     # Exponential recency half-life in days, no floor. Default 2.0
     # (shortened from the original 7.0).
     gallery_recency_half_life_days: float = 2.0
@@ -413,6 +498,10 @@ class ResolverConfig:
     # Maximum span (seconds) a backfill may relabel backward from the commit,
     # regardless of how much earlier the PH's Unknown history extends.
     backfill_max_range_s: float = 14400.0
+    # Wearable trigger for the same backfill: a trajectory-attested association backfills the
+    # PH's identity-NULL rows over the attested segment. Waits on the owner's confirmation that
+    # attested intervals may be backfilled; shares backfill_shadow and backfill_max_range_s.
+    enable_wearable_backfill: bool = False
 
     # --- Face evidence policy ---
     # Set from face_id.evidence_policy (app/main.py), the same value FaceIdentityStage emits by,
@@ -596,6 +685,7 @@ class IdentityResolver:
 
         wearable_mode = self._wearable_config.mode
         pending_decisions: list[_PendingIdentityDecision] = []
+        outcome_image_only: list[ImageOnlyEvaluation] = []
 
         for entity in hypotheses:
             prior = self._build_prior(entity, captured_at)
@@ -802,6 +892,25 @@ class IdentityResolver:
                     shadow_identity_id=counterfactual,
                     feature="face_template",
                 )
+            # Image-only evaluation: wearable truth scores what the cameras alone decide.
+            if (
+                raw_wearable_ev is not None
+                and raw_wearable_ev.attested
+                and _sampled(self._wearable_config.evaluation_sample_rate)
+            ):
+                outcome_image_only.append(
+                    await self._image_only_evaluation(
+                        entity,
+                        raw_wearable_ev,
+                        augmented_anchors,
+                        augmented_evidence,
+                        height_likelihood,
+                        captured_at,
+                        entity_quality,
+                        calibrated=live_calibrated,
+                        face_quality_mode=live_quality_mode,
+                    )
+                )
             # Attach evidence summary.
             ep = EvidencePosterior(
                 distribution=posterior.distribution,
@@ -875,6 +984,7 @@ class IdentityResolver:
             )
 
         outcome = ResolveOutcome()
+        outcome.image_only = outcome_image_only
         final_decisions = self._apply_duplicate_active_identity_guard(
             pending_decisions, open_ph_identities or {}
         )
@@ -1342,6 +1452,60 @@ class IdentityResolver:
             check_contradiction=True,
         ).new_id
 
+    async def _image_only_evaluation(
+        self,
+        entity: IdentityResolvableEntity,
+        wearable_evidence: WearableEvidence,
+        face_anchors: list[FaceAnchor],
+        face_evidence: list[FaceEvidence],
+        height_likelihood: PosteriorDist,
+        captured_at: datetime,
+        entity_quality: float,
+        *,
+        calibrated: bool,
+        face_quality_mode: FaceQualityMode,
+    ) -> ImageOnlyEvaluation:
+        """Decide this PH twice without the wearable channel, for scoring against the tag.
+
+        Control: no wearable-taught gallery row exists (what the cameras would know untaught).
+        Treatment: wearable-taught rows vote too. In both arms no row seen in the last exclusion
+        window votes, so rows minted from this stretch cannot vote for themselves and the arms
+        differ only in the wearable-taught rows older than the window. Both arms see this round's
+        faces and height and decide as for a PH holding no identity (:class:`_UnheldEntity`).
+        """
+        unheld = _UnheldEntity(entity)
+        prior = self._build_prior(unheld, captured_at)
+        cutoff = captured_at - timedelta(seconds=self._wearable_config.evaluation_exclusion_s)
+        arms = (
+            _GalleryArm(exclude_seed_sources=_WEARABLE_TAUGHT_SOURCES, seen_before=cutoff),
+            _GalleryArm(seen_before=cutoff),
+        )
+        decided: list[str | None] = []
+        for arm in arms:
+            reid = await self._from_gallery(unheld, arm=arm)
+            decided.append(
+                self._counterfactual_identity(
+                    unheld,
+                    face_anchors,
+                    face_evidence,
+                    prior,
+                    reid,
+                    height_likelihood,
+                    captured_at,
+                    entity_quality,
+                    calibrated=calibrated,
+                    face_quality_mode=face_quality_mode,
+                )
+            )
+        return ImageOnlyEvaluation(
+            ph_id=entity.entity_id,
+            truth_identity_id=wearable_evidence.identity_id,
+            attestation_grade=wearable_evidence.attestation_grade,
+            control_identity_id=decided[0],
+            treatment_identity_id=decided[1],
+            captured_at=captured_at,
+        )
+
     @staticmethod
     def _record_shadow_outcome(
         entity: IdentityResolvableEntity,
@@ -1578,6 +1742,7 @@ class IdentityResolver:
         *,
         enable_coherence_boost: bool | None = None,
         enable_multiview: bool = False,
+        arm: _GalleryArm | None = None,
     ) -> PosteriorDist:
         """Build likelihood from gallery k-NN search.
 
@@ -1595,14 +1760,21 @@ class IdentityResolver:
         prototypes = entity.view_prototypes if use_multiview else ()
 
         if prototypes:
-            return await self._from_gallery_multiview(entity, prototypes)
+            return await self._from_gallery_multiview(entity, prototypes, arm=arm)
 
         # --- Single-query path (original behaviour) ---
         try:
-            recent = await self._gallery_repo.list_gallery_entries_for_tracklets(
-                tracklet_ids=set(entity.observation_ids),
-                limit=20,
-            )
+            if arm is not None and arm.exclude_seed_sources:
+                recent = await self._gallery_repo.list_gallery_entries_for_tracklets(
+                    tracklet_ids=set(entity.observation_ids),
+                    limit=20,
+                    exclude_seed_sources=arm.exclude_seed_sources,
+                )
+            else:
+                recent = await self._gallery_repo.list_gallery_entries_for_tracklets(
+                    tracklet_ids=set(entity.observation_ids),
+                    limit=20,
+                )
         except Exception:
             logger.warning(
                 "reid_gallery_lookup_failed",
@@ -1644,7 +1816,7 @@ class IdentityResolver:
             similar = await self._gallery_repo.search_similar(
                 embedding=query,
                 limit=20,
-                **self._gallery_search_kwargs(),
+                **self._gallery_search_kwargs(arm),
             )
         except Exception:
             logger.warning(
@@ -1671,6 +1843,8 @@ class IdentityResolver:
         self,
         entity: IdentityResolvableEntity,
         prototypes: tuple[ViewPrototype, ...],
+        *,
+        arm: _GalleryArm | None = None,
     ) -> PosteriorDist:
         """Per-view gallery query with max-over-views aggregation.
 
@@ -1699,7 +1873,7 @@ class IdentityResolver:
                 similar = await self._gallery_repo.search_similar(
                     embedding=query_emb,
                     limit=20,
-                    **self._gallery_search_kwargs(),
+                    **self._gallery_search_kwargs(arm),
                 )
             except Exception:
                 logger.warning(
@@ -1758,24 +1932,32 @@ class IdentityResolver:
         return GalleryScoringConfig(
             verified_trust_multiplier=self._config.gallery_verified_trust_multiplier,
             auto_verified_trust_multiplier=self._config.gallery_auto_verified_trust_multiplier,
+            wearable_trust_multiplier=self._config.gallery_wearable_trust_multiplier,
             recency_half_life_days=self._config.gallery_recency_half_life_days,
             identified_entry_boost_min_sim=self._config.identified_entry_boost_min_sim,
             identified_entry_min_likelihood=self._config.identified_entry_min_likelihood,
         )
 
-    def _gallery_search_kwargs(self) -> _GallerySearchKwargs:
-        """Kwargs every vote-path ``search_similar`` call must pass (M03).
+    def _gallery_search_kwargs(self, arm: _GalleryArm | None = None) -> _GallerySearchKwargs:
+        """Kwargs every vote-path ``search_similar`` call must pass.
 
         Centralizes the hard vote-age cutoff and the voting-states filter so
         a future call site cannot forget either. ``gallery_vote_max_age_s``
         is ``None`` when the cutoff is disabled (rollback state); truncating
-        to ``int`` matches the repository signature (whole seconds).
+        to ``int`` matches the repository signature (whole seconds). An
+        image-only evaluation *arm* adds its provenance filter here, never at
+        a call site.
         """
         cutoff = self._config.gallery_vote_max_age_s
-        return {
+        kwargs: _GallerySearchKwargs = {
             "max_age_seconds": int(cutoff) if cutoff is not None else None,
             "states": VOTING_STATES,
         }
+        if arm is not None:
+            kwargs["exclude_seed_sources"] = arm.exclude_seed_sources
+            if arm.seen_before is not None:
+                kwargs["seen_before"] = arm.seen_before
+        return kwargs
 
     @staticmethod
     def _on_nonvoting_gallery_vote() -> None:
@@ -1957,7 +2139,8 @@ class IdentityResolver:
         evidence_identity_ids: frozenset[str],
         *,
         feature: str,
-        **from_gallery_kwargs: bool,
+        enable_coherence_boost: bool | None = None,
+        enable_multiview: bool = False,
     ) -> None:
         """Evaluate an alternative gallery-query configuration purely for measurement.
 
@@ -1966,7 +2149,11 @@ class IdentityResolver:
         shadows. Callers must gate invocation with an explicit sample rate — this
         method always issues the gallery query it is called for.
         """
-        shadow_reid = await self._from_gallery(entity, **from_gallery_kwargs)
+        shadow_reid = await self._from_gallery(
+            entity,
+            enable_coherence_boost=enable_coherence_boost,
+            enable_multiview=enable_multiview,
+        )
         if shadow_reid.distribution == reid_likelihood.distribution:
             return
         shadow_channels = (

@@ -100,6 +100,52 @@ class WearableShadowOutcome(StrEnum):
     WOULD_CONFLICT = "would_conflict"
 
 
+class WearableSeedOutcome(StrEnum):
+    """Bounded label set for ``cts_wearable_seed_outcomes_total{outcome}``."""
+
+    MINTED_AUTO_VERIFIED = "minted_auto_verified"
+    MINTED_PENDING_REVIEW = "minted_pending_review"
+    WEARABLE_NOT_ATTESTED = "wearable_not_attested"
+    IDENTITY_MISMATCH = "identity_mismatch"
+    FACE_CONFLICT = "face_conflict"
+    UNKNOWN_ORIENTATION = "unknown_orientation"
+    LOW_ORIENTATION_CONFIDENCE = "low_orientation_confidence"
+    NO_EMBEDDING = "no_embedding"
+    NON_FINITE_EMBEDDING = "non_finite_embedding"
+    LOW_QUALITY = "low_quality"
+    SEED_INTERVAL = "seed_interval"
+    TOO_SIMILAR_TO_RECENT = "too_similar_to_recent"
+    ROOM_DAILY_CAP = "room_daily_cap"
+    CAP_REACHED = "cap_reached"
+    CREATE_FAILED = "create_failed"
+
+
+class ImageOnlyArm(StrEnum):
+    """Bounded label set for the image-only evaluation arm."""
+
+    CONTROL = "control"
+    TREATMENT = "treatment"
+
+
+class ImageOnlyOutcome(StrEnum):
+    """Bounded label set for an image-only evaluation outcome against wearable truth."""
+
+    CORRECT = "correct"
+    WRONG = "wrong"
+    UNKNOWN = "unknown"
+
+
+class WearableFaceAttestationResult(StrEnum):
+    """Bounded label set for ``cts_wearable_face_attestations_total{result}``."""
+
+    QUEUED = "queued"
+    EXCLUDED_CONFLICT = "excluded_conflict"
+    SENT = "sent"
+    MOVED = "moved"
+    BUFFER_MISS = "buffer_miss"
+    FAILED = "failed"
+
+
 class DeadLetterStream(StrEnum):
     """Bounded label set for ``cts_messages_dead_lettered_total{stream}``."""
 
@@ -350,6 +396,12 @@ class Metrics:
     cts_wearable_face_conflict_total: Counter
     cts_wearable_shadow_outcomes_total: Counter  # label: outcome
     cts_messages_dead_lettered_total: Counter  # label: stream
+
+    # ---- wearable supervision ----
+    cts_wearable_seed_outcomes_total: Counter  # label: outcome (WearableSeedOutcome)
+    # labels: arm (ImageOnlyArm), outcome (ImageOnlyOutcome), grade (room|trajectory)
+    cts_image_only_eval_seconds_total: Counter
+    cts_wearable_face_attestations_total: Counter  # label: result
 
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
@@ -1070,6 +1122,24 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_messages_dead_lettered_total",
             "Malformed stream messages acknowledged and discarded without silent fallback.",
             ["stream"],
+        ),
+        cts_wearable_seed_outcomes_total=_counter(
+            "cts_wearable_seed_outcomes_total",
+            "Wearable-attested ReID gallery seed attempts, by minted state or rejection reason.",
+            ["outcome"],
+        ),
+        cts_image_only_eval_seconds_total=_counter(
+            "cts_image_only_eval_seconds_total",
+            "Sample-weighted seconds of image-only identity scored against wearable truth, by "
+            "arm (control without wearable-taught rows, treatment with them), outcome, and "
+            "attestation grade.",
+            ["arm", "outcome", "grade"],
+        ),
+        cts_wearable_face_attestations_total=_counter(
+            "cts_wearable_face_attestations_total",
+            "Faces of wearable-attested PHs offered to person-identification-service's "
+            "attested-exemplar queue, by result.",
+            ["result"],
         ),
     )
 

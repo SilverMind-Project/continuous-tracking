@@ -114,6 +114,19 @@ class TemplateQualityReading:
 
 
 @dataclass(frozen=True)
+class FaceAttestationResult:
+    """What person-identification-service did with one attestation call.
+
+    ``moved`` faces were still held in its in-memory attestation buffer and became attested
+    calibration candidates; ``missed`` detection ids were not held (expired, below the quality
+    or size floor, or never sampled) and are simply counted.
+    """
+
+    moved: int
+    missed: int
+
+
+@dataclass(frozen=True)
 class TemplateMatchResult:
     """person-identification-service's verdict on a face template (several faces of one PH)."""
 
@@ -151,6 +164,10 @@ class CaptureContext:
     captured_at: datetime
     crop_pad_top_frac: float
     crop_pad_side_frac: float
+    # Detection id of each crop, parallel to the crops of the call (empty when unknown). Sent per
+    # crop so person-identification-service can hold the face for a later wearable attestation
+    # that names the detection; an id is a random UUID and says nothing about who it is.
+    detection_ids: tuple[str, ...] = ()
 
 
 class CropQueryStatus(StrEnum):
@@ -310,12 +327,19 @@ class FaceIdentificationClient:
             "crop_pad_side_frac": context.crop_pad_side_frac,
             "crop_jpeg_quality": self._jpeg_quality,
         }
+        if context.detection_ids and len(context.detection_ids) != len(crops):
+            raise ValueError("CaptureContext.detection_ids must be parallel to the crops")
         results: list[CropQueryResult] = []
         crop_with_bboxes = zip(crops, crop_bboxes_norm, strict=True)
         for idx, (crop, crop_bbox_norm) in enumerate(crop_with_bboxes):
+            crop_context = (
+                {**capture_context, "detection_id": context.detection_ids[idx]}
+                if context.detection_ids
+                else capture_context
+            )
             results.append(
                 await self._identify_one(
-                    client, idx, crop, crop_bbox_norm, capture_context, return_embedding
+                    client, idx, crop, crop_bbox_norm, crop_context, return_embedding
                 )
             )
 
@@ -431,6 +455,54 @@ class FaceIdentificationClient:
             return None
         except (KeyError, TypeError, ValueError):
             logger.warning("face_template_match_malformed_response", member_count=len(members))
+            return None
+
+    async def attest_faces(
+        self,
+        *,
+        association_id: str,
+        identity_id: str,
+        attestation_grade: str,
+        detection_ids: Sequence[str],
+    ) -> FaceAttestationResult | None:
+        """Ask person-identification-service to keep the buffered faces of these detections.
+
+        ``POST /api/v1/calibration/attestations``: faces it still holds for these detection ids
+        become operator-gated, ``sensor_attested`` calibration candidates labeled with
+        *identity_id*; nothing reaches enrollment or recognition without an operator. Returns
+        None when disconnected or on any error; the caller counts and moves on.
+        """
+        if self._client is None or not detection_ids:
+            return None
+        body = {
+            "association_id": association_id,
+            "identity_id": identity_id,
+            "attestation_grade": attestation_grade,
+            "detection_ids": list(detection_ids),
+            "attested_by": "wearable",
+        }
+        try:
+            resp = await self._client.post(
+                f"{self._base_url}/api/v1/calibration/attestations", json=body
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return FaceAttestationResult(moved=int(data["moved"]), missed=int(data["missed"]))
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "face_attestation_rejected",
+                status_code=exc.response.status_code,
+                code=_error_code(exc.response),
+                detection_count=len(detection_ids),
+            )
+            return None
+        except httpx.HTTPError:
+            logger.warning("face_attestation_http_error", detection_count=len(detection_ids))
+            return None
+        except (KeyError, TypeError, ValueError):
+            logger.warning(
+                "face_attestation_malformed_response", detection_count=len(detection_ids)
+            )
             return None
 
 

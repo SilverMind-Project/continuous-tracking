@@ -124,8 +124,12 @@ def test_all_call_sites_use_the_shared_helper() -> None:
         IdentityResolver._has_cross_camera_reid_assist,
     ):
         source = inspect.getsource(method)
-        assert "self._gallery_search_kwargs()" in source, (
+        # The helper takes an optional image-only evaluation arm; either call form delegates.
+        assert "self._gallery_search_kwargs(" in source, (
             f"{method.__name__} must route through _gallery_search_kwargs()"
+        )
+        assert "max_age_seconds=" not in source, (
+            f"{method.__name__} must not build the vote-age cutoff inline"
         )
 
 

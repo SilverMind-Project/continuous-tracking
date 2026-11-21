@@ -63,7 +63,7 @@ async def test_resolver_returns_empty_when_no_resolver():
     await ph_repo.save(ph)
     await obs_repo.save(_make_observation(), "ph-1")
 
-    decisions, revisions, identity_by_ph = await _resolve_identities(
+    decisions, revisions, identity_by_ph, _image_only = await _resolve_identities(
         resolver=None,
         obs_repo=obs_repo,
         ph_repo=ph_repo,

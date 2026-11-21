@@ -872,6 +872,8 @@ class ResolveOutcome:
     def __init__(self) -> None:
         self.decisions: list[IdentityDecision] = []
         self.revisions: list[IdentityRevision] = []
+        # Sampled image-only evaluations of attested PHs; measurement only, never a decision.
+        self.image_only: list[ImageOnlyEvaluation] = []
 
 
 @dataclass(frozen=True)
@@ -915,6 +917,20 @@ class Identity:
     is_active: bool = True
 
 
+class GallerySeedSource(StrEnum):
+    """Where a ReID gallery row's identity label came from.
+
+    The value decides the row's voting trust (``gallery_scoring.score_hits``) and lets an
+    operator filter or bulk-demote rows by provenance. ``WEARABLE_ROOM_ATTESTED`` rows always
+    mint ``pending_review``: a sole-occupant inference teaches only through an operator.
+    """
+
+    FACE = "face"
+    WEARABLE_ATTESTED = "wearable_attested"
+    WEARABLE_ROOM_ATTESTED = "wearable_room_attested"
+    OPERATOR = "operator"
+
+
 @dataclass(frozen=True)
 class GalleryEmbedding:
     """One embedding row in an identity's gallery."""
@@ -936,6 +952,9 @@ class GalleryEmbedding:
     # so this field lets `phs_with_pending_reid` match the same way Postgres
     # does for rows created by ReIDCandidateStage.
     ph_id: str = ""
+    seed_source: GallerySeedSource = GallerySeedSource.FACE
+    # Wearable association segment that seeded the row; None for face- or operator-seeded rows.
+    seed_association_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -984,6 +1003,8 @@ class ReviewCandidate:
     review_reason: str | None
     review_note: str | None
     audit_version: int
+    seed_source: GallerySeedSource = GallerySeedSource.FACE
+    seed_association_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1023,8 +1044,12 @@ class NewReviewCandidate:
     created_actor: str
     model_version: str
     preprocessing_version: str
-    confidence: float
+    # Calibrated face confidence (or the face match score when uncalibrated) for a face seed;
+    # None for a wearable seed, which carries no face probability.
+    confidence: float | None
     state: str = "pending_review"
+    seed_source: GallerySeedSource = GallerySeedSource.FACE
+    seed_association_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1549,6 +1574,12 @@ class CameraProfile:
 
 from .wearables import (  # noqa: E402
     WEARABLE_MODES as WEARABLE_MODES,
+)
+from .wearables import (  # noqa: E402
+    ImageOnlyDailyTotal as ImageOnlyDailyTotal,
+)
+from .wearables import (  # noqa: E402
+    ImageOnlyEvaluation as ImageOnlyEvaluation,
 )
 from .wearables import (  # noqa: E402
     RfNode as RfNode,

@@ -15,7 +15,11 @@ from datetime import datetime
 from pathlib import Path
 
 from app.domain import FaceAnchor
-from app.tracking.identity.candidate_eligibility import CandidatePolicy, evaluate_candidate
+from app.tracking.identity.candidate_eligibility import (
+    CandidatePolicy,
+    FaceSeed,
+    evaluate_candidate,
+)
 from app.tracking.orientation import OrientationBin
 
 _FIXTURE = (
@@ -36,7 +40,7 @@ def test_recognized_face_must_match_gallery_seed_identity() -> None:
 
     result = evaluate_candidate(
         committed_identity_id=data["resolved_identity_id"],
-        face_anchor=face_anchor,
+        seed=FaceSeed(face_anchor),
         embedding=data["body_embedding"],
         quality=data["quality"],
         orientation=OrientationBin[data["orientation"]],

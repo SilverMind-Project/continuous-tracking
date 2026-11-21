@@ -19,6 +19,7 @@ from app.main import (
     _build_resolver_config,
     _build_sampler_config,
     _build_signal_config,
+    _build_wearable_config,
     _build_world_tracker_config,
 )
 from app.pipeline.frame_pipeline import FaceIdConfig, PipelineConfig
@@ -222,9 +223,33 @@ def test_candidate_policy_is_built_from_settings(monkeypatch: pytest.MonkeyPatch
     """The reid_candidates section reaches the stage; it was once built and never passed on."""
     settings = _settings(monkeypatch)
     data = _yaml()
-    policy = _build_candidate_policy(settings)
+    policy = _build_candidate_policy(settings, _build_wearable_config(settings))
     rc = data["reid_candidates"]
     assert policy.model_version == data["triton"]["reid_model"] != ""
     assert policy.max_per_identity_orientation == rc["max_per_identity_orientation"]
+    assert policy.wearable_seeding_enabled is rc["wearable_seeding_enabled"] is False
+    assert policy.wearable_min_seed_interval_s == pytest.approx(rc["wearable_min_seed_interval_s"])
+    assert policy.wearable_room_grade_max_per_day == rc["wearable_room_grade_max_per_day"]
     main_source = Path("app/main.py").read_text()
-    assert "reid_candidates=_build_candidate_policy(settings)" in main_source
+    assert "reid_candidates=_build_candidate_policy(settings, wearable_config)" in main_source
+
+
+def test_wearable_seeding_refused_unless_wearable_channel_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for key, value in ENV_FOR_SETTINGS.items():
+        monkeypatch.setenv(key, value)
+    data = _yaml()
+    data["reid_candidates"]["wearable_seeding_enabled"] = True
+
+    def build(mode: str) -> CandidatePolicy:
+        data["wearable"]["mode"] = mode
+        path = tmp_path / f"settings-{mode}.yaml"
+        path.write_text(yaml.safe_dump(data))
+        settings = Settings(path)
+        return _build_candidate_policy(settings, _build_wearable_config(settings))
+
+    for mode in ("off", "shadow"):
+        with pytest.raises(ValueError, match="wearable_seeding_enabled requires"):
+            build(mode)
+    assert build("enabled").wearable_seeding_enabled is True

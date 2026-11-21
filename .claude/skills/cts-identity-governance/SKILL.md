@@ -121,6 +121,11 @@ Face scores have four names, and each name means one thing:
   without bypassing incumbents, never grants authority, and forces `Unknown` (`wearable_face`)
   when a qualifying calibrated direct-face anchor disagrees. Read `reference/wearable-evidence.md`
   before changing wearable association, attestation, or channel weighting.
+- An attested wearable association is a sensor-attested label: it may seed body-gallery rows by
+  grade (trajectory `auto_verified` at 1.25 trust, room `pending_review`), offer face exemplars to
+  person-id's operator-gated queue, backfill NULL history (trajectory only, flag off), and serve
+  as image-only evaluation truth; never enrollment, authority, or unaudited calibration. Read
+  `reference/sensor-attested-labels.md` before changing any wearable learner.
 - ArcFace enrollment is a golden dataset. PH inference, operator identity correction, and ReID
   review never modify enrollment. Enrollment gains entries
   only via explicit enroll calls, explicit operator naming of a visitor cluster
@@ -212,8 +217,9 @@ vote, including through caches, fallback queries, or compatibility code; `auto_v
 default 1.5, `resolver.gallery_verified_trust_multiplier` default 2.0).
 
 The only pipeline write into `reid_gallery` is `ReIDCandidateStage` →
-`GalleryRepository.create_review_candidate`, always with crop + frame provenance and
-`origin_tracklet_id`/`ph_id`. A face-derived candidate requires the recognized ArcFace identity to
+`GalleryRepository.create_review_candidate`, always with crop + frame provenance,
+`origin_tracklet_id`/`ph_id`, and a `seed_source` (`face`, `wearable_attested`,
+`wearable_room_attested`, `operator`; migration `0009`). A face-derived candidate requires the recognized ArcFace identity to
 equal the committed identity, with calibrated confidence at or above the authority threshold. The
 minting state is `pending_review` unless the calibrated confidence also clears
 `reid_candidates.auto_verify_min_confidence` (default 0.90), in which case it mints straight into
@@ -278,8 +284,9 @@ hand instead of delegating) is a defect.
 
 - Apply a configurable trust multiplier to verified hits before identity aggregation
   (`resolver.gallery_verified_trust_multiplier`, default 2.0) and to auto_verified hits
-  (`resolver.gallery_auto_verified_trust_multiplier`, default 1.5). Do not alter cosine
-  similarity.
+  (`resolver.gallery_auto_verified_trust_multiplier`, default 1.5; an auto_verified hit seeded
+  by a wearable, `seed_source = wearable_attested`, uses
+  `resolver.gallery_wearable_trust_multiplier`, default 1.25). Do not alter cosine similarity.
 - Apply configurable exponential recency decay (`resolver.gallery_recency_half_life_days`,
   default 2.0) with no floor.
 - Cap or cluster near-duplicate votes by source episode, camera, and orientation.
@@ -405,6 +412,12 @@ covers the live edge (operator authority always outranks the automatic process);
 maximum span (`resolver.backfill_max_range_s`). A range that collapses to empty is skipped, not
 clamped to a minimum.
 
+A second trigger exists for wearables: a segment transition to `trajectory` attestation
+backfills identity-NULL rows over `[segment.started_at, capture time]`, once per segment, with
+the same clips and NULL-only rewriter, behind `resolver.enable_wearable_backfill` (default false,
+waiting on the owner's confirmation; room grade never backfills). See
+`reference/sensor-attested-labels.md`.
+
 Staged rollout: `resolver.enable_unknown_backfill` (default false), `resolver.backfill_shadow`
 (default true). Shadow mode computes the range, increments metrics, and logs, with zero database
 or stream writes. Enabled mode records the inferred range, relabels rows, and publishes one
@@ -436,7 +449,8 @@ relaxation.
 
 - [ ] Raw inference is immutable.
 - [ ] Effective identity is explicit and revision-aware.
-- [ ] No inferred label becomes training truth.
+- [ ] No inferred label becomes training truth; sensor-attested labels only where
+      `reference/sensor-attested-labels.md` allows.
 - [ ] No raw similarity is named confidence or probability.
 - [ ] Prior-only evaluation cannot refresh independent evidence time.
 - [ ] Pending/rejected gallery entries are excluded at repository and cache boundaries.

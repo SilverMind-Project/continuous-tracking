@@ -53,9 +53,13 @@ class RevisionsStage(FrameStage):
                     applies_to=rewrite_time,
                 )
 
-        if self._backfill_service is not None and ctx.outcome_decisions:
+        if self._backfill_service is not None and (
+            ctx.outcome_decisions or ctx.wearable_association_transitions
+        ):
             await self._backfill_service.process(
                 outcome_decisions=ctx.outcome_decisions,
                 ph_born_at_by_id=ctx.ph_born_at_by_id,
                 event_time=ctx.event_time,
+                wearable_transitions=ctx.wearable_association_transitions,
+                captured_at=ctx.capture_time,
             )

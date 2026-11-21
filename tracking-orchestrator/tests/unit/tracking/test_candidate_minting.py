@@ -13,6 +13,7 @@ from app.domain import FaceAnchor, OrientationBin
 from app.tracking.identity.candidate_eligibility import (
     CandidateEligibility,
     CandidatePolicy,
+    FaceSeed,
     evaluate_candidate,
 )
 
@@ -36,7 +37,7 @@ def _face(
 def _eval(*, cfg: CandidatePolicy, face_anchor: FaceAnchor) -> CandidateEligibility:
     return evaluate_candidate(
         committed_identity_id="grandma",
-        face_anchor=face_anchor,
+        seed=FaceSeed(face_anchor),
         embedding=_EMB,
         quality=0.9,
         orientation=OrientationBin.FRONT,

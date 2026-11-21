@@ -667,6 +667,10 @@ class WorldTrackingStage(FrameStage):
         ctx.wearable_association_transitions = (
             list(result.wearable_association_transitions) if include_revisions else []
         )
+        ctx.wearable_evidence_by_ph = dict(result.wearable_evidence_by_ph)
+        ctx.image_only_evaluations = (
+            list(result.image_only_evaluations) if include_revisions else []
+        )
 
         # Store snapshots on the context for downstream stages.
         ctx.world_snapshots = list(result.snapshots)

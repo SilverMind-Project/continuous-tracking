@@ -28,6 +28,7 @@ from ...domain import (
     IdentityDecision,
     IdentityResolvableEntity,
     IdentityRevision,
+    ImageOnlyEvaluation,
     OverlapGroup,
     PersonHypothesis,
     PHContinuationCandidate,
@@ -176,6 +177,7 @@ class WorldTrackerResult:
     coasting_ph_ids: frozenset[str] = frozenset()
     wearable_association_transitions: tuple[WearableAssociationTransition, ...] = ()
     wearable_evidence_by_ph: Mapping[str, WearableEvidence] = field(default_factory=dict)
+    image_only_evaluations: tuple[ImageOnlyEvaluation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1227,7 +1229,7 @@ class WorldTracker:
             for ph in updated_phs
             if ph.closed_at is None and ph.current_identity_id
         }
-        identity_decisions, revisions, identity_by_ph = await _resolve_identities(
+        identity_decisions, revisions, identity_by_ph, image_only = await _resolve_identities(
             resolver=self._identity_resolver,
             obs_repo=self._obs_repo,
             ph_repo=self._ph_repo,
@@ -1394,6 +1396,7 @@ class WorldTracker:
             coasting_ph_ids=frozenset(coasting_ph_ids),
             wearable_association_transitions=tuple(wearable_transitions),
             wearable_evidence_by_ph=wearable_evidence_by_ph,
+            image_only_evaluations=tuple(image_only),
         )
 
     def _update_primary_camera(self, ph_id: str, best_camera: str) -> None:
@@ -1585,7 +1588,12 @@ async def _resolve_identities(
     wearable_evidence: Mapping[str, WearableEvidence] | None = None,
     now: datetime,
     config: WorldTrackerConfig,
-) -> tuple[list[IdentityDecision], list[IdentityRevision], dict[str, dict[str, object]]]:
+) -> tuple[
+    list[IdentityDecision],
+    list[IdentityRevision],
+    dict[str, dict[str, object]],
+    list[ImageOnlyEvaluation],
+]:
     """Run the Bayesian identity resolver on PHs that received observations.
 
     In PH mode, FaceAnchor.tracklet_id is empty when produced by
@@ -1594,9 +1602,10 @@ async def _resolve_identities(
     can match anchors to PHs via entity_id without polluting observation_ids.
 
     Returns:
-        (decisions, revisions, identity_by_ph) where identity_by_ph maps
+        (decisions, revisions, identity_by_ph, image_only) where identity_by_ph maps
         ph_id → {identity_id, identity_confidence, posterior_entropy,
-                  direct_face_evidence} for populating snapshot fields.
+                  direct_face_evidence} for populating snapshot fields, and image_only holds
+        the round's sampled image-only evaluations of wearable-attested PHs.
     """
     # Remap PH-mode face anchors: fill in tracklet_id = ph_id for any anchor
     # that arrived with an empty tracklet_id but a known detection → PH mapping.
@@ -1619,14 +1628,14 @@ async def _resolve_identities(
 
     if resolver is None:
         logger.debug("identity_resolver_not_configured")
-        return [], [], identity_by_ph
+        return [], [], identity_by_ph, []
 
     # Find PHs that received observations this frame.
     active_ph_ids = set(ph_obs_meta.keys())
     resolvable_phs = [ph for ph in phs if ph.ph_id in active_ph_ids]
 
     if not resolvable_phs:
-        return [], [], identity_by_ph
+        return [], [], identity_by_ph, []
 
     # Build resolvable wrappers with real observation IDs from the repository.
     resolvable: list[IdentityResolvableEntity] = []
@@ -1734,4 +1743,4 @@ async def _resolve_identities(
         identities_assigned=sum(1 for d in outcome.decisions if d.identity_id is not None),
     )
 
-    return list(outcome.decisions), revisions, identity_by_ph
+    return list(outcome.decisions), revisions, identity_by_ph, list(outcome.image_only)

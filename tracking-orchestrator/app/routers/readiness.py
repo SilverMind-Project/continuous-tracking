@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from ..services.identity_readiness import IdentityReadinessService
+from ..services.identity_readiness import GalleryStateCounts, IdentityReadinessService
 
 router = APIRouter(prefix="/internal/identity", tags=["identity-readiness-internal"])
 
@@ -65,6 +65,13 @@ class IdentityReadinessResponse(BaseModel):
         ge=0,
         description="Open wearable-to-PH associations; null before the world tracker is built",
     )
+    wearable_gallery_counts: GalleryStateCountsOut | None = Field(
+        default=None,
+        description=(
+            "ReID gallery rows a wearable taught (seed_source wearable_attested or "
+            "wearable_room_attested), by state; null without a gallery repository"
+        ),
+    )
 
 
 @router.get("/readiness", response_model=IdentityReadinessResponse)
@@ -72,7 +79,6 @@ async def get_identity_readiness(
     service: IdentityReadinessService = Depends(get_readiness_service),
 ) -> IdentityReadinessResponse:
     snap = await service.snapshot()
-    counts = snap.reid_gallery_counts
     return IdentityReadinessResponse(
         face_evidence_policy=snap.policy.face_evidence_policy,
         face_templates_mode=snap.policy.face_templates_mode,
@@ -81,14 +87,7 @@ async def get_identity_readiness(
         wearable_mode=snap.policy.wearable_mode,
         expected_arcface_model_version=snap.policy.expected_arcface_model_version,
         expected_quality_version=snap.policy.expected_quality_version,
-        reid_gallery_counts=None
-        if counts is None
-        else GalleryStateCountsOut(
-            pending_review=counts.pending_review,
-            auto_verified=counts.auto_verified,
-            operator_verified=counts.operator_verified,
-            rejected=counts.rejected,
-        ),
+        reid_gallery_counts=_counts_out(snap.reid_gallery_counts),
         cameras=[
             CameraCalibrationOut(camera_id=c.camera_id, calibrated=c.calibrated)
             for c in snap.cameras
@@ -96,4 +95,16 @@ async def get_identity_readiness(
         overlap_group_count=snap.overlap_group_count,
         identities_known=snap.identities_known,
         wearable_active_associations=snap.wearable_active_associations,
+        wearable_gallery_counts=_counts_out(snap.wearable_gallery_counts),
+    )
+
+
+def _counts_out(counts: GalleryStateCounts | None) -> GalleryStateCountsOut | None:
+    if counts is None:
+        return None
+    return GalleryStateCountsOut(
+        pending_review=counts.pending_review,
+        auto_verified=counts.auto_verified,
+        operator_verified=counts.operator_verified,
+        rejected=counts.rejected,
     )

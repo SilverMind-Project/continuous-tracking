@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.calibration.state import CalibrationState
-from app.domain import GalleryEmbedding, Identity
+from app.domain import GalleryEmbedding, GallerySeedSource, Identity
 from app.routers.readiness import router
 from app.services.camera_room_map import CameraRoomBinding, CameraRoomMap
 from app.services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
@@ -57,7 +57,13 @@ async def _gallery() -> InMemoryGalleryRepository:
     await repo.upsert_identity(
         Identity(identity_id=_IDENTITY, display_name="Someone", enrolled_at=T0, is_active=True)
     )
-    for index, state in enumerate(("pending_review", "pending_review", "auto_verified")):
+    for index, (state, source) in enumerate(
+        (
+            ("pending_review", GallerySeedSource.FACE),
+            ("pending_review", GallerySeedSource.WEARABLE_ROOM_ATTESTED),
+            ("auto_verified", GallerySeedSource.WEARABLE_ATTESTED),
+        )
+    ):
         await repo.upsert_gallery_entry(
             GalleryEmbedding(
                 gallery_entry_id=f"entry-{index}",
@@ -67,6 +73,7 @@ async def _gallery() -> InMemoryGalleryRepository:
                 quality=0.9,
                 origin_tracklet_id=f"tracklet-{index}",
                 state=state,
+                seed_source=source,
             )
         )
     return repo
@@ -115,6 +122,13 @@ async def test_reports_policies_counts_and_camera_calibration(
         "operator_verified": 0,
         "rejected": 0,
     }
+    # Rows a wearable taught, by state, for the readiness page's body-sample step.
+    assert body["wearable_gallery_counts"] == {
+        "pending_review": 1,
+        "auto_verified": 1,
+        "operator_verified": 0,
+        "rejected": 0,
+    }
     assert body["cameras"] == [
         {"camera_id": "hall", "calibrated": False},
         {"camera_id": "kitchen", "calibrated": True},
@@ -138,6 +152,7 @@ async def test_without_gallery_or_tracker_reports_null_not_zero(
     body = next(_client(service)).get("/internal/identity/readiness").json()
 
     assert body["reid_gallery_counts"] is None
+    assert body["wearable_gallery_counts"] is None
     assert body["identities_known"] is None
     assert body["overlap_group_count"] is None
     assert body["cameras"] == []

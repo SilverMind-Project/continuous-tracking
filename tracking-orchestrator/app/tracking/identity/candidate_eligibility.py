@@ -1,10 +1,11 @@
-"""Pure eligibility gate for governed ReID gallery candidate creation (M04).
+"""Pure eligibility gate for governed ReID gallery candidate creation.
 
-Decides whether one detection's evidence may become a ``pending_review``
-gallery row. No I/O, no repository access: :class:`ReIDCandidateStage`
-(``app/pipeline/stages/reid_candidates.py``) calls this and then persists via
-``GalleryRepository.create_review_candidate``. See the cts-identity-governance
-skill for the authority rules this encodes.
+Decides whether one detection's evidence may become a gallery row, and in which state. No I/O,
+no repository access: :class:`ReIDCandidateStage` (``app/pipeline/stages/reid_candidates.py``)
+calls this and then persists via ``GalleryRepository.create_review_candidate``. A candidate is
+seeded either by a recognized face on the detection (:class:`FaceSeed`) or by an attested
+wearable association on its PH (:class:`WearableSeed`); see the cts-identity-governance skill
+for the authority and sensor-attested label rules this encodes.
 """
 
 from __future__ import annotations
@@ -13,7 +14,13 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from ...domain import FaceAnchor, OrientationBin
+from ...domain import (
+    FaceAnchor,
+    GallerySeedSource,
+    OrientationBin,
+    WearableAttestationGrade,
+    WearableEvidence,
+)
 
 
 @dataclass(frozen=True)
@@ -42,20 +49,63 @@ class CandidatePolicy:
     # cross-version compatibility partitioning meaningless).
     model_version: str = ""
     preprocessing_version: str = "v1"
+    # Wearable-attested seeding. Off by default; startup refuses it unless the wearable channel
+    # itself is live, because an auto_verified row votes at once.
+    wearable_seeding_enabled: bool = False
+    # At most one wearable seed per (identity, orientation) per interval, so a sedentary person
+    # does not fill the gallery with near-duplicates of one pose.
+    wearable_min_seed_interval_s: float = 120.0
+    # Skip a wearable seed whose cosine to any same-day row of the identity and orientation is
+    # above this, keeping the gallery diverse.
+    wearable_max_similarity_to_recent: float = 0.92
+    # Room-attested seeds are reviewed by hand; this caps them per identity per UTC day so the
+    # ReID Review Queue stays reviewable.
+    wearable_room_grade_max_per_day: int = 10
+
+    def __post_init__(self) -> None:
+        if self.wearable_min_seed_interval_s < 0.0:
+            raise ValueError("reid_candidates.wearable_min_seed_interval_s must be >= 0")
+        if not 0.0 < self.wearable_max_similarity_to_recent <= 1.0:
+            raise ValueError("reid_candidates.wearable_max_similarity_to_recent must be in (0, 1]")
+        if self.wearable_room_grade_max_per_day < 0:
+            raise ValueError("reid_candidates.wearable_room_grade_max_per_day must be >= 0")
+
+
+@dataclass(frozen=True)
+class FaceSeed:
+    """A recognized face on the detection, proposing its own identity."""
+
+    anchor: FaceAnchor
+
+
+@dataclass(frozen=True)
+class WearableSeed:
+    """An attested wearable association on the detection's PH, proposing the tag's member.
+
+    ``detection_faces`` are every face the face stage produced for this detection (live and
+    shadow-only), so the conflict gate sees a recognition that never reached live evidence.
+    """
+
+    evidence: WearableEvidence
+    detection_faces: tuple[FaceAnchor, ...] = ()
+
+
+Seed = FaceSeed | WearableSeed
 
 
 @dataclass(frozen=True)
 class CandidateEligibility:
     """Result of :func:`evaluate_candidate`. ``reason`` is ``""`` iff eligible.
 
-    ``mint_state`` is only meaningful when ``eligible`` is True: it is the
-    ``reid_gallery`` lifecycle state the candidate should be created in,
-    either ``"pending_review"`` or ``"auto_verified"`` (M02, decision D3).
+    ``mint_state`` and ``seed_source`` are only meaningful when ``eligible`` is True:
+    ``mint_state`` is the ``reid_gallery`` lifecycle state the candidate is created in
+    (``"pending_review"`` or ``"auto_verified"``), ``seed_source`` its provenance.
     """
 
     eligible: bool
     reason: str
     mint_state: str = "pending_review"
+    seed_source: GallerySeedSource = GallerySeedSource.FACE
 
 
 def _ineligible(reason: str) -> CandidateEligibility:
@@ -65,7 +115,7 @@ def _ineligible(reason: str) -> CandidateEligibility:
 def evaluate_candidate(
     *,
     committed_identity_id: str | None,
-    face_anchor: FaceAnchor | None,
+    seed: Seed | None,
     embedding: Sequence[float] | None,
     quality: float,
     orientation: OrientationBin,
@@ -74,18 +124,28 @@ def evaluate_candidate(
 ) -> CandidateEligibility:
     """Evaluate whether one detection may seed a governed gallery candidate.
 
-    Every gate below is fail-closed: an ineligible detection produces nothing,
-    never a degraded or unlabeled row. The identity-equality gate
-    (``identity_mismatch``) is unconditional and is the direct fix for the
-    confirmed gallery seed-identity mismatch bug (F3): a face naming a
-    different person than the PH's committed identity must never seed under
-    the held label.
+    Every gate is fail-closed: an ineligible detection produces nothing, never a degraded or
+    unlabeled row. The identity-equality gate (``identity_mismatch``) is unconditional on both
+    paths: neither a face nor a tag naming a different person than the PH's committed identity
+    may seed under the held label.
     """
     if not committed_identity_id:
         return _ineligible("no_identity")
 
-    if face_anchor is None:
+    if isinstance(seed, WearableSeed):
+        return _evaluate_wearable_seed(
+            committed_identity_id=committed_identity_id,
+            seed=seed,
+            embedding=embedding,
+            quality=quality,
+            orientation=orientation,
+            orientation_confidence=orientation_confidence,
+            cfg=cfg,
+        )
+
+    if seed is None:
         return _ineligible("no_face_anchor")
+    face_anchor = seed.anchor
 
     if face_anchor.recognition_state != "recognized":
         return _ineligible("face_not_recognized")
@@ -103,20 +163,9 @@ def evaluate_candidate(
     ):
         return _ineligible("face_quality_too_low")
 
-    if orientation == OrientationBin.UNKNOWN:
-        return _ineligible("unknown_orientation")
-
-    if orientation_confidence < cfg.seed_orientation_min_confidence:
-        return _ineligible("low_orientation_confidence")
-
-    if not embedding:
-        return _ineligible("no_embedding")
-
-    if not all(math.isfinite(v) for v in embedding) or all(v == 0.0 for v in embedding):
-        return _ineligible("non_finite_embedding")
-
-    if quality < cfg.min_quality:
-        return _ineligible("low_quality")
+    shared = _shared_gates(embedding, quality, orientation, orientation_confidence, cfg)
+    if shared is not None:
+        return shared
 
     # Auto-verify mint rule: only a *calibrated* confidence at or
     # above the bar mints auto_verified. Raw ArcFace similarity is never
@@ -132,3 +181,83 @@ def evaluate_candidate(
         mint_state = "auto_verified"
 
     return CandidateEligibility(eligible=True, reason="", mint_state=mint_state)
+
+
+def _evaluate_wearable_seed(
+    *,
+    committed_identity_id: str,
+    seed: WearableSeed,
+    embedding: Sequence[float] | None,
+    quality: float,
+    orientation: OrientationBin,
+    orientation_confidence: float,
+    cfg: CandidatePolicy,
+) -> CandidateEligibility:
+    """Gate a wearable-attested seed. The grade decides the mint state, never the operator.
+
+    Trajectory grade mints ``auto_verified`` (the wearable placed the person on this track);
+    room grade mints ``pending_review`` and votes only after an operator approves it, because a
+    sole-occupant inference is weaker than a matched trajectory.
+    """
+    evidence = seed.evidence
+    if not cfg.wearable_seeding_enabled:
+        return _ineligible("wearable_seeding_disabled")
+
+    if not evidence.attested:
+        return _ineligible("wearable_not_attested")
+
+    if evidence.identity_id != committed_identity_id:
+        return _ineligible("identity_mismatch")
+
+    # Stricter than the face path: the wearable cannot see the face, so any recognition of
+    # someone else on this detection, at any similarity, vetoes the seed.
+    if any(
+        face.recognition_state == "recognized"
+        and face.person_id is not None
+        and face.person_id != committed_identity_id
+        for face in seed.detection_faces
+    ):
+        return _ineligible("face_conflict")
+
+    shared = _shared_gates(embedding, quality, orientation, orientation_confidence, cfg)
+    if shared is not None:
+        return shared
+
+    if evidence.attestation_grade == WearableAttestationGrade.TRAJECTORY:
+        return CandidateEligibility(
+            eligible=True,
+            reason="",
+            mint_state="auto_verified",
+            seed_source=GallerySeedSource.WEARABLE_ATTESTED,
+        )
+    return CandidateEligibility(
+        eligible=True,
+        reason="",
+        mint_state="pending_review",
+        seed_source=GallerySeedSource.WEARABLE_ROOM_ATTESTED,
+    )
+
+
+def _shared_gates(
+    embedding: Sequence[float] | None,
+    quality: float,
+    orientation: OrientationBin,
+    orientation_confidence: float,
+    cfg: CandidatePolicy,
+) -> CandidateEligibility | None:
+    """Orientation, embedding, and crop-quality gates every seed path applies, in this order."""
+    if orientation == OrientationBin.UNKNOWN:
+        return _ineligible("unknown_orientation")
+
+    if orientation_confidence < cfg.seed_orientation_min_confidence:
+        return _ineligible("low_orientation_confidence")
+
+    if not embedding:
+        return _ineligible("no_embedding")
+
+    if not all(math.isfinite(v) for v in embedding) or all(v == 0.0 for v in embedding):
+        return _ineligible("non_finite_embedding")
+
+    if quality < cfg.min_quality:
+        return _ineligible("low_quality")
+    return None

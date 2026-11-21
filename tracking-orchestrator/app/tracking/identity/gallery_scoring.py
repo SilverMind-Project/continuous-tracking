@@ -15,7 +15,7 @@ from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ...domain import GalleryEmbedding
+from ...domain import GalleryEmbedding, GallerySeedSource
 
 _VERIFIED_STATE = "operator_verified"
 _AUTO_VERIFIED_STATE = "auto_verified"
@@ -30,6 +30,10 @@ class GalleryScoringConfig:
     # face matches minted directly. Confidence is strictly bounded below
     # operator_verified's full trust.
     auto_verified_trust_multiplier: float = 1.5
+    # Trust for auto_verified rows minted from a trajectory-attested wearable association.
+    # Below a face-minted row because the wearable never saw the person's face; an operator
+    # approval lifts the row to operator_verified and full trust like any other row.
+    wearable_trust_multiplier: float = 1.25
     recency_half_life_days: float = 7.0
     identified_entry_boost_min_sim: float = 0.65
     identified_entry_min_likelihood: float = 0.80
@@ -53,6 +57,7 @@ class ScoredHit:
 
 def _trust_multiplier(
     state: str,
+    seed_source: GallerySeedSource,
     cfg: GalleryScoringConfig,
     on_nonvoting_state: Callable[[], None],
 ) -> float:
@@ -67,6 +72,8 @@ def _trust_multiplier(
     if state == _VERIFIED_STATE:
         return cfg.verified_trust_multiplier
     if state == _AUTO_VERIFIED_STATE:
+        if seed_source == GallerySeedSource.WEARABLE_ATTESTED:
+            return cfg.wearable_trust_multiplier
         return cfg.auto_verified_trust_multiplier
     on_nonvoting_state()
     return 1.0
@@ -107,7 +114,7 @@ def score_hits(
             logit = cfg.identified_entry_min_likelihood
             boosted = True
 
-        trust = _trust_multiplier(entry.state, cfg, on_nonvoting_state)
+        trust = _trust_multiplier(entry.state, entry.seed_source, cfg, on_nonvoting_state)
         recency = _recency_factor(entry.seen_at, now, cfg.recency_half_life_days)
         weighted_logit = logit * trust * recency
 

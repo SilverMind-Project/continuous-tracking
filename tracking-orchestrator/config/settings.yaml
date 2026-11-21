@@ -438,6 +438,11 @@ resolver:
   # (M03, decision D2: 7.0 -> 2.0 below).
   gallery_verified_trust_multiplier: 2.0
   gallery_auto_verified_trust_multiplier: 1.5
+  # Vote trust of an auto_verified row minted from a trajectory-attested wearable association
+  # (seed_source wearable_attested). Below face-minted rows (1.5) and operator-verified rows
+  # (2.0): the wearable placed the person on the track but never saw the face. An operator can
+  # demote or reject these rows in the ReID review queue.
+  gallery_wearable_trust_multiplier: 1.25
   # Recency half-life shortened from 7 to 2 days (identity-continuity M03,
   # decision D2): SOLIDER-REID embeddings are clothing-dominated, and
   # clothing validity is a step function at wardrobe change, not a smooth
@@ -505,6 +510,11 @@ resolver:
   # Maximum span (seconds) a backfill may relabel backward from the commit
   # time, regardless of how much earlier the PH's Unknown history extends.
   backfill_max_range_s: 14400.0
+  # Wearable-attested backfill: when a wearable association reaches trajectory attestation,
+  # relabel the PH's identity-NULL rows over the attested segment (NULL-only, the same clips and
+  # cap as above, shadow under backfill_shadow). Room-grade attestation never backfills. Stays
+  # false until the owner confirms that attested intervals may be backfilled.
+  enable_wearable_backfill: false
 
   # External identity evidence from cc.identity_assertions (identity-continuity
   # M09): reCamera face sightings and other CC-side identifications, matched
@@ -567,6 +577,19 @@ reid_candidates:
   # reduced trust multiplier. Set above 1.0 to disable auto-verify minting
   # entirely (rollback path) without touching candidate creation itself.
   auto_verify_min_confidence: 0.90
+  # Wearable-attested seeding: when no face seed qualifies and the detection's PH carries an
+  # attested wearable association naming its committed identity, mint a body sample from the
+  # wearable. Trajectory grade mints auto_verified (seed_source wearable_attested, vote trust
+  # resolver.gallery_wearable_trust_multiplier); room grade mints pending_review and votes only
+  # after operator approval. Off until the wearable channel itself is enabled and its shadow
+  # review passed; startup refuses true unless wearable.mode is "enabled".
+  wearable_seeding_enabled: false
+  # Seconds between two wearable seeds of one identity and orientation (seed spacing).
+  wearable_min_seed_interval_s: 120.0
+  # Cosine above which a wearable seed is skipped as a near-duplicate of a same-day row.
+  wearable_max_similarity_to_recent: 0.92
+  # Room-grade seeds per identity per UTC day; they all wait for review, so keep the queue small.
+  wearable_room_grade_max_per_day: 10
 
 # Keyframe sampler
 sampler:
@@ -861,6 +884,24 @@ wearable:
   duplicate_guard_min_probability: 0.90
   swap_conflict_count: 3
   swap_conflict_window_s: 600.0
+  # Image-only evaluation: wearable truth scores what the cameras alone would decide. For a
+  # sampled share of attested PH resolutions the resolver re-decides without the wearable
+  # channel twice: control without any wearable-taught gallery row, treatment with them. In
+  # both arms no row seen in the last exclusion_s votes (a row cannot vote for the stretch that
+  # minted it), so the arms differ only in older wearable-taught rows. Seconds accumulate per
+  # arm, outcome, and grade, and persist per identity and UTC day.
+  # Each sampled evaluation issues gallery queries, so the rate ships 0.0; the rollout uses 0.1.
+  evaluation:
+    sample_rate: 0.0
+    exclusion_s: 600.0
+    # A PH gap longer than this between two sampled evaluations counts no time.
+    max_gap_s: 30.0
+  supervision:
+    # Offer the emitted faces of wearable-attested PHs to person-identification-service, which
+    # keeps them as sensor_attested calibration candidates for operator audit and promotion
+    # (never enrollment or recognition on their own). person-identification-service must also
+    # have calibration_capture.attestation_enabled on, or every offer is a buffer miss.
+    face_attestation: "off"
 
 # Environment label (dev / staging / production)
 env: production

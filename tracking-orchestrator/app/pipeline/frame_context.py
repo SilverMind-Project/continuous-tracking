@@ -21,10 +21,12 @@ if TYPE_CHECKING:
         FloorPoint,
         IdentityDecision,
         IdentityRevision,
+        ImageOnlyEvaluation,
         ObservationGeometry,
         OrientationBin,
         PostureType,
         WearableAssociationTransition,
+        WearableEvidence,
         WorldFrameSnapshot,
     )
     from ..inference.evidence import (
@@ -139,6 +141,12 @@ class FrameContext:
     wearable_association_transitions: list[WearableAssociationTransition] = field(
         default_factory=list
     )
+    # Accepted wearable evidence per PH this round (every context of the round: it is per PH).
+    # Producer: WorldTrackingStage. Consumer: ReIDCandidateStage (wearable-attested seeds).
+    wearable_evidence_by_ph: dict[str, WearableEvidence] = field(default_factory=dict)
+    # Producer: WorldTrackingStage (primary context only, once per tracker round).
+    # Consumer: ImageOnlyEvaluationStage.
+    image_only_evaluations: list[ImageOnlyEvaluation] = field(default_factory=list)
 
     # --- Stage: publish ---
     identities: dict[str, tuple[str, float]] = field(default_factory=dict)

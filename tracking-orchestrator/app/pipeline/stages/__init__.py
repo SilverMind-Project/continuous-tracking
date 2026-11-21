@@ -6,6 +6,7 @@ from .detection_backfill import DetectionBackfillStage
 from .face_identity import FaceIdentityStage
 from .fall_detection import FallDetectionConfig, FallDetectionStage
 from .fetch import FetchStage
+from .image_only_evaluation import ImageOnlyEvaluationStage
 from .inference import InferenceStage
 from .keyframes import KeyframeStage
 from .posture_stage import PostureStage
@@ -18,6 +19,7 @@ from .revisions import RevisionsStage
 from .spatial_projection import SpatialProjectionStage
 from .trajectory import ClosePHStage, TrajectoryStage
 from .wearable_associations import WearableAssociationPersistStage
+from .wearable_face_attestation import WearableFaceAttestationStage
 from .world_tracking import WorldTrackingStage
 
 __all__ = [
@@ -29,6 +31,7 @@ __all__ = [
     "FallDetectionStage",
     "FetchStage",
     "FrameStage",
+    "ImageOnlyEvaluationStage",
     "InferenceStage",
     "KeyframeStage",
     "PostureStage",
@@ -42,6 +45,7 @@ __all__ = [
     "TrailsStage",
     "TrajectoryStage",
     "WearableAssociationPersistStage",
+    "WearableFaceAttestationStage",
     "WorldTrackingStage",
     "timed_phase",
 ]

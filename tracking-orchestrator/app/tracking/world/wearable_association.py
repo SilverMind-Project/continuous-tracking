@@ -869,6 +869,7 @@ class WearableAssociationTracker:
                 matched_fixes=pair.matched_fixes,
                 mean_residual_m=pair.mean_residual_m,
                 newest_fix_at=pair.newest_fix_at,
+                segment_id=active_seg.segment_id,
             )
 
             # Observe residual histogram for trajectory-class matches.

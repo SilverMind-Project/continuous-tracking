@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -32,6 +33,9 @@ from ..domain import (
     IdentityRevision,
     IdentityRevisionJob,
     ProjectionAck,
+    WearableAssociationSegment,
+    WearableAssociationTransition,
+    WearableAttestationGrade,
 )
 from ..observability import metrics as _metrics
 from ..storage.base import IdentityDecisionRepositoryProtocol, PHRepositoryProtocol
@@ -55,6 +59,8 @@ BACKFILL_SCHEMA_VERSION = "1"
 # just the PH, with a short TTL rather than a per-process single-shot.
 _RATE_LIMIT_TTL_S = 600.0
 _AFTER_OPERATOR_RANGE = timedelta(microseconds=1)
+# A trajectory segment lasts minutes; remembering handled ids for an hour covers its life.
+_WEARABLE_DONE_TTL_S = 3600.0
 
 
 @dataclass(frozen=True)
@@ -71,6 +77,10 @@ class BackfillConfig:
     enabled: bool = False
     shadow: bool = True
     max_range_s: float = 14400.0
+    # Second trigger: a wearable association reaching trajectory attestation backfills the PH's
+    # identity-NULL rows over the attested segment. Independent of ``enabled`` (the face
+    # trigger); shares ``shadow`` and ``max_range_s``.
+    wearable_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -137,6 +147,8 @@ class UnknownBackfillService:
         self._cfg = config
         # (ph_id, identity_id) -> last attempt monotonic time.
         self._rate_limit: dict[tuple[str, str], float] = {}
+        # Wearable segments already handled -> monotonic time; one backfill per segment.
+        self._wearable_done: dict[str, float] = {}
 
     async def process(
         self,
@@ -144,15 +156,78 @@ class UnknownBackfillService:
         outcome_decisions: list[IdentityDecision],
         ph_born_at_by_id: dict[str, datetime],
         event_time: datetime,
+        wearable_transitions: Sequence[WearableAssociationTransition] = (),
+        captured_at: datetime | None = None,
     ) -> None:
-        """Scan a frame's outcome decisions for qualifying backfill triggers."""
-        if not self._cfg.enabled:
-            return
+        """Scan a round's outcome decisions and wearable segment transitions for triggers."""
+        if self._cfg.enabled:
+            for decision in outcome_decisions:
+                if not _trigger_matches(decision):
+                    continue
+                await self._handle_candidate(decision, ph_born_at_by_id, event_time)
 
-        for decision in outcome_decisions:
-            if not _trigger_matches(decision):
-                continue
-            await self._handle_candidate(decision, ph_born_at_by_id, event_time)
+        if self._cfg.wearable_enabled:
+            for transition in wearable_transitions:
+                segment = transition.segment
+                if segment.attestation_grade != WearableAttestationGrade.TRAJECTORY:
+                    continue
+                await self._handle_wearable_segment(segment, captured_at or event_time)
+
+    async def _handle_wearable_segment(
+        self, segment: WearableAssociationSegment, end: datetime
+    ) -> None:
+        """Backfill identity-NULL rows over one trajectory-attested segment, once per segment.
+
+        The range starts at the segment's start: each backfilled interval rests on direct
+        sensor evidence for that interval, unlike a posterior commit whose trust would be
+        inherited backward. Room-grade attestation never backfills. The same clips apply as for
+        the face trigger: a different-identity decision, an operator range, the span cap.
+        """
+        if segment.segment_id in self._wearable_done:
+            return
+        self._wearable_done[segment.segment_id] = time.monotonic()
+        self._prune_wearable_done()
+
+        range_or_skip = await self._compute_range(
+            segment.ph_id, segment.identity_id, segment.started_at, end
+        )
+        if isinstance(range_or_skip, SkipReason):
+            self._record_skip(range_or_skip.reason)
+            return
+        backfill_range = range_or_skip
+        for reason in backfill_range.clip_reasons:
+            _metrics.metrics.identity_backfill_clip_total.labels(reason=reason).inc()
+        _metrics.metrics.identity_backfill_range_seconds.observe(
+            (backfill_range.end - backfill_range.start).total_seconds()
+        )
+        if self._cfg.shadow:
+            _metrics.metrics.identity_backfill_total.labels(
+                mode="shadow", outcome="wearable_shadow"
+            ).inc()
+            logger.info(
+                "unknown_backfill_shadow",
+                trigger="wearable_attested",
+                ph_id=segment.ph_id,
+                identity_id=segment.identity_id,
+                segment_id=segment.segment_id,
+                range_start=backfill_range.start.isoformat(),
+                range_end=backfill_range.end.isoformat(),
+                clip_reasons=list(backfill_range.clip_reasons),
+            )
+            return
+        await self._apply(
+            segment.ph_id,
+            segment.identity_id,
+            backfill_range,
+            evidence_source="wearable",
+            applied_outcome="wearable_applied",
+        )
+
+    def _prune_wearable_done(self) -> None:
+        now = time.monotonic()
+        stale = [k for k, ts in self._wearable_done.items() if now - ts >= _WEARABLE_DONE_TTL_S]
+        for key in stale:
+            del self._wearable_done[key]
 
     async def _handle_candidate(
         self,
@@ -268,7 +343,15 @@ class UnknownBackfillService:
 
         return BackfillRange(start=start, end=commit_time, clip_reasons=tuple(clip_reasons))
 
-    async def _apply(self, ph_id: str, new_identity_id: str, r: BackfillRange) -> None:
+    async def _apply(
+        self,
+        ph_id: str,
+        new_identity_id: str,
+        r: BackfillRange,
+        *,
+        evidence_source: str = "direct_face",
+        applied_outcome: str = "applied",
+    ) -> None:
         revision_id = str(uuid.uuid4())
 
         try:
@@ -321,7 +404,7 @@ class UnknownBackfillService:
             reason="unknown_backfill",
             applied_at=r.end,
             rewritten_rows=0,
-            evidence=IdentityEvidence(evidence_sources=["direct_face"]),
+            evidence=IdentityEvidence(evidence_sources=[evidence_source]),
             revision_kind="inferred_backfill",
             range_start=r.start,
             range_end=r.end,
@@ -333,9 +416,12 @@ class UnknownBackfillService:
         if self._publisher is not None:
             await self._publisher.publish_many([revision])  # type: ignore[attr-defined]
 
-        _metrics.metrics.identity_backfill_total.labels(mode="enabled", outcome="applied").inc()
+        _metrics.metrics.identity_backfill_total.labels(
+            mode="enabled", outcome=applied_outcome
+        ).inc()
         logger.info(
             "unknown_backfill_applied",
+            evidence_source=evidence_source,
             ph_id=ph_id,
             identity_id=new_identity_id,
             revision_id=revision_id,

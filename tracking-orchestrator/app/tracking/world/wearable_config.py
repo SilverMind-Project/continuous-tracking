@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from app.domain import WEARABLE_MODES, WearableMode
+
+FaceAttestationMode = Literal["off", "enabled"]
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,20 @@ class WearableConfig:
     swap_conflict_count: int = 3
     swap_conflict_window_s: float = 600.0
 
+    # Image-only evaluation: the share of attested PH resolutions that are re-scored without the
+    # wearable channel, once without wearable-taught gallery rows (control) and once with them
+    # (treatment); in both, rows seen in the last ``evaluation_exclusion_s`` do not vote. 0.0 is
+    # off.
+    evaluation_sample_rate: float = 0.0
+    evaluation_exclusion_s: float = 600.0
+    # A gap between two sampled evaluations of one PH longer than this counts no time (the PH
+    # or its tag was away); the next evaluation starts a new interval.
+    evaluation_max_gap_s: float = 30.0
+
+    # Offer emitted faces of attested PHs to person-identification-service's operator-gated
+    # attested-exemplar queue. "off" sends nothing.
+    face_attestation: FaceAttestationMode = "off"
+
     def __post_init__(self) -> None:
         if self.mode not in WEARABLE_MODES:
             raise ValueError(f"wearable.mode must be one of {WEARABLE_MODES}, got {self.mode!r}")
@@ -78,6 +95,14 @@ class WearableConfig:
             raise ValueError("wearable.p_max_room must be in (0, p_max]")
         if self.llr_scale <= 0.0:
             raise ValueError("wearable.llr_scale must be positive")
+        if not 0.0 <= self.evaluation_sample_rate <= 1.0:
+            raise ValueError("wearable.evaluation.sample_rate must be in [0, 1]")
+        if self.evaluation_exclusion_s < 0.0:
+            raise ValueError("wearable.evaluation.exclusion_s must be >= 0")
+        if self.evaluation_max_gap_s <= 0.0:
+            raise ValueError("wearable.evaluation.max_gap_s must be positive")
+        if self.face_attestation not in ("off", "enabled"):
+            raise ValueError("wearable.supervision.face_attestation must be 'off' or 'enabled'")
         if self.weight_multiplier <= 0.0:
             raise ValueError("wearable.weight_multiplier must be positive")
         if not 0.0 < self.room_match_eps < 0.5:
