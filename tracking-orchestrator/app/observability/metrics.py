@@ -685,7 +685,7 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
         ),
         identity_quality_gate_blocks_total=_counter(
             "cts_identity_quality_gate_blocks_total",
-            "Identity commits or face locks suppressed by the PH quality gate.",
+            "Identity commits suppressed by the PH quality gate.",
         ),
         identity_flips_total=_counter(
             "cts_identity_flips_total",

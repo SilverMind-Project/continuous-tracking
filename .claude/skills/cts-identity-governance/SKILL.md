@@ -72,7 +72,7 @@ person-id additionally returns `None` for any identity outside the artifact's
 owner recalibrates. Changing the quality scorer means refitting calibration and bumping
 `face_id.expected_quality_version` together. The resolved value is also written to
 `face_observation_stats.calibrated_confidence` (migration 0006) for the face resolution report;
-the stats row never feeds resolution. `FaceIdClient.identify_crops` sends a `CaptureContext`
+the stats row never feeds resolution. `FaceIdentificationClient.identify_crops` sends a `CaptureContext`
 (camera, capture time, crop padding, JPEG quality) so person-id can sample faces for household
 calibration; the context carries no identity claim.
 
@@ -246,14 +246,17 @@ minting state is `pending_review` unless the calibrated confidence also clears
 `reid_candidates.auto_verify_min_confidence` (default 0.90), in which case it mints straight into
 `auto_verified`; raw (uncalibrated) confidence never mints `auto_verified` (fail-closed, same
 posture as the ArcFace authority gate). The per-(identity, orientation) working-set cap
-(`reid_candidates.max_entries_per_orientation`, default 10) counts `pending_review` +
+(`reid_candidates.max_per_identity_orientation`, default 10) counts `pending_review` +
 `auto_verified` + `operator_verified` rows (`PENDING_AND_VERIFIED` in `app/storage/gallery.py`)
 within the active vote window (`seen_since = capture_time - gallery_vote_max_age_s`), never
 `rejected` or `expired` rows and never rows already outside the vote window.
 Review mutations go through `apply_review_action`/`compensate_review` only; retention expiry goes
 through `GalleryRetentionService` (`app/services/gallery_retention.py`, default `enabled` mode;
 14d `auto_verified`, 30d `pending_review`, 90d `operator_verified`, deleting vector and crop on
-expiry and keeping audit metadata), never raw SQL or `_pool`.
+expiry and keeping audit metadata), never raw SQL or `_pool`. Enrollment roster synchronization
+and complete identity purge run through `IdentityRosterSyncService` and
+`GalleryRepository.purge_identity`; read `reference/roster-sync-and-purge.md` before adding any
+new `identity_id`-keyed table or in-memory buffer.
 
 `app/storage/gallery.py` exports two vocabulary constants: `VERIFIED_ONLY` (`operator_verified`
 only, the default for the one admin/list surface with no vote-path caller) and `VOTING_STATES`

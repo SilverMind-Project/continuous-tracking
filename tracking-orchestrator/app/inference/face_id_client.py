@@ -712,8 +712,7 @@ def _parse_face(
     nx2 = cx1 + (fx2 / crop_w) * crop_w_norm
     ny2 = cy1 + (fy2 / crop_h) * crop_h_norm
 
-    # An older service sends only the legacy "similarity" alias.
-    raw_sim = float(face.get("raw_similarity", face.get("similarity", 0)))
+    raw_sim = float(face.get("similarity", 0))
     cal_conf_raw = face.get("calibrated_confidence")
     interocular_raw = face.get("interocular_px")
     second_sim_raw = face.get("second_best_similarity")

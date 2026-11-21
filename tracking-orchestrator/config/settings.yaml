@@ -247,10 +247,10 @@ signal:
   gait_slowing_warning_decline_frac: 0.20
   gait_slowing_warning_speed_m_s: 0.6
 
-# Agitation index signal (Milestone 4)
+# Agitation index signal
 #
 # Defaults to disabled (agitation_enabled: false). Enable per-deployment only
-# after caregiver annotation feedback (M4 task 3) provides validation evidence.
+# after caregiver annotation feedback provides validation evidence.
 # Evidence grade: experimental. Severity capped at warning.
 #
 # Threshold rationale:
@@ -285,7 +285,7 @@ signal.agitation:
   agitation_weight_entropy: 0.3
   agitation_weight_excursion: 0.2
 
-# Fall detection fast path (Milestone 2)
+# Fall detection fast path
 #
 # Threshold rationale:
 #
@@ -378,8 +378,8 @@ pipeline:
     # Read by: main.py → PipelineConfig(identity_rewrite_on_face_commit=)
     rewrite_on_face_commit: true
 
-  # Adaptive ReID cadence (M5.1): skip SOLIDER embeddings in unambiguous
-  # single-resident steady-state frames.  Ships shadow-first: the policy
+  # Adaptive ReID cadence: skip SOLIDER embeddings in unambiguous
+  # single-resident steady-state frames. Ships shadow-first: the policy
   # evaluates and counts would-skip decisions without actually skipping.
   # Flip enabled: true only after shadow rate >= 60 % on single-resident replay.
   adaptive_reid:
@@ -437,10 +437,8 @@ resolver:
   commit_margin_dense: 0.20
   identified_entry_boost_min_sim: 0.65
   identified_entry_min_likelihood: 0.80
-  # Gallery vote scoring (M01): one scorer applies these to every gallery
-  # query path (multiview, single-query fallback, shadow). Numeric defaults
-  # unchanged from the pre-M01 hardcoded values, except recency half-life
-  # (M03, decision D2: 7.0 -> 2.0 below).
+  # Gallery vote scoring: one central scorer applies these parameters to every
+  # gallery query path (multiview, single-query fallback, and shadow).
   gallery_verified_trust_multiplier: 2.0
   gallery_auto_verified_trust_multiplier: 1.5
   # Vote trust of an auto_verified row minted from a trajectory-attested wearable association
@@ -448,20 +446,16 @@ resolver:
   # (2.0): the wearable placed the person on the track but never saw the face. An operator can
   # demote or reject these rows in the ReID review queue.
   gallery_wearable_trust_multiplier: 1.25
-  # Recency half-life shortened from 7 to 2 days (identity-continuity M03,
-  # decision D2): SOLIDER-REID embeddings are clothing-dominated, and
-  # clothing validity is a step function at wardrobe change, not a smooth
-  # 7-day decay. The hard cutoff below encodes the step; this half-life
-  # handles staleness inside the window.
+  # SOLIDER-REID embeddings encode clothing, which changes daily; a 2-day
+  # half-life keeps yesterday's outfit weak inside the vote window while the
+  # hard cutoff below encodes the step change at wardrobe turnover.
   gallery_recency_half_life_days: 2.0
-  # Hard vote-age cutoff in seconds (identity-continuity M03, decision D4):
-  # gallery entries older than this contribute zero vote weight on every
-  # path (resolver multiview/fallback/shadow queries and the tracker's
-  # verified-ReID disagreement probe). null/0/absent disables the cutoff
-  # (config-only rollback). Precondition: M02's auto_verified population
-  # must be accumulating in production before this default is relied upon,
-  # or the resolver loses its ReID vote every morning (V4) -- see the M03
-  # milestone doc for the production precondition check.
+  # Hard vote-age cutoff in seconds (capture time): gallery entries older than
+  # this contribute zero vote weight on every path (resolver multiview,
+  # fallback, shadow queries, and the tracker's verified-ReID disagreement
+  # probe). null/0/absent disables the cutoff. Precondition: same-day
+  # auto_verified rows must accumulate in production before relying on a 12 h
+  # cutoff, or the resolver loses its ReID vote every morning.
   gallery_vote_max_age_s: 43200
   # The embedding_coherence_* keys only take effect when
   # enable_embedding_coherence_boost is true.
@@ -470,8 +464,7 @@ resolver:
   embedding_coherence_min_sim: 0.70
   embedding_coherence_boost: 2.0
   # Sticky maintenance: hold committed identity unless strongly contradicted.
-  # Enabled 2026-06-02 after the make ci guardrails (two_people_one_room,
-  # resident_plus_stranger) passed green. Staged rollout phase 1.
+  # Guarded by two-person and resident-plus-stranger replay tests.
   enable_sticky_maintenance: true
   # A recognized face for another identity at or above this raw ArcFace cosine similarity
   # contradicts a held identity.
@@ -479,7 +472,7 @@ resolver:
   contradiction_posterior_prob: 0.80
   contradiction_posterior_margin: 0.20
 
-  # Rich face evidence — three-valued recognition weights.
+  # Rich face evidence: three-valued recognition weights.
   candidate_face_weight_multiplier: 1.0
   face_present_unknown_unknown_mass: 0.10
   frontality_full_yaw_deg: 15.0
@@ -491,10 +484,9 @@ resolver:
   # handoffs while refusing weak relative/clothing matches.
   cross_gt_face_propagation_threshold: 0.72
   cross_gt_face_propagation_max_gts: 4
-  # Multi-view gallery query — per-orientation ReID with max-over-views.
-  # Enabled 2026-06-02 (M4) after the UNKNOWN-complement leak fix and guardrails:
-  # back-view retrieval commits via max-over-views; orthogonal stranger stays
-  # UNKNOWN. Benefit ramps as the gallery accumulates non-front prototypes.
+  # Multi-view gallery query: per-orientation ReID with max-over-views.
+  # Back-view retrieval commits via max-over-views while keeping orthogonal
+  # strangers Unknown; benefit ramps as non-front prototypes accumulate.
   enable_multiview_gallery: true
   # Fraction of frames where the multiview-gallery shadow comparison runs
   # while enable_multiview_gallery is false (measurement only). 0.0 = disabled;
@@ -502,14 +494,12 @@ resolver:
   multiview_shadow_sample_rate: 0.0
   seed_orientation_min_confidence: 0.5
 
-  # Unknown-segment backfill (identity-continuity M04). On a qualifying first
-  # calibrated-face commit of a previously Unknown PH, retroactively attribute
-  # the PH's Unknown history to that identity: an inferred revision range plus
-  # a relabel of identity-NULL person_trajectories/room_dwells rows. Staged
-  # rollout: off, then shadow (metrics/logs only, no writes), then enabled.
-  # Depends on the same calibration artifact as M02/M03/M09 (see the
-  # identity-continuity M00 program doc's 2026-07-19 correction): dormant in
-  # production until that artifact is deployed, same as those milestones.
+  # Unknown-segment backfill. On a qualifying first calibrated-face commit of a
+  # previously Unknown PH, retroactively attribute the PH's Unknown history to
+  # that identity: an inferred revision range plus a NULL-only relabel of
+  # person_trajectories and room_dwells rows. Staged rollout: off, then shadow
+  # (metrics/logs only, no writes), then enabled. Dormant until a compatible
+  # face calibration artifact is deployed in person-identification-service.
   enable_unknown_backfill: false
   backfill_shadow: true
   # Maximum span (seconds) a backfill may relabel backward from the commit
@@ -521,14 +511,13 @@ resolver:
   # false until the owner confirms that attested intervals may be backfilled.
   enable_wearable_backfill: false
 
-  # External identity evidence from cc.identity_assertions (identity-continuity
-  # M09): reCamera face sightings and other CC-side identifications, matched
-  # to CTS observations at room or floor granularity. Rollout is shadow-first:
-  # the matcher and metrics always run once the producer publishes; "shadow"
-  # records outcome metrics without injecting anchors into the resolver.
-  # Flip to "enabled" only after >= 1 week of live shadow data shows
-  # would_name_unknown materially nonzero and an acceptable disagrees rate
-  # (see the M09 milestone doc's flip criteria and delete off-ramp).
+  # External identity evidence from cc.identity_assertions: reCamera face
+  # sightings and other CC-side identifications matched to CTS observations at
+  # room or floor granularity. Rollout is shadow-first: the matcher and metrics
+  # always run once the producer publishes; "shadow" records outcome metrics
+  # without injecting anchors into the resolver. Flip to "enabled" only after
+  # >= 1 week of live shadow data shows material unknown-naming with an
+  # acceptable disagreement rate.
   cc_assertion_mode: shadow
   # Same recognizer as native ArcFace, but a cross-fleet spatial match is
   # weaker association than a same-frame native anchor. Calibrated by shadow
@@ -558,11 +547,11 @@ resolver:
   # posterior other evidence already supports but cannot carry one alone.
   uncalibrated_face_max_likelihood: 0.55
 
-# Governed ReID gallery candidate creation (M04). The only pipeline write
-# path into reid_gallery: ReIDCandidateStage -> create_review_candidate,
-# always pending_review, always with crop/frame provenance. require_calibrated_face
-# defaults true: without a deployed calibration artifact this fails closed
-# (no automatic candidates) rather than seeding on raw ArcFace similarity.
+# Governed ReID gallery candidate creation. The only pipeline write path into
+# reid_gallery: ReIDCandidateStage -> create_review_candidate, always with crop
+# and frame provenance. require_calibrated_face defaults true so the pipeline
+# fails closed without a deployed calibration artifact rather than seeding on
+# raw ArcFace similarity.
 reid_candidates:
   enabled: true
   require_calibrated_face: true
@@ -576,11 +565,10 @@ reid_candidates:
   # model_version is read separately from triton.reid_model (the live Triton
   # model identifier); this key only covers the crop preprocessing pipeline.
   preprocessing_version: "v1"
-  # Identity-continuity M02 (decision D3): a candidate whose calibrated
-  # direct-face confidence is at or above this bar mints straight into
-  # auto_verified instead of pending_review, so it votes immediately at a
-  # reduced trust multiplier. Set above 1.0 to disable auto-verify minting
-  # entirely (rollback path) without touching candidate creation itself.
+  # A candidate whose calibrated direct-face confidence clears this bar mints
+  # straight into auto_verified instead of pending_review, so it votes
+  # immediately at a reduced trust multiplier while remaining operator-governable.
+  # Set above 1.0 to disable auto-verify minting without disabling candidate creation.
   auto_verify_min_confidence: 0.90
   # Wearable-attested seeding: when no face seed qualifies and the detection's PH carries an
   # attested wearable association, mint a body sample from the wearable. Trajectory grade mints
@@ -691,8 +679,8 @@ world_tracker:
   zupt_innov_chi2: 2.0
   zupt_velocity_sigma_m_s: 0.05
   height_sigma_m: 0.15
-  # ---- Observation uncertainty model (M04 information-form fusion) ----
-  # Mirror observation_model.py module constants; tune against M09 acceptance fixtures.
+  # ---- Observation uncertainty model (information-form fusion) ----
+  # Mirror observation_model.py module constants; tune against fusion acceptance fixtures.
   k_cal: 1.0                        # bias-floor gain: R_cal = (k_cal * residual_m)^2 * I (m^2)
   base_footpoint_sigma_px: 4.0      # detector bbox-bottom localization noise (px, 1 sigma)
   occluded_footpoint_inflation: 8.0  # sigma multiplier when feet are hidden or bbox truncated
@@ -702,7 +690,7 @@ world_tracker:
   # frames before snapshot camera_id/keyframe/room fallback switches.
   primary_switch_frames: 5
 
-  # ---- Cross-camera dedup (U1) ----
+  # ---- Cross-camera dedup ----
   dedup_enabled: true
   dedup_max_distance_m: 0.9
   dedup_residual_coeff_k: 1.0
@@ -713,29 +701,25 @@ world_tracker:
   # 0.0 disables the skew term; set to ~1.4 m/s to cover normal walking speed.
   dedup_time_skew_speed_m_s: 0.0
   # ---- PH revival ----
-  # M2 enabled 2026-06-02 (phase 1) after make ci guardrails passed.
+  # Reuse recently closed PHs across brief occlusions within revive_max_age_s.
   enable_ph_revival: true
   revive_max_age_s: 30.0
   revive_max_distance_m: 2.0
   revive_appearance_min_sim: 0.55
   # ---- Uncalibrated association relaxation ----
-  # M2 enabled 2026-06-02 (phase 1) after make ci guardrails passed.
+  # Widen chi-square gate and weight appearance higher on uncalibrated cameras.
   enable_uncalibrated_gate_relax: true
   uncalibrated_gate_chi2: 21.0
   uncalibrated_alpha_app: 0.7
   # ---- Multi-view ReID ----
-  # Enabled 2026-06-02 (M4): association appearance cost uses max-over-view
-  # prototypes; calibrated single-mean path unchanged. Covered by
-  # test_cost_matrix_multiview (back-prototype match) and shadow proofs.
+  # Association appearance cost uses max-over-view prototypes; calibrated
+  # single-mean path stays unchanged.
   enable_multiview_association: true
 
-  # ---- Cross-camera revival (M5) ----
-  # Enabled 2026-06-02 (stage after M2) once step-level guardrails passed:
-  # cross_camera_handoff links identity across cameras; the 2-camera stranger
-  # guardrail proves a stranger never inherits a resident's identity. Reads
-  # per-PH view_prototypes (no gallery dependency); appearance gate is an
-  # absolute cosine floor (cross_camera_revive_appearance_min_sim), not the
-  # normalize-to-1 posterior. M4 multiview stays OFF (staged next).
+  # ---- Cross-camera revival ----
+  # Links identity across cameras using per-PH view_prototypes (no gallery
+  # dependency) behind an absolute cosine floor so a stranger never inherits
+  # a resident's identity across a handoff.
   enable_cross_camera_revival: true
   cross_camera_min_plausibility: 0.05
   cross_camera_revive_appearance_min_sim: 0.60
@@ -749,9 +733,8 @@ world_tracker:
   enable_group_appearance_dedup: true
   dedup_group_appearance_min_sim: 0.75
 
-  # ---- Low-confidence detection recovery (M2.3 BYTE-style second association) ----
-  # Default OFF. Enable per-deployment after fixture proofs pass (same rollout
-  # pattern as M1-M6). When on, YOLO detections in [low_confidence_floor,
+  # ---- Low-confidence detection recovery (BYTE-style second association) ----
+  # Default OFF. When enabled, YOLO detections in [low_confidence_floor,
   # pipeline.detector_confidence) are offered in a second association pass
   # against already-open PHs only, with a tightened geometric gate.
   # False-negative risk: defended by stillness pathway (defense in depth).
@@ -772,11 +755,9 @@ world_tracker:
   # {band=high|low_only|empty} + cts_detector_lowband_boxes_total, to measure
   # whether the detector_confidence cut is hiding present people. Does NOT change
   # tracking (the low band is only counted, never fed to the tracker).
-  # TEMPORARILY ENABLED for the detection-gap root-cause measurement (2026-06-17);
-  # revert to false once the capture is complete.
   measure_low_confidence_band: false
 
-  # ---- Association covariance/point validation (M03) ----
+  # ---- Association covariance/point validation ----
   # Fail-closed validation of floor points and observation covariance before the
   # Mahalanobis gate. Non-finite points/covariance ALWAYS gate out regardless of
   # this flag (pure safety); this toggles the symmetry/PSD/trace-cap checks.
@@ -790,35 +771,31 @@ world_tracker:
   covariance_symmetry_tol_m2: 0.000001
   covariance_psd_tol_m2: -0.000000001
 
-  # ---- Typed authoritative identity evidence (M03 task 5; plumbed M12) ----
+  # ---- Typed authoritative identity evidence ----
   # Verified-ReID disagreement is a configurable strong cost, never a hard gate.
-  # M12 wired the per-observation verified-ReID identity input: when this flag
-  # is true, WorldTracker resolves each observation's identity from the
-  # operator_verified gallery before association and passes it in, so a body
-  # whose verified-ReID identity disagrees with a PH's committed identity pays
-  # reid_disagreement_cost. Left false pending the release-gated two-person
-  # golden-replay acceptance (see identity-integrity-rollout). Flipping it
-  # turns on the pre-association gallery lookup, so flip only after acceptance.
+  # When enabled, WorldTracker resolves each observation's identity from the
+  # operator_verified gallery before association and charges
+  # reid_disagreement_cost when it disagrees with a PH's committed identity.
+  # Left false until two-person replay acceptance justifies turning on the
+  # pre-association gallery lookup.
   enable_reid_disagreement_cost: false
   reid_disagreement_cost: 0.6
   # Minimum gallery cosine similarity for accepting a top operator_verified hit
   # as an observation's verified-ReID identity. Consulted only when the flag
   # above is true.
   reid_disagreement_min_similarity: 0.5
-  # Hard vote-age cutoff for the disagreement probe's gallery lookup
-  # (identity-continuity M03, decision D4), mirroring resolver.gallery_vote_max_age_s
-  # so the probe sees the same corpus the resolver votes with. Wired now so
-  # enabling enable_reid_disagreement_cost later inherits correct temporal
-  # behavior; inert while that flag is false. null/0/absent disables the cutoff.
+  # Hard vote-age cutoff for the disagreement probe's gallery lookup, mirroring
+  # resolver.gallery_vote_max_age_s so the probe sees the same corpus the
+  # resolver votes with. Inert while enable_reid_disagreement_cost is false;
+  # null/0/absent disables the cutoff.
   reid_disagreement_max_age_s: 43200
 
-  # ---- PH-local appearance contamination guard (M03 tasks 7-9) ----
+  # ---- PH-local appearance contamination guard ----
   # One bad association must not immediately pollute a PH's appearance state.
   # An embedding updates gallery_mean / view prototypes / mean_quality only when
   # finite, non-degenerate, quality-qualified, orientation-valid, and either
   # consistent with the matching orientation prototype or initialising a new
-  # qualified orientation. Default true: this is a property of the shipped
-  # milestone; the flag is a kill-switch that defaults ON for rollback only.
+  # qualified orientation. Default true; kill-switch for rollback only.
   enable_appearance_outlier_rejection: true
   appearance_min_quality: 0.30
   # L2 norm at/below this is degenerate (zero vector) and rejected; real SOLIDER
@@ -831,7 +808,7 @@ world_tracker:
   # Minimum orientation confidence to initialise a NEW orientation prototype.
   appearance_new_orientation_min_confidence: 0.30
 
-# Gait and mobility analytics (Milestone 3)
+# Gait and mobility analytics
 #
 # Threshold rationale:
 #
@@ -865,25 +842,17 @@ gait:
   min_daily_bouts: 3
   min_daily_walking_s: 60
 
-# DL-M07: daily appearance profile + same_clothes_suspected evaluator.
+# Daily appearance profile + same_clothes_suspected evaluator.
 # Timezone is shared with `app.timezone` (day-over-day "yesterday's clothes"
-# is a local-calendar concept, and CC's day-boundary logic must agree with
-# this one, per the Daily Living program's local-day rule).
+# is a local-calendar concept, and CC's day-boundary logic must agree with this).
 hygiene:
   same_clothes:
-    # Shadow-first (DL10): persist profiles and log/metric the candidate
-    # similarity, but never publish, until the backtest supports a flip.
+    # Shadow-first: persist profiles and log/metric the candidate similarity,
+    # but never publish, until an appearance backtest supports a flip.
     enabled: false
     # Day-over-day centroid cosine at or above this is "suspiciously similar".
-    # Calibrated by the DL-M07 backtest before live use; 0.90 is the
-    # pre-backtest default.
-    # 2026-07-25 backtest (scripts/backtest_appearance.py --days 21 against the
-    # live deployment DB): only 2 identities carry current_identity_id, 4 total
-    # qualifying PH rows, no identity has 2 consecutive local days each with
-    # min_samples_per_day; no similarity distribution could be computed.
-    # Threshold stays at this pre-backtest default; report at
-    # daily-living-m07-backtest-report.md. Re-run once identity attribution is
-    # denser (see the report's decision section).
+    # Pre-backtest default; recalibrate via scripts/backtest_appearance.py once
+    # multi-day identity attribution produces consecutive qualifying local days.
     similarity_threshold: 0.90
     # Fewer quality-weighted PH samples than this on either day: no verdict
     # (insufficient evidence, fail-silent per the worker's DataQuality pattern).

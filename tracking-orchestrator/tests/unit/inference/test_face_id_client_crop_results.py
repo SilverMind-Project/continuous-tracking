@@ -26,12 +26,10 @@ _CONTEXT = CaptureContext(
 _FACE = {
     "person_id": "resident-alpha",
     "name": "Resident Alpha",
-    "confidence": 0.52,
     "bbox": [10.0, 20.0, 40.0, 60.0],
     "recognition_state": "recognized",
     "best_candidate_id": "resident-alpha",
     "similarity": 0.52,
-    "raw_similarity": 0.52,
     "det_score": 0.88,
     "face_width_px": 30.0,
     "face_height_px": 40.0,
@@ -165,9 +163,9 @@ def test_out_of_range_jpeg_quality_is_rejected(quality: int) -> None:
 
 
 @pytest.mark.asyncio
-async def test_legacy_confidence_is_ignored_and_raw_similarity_is_read() -> None:
+async def test_legacy_confidence_is_ignored_and_similarity_is_read() -> None:
     # An older service still sends "confidence"; it never reaches FaceResult.
-    face = {**_FACE, "confidence": 0.99, "raw_similarity": 0.52, "similarity": 0.52}
+    face = {**_FACE, "confidence": 0.99, "similarity": 0.52}
     client = await _client(
         httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
     )
@@ -180,8 +178,8 @@ async def test_legacy_confidence_is_ignored_and_raw_similarity_is_read() -> None
 
 
 @pytest.mark.asyncio
-async def test_service_without_raw_similarity_falls_back_to_similarity() -> None:
-    face = {k: v for k, v in _FACE.items() if k != "raw_similarity"} | {"similarity": 0.61}
+async def test_similarity_is_read_directly_into_raw_similarity() -> None:
+    face = {**_FACE, "similarity": 0.61}
     client = await _client(
         httpx.MockTransport(lambda _r: httpx.Response(200, json={"faces": [face]}))
     )

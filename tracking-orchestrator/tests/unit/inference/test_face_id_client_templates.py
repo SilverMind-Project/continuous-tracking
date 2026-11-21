@@ -45,7 +45,7 @@ def _face(**changes: Any) -> dict[str, Any]:
         "bbox": [10.0, 20.0, 40.0, 60.0],
         "recognition_state": "recognized",
         "best_candidate_id": "alice",
-        "raw_similarity": 0.52,
+        "similarity": 0.52,
         "det_score": 0.88,
     } | changes
 
