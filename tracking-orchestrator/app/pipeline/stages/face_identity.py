@@ -153,7 +153,7 @@ class FaceIdentityStage(FrameStage):
         live_config: LiveConfigHolder | None = None,
         last_face_id_by_tracklet: dict[str, datetime] | None = None,
         face_service_version: str = "",
-        expected_arcface_model_version: str = "",
+        expected_recognizer_version: str = "",
         expected_preprocessing_version: str = "",
         expected_quality_version: str = "heuristic-v1",
         head_region_policy: HeadRegionPolicy | None = None,
@@ -178,7 +178,7 @@ class FaceIdentityStage(FrameStage):
         self._face_id_camera_configs = face_id_camera_configs or {}
         self._live_config = live_config
         self._face_service_version = face_service_version
-        self._expected_arcface_model_version = expected_arcface_model_version
+        self._expected_recognizer_version = expected_recognizer_version
         self._expected_preprocessing_version = expected_preprocessing_version
         self._expected_quality_version = expected_quality_version
         # Cooldown dict keyed by stable track ID (not ephemeral detection_id).
@@ -236,8 +236,8 @@ class FaceIdentityStage(FrameStage):
             return None
         if face.quality is None or face.quality.version != self._expected_quality_version:
             return None
-        if self._expected_arcface_model_version and (
-            face.arcface_model_version != self._expected_arcface_model_version
+        if self._expected_recognizer_version and (
+            face.recognizer_version != self._expected_recognizer_version
         ):
             return None
         if self._expected_preprocessing_version and (

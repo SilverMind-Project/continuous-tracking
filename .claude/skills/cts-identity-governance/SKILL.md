@@ -58,9 +58,14 @@ keeps a face's `calibrated_confidence` only when all of these hold, and otherwis
 - `calibration_status == "ready"`;
 - `calibration_profile == "single_frame"` (`SINGLE_FRAME_PROFILE`). An artifact fitted for a
   multi-frame profile is never authoritative on a single frame;
-- `face.quality.version == face_id.expected_quality_version` (settings, default `heuristic-v1`).
-  A face without a quality block fails;
-- the ArcFace model and preprocessing versions match when they are configured.
+- `face.quality.version == face_id.expected_quality_version` (settings, default `heuristic-v1`;
+  non-default recognizer profiles qualify this as `heuristic-v1@<recognizer_version>` so a
+  recognizer change fails closed until recalibrated). A face without a quality block fails;
+- `face.recognizer_version == face_id.expected_recognizer_version` and `face.preprocessing_version`
+  matches `face_id.expected_preprocessing_version` when configured. (`FaceIdentificationClient`
+  decodes `recognizer_version` with a one-release fallback to the legacy `arcface_model_version`
+  wire alias, and `_build_face_id_config` keeps a one-release fallback to the legacy
+  `expected_arcface_model_version` settings key.)
 
 person-id additionally returns `None` for any identity outside the artifact's
 `covered_identities`, so a resident enrolled after the fit has no calibrated confidence until the

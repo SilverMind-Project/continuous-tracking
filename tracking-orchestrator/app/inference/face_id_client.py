@@ -65,7 +65,7 @@ class FaceResult:
     # Calibration fields. calibrated_confidence is None in any degraded state.
     calibrated_confidence: float | None = None
     calibration_status: str = "degraded_missing"
-    arcface_model_version: str = ""
+    recognizer_version: str = ""
     preprocessing_version: str = ""
     # Face size in pixels of the submitted crop (equal to frame pixels; crops are not resized).
     face_width_px: float = 0.0
@@ -731,7 +731,10 @@ def _parse_face(
         det_score=float(face.get("det_score", 0)),
         calibrated_confidence=float(cal_conf_raw) if cal_conf_raw is not None else None,
         calibration_status=str(face.get("calibration_status", "degraded_missing")),
-        arcface_model_version=str(face.get("arcface_model_version", "")),
+        # Decode boundary: prefer recognizer_version; accept arcface_model_version for one release.
+        recognizer_version=str(
+            face.get("recognizer_version") or face.get("arcface_model_version") or ""
+        ),
         preprocessing_version=str(face.get("preprocessing_version", "")),
         face_width_px=float(face.get("face_width_px", 0.0)),
         face_height_px=float(face.get("face_height_px", 0.0)),

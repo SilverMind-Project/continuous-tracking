@@ -88,10 +88,10 @@ face_id:
   # the wrong person at most 2% of the time. Rollback is setting "legacy".
   evidence_policy: shadow
   enabled: true
-  # M10: expected calibration versions. calibrated_confidence is set to None
-  # when the person-id response carries a different model or preprocessing version,
-  # ensuring the authority gate fails closed on model mismatches.
-  expected_arcface_model_version: "buffalo_l"
+  # Expected calibration versions. calibrated_confidence is set to None when the person-id
+  # response carries a different recognizer or preprocessing version, ensuring the authority gate
+  # fails closed on recognizer mismatches.
+  expected_recognizer_version: "buffalo_l"
   expected_preprocessing_version: "v1"
   # Face-quality scorer the calibration artifact was fitted on. A calibrated confidence from any
   # other scorer, or from a calibration profile other than single_frame, is ignored (fail closed).

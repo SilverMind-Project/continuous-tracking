@@ -279,3 +279,22 @@ def test_wearable_seeding_refused_unless_wearable_channel_running(
     live_policy = build("enabled")
     assert live_policy.wearable_seeding_enabled is True
     assert live_policy.wearable_channel_live is True
+
+
+def test_face_id_config_accepts_expected_recognizer_version_and_legacy_alias(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for key, value in ENV_FOR_SETTINGS.items():
+        monkeypatch.setenv(key, value)
+    data = _yaml()
+    assert data["face_id"]["expected_recognizer_version"] == "buffalo_l"
+    modern_cfg = _build_face_id_config(_settings(monkeypatch), camera_configs={})
+    assert modern_cfg.expected_recognizer_version == "buffalo_l"
+
+    legacy_data = _yaml()
+    legacy_data["face_id"].pop("expected_recognizer_version", None)
+    legacy_data["face_id"]["expected_arcface_model_version"] = "buffalo_l"
+    legacy_path = tmp_path / "settings-legacy.yaml"
+    legacy_path.write_text(yaml.safe_dump(legacy_data))
+    legacy_cfg = _build_face_id_config(Settings(legacy_path), camera_configs={})
+    assert legacy_cfg.expected_recognizer_version == "buffalo_l"

@@ -565,7 +565,7 @@ class TestWearableAssociationPersistStage:
                 face_templates_mode="off",
                 face_quality_mode="shadow",
                 cc_assertion_mode="shadow",
-                expected_arcface_model_version="buffalo_l",
+                expected_recognizer_version="buffalo_l",
                 expected_quality_version="heuristic-v1",
                 wearable_mode="shadow",
             ),

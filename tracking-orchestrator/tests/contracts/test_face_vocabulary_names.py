@@ -126,3 +126,11 @@ def test_face_id_settings_use_similarity_keys() -> None:
     assert re.search(r"^\s+contradiction_face_similarity:", text, re.MULTILINE)
     assert re.search(r"^\s+duplicate_identity_direct_face_min_similarity:", text, re.MULTILINE)
     assert re.search(r"^\s+face_conflict_min_similarity:", text, re.MULTILINE)
+    assert re.search(r"^\s+expected_recognizer_version:", text, re.MULTILINE)
+    assert not re.search(r"^\s+expected_arcface_model_version:", text, re.MULTILINE)
+
+
+def test_face_result_uses_recognizer_version() -> None:
+    names = _field_names(FaceResult)
+    assert "recognizer_version" in names
+    assert "arcface_model_version" not in names

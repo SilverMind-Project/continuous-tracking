@@ -694,7 +694,10 @@ def _build_face_id_config(
         min_raw_similarity=fi.as_float("min_raw_similarity"),
         enabled=fi.as_bool("enabled"),
         camera_configs=camera_configs,
-        expected_arcface_model_version=_optional_str(fi, "expected_arcface_model_version"),
+        expected_recognizer_version=(
+            _optional_str(fi, "expected_recognizer_version")
+            or _optional_str(fi, "expected_arcface_model_version")
+        ),
         expected_preprocessing_version=_optional_str(fi, "expected_preprocessing_version"),
         expected_quality_version=fi.as_str("expected_quality_version"),
         head_region=HeadRegionPolicy(
@@ -718,7 +721,7 @@ def _build_identity_policy_snapshot(config: PipelineConfig) -> IdentityPolicySna
         face_templates_mode=config.face_templates.mode,
         face_quality_mode=config.resolver.face_quality_mode,
         cc_assertion_mode=config.resolver.cc_assertion_mode,
-        expected_arcface_model_version=config.face_id.expected_arcface_model_version or None,
+        expected_recognizer_version=config.face_id.expected_recognizer_version or None,
         expected_quality_version=config.face_id.expected_quality_version,
         wearable_mode=config.wearable.mode,
         wearable_seeding_enabled=config.reid_candidates.wearable_seeding_enabled,

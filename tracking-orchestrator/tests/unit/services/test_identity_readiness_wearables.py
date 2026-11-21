@@ -169,7 +169,7 @@ async def test_readiness_wearable_learners_matches_report_formula_and_omits_pii(
             face_templates_mode="enabled",
             face_quality_mode="enabled",
             cc_assertion_mode="enabled",
-            expected_arcface_model_version="buffalo_l",
+            expected_recognizer_version="buffalo_l",
             expected_quality_version="heuristic-v1",
             wearable_mode="enabled",
             wearable_seeding_enabled=True,

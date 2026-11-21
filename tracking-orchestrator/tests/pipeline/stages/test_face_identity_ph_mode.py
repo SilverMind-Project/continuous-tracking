@@ -89,7 +89,7 @@ class _FakeFaceResult:
         raw_similarity: float,
         calibrated_confidence: float | None = None,
         calibration_status: str = "degraded_missing",
-        arcface_model_version: str = "buffalo_l",
+        recognizer_version: str = "buffalo_l",
         preprocessing_version: str = "v1",
         recognition_state: str = "recognized",
         calibration_profile: str = "single_frame",
@@ -105,7 +105,7 @@ class _FakeFaceResult:
         self.det_score = 0.85
         self.calibrated_confidence = calibrated_confidence
         self.calibration_status = calibration_status
-        self.arcface_model_version = arcface_model_version
+        self.recognizer_version = recognizer_version
         self.preprocessing_version = preprocessing_version
         self.face_width_px = 40.0
         self.face_height_px = 48.0
@@ -464,7 +464,7 @@ async def test_raw_similarity_0_95_with_null_calibrated_cannot_satisfy_authority
         face_id_min_raw_similarity=0.5,
         evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
-        expected_arcface_model_version="buffalo_l",
+        expected_recognizer_version="buffalo_l",
         expected_preprocessing_version="v1",
     )
 
@@ -493,7 +493,7 @@ async def test_calibrated_confidence_0_85_propagates_to_anchor():
         raw_similarity=0.90,
         calibrated_confidence=0.85,
         calibration_status="ready",
-        arcface_model_version="buffalo_l",
+        recognizer_version="buffalo_l",
         preprocessing_version="v1",
     )
     client.identify_crops.return_value = [_found(0, result)]
@@ -504,7 +504,7 @@ async def test_calibrated_confidence_0_85_propagates_to_anchor():
         face_id_min_raw_similarity=0.5,
         evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
-        expected_arcface_model_version="buffalo_l",
+        expected_recognizer_version="buffalo_l",
         expected_preprocessing_version="v1",
     )
 
@@ -522,7 +522,7 @@ async def test_calibrated_confidence_0_85_propagates_to_anchor():
 
 @pytest.mark.asyncio
 async def test_version_mismatch_nullifies_calibrated_confidence():
-    """When arcface_model_version from response doesn't match CTS expectation,
+    """When recognizer_version from response doesn't match CTS expectation,
     calibrated_confidence must be set to None on the FaceAnchor.
     """
     client = AsyncMock(spec=FaceIdentificationClient)
@@ -531,7 +531,7 @@ async def test_version_mismatch_nullifies_calibrated_confidence():
         raw_similarity=0.90,
         calibrated_confidence=0.88,
         calibration_status="ready",
-        arcface_model_version="some_other_model",  # mismatch
+        recognizer_version="some_other_model",  # mismatch
         preprocessing_version="v1",
     )
     client.identify_crops.return_value = [_found(0, result)]
@@ -542,7 +542,7 @@ async def test_version_mismatch_nullifies_calibrated_confidence():
         face_id_min_raw_similarity=0.5,
         evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
-        expected_arcface_model_version="buffalo_l",
+        expected_recognizer_version="buffalo_l",
         expected_preprocessing_version="v1",
     )
 
@@ -567,7 +567,7 @@ async def test_calibrated_confidence_propagates_to_face_evidence():
         raw_similarity=0.90,
         calibrated_confidence=0.82,
         calibration_status="ready",
-        arcface_model_version="buffalo_l",
+        recognizer_version="buffalo_l",
         preprocessing_version="v1",
     )
     client.identify_crops.return_value = [_found(0, result)]
@@ -578,7 +578,7 @@ async def test_calibrated_confidence_propagates_to_face_evidence():
         face_id_min_raw_similarity=0.5,
         evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
-        expected_arcface_model_version="buffalo_l",
+        expected_recognizer_version="buffalo_l",
         expected_preprocessing_version="v1",
     )
 
@@ -601,7 +601,7 @@ async def test_candidate_anchor_never_carries_calibrated_confidence():
         raw_similarity=0.35,
         calibrated_confidence=0.50,  # would be valid if recognized
         calibration_status="ready",
-        arcface_model_version="buffalo_l",
+        recognizer_version="buffalo_l",
         preprocessing_version="v1",
         recognition_state="candidate",
     )
@@ -614,7 +614,7 @@ async def test_candidate_anchor_never_carries_calibrated_confidence():
         face_id_min_raw_similarity=0.5,
         evidence_policy="legacy",
         face_id_camera_configs={"cam-1": FaceIdCameraConfig(enabled=True)},
-        expected_arcface_model_version="buffalo_l",
+        expected_recognizer_version="buffalo_l",
         expected_preprocessing_version="v1",
     )
 

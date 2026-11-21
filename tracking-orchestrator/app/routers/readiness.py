@@ -92,8 +92,13 @@ class IdentityReadinessResponse(BaseModel):
     cc_assertion_mode: str = Field(description="resolver.cc_assertion_mode")
     wearable_mode: str = Field(default="off", description="wearable.mode")
     closed_world_mode: str = Field(default="off", description="closed_world.mode")
+    expected_recognizer_version: str | None = Field(
+        default=None,
+        description="Face recognizer version calibrated faces must carry; null accepts any",
+    )
     expected_arcface_model_version: str | None = Field(
-        description="ArcFace model version calibrated faces must carry; null accepts any"
+        default=None,
+        description="Deprecated one-release alias of expected_recognizer_version",
     )
     expected_quality_version: str
     reid_gallery_counts: GalleryStateCountsOut | None = Field(
@@ -145,7 +150,8 @@ async def get_identity_readiness(
         cc_assertion_mode=snap.policy.cc_assertion_mode,
         wearable_mode=snap.policy.wearable_mode,
         closed_world_mode=snap.policy.closed_world_mode,
-        expected_arcface_model_version=snap.policy.expected_arcface_model_version,
+        expected_recognizer_version=snap.policy.expected_recognizer_version,
+        expected_arcface_model_version=snap.policy.expected_recognizer_version,
         expected_quality_version=snap.policy.expected_quality_version,
         reid_gallery_counts=_counts_out(snap.reid_gallery_counts),
         cameras=[

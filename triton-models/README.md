@@ -51,11 +51,12 @@ triton-models/
 │   └── 1/
 │       ├── model.onnx        FP32 ONNX, 52 MB
 │       └── model_qdq.onnx    QDQ ONNX, ~13 MB  ← active
-├── face-detector-scrfd/      Buffalo_L SCRFD detector (FP32 ONNX)
-├── face-recognition-arcface/ Buffalo_L ArcFace embeddings (FP32 ONNX)
-├── face-landmark-2d106/      Buffalo_L 106-point landmarks (FP32 ONNX)
-├── face-landmark-3d68/       Buffalo_L 68-point 3D landmarks (FP32 ONNX)
-├── face-attribute-genderage/ Buffalo_L gender/age attributes (FP32 ONNX)
+├── face-detector-scrfd/             Buffalo_L SCRFD detector (FP32 ONNX)
+├── face-recognition-arcface/        Buffalo_L ArcFace embeddings (FP32 ONNX)
+├── face-recognition-adaface-ir50/   AdaFace IR-50 candidate recognizer (FP32 ONNX, config only; weights exported locally)
+├── face-landmark-2d106/             Buffalo_L 106-point landmarks (FP32 ONNX)
+├── face-landmark-3d68/              Buffalo_L 68-point 3D landmarks (FP32 ONNX)
+├── face-attribute-genderage/        Buffalo_L gender/age attributes (FP32 ONNX)
 ├── embeddinggemma-300m/      Gemma 3 300M sentence embeddings (ONNX Runtime)
 │   ├── config.pbtxt
 │   └── 1/
@@ -67,8 +68,9 @@ triton-models/
     ├── export_yolo.py        YOLO26L .pt → ONNX
     ├── export_clip.py        CLIP ViT-L/14 vision encoder → ONNX
     ├── export_reid.py        SOLIDER-REID → ONNX (requires SOLIDER-REID repo)
-    ├── export_pose.py        RTMPose-m → ONNX (requires mmpose)
-    ├── download_florence.py  Download Florence-2 QDQ ONNX from onnx-community
+    ├── export_pose.py          RTMPose-m → ONNX (requires mmpose)
+    ├── export_adaface_onnx.py  AdaFace IR-50 checkpoint → FP32 ONNX + parity check
+    ├── download_florence.py    Download Florence-2 QDQ ONNX from onnx-community
     ├── download_models.py    One-shot download of all onnx-community models
     └── quantize_int8.py      Dynamic QDQ quantization for any ONNX model
 ```
@@ -86,6 +88,7 @@ Large ONNX files are managed through Git LFS.
 | RTMPose-m | `pose-rtmpose` | ONNX Runtime | 52 MB | **~13 MB** | `input` [N,3,256,192] | `simcc_x` [N,17,384], `simcc_y` [N,17,512] |
 | SCRFD | `face-detector-scrfd` | ONNX Runtime | 16.9 MB | Jetson repo | `input.1` [1,3,640,640] | 9 detection heads |
 | ArcFace R50 | `face-recognition-arcface` | ONNX Runtime | 174.4 MB | Jetson repo | `input.1` [1,3,112,112] | `683` [1,512] |
+| AdaFace IR-50 (candidate) | `face-recognition-adaface-ir50` | ONNX Runtime | local export | n/a | `input` [1,3,112,112] (BGR) | `embedding` [1,512] |
 | 2D landmarks | `face-landmark-2d106` | ONNX Runtime | 5.0 MB | Jetson repo | `data` [1,3,192,192] | `fc1` [1,212] |
 | 3D landmarks | `face-landmark-3d68` | ONNX Runtime | 143.6 MB | Jetson repo | `data` [1,3,192,192] | `fc1` [1,3309] |
 | Gender/age | `face-attribute-genderage` | ONNX Runtime | 1.3 MB | Jetson repo | `data` [1,3,96,96] | `fc1` [1,3] |
@@ -112,6 +115,11 @@ Startup fails when Triton is unavailable or any required Buffalo_L model is not
 ready. The service does not fall back to local ONNX Runtime or CUDA execution.
 
 **Total model repo: ~1.65 GB** (QDQ active + FP32 backups + embeddinggemma FP32).
+
+## Face recognizer licensing
+
+- **Buffalo_L (`face-detector-scrfd`, `face-recognition-arcface`, `face-landmark-2d106`, `face-landmark-3d68`, `face-attribute-genderage`)**: InsightFace code is MIT-licensed, but the pretrained Buffalo_L weights are distributed for **non-commercial research purposes only**. Deployers are responsible for model licensing compliance and must supply commercially licensed or self-trained weights for commercial deployments.
+- **AdaFace IR-50 (`face-recognition-adaface-ir50`)**: The `mk-minchul/AdaFace` repository code is MIT-licensed, but publicly released pretrained checkpoints trained on WebFace4M/WebFace12M or MS1MV2 inherit non-commercial academic dataset terms. Binary weights are not committed to this repository; run `triton-models/scripts/export_adaface_onnx.py` with a local checkpoint (including commercially licensed or self-trained weights) to export `triton-models/face-recognition-adaface-ir50/1/model.onnx`. Unlike `buffalo_l` (RGB), AdaFace expects BGR input tensors normalized as `(x - 127.5) / 127.5`, configured via `face_engine.profiles.adaface_ir50_webface4m` in `person-identification-service`.
 
 ## GPU vendor support
 

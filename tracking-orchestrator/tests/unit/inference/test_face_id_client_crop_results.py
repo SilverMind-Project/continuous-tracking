@@ -270,3 +270,25 @@ async def test_calibration_profile_is_parsed() -> None:
     [result] = await client.identify_crops([_crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)], _CONTEXT)
     assert result.faces[0].calibration_profile == "single_frame"
     await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_recognizer_version_preferred_and_legacy_alias_accepted() -> None:
+    modern = _FACE | {
+        "recognizer_version": "adaface_ir50_webface4m",
+        "arcface_model_version": "buffalo_l",
+    }
+    legacy = _FACE | {"arcface_model_version": "buffalo_l"}
+    responses = iter(
+        [
+            httpx.Response(200, json={"faces": [modern]}),
+            httpx.Response(200, json={"faces": [legacy]}),
+        ]
+    )
+    client = await _client(httpx.MockTransport(lambda _r: next(responses)))
+    results = await client.identify_crops(
+        [_crop(64, 64), _crop(64, 64)], [(0.0, 0.0, 1.0, 1.0)] * 2, _CONTEXT
+    )
+    assert results[0].faces[0].recognizer_version == "adaface_ir50_webface4m"
+    assert results[1].faces[0].recognizer_version == "buffalo_l"
+    await client.disconnect()

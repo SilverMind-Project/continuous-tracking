@@ -211,8 +211,8 @@ class FaceIdConfig:
     min_raw_similarity: float = 0.6
     enabled: bool = True
     camera_configs: dict[str, FaceIdCameraConfig] = field(default_factory=dict)
-    # expected versions for calibration compatibility gating on the CTS side.
-    expected_arcface_model_version: str = ""
+    # Expected versions for calibration compatibility gating on the CTS side.
+    expected_recognizer_version: str = ""
     expected_preprocessing_version: str = ""
     expected_quality_version: str = "heuristic-v1"
     head_region: HeadRegionPolicy = field(default_factory=HeadRegionPolicy)
@@ -811,7 +811,7 @@ class FrameProcessingPipeline:
                 face_id_camera_configs=self._config.face_id.camera_configs,
                 live_config=self._live_config,
                 last_face_id_by_tracklet=self._last_face_id_by_tracklet,
-                expected_arcface_model_version=self._config.face_id.expected_arcface_model_version,
+                expected_recognizer_version=self._config.face_id.expected_recognizer_version,
                 expected_preprocessing_version=self._config.face_id.expected_preprocessing_version,
                 expected_quality_version=self._config.face_id.expected_quality_version,
                 head_region_policy=self._config.face_id.head_region,

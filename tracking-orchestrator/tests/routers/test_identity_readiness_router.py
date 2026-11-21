@@ -39,13 +39,17 @@ class _Groups:
         return self.count
 
 
-def _policy(face_evidence_policy: str = "shadow", templates: str = "off") -> IdentityPolicySnapshot:
+def _policy(
+    face_evidence_policy: str = "shadow",
+    templates: str = "off",
+    expected_recognizer_version: str | None = "buffalo_l",
+) -> IdentityPolicySnapshot:
     return IdentityPolicySnapshot(
         face_evidence_policy=face_evidence_policy,
         face_templates_mode=templates,
         face_quality_mode="shadow",
         cc_assertion_mode="shadow",
-        expected_arcface_model_version=None,
+        expected_recognizer_version=expected_recognizer_version,
         expected_quality_version="heuristic-v1",
     )
 
@@ -124,7 +128,8 @@ async def test_reports_policies_counts_and_camera_calibration(
     body = response.json()
     assert body["face_evidence_policy"] == policy
     assert body["face_templates_mode"] == "shadow"
-    assert body["expected_arcface_model_version"] is None
+    assert body["expected_recognizer_version"] == "buffalo_l"
+    assert body["expected_arcface_model_version"] == "buffalo_l"
     assert body["reid_gallery_counts"] == {
         "pending_review": 2,
         "auto_verified": 1,
@@ -188,7 +193,7 @@ async def test_closed_world_readiness_reports_activity_and_gate_reason(
         face_templates_mode="off",
         face_quality_mode="shadow",
         cc_assertion_mode="shadow",
-        expected_arcface_model_version=None,
+        expected_recognizer_version=None,
         expected_quality_version="heuristic-v1",
         closed_world_mode="shadow",
     )

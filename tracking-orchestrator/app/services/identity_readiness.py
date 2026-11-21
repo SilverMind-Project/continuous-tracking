@@ -34,8 +34,8 @@ class IdentityPolicySnapshot:
     face_templates_mode: str
     face_quality_mode: str
     cc_assertion_mode: str
-    # None when the pipeline accepts any ArcFace model version.
-    expected_arcface_model_version: str | None
+    # None when the pipeline accepts any recognizer version.
+    expected_recognizer_version: str | None
     expected_quality_version: str
     wearable_mode: str = "off"
     wearable_seeding_enabled: bool = False
