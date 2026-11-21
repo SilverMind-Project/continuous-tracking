@@ -13,6 +13,7 @@ import yaml
 from app.config import Settings
 from app.main import (
     _build_appearance_settings,
+    _build_candidate_policy,
     _build_face_id_config,
     _build_face_template_policy,
     _build_resolver_config,
@@ -22,6 +23,7 @@ from app.main import (
 )
 from app.pipeline.frame_pipeline import FaceIdConfig, PipelineConfig
 from app.sampling.keyframe_sampler import SamplerConfig
+from app.tracking.identity.candidate_eligibility import CandidatePolicy
 from app.tracking.identity.face_template_buffer import FaceTemplatePolicy
 from app.tracking.identity_resolver import ResolverConfig
 from app.tracking.world.config import WorldTrackerConfig
@@ -171,6 +173,7 @@ def test_no_dead_settings() -> None:
         "sampler": _build_sampler_config,
         "face_id": _build_face_id_config,
         "face_templates": _build_face_template_policy,
+        "reid_candidates": _build_candidate_policy,
     }
     for section, builder in builder_by_section.items():
         source = inspect.getsource(builder)
@@ -188,6 +191,7 @@ def test_no_dead_settings() -> None:
         SamplerConfig: _build_sampler_config,
         FaceIdConfig: _build_face_id_config,
         FaceTemplatePolicy: _build_face_template_policy,
+        CandidatePolicy: _build_candidate_policy,
     }
     externally_supplied = {
         (FaceIdConfig, "camera_configs"),
@@ -212,3 +216,15 @@ def test_no_dead_settings() -> None:
     assert '"pipeline.min_keyframe_detection_confidence"' in main_source
     assert '"signal.enabled"' in main_source
     assert '"signal.interval_s"' in main_source
+
+
+def test_candidate_policy_is_built_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reid_candidates section reaches the stage; it was once built and never passed on."""
+    settings = _settings(monkeypatch)
+    data = _yaml()
+    policy = _build_candidate_policy(settings)
+    rc = data["reid_candidates"]
+    assert policy.model_version == data["triton"]["reid_model"] != ""
+    assert policy.max_per_identity_orientation == rc["max_per_identity_orientation"]
+    main_source = Path("app/main.py").read_text()
+    assert "reid_candidates=_build_candidate_policy(settings)" in main_source

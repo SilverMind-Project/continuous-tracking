@@ -709,6 +709,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resolver=resolver_config,
         world_tracker=world_tracker_config,
         wearable=wearable_config,
+        reid_candidates=_build_candidate_policy(settings),
         sampler=sampler_config,
         signals=_build_signal_config(settings),
         signals_enabled=settings.as_bool("signal.enabled"),
