@@ -122,11 +122,11 @@ class PostgresPHRepository:
                     observation_count, current_identity_id,
                     current_identity_committed_at,
                     last_independent_identity_evidence_at,
-                    state_mean, state_cov, gallery_mean, height_m,
+                    state_mean, state_cov, gallery_mean, height_m, height_sigma_m,
                     active_cameras, metadata, mean_quality, view_prototypes
                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15::jsonb, $16, $17
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                    $15, $16::jsonb, $17, $18
                 )
                 ON CONFLICT (ph_id) DO UPDATE SET
                     closed_at = EXCLUDED.closed_at,
@@ -148,6 +148,7 @@ class PostgresPHRepository:
                     state_cov = EXCLUDED.state_cov,
                     gallery_mean = EXCLUDED.gallery_mean,
                     height_m = EXCLUDED.height_m,
+                    height_sigma_m = EXCLUDED.height_sigma_m,
                     active_cameras = EXCLUDED.active_cameras,
                     metadata = EXCLUDED.metadata,
                     mean_quality = EXCLUDED.mean_quality,
@@ -166,6 +167,7 @@ class PostgresPHRepository:
                 list(ph.state_cov),
                 ph.gallery_mean,
                 ph.height_estimate_m,
+                ph.height_sigma_m,
                 list(ph.active_cameras),
                 json.dumps(
                     _json_object_from_domain(ph.metadata, column="PersonHypothesis.metadata")
@@ -1167,6 +1169,7 @@ def _row_to_ph(row: Any) -> PersonHypothesis:
         last_independent_identity_evidence_at=row.get("last_independent_identity_evidence_at"),
         gallery_mean=row["gallery_mean"],
         height_estimate_m=row.get("height_m"),
+        height_sigma_m=row.get("height_sigma_m"),
         active_cameras=frozenset(row["active_cameras"] or []),
         closed_at=row.get("closed_at"),
         last_floor_speed_m_s=0.0,

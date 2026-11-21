@@ -133,9 +133,11 @@ def collect_evidence_identity_ids(
     - A matched *candidate* (grey-zone) face anchor qualifies only when
       ``recognized_only`` is False — candidate faces corroborate posterior
       commits today but must not advance the independent-evidence clock.
-    - The ReID argmax qualifies when the distribution is non-empty, the
-      argmax is not ``"UNKNOWN"``, and its score is > 0.3 (the same floor
-      ``_build_evidence_ledger`` already uses).
+    - Every non-``"UNKNOWN"`` identity in the ReID distribution whose score is
+      > 0.3 qualifies (the same floor ``_build_evidence_ledger`` already uses).
+      Returning all qualifying identities instead of only the single argmax
+      prevents alphabetical tie-breaks when two residents wear similar clothes
+      and a corroborating channel (such as standing height) resolves the tie.
     - External evidence grades with ``refreshes_evidence_clock=False`` never
       advance the independent-evidence clock: excluded whenever
       ``recognized_only`` is True. They still qualify for general commit
@@ -162,9 +164,7 @@ def collect_evidence_identity_ids(
             calibrated_faces_only=calibrated_faces_only,
         )
     }
-    reid_id = _reid_evidence_identity(reid_likelihood)
-    if reid_id is not None:
-        ids.add(reid_id)
+    ids.update(_reid_evidence_identities(reid_likelihood))
     return frozenset(ids)
 
 
@@ -200,7 +200,7 @@ def identity_evidence_time(
         )
         if fa.person_id == identity_id
     ]
-    if _reid_evidence_identity(reid_likelihood) == identity_id:
+    if identity_id in _reid_evidence_identities(reid_likelihood):
         times.append(round_time)
     return max(times, default=None)
 
@@ -242,12 +242,15 @@ def _evidence_face_anchors(
             yield fa
 
 
-def _reid_evidence_identity(reid_likelihood: PosteriorDist) -> str | None:
-    """Return the ReID argmax when it is real evidence (not UNKNOWN, score above 0.3)."""
+def _reid_evidence_identities(reid_likelihood: PosteriorDist) -> frozenset[str]:
+    """Return every non-UNKNOWN identity with real ReID gallery support (score > 0.3)."""
     if not reid_likelihood.distribution:
-        return None
-    top_id, top_score = reid_likelihood.top_identity()
-    return top_id if top_id != "UNKNOWN" and top_score > 0.3 else None
+        return frozenset()
+    return frozenset(
+        ident
+        for ident, score in reid_likelihood.distribution.items()
+        if ident != "UNKNOWN" and score > 0.3
+    )
 
 
 # ---------------------------------------------------------------------------

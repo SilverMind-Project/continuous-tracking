@@ -45,9 +45,11 @@ Identity resolution uses this order:
 3. The existing PH posterior over operator-verified ReID gallery evidence.
 4. Bounded temporal prior.
 
-Height, propagated face evidence, raw ArcFace similarity, pending gallery entries, and
-track-local appearance prototypes are corroborating or tracking inputs only. They never create
-authority.
+Height (`HeightChannel`, `resolver.height_mode`: `off`, `shadow`, `enabled`; profiles in
+`identity_height_profiles` with `learned` taking precedence over `operator`), propagated face
+evidence, raw ArcFace similarity, pending gallery entries, and track-local appearance prototypes
+are corroborating or tracking inputs only. They never create authority or refresh the evidence
+clock.
 
 "Compatible calibration" is checked in one place,
 `FaceIdentityStage._resolve_calibrated_confidence` (`app/pipeline/stages/face_identity.py`). It
@@ -148,9 +150,11 @@ Face scores have four names, and each name means one thing:
   and conflict gates.
 - A conflict immediately yields `Unknown`; sticky maintenance cannot hide it.
 - The evidence clock advances only on identity-matched independent evidence: a direct
-  recognized ArcFace anchor whose `person_id` equals the committed identity, or a ReID vote
-  whose argmax equals the committed identity. Presence of *any* evidence in the frame is never
-  sufficient; smoothing mass in a likelihood distribution is not evidence. Gate with an explicit
+  recognized ArcFace anchor whose `person_id` equals the committed identity, a qualifying wearable
+  evidence channel, or a verified ReID gallery vote whose score for the committed identity exceeds
+  0.3 (not only the single alphabetical argmax, so a corroborating channel like height can resolve
+  an identical-clothing tie). Presence of *any* evidence in the frame is never sufficient;
+  smoothing mass in a likelihood distribution is not evidence. Gate with an explicit
   `evidence_identity_ids` set, never with `id in distribution`.
 
 Persist `last_independent_identity_evidence_at` separately from identity update timestamps.

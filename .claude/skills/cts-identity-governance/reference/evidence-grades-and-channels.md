@@ -32,7 +32,11 @@ pairs fail loudly with `KeyError` from `grade_of(anchor)`.
 `combine_channels(prior, channels)`:
 
 - Built-in channels run in canonical order: `FaceChannel` (`face_weight_multiplier`, default 3.0),
-  `GalleryChannel` (1.0), `HeightChannel` (`height_weight_multiplier`, default 1.5).
+  `GalleryChannel` (1.0), `HeightChannel` (`height_weight_multiplier`, default 0.15, applied as a
+  log-likelihood power `max(0.01, exp(-0.5 * w * z^2))` with `support_multiplier = 1.0`,
+  `"UNKNOWN": 0.5` neutral baseline, `evidence_at = None`, governed by `resolver.height_mode`:
+  `off`, `shadow`, `enabled`; profiles from `identity_height_profiles` where `learned` overrides
+  `operator`), and `WearableChannel` (`wearable.mode`).
 - For each identity, `combine_channels` multiplies `prior(id)` by each channel's factor in order:
   `1.0` when the channel is empty, `dist[id] * support_multiplier` when present, and Laplace fill
   `1 / (n + 1)` when absent from a non-empty channel.

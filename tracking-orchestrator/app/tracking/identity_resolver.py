@@ -46,6 +46,7 @@ from ..domain import (
     GallerySeedSource,
     Identity,
     IdentityDecision,
+    IdentityHeightProfile,
     IdentityResolvableEntity,
     IdentityRevision,
     ImageOnlyEvaluation,
@@ -58,6 +59,7 @@ from ..inference.evidence import FaceEvidence
 from ..observability import metrics
 from ..observability.metrics import WearableShadowOutcome
 from ..storage.base import VOTING_STATES, GalleryRepository
+from ..storage.height_profiles import IdentityHeightProfileRepository
 from .identity.channels import (
     ChannelLikelihood,
     EvidenceChannel,
@@ -192,6 +194,7 @@ class _PendingIdentityDecision:
 
 
 FaceQualityMode = Literal["off", "shadow", "enabled"]
+HeightMode = Literal["off", "shadow", "enabled"]
 
 
 @dataclass(frozen=True)
@@ -243,11 +246,16 @@ class ResolverConfig:
     # has half the weight of direct face evidence.
     propagated_face_weight_multiplier: float = 0.5
 
-    # Multiplier applied to height likelihood weights before combining.
-    # Height is a weak-but-useful demographic signal.  Default 1.5 means
-    # height evidence carries 1.5x the base weight, which is less than
-    # face (3.0) but more than neutral (1.0).
+    # Log-likelihood power applied to standing-height evidence when height_mode is enabled.
+    # Standing height is a corroborating clothing-independent cue (never grants authority or
+    # refreshes the evidence clock).
     height_weight_multiplier: float = 1.5
+
+    # Rollout mode for single-view standing height evidence:
+    # "off": ignored; "shadow": evaluates HeightChannel and counts disagreements in
+    # cts_identity_shadow_mismatch_total{feature="height"} without altering live decisions;
+    # "enabled": includes HeightChannel in the live Bayesian posterior.
+    height_mode: HeightMode = "shadow"
 
     # --- Evidence quality gates ---
     # Minimum PH crop-quality EMA needed for a new identity commit.
@@ -559,14 +567,20 @@ class IdentityResolver:
         config: ResolverConfig | None = None,
         gallery_cache: GalleryCache | None = None,
         wearable_config: WearableConfig | None = None,
+        height_profile_repo: IdentityHeightProfileRepository | None = None,
+        height_profiles: Sequence[IdentityHeightProfile] | None = None,
     ) -> None:
         self._gallery_repo = gallery_repo
+        self._height_profile_repo = height_profile_repo
         self._config = config or ResolverConfig()
         self._gallery_cache = gallery_cache
         self._wearable_config = wearable_config or WearableConfig()
         # Known identities for display names
         self._identities: dict[str, Identity] = {
             ident.identity_id: ident for ident in identities or []
+        }
+        self._height_profiles: dict[str, IdentityHeightProfile] = {
+            profile.identity_id: profile for profile in height_profiles or []
         }
         # Timestamps for the TTL-based identity-list cache.
         self._identities_loaded_at: datetime | None = (
@@ -584,7 +598,7 @@ class IdentityResolver:
             support_multiplier=1.0,
         )
         self._height_channel = HeightChannel(
-            identities_getter=lambda: self._identities,
+            height_profiles_getter=lambda: self._height_profiles,
             height_weight_multiplier=self._config.height_weight_multiplier,
         )
         self._wearable_channel = WearableChannel(
@@ -603,8 +617,10 @@ class IdentityResolver:
         return self._face_channel.likelihood_scale(grade)
 
     def invalidate_identity_cache(self) -> None:
-        """Invalidate the cached enrolled-identity roster and gallery cache."""
+        """Invalidate the cached enrolled-identity roster, height profiles, and gallery cache."""
         self._identities_loaded_at = None
+        if self._height_profile_repo is not None:
+            self._height_profiles = {}
         if self._gallery_cache is not None:
             self._gallery_cache.invalidate()
 
@@ -618,6 +634,7 @@ class IdentityResolver:
         face_evidence: list[FaceEvidence] | None = None,
         open_ph_identities: Mapping[str, str] | None = None,
         wearable_evidence: Mapping[str, WearableEvidence] | None = None,
+        ph_height_sigmas: dict[str, float] | None = None,
     ) -> ResolveOutcome:
         """Resolve identities for a batch of tracked entities.
 
@@ -649,6 +666,11 @@ class IdentityResolver:
         ):
             enrolled = await self._gallery_repo.list_identities(active_only=True)
             self._identities = {ident.identity_id: ident for ident in enrolled}
+            if self._height_profile_repo is not None:
+                loaded_profiles = await self._height_profile_repo.list_all()
+                self._height_profiles = {
+                    p.identity_id: p for p in loaded_profiles if p.identity_id in self._identities
+                }
             self._identities_loaded_at = now_dt
 
         # Shadow-only anchors feed their shadow evaluation and nothing else: from here on every
@@ -683,6 +705,7 @@ class IdentityResolver:
             face_evidence=tuple(augmented_evidence),
             ph_heights_m=ph_heights or {},
             ph_qualities=ph_qualities or {},
+            ph_height_sigmas_m=ph_height_sigmas or {},
             raw_face_anchors=tuple(new_face_anchors),
             raw_face_evidence=tuple(face_evidence or ()),
             wearable_evidence=wearable_evidence or {},
@@ -690,6 +713,8 @@ class IdentityResolver:
         )
 
         wearable_mode = self._wearable_config.mode
+        height_mode = self._config.height_mode
+        empty_height_ch = ChannelLikelihood("height", PosteriorDist({}), 1.0)
         pending_decisions: list[_PendingIdentityDecision] = []
         outcome_image_only: list[ImageOnlyEvaluation] = []
 
@@ -705,7 +730,14 @@ class IdentityResolver:
                 calibrated=live_calibrated,
             )
             gallery_ch = await self._gallery_channel.evaluate(entity, inputs)
-            height_ch = await self._height_channel.evaluate(entity, inputs)
+            raw_height_ch = (
+                await self._height_channel.evaluate(entity, inputs)
+                if height_mode != "off"
+                else empty_height_ch
+            )
+            height_ch = raw_height_ch if height_mode == "enabled" else empty_height_ch
+            if height_mode == "enabled" and height_ch.distribution.distribution:
+                metrics.metrics.height_evidence_frames_total.inc()
 
             raw_wearable_ev = inputs.wearable_evidence.get(entity.entity_id)
             live_wearable_ev = raw_wearable_ev if wearable_mode == "enabled" else None
@@ -863,6 +895,31 @@ class IdentityResolver:
                     arcface_authority=arcface_authority,
                     live_identity_id=decision.identity_id,
                 )
+            # Height shadow counterfactual: pure CPU over cached height profiles;
+            # counts disagreements without changing live decisions.
+            if (
+                height_mode == "shadow"
+                and arcface_authority is None
+                and raw_height_ch.distribution.distribution
+            ):
+                shadow_height_channels = (
+                    (face_res.likelihood, gallery_ch, raw_height_ch, wearable_ch)
+                    if live_wearable_ev is not None
+                    else (face_res.likelihood, gallery_ch, raw_height_ch)
+                )
+                height_shadow_eval = self._evaluate_channels_counterfactual(
+                    entity,
+                    prior,
+                    shadow_height_channels,
+                    face_likelihood=face_likelihood,
+                    reid_likelihood=reid_likelihood,
+                    best_face_similarity=best_face_conf,
+                    captured_at=captured_at,
+                    entity_quality=entity_quality,
+                    evidence_identity_ids=commit_evidence_ids,
+                    check_contradiction=True,
+                )
+                self._shadow_mismatch("height", decision.identity_id, height_shadow_eval)
             # Calibrated-policy shadow: pure CPU over this frame's anchors, so not sample-gated.
             if policy == "shadow" and self._has_recognized_face(
                 entity, augmented_anchors + shadow_face_anchors
@@ -1439,7 +1496,7 @@ class IdentityResolver:
         channels = (
             face_res.likelihood,
             self._gallery_channel.wrap(reid_likelihood, captured_at=captured_at),
-            ChannelLikelihood("height", height_likelihood, self._config.height_weight_multiplier),
+            ChannelLikelihood("height", height_likelihood, 1.0),
         )
         evidence_ids = self._face_channel.collect_commit_evidence_ids(
             entity,
@@ -1678,7 +1735,7 @@ class IdentityResolver:
         shadow_channels = (
             shadow_face_res.likelihood,
             self._gallery_channel.wrap(reid_likelihood, captured_at=captured_at),
-            ChannelLikelihood("height", height_likelihood, self._config.height_weight_multiplier),
+            ChannelLikelihood("height", height_likelihood, 1.0),
         )
         live_eval = self._evaluate_commit(
             entity,
@@ -2095,9 +2152,12 @@ class IdentityResolver:
         self,
         entity: IdentityResolvableEntity,
         ph_heights: dict[str, float],
+        ph_height_sigmas: dict[str, float] | None = None,
     ) -> PosteriorDist:
         """Delegate height likelihood evaluation to :class:`HeightChannel`."""
-        return self._height_channel.evaluate_heights(entity, ph_heights).distribution
+        return self._height_channel.evaluate_heights(
+            entity, ph_heights, ph_height_sigmas
+        ).distribution
 
     # ------------------------------------------------------------------
     # Posterior combination
@@ -2123,7 +2183,7 @@ class IdentityResolver:
                 ChannelLikelihood(
                     "height",
                     height if height is not None else PosteriorDist({}),
-                    self._config.height_weight_multiplier,
+                    1.0,
                 ),
             ),
         )

@@ -107,11 +107,38 @@ where suitability comes from the shared descriptor (penalize foreshortened head-
 and occluded lower bodies) and the `orientation` bin (side views best separate sit/stand/lie).
 `_resolve` requires a margin between the top-two fused scores before flipping class.
 
+## Single-view standing height metrology
+
+All height geometry lives in one pure module: `app/tracking/camera_pose.py`, called by
+`HeightEstimationStage` (`app/pipeline/stages/height_estimation.py`) right after `InferenceStage`.
+
+- **Pose recovery (`pose_from_homography`).** Recovers camera rotation `R` and centre `C` in the
+  shared floor frame from the floor-to-image homography and `focal_length_px(width_px, horizontal_fov_deg)`
+  (`cts_contracts.optics`). Handles both right-handed and left-handed (top-left-origin floor-plan)
+  frames by picking the camera-above-floor sign (`C_z > 0`) without flipping `det(R)` during polar
+  orthonormalization.
+- **Startup and sync validation (`validate_camera_pose`).** Rejects cameras with missing profile
+  fields (`horizontal_fov_deg`, `mounting_height_m`, `tilt_deg`), `|C_z - mounting_height_m| > 0.25 m`,
+  or `|tilt_recovered - tilt_deg| > 10 deg`. `CameraPoseCache` caches per
+  `(cal_version, profile_version, width_px, height_px)` and increments
+  `cts_camera_height_pose_unreliable_total{reason}` once per epoch.
+- **Metrology, uncertainty, and upright gate.** `is_upright_standing` requires a non-truncated box
+  inside the central image band, aspect ratio `>= 1.3`, and visible shoulders above hips above
+  ankles with torso tilt `<= 25 deg`. `standing_height_m` intersects the head ray with the vertical
+  line through the calibrated foot point; `standing_height_with_sigma` propagates the 2x2 floor
+  footpoint covariance, `sigma_head_px = 4.0`, and `sigma_model_m = 0.04 m` via central differences.
+- **PH running state (`update_ph_height_estimate`).** World tracking fuses accepted measurements by
+  inverse variance with a 3-sigma innovation gate (rejecting sitting outliers) and floors
+  `PersonHypothesis.height_sigma_m` at `0.02 m`. Accepted observations also append to
+  `ph_height_samples` (14-day TimescaleDB retention) for `HeightProfileLearner`.
+
 ## Where things live
 
 | Concern | Module |
 |---|---|
 | Jacobian, Σ_px, R_obs, posture-view weight, primary-cam score | `app/tracking/world/observation_model.py` (pure) |
+| Camera pose recovery, standing height, uncertainty, PH fusion | `app/tracking/camera_pose.py` (pure) |
+| Single-view height stage and pose validation cache | `app/pipeline/stages/height_estimation.py` |
 | `ObservationGeometry` descriptor (frozen) | `app/domain/__init__.py` |
 | Footpoint→floor projection (+ covariance via the module) | `app/tracking/floor_projector.py` |
 | Information-form cross-camera fusion | `app/tracking/world/dedup.py` |

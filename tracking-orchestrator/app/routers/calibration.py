@@ -32,7 +32,10 @@ from app.calibration.state import CalibrationState, PrivacyZoneConfig
 from app.calibration.state import calibration_state as _default_state
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from app.calibration.auto_calibrator import AutoCalibrator
+    from app.tracking.camera_pose import CameraPoseValidation
     from app.transport.minio_frames import MinioFrameFetcher
 
 logger = get_logger(__name__)
@@ -42,6 +45,7 @@ router = APIRouter(prefix="/internal/calibration", tags=["calibration-internal"]
 # Module-level singletons wired from the app lifespan.
 _auto_calibrator: AutoCalibrator | None = None
 _frame_fetcher: MinioFrameFetcher | None = None
+_height_pose_provider: Callable[[], dict[str, CameraPoseValidation]] | None = None
 
 
 def set_auto_calibration_context(
@@ -52,6 +56,14 @@ def set_auto_calibration_context(
     global _auto_calibrator, _frame_fetcher
     _auto_calibrator = auto_calibrator
     _frame_fetcher = frame_fetcher
+
+
+def set_height_pose_provider(
+    provider: Callable[[], dict[str, CameraPoseValidation]] | None,
+) -> None:
+    """Wire a snapshot callable returning per-camera height-pose validations."""
+    global _height_pose_provider
+    _height_pose_provider = provider
 
 
 # ---------------------------------------------------------------------------
@@ -113,12 +125,24 @@ class StreamSizeOut(BaseModel):
     height_px: int = Field(gt=0)
 
 
+class CameraHeightPoseOut(BaseModel):
+    """Cached single-view metrology pose validation state for a camera."""
+
+    reliable: bool
+    reason: str | None = None
+    recovered_height_m: float | None = None
+    expected_height_m: float | None = None
+    recovered_tilt_deg: float | None = None
+    expected_tilt_deg: float | None = None
+
+
 class CalibrationStatusResponse(BaseModel):
     cameras_with_homography: int
     homography_camera_ids: list[str] = []
     cameras_with_privacy_zones: int
     last_reload_at: str | None
     observed_stream_sizes: dict[str, StreamSizeOut] = Field(default_factory=dict)
+    camera_height_poses: dict[str, CameraHeightPoseOut] = Field(default_factory=dict)
 
 
 class CalibrationPoint(BaseModel):
@@ -549,6 +573,25 @@ async def post_reload() -> None:
 )
 async def get_status() -> CalibrationStatusResponse:
     state = _get_state()
+    height_poses: dict[str, CameraHeightPoseOut] = {}
+    if _height_pose_provider is not None:
+        for cam_id, validation in sorted(_height_pose_provider().items()):
+            height_poses[cam_id] = CameraHeightPoseOut(
+                reliable=validation.reliable,
+                reason=validation.reason.value if validation.reason is not None else None,
+                recovered_height_m=(
+                    round(validation.recovered_height_m, 4)
+                    if validation.recovered_height_m is not None
+                    else None
+                ),
+                expected_height_m=validation.expected_height_m,
+                recovered_tilt_deg=(
+                    round(validation.recovered_tilt_deg, 2)
+                    if validation.recovered_tilt_deg is not None
+                    else None
+                ),
+                expected_tilt_deg=validation.expected_tilt_deg,
+            )
     return CalibrationStatusResponse(
         cameras_with_homography=len(state.homographies),
         homography_camera_ids=sorted(state.homographies),
@@ -559,6 +602,7 @@ async def get_status() -> CalibrationStatusResponse:
             cam_id: StreamSizeOut(width_px=dims[0], height_px=dims[1])
             for cam_id, dims in sorted(state.observed_stream_sizes.items())
         },
+        camera_height_poses=height_poses,
     )
 
 

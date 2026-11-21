@@ -17,6 +17,8 @@ from app.main import (
     _build_face_id_config,
     _build_face_template_policy,
     _build_gallery_retention_config,
+    _build_height_estimation_config,
+    _build_height_learner_config,
     _build_resolver_config,
     _build_sampler_config,
     _build_signal_config,
@@ -24,8 +26,10 @@ from app.main import (
     _build_world_tracker_config,
 )
 from app.pipeline.frame_pipeline import FaceIdConfig, PipelineConfig
+from app.pipeline.stages.height_estimation import HeightEstimationConfig
 from app.sampling.keyframe_sampler import SamplerConfig
 from app.services.gallery_retention import GalleryRetentionConfig
+from app.services.height_profile_learner import HeightProfileLearnerConfig
 from app.tracking.identity.candidate_eligibility import CandidatePolicy
 from app.tracking.identity.face_template_buffer import FaceTemplatePolicy
 from app.tracking.identity_resolver import ResolverConfig
@@ -84,6 +88,11 @@ def test_settings_loads_full_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert retention == GalleryRetentionConfig()
     wearable = _build_wearable_config(settings)
     assert wearable.revocation_auto_on_swap is True
+    height_est = _build_height_estimation_config(settings)
+    assert isinstance(height_est, HeightEstimationConfig)
+    height_learner = _build_height_learner_config(settings)
+    assert isinstance(height_learner, HeightProfileLearnerConfig)
+    assert resolver.height_mode == "shadow"
 
 
 def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -201,6 +210,8 @@ def test_no_dead_settings() -> None:
         FaceTemplatePolicy: _build_face_template_policy,
         CandidatePolicy: _build_candidate_policy,
         GalleryRetentionConfig: _build_gallery_retention_config,
+        HeightEstimationConfig: _build_height_estimation_config,
+        HeightProfileLearnerConfig: _build_height_learner_config,
     }
     externally_supplied = {
         (FaceIdConfig, "camera_configs"),

@@ -85,6 +85,10 @@ class FrameContext:
     # per-detection body orientation estimate from pose keypoints.
     # Producer: InferenceStage. Consumer: WorldTrackingStage.
     orientation_by_detection: dict[str, tuple[OrientationBin, float]] = field(default_factory=dict)
+    # --- Stage: height_estimation ---
+    # detection_id -> (height_estimate_m, height_sigma_m) from single-view standing metrology.
+    # Producer: HeightEstimationStage. Consumer: WorldTrackingStage.
+    height_by_detection: dict[str, tuple[float, float]] = field(default_factory=dict)
     # detection_id -> ObservationGeometry.
     # Producer: WorldTrackingStage._build_observations.
     # Consumers: geometry-aware posture weighting and observation persistence.

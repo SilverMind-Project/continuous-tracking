@@ -22,6 +22,7 @@ from ..domain import Identity
 if TYPE_CHECKING:
     from ..pipeline.gallery_cache import GalleryCache
     from ..storage.gallery import GalleryRepository
+    from ..storage.height_profiles import IdentityHeightProfileRepository
     from ..tracking.identity_resolver import IdentityResolver
 
 logger = get_logger(__name__)
@@ -67,6 +68,7 @@ class IdentityRosterSyncService:
         wearable_association_repo: WearableAssociationIdentityPurge | None = None,
         image_only_evaluation: WearableAssociationIdentityPurge | None = None,
         face_attestation: WearableAssociationIdentityPurge | None = None,
+        height_profile_repo: IdentityHeightProfileRepository | None = None,
         interval_s: float = 60.0,
     ) -> None:
         self._gallery_repo = gallery_repo
@@ -79,6 +81,7 @@ class IdentityRosterSyncService:
         self._image_only_evaluation = image_only_evaluation
         # Pending face attestations name the identity they would label.
         self._face_attestation = face_attestation
+        self._height_profile_repo = height_profile_repo
         self._members_source = members_source
         self._identity_resolver = identity_resolver
         self._gallery_cache = gallery_cache
@@ -177,6 +180,10 @@ class IdentityRosterSyncService:
             removed += await self._image_only_evaluation.purge_identity(identity_id)
         if self._face_attestation is not None:
             removed += await self._face_attestation.purge_identity(identity_id)
+        if self._height_profile_repo is not None and await self._height_profile_repo.delete(
+            identity_id
+        ):
+            removed += 1
         return removed
 
     def _invalidate_caches(self) -> None:

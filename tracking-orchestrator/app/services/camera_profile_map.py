@@ -47,3 +47,7 @@ class CameraProfileMap:
     async def version(self) -> int:
         async with self._lock:
             return self._version
+
+    def version_sync(self) -> int:
+        """Return the current profile map version without awaiting the lock."""
+        return self._version

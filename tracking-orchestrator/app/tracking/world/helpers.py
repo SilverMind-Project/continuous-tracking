@@ -39,19 +39,6 @@ def update_gallery_mean(
     return result2
 
 
-def update_height_ema(
-    current_height_m: float | None,
-    new_height_m: float | None,
-    alpha: float = 0.1,
-) -> float | None:
-    """Exponential moving average of height estimates."""
-    if new_height_m is None:
-        return current_height_m
-    if current_height_m is None:
-        return new_height_m
-    return alpha * new_height_m + (1.0 - alpha) * current_height_m
-
-
 def is_in_any_room_polygon(
     floor_x_m: float,
     floor_y_m: float,

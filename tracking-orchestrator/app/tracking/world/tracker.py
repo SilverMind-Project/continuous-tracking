@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from ...storage.base import GalleryRepository
     from ...tracking.identity_resolver import IdentityResolver
 
+from app.tracking.camera_pose import update_ph_height_estimate
+
 from ...domain import (
     BoundingBox,
     CameraTopologyEdge,
@@ -60,7 +62,6 @@ from .helpers import (
     resolve_room,
     speed_m_s,
     update_gallery_mean,
-    update_height_ema,
 )
 from .kalman import (
     KalmanState,
@@ -701,7 +702,12 @@ class WorldTracker:
                 new_prototypes = ph.view_prototypes
                 new_mean_quality = ph.mean_quality
                 _record_appearance_rejection(m, ph.ph_id, obs, appearance_decision)
-            new_height = update_height_ema(ph.height_estimate_m, obs.height_estimate_m, alpha=0.1)
+            new_height, new_height_sigma, _height_accepted = update_ph_height_estimate(
+                ph.height_estimate_m,
+                ph.height_sigma_m,
+                obs.height_estimate_m,
+                obs.height_sigma_m,
+            )
             room_id, room_name = resolve_room(
                 obs.floor_point.x_mm / 1000.0,
                 obs.floor_point.y_mm / 1000.0,
@@ -731,6 +737,7 @@ class WorldTracker:
                 observation_count=ph.observation_count + 1,
                 gallery_mean=new_gallery_mean,
                 height_estimate_m=new_height,
+                height_sigma_m=new_height_sigma,
                 active_cameras=ph.active_cameras | cluster_cameras,
                 last_floor_speed_m_s=speed_m_s(
                     (
@@ -976,6 +983,7 @@ class WorldTracker:
                     current_identity_id=None,
                     gallery_mean=obs.embedding if obs.embedding else None,
                     height_estimate_m=obs.height_estimate_m,
+                    height_sigma_m=obs.height_sigma_m,
                     active_cameras=spawn_cameras,
                     last_floor_speed_m_s=0.0,
                     metadata=_metadata_with_room({}, room_id, room_name),
@@ -1665,6 +1673,11 @@ async def _resolve_identities(
                 ph.ph_id: ph.height_estimate_m
                 for ph in resolvable_phs
                 if ph.height_estimate_m is not None
+            },
+            ph_height_sigmas={
+                ph.ph_id: ph.height_sigma_m
+                for ph in resolvable_phs
+                if ph.height_sigma_m is not None
             },
             ph_qualities={ph.ph_id: ph.mean_quality for ph in resolvable_phs},
             face_evidence=face_evidence,

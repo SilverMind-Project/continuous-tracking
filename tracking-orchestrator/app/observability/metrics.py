@@ -56,6 +56,7 @@ class CCSyncResource(StrEnum):
     """Bounded label set for ``cts_cc_sync_failures_total{resource}``."""
 
     WEARABLES = "wearables"
+    PERSON_HEIGHTS = "person_heights"
 
 
 class WearableFixKindLabel(StrEnum):
@@ -236,6 +237,7 @@ class Metrics:
     homography_rejected_total: Counter
     homography_warning_total: Counter
     camera_profile_rejected_total: Counter
+    camera_height_pose_unreliable_total: Counter
     cc_sync_failures_total: Counter
 
     # ---- Calibration and transit metrics -----------------------------------
@@ -562,6 +564,11 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_camera_profile_rejected_total",
             "Camera profile entries rejected during CC config sync (e.g. unknown role).",
             ["camera_id", "reason"],
+        ),
+        camera_height_pose_unreliable_total=_counter(
+            "cts_camera_height_pose_unreliable_total",
+            "Cameras marked unreliable for single-view standing height estimation by reason.",
+            ["reason"],
         ),
         cc_sync_failures_total=_counter(
             "cts_cc_sync_failures_total",

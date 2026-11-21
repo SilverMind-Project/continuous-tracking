@@ -19,12 +19,14 @@ from ...domain import (
     FloorPoint,
     ObservationGeometry,
     OrientationBin,
+    PHHeightSample,
     WearableFixSource,
     WorldObservation,
 )
 from ...inference.evidence import FaceEvidence
 from ...observability import metrics as _metrics
 from ...services.face_templates import FaceTemplateService
+from ...storage.height_profiles import PHHeightSampleRepository
 from ...tracking.floor_projector import FloorProjector
 from ...tracking.identity.evidence_grades import grade_of
 from ...tracking.world.assertion_matching import match_assertions_to_face_anchors
@@ -131,12 +133,14 @@ class WorldTrackingStage(FrameStage):
         face_templates: FaceTemplateService | None = None,
         wearable_fix_source: WearableFixSource | None = None,
         wearable_fix_window_s: float = 15.0,
+        height_sample_repo: PHHeightSampleRepository | None = None,
     ) -> None:
         self._tracker = tracker
         # None while face_templates.mode is off: no template anchors, no buffer.
         self._face_templates = face_templates
         self._wearable_fix_source = wearable_fix_source
         self._wearable_fix_window_s = wearable_fix_window_s
+        self._height_sample_repo = height_sample_repo
         self._config = config or WorldTrackerConfig()
         self._live_config = live_config
         self._enabled = enabled
@@ -261,6 +265,30 @@ class WorldTrackingStage(FrameStage):
                 committed={d.ph_id: d.identity_id for d in result.identity_decisions},
                 now=batch_time,
             )
+
+        if self._height_sample_repo is not None:
+            height_samples = [
+                PHHeightSample(
+                    ph_id=result.det_to_ph[obs.detection_id],
+                    camera_id=obs.camera_id,
+                    observed_at=obs.captured_at,
+                    height_m=obs.height_estimate_m,
+                    height_sigma_m=obs.height_sigma_m,
+                )
+                for obs in observations
+                if obs.detection_id in result.det_to_ph
+                and obs.height_estimate_m is not None
+                and obs.height_sigma_m is not None
+            ]
+            if height_samples:
+                try:
+                    await self._height_sample_repo.append_many(height_samples)
+                except Exception:
+                    logger.warning(
+                        "ph_height_samples_append_failed",
+                        count=len(height_samples),
+                        exc_info=True,
+                    )
 
         if self._cc_assertion_mode == "shadow" and cc_face_anchors:
             self._record_cc_assertion_shadow_outcomes(cc_face_anchors, result)
@@ -406,6 +434,9 @@ class WorldTrackingStage(FrameStage):
             orientation, orientation_confidence = ctx.orientation_by_detection.get(
                 det.detection_id, (OrientationBin.UNKNOWN, 0.0)
             )
+            height_est = ctx.height_by_detection.get(det.detection_id)
+            height_estimate_m = height_est[0] if height_est is not None else None
+            height_sigma_m = height_est[1] if height_est is not None else None
             observations.append(
                 WorldObservation(
                     camera_id=det.camera_id,
@@ -415,7 +446,8 @@ class WorldTrackingStage(FrameStage):
                     bbox=det.bbox,
                     embedding=det.embedding,
                     detection_confidence=det.confidence,
-                    height_estimate_m=None,
+                    height_estimate_m=height_estimate_m,
+                    height_sigma_m=height_sigma_m,
                     face_anchor=None,
                     detection_id=det.detection_id,
                     quality=det.crop_quality,

@@ -56,6 +56,7 @@ _KNOWN_PH_FIELDS = frozenset(
         "last_independent_identity_evidence_at",
         "gallery_mean",
         "height_estimate_m",
+        "height_sigma_m",
         "active_cameras",
         "closed_at",
         "last_floor_speed_m_s",
@@ -119,6 +120,7 @@ def _sentinel_ph(ph_id: str = "ph-sentinel") -> PersonHypothesis:
         last_independent_identity_evidence_at=_T0 - timedelta(seconds=20),
         gallery_mean=[0.9, 0.1, 0.2, 0.3],
         height_estimate_m=1.65,
+        height_sigma_m=0.055,
         active_cameras=frozenset([_CAM, "cam-other"]),
         closed_at=None,
         last_floor_speed_m_s=0.42,
@@ -342,6 +344,8 @@ async def test_matched_update_survives_sentinel_metadata_last_posture_and_eviden
     assert matched.current_identity_id == "sentinel-identity"
     assert matched.current_identity_committed_at == ph.current_identity_committed_at
     assert matched.last_independent_identity_evidence_at == ph.last_independent_identity_evidence_at
+    assert matched.height_estimate_m == ph.height_estimate_m
+    assert matched.height_sigma_m == ph.height_sigma_m
     assert matched.closed_at is None
     # Sanity: the site does own these -- prove it actually advanced them.
     assert matched.last_seen_at == obs.captured_at

@@ -45,6 +45,7 @@ from .pipeline.frame_pipeline import (
 )
 from .pipeline.reid_policy import AdaptiveReidConfig
 from .pipeline.stages.fall_detection import FallDetectionConfig
+from .pipeline.stages.height_estimation import HeightEstimationConfig
 from .pipeline.types import FaceIdCameraConfig
 from .routers import dashboard as dashboard_router_mod
 from .routers import gallery as gallery_router_mod
@@ -56,6 +57,8 @@ from .routers.dashboard import router as dashboard_router
 from .routers.gait import router as gait_router
 from .routers.gait import set_context as set_gait_context
 from .routers.gallery import router as gallery_router
+from .routers.height_profiles import router as height_profiles_router
+from .routers.height_profiles import set_context as set_height_profiles_context
 from .routers.live import router as live_router
 from .routers.live import set_context as set_live_context
 from .routers.ph import router as ph_router
@@ -81,6 +84,11 @@ from .services.gallery_retention import (
     GalleryRetentionMode,
     GalleryRetentionService,
 )
+from .services.height_profile_learner import (
+    HeightProfileLearner,
+    HeightProfileLearnerConfig,
+    PostgresHeightSampleSource,
+)
 from .services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
 from .services.image_only_evaluator import ImageOnlyEvaluationService
@@ -90,6 +98,12 @@ from .services.wearable_fix_buffer import WearableFixBuffer
 from .services.wearable_fix_subscriber import WearableFixSubscriber
 from .services.wearable_revocation import WearableTeachingRevocationService
 from .services.wearable_site_config_map import WearableSiteConfigMap
+from .storage.height_profiles import (
+    IdentityHeightProfileRepository,
+    InMemoryIdentityHeightProfileRepository,
+    InMemoryPHHeightSampleRepository,
+    PHHeightSampleRepository,
+)
 from .storage.image_only_evaluation import (
     ImageOnlyEvaluationRepository,
     InMemoryImageOnlyEvaluationRepository,
@@ -101,6 +115,10 @@ from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
 from .storage.postgres.face_stats_repo import PostgresFaceObservationStatsRepository
 from .storage.postgres.gait_repo import PostgresGaitDailyRepository
 from .storage.postgres.gallery_repo import PostgresGalleryRepository
+from .storage.postgres.height_profile_repo import (
+    PostgresIdentityHeightProfileRepository,
+    PostgresPHHeightSampleRepository,
+)
 from .storage.postgres.image_only_evaluation_repo import PostgresImageOnlyEvaluationRepository
 from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
 from .storage.postgres.ph_repo import PostgresPHRepository, PostgresWorldObservationRepository
@@ -118,7 +136,7 @@ from .storage.wearable_teaching_holds import (
     WearableTeachingHoldRepository,
 )
 from .tracking.identity.candidate_eligibility import CandidatePolicy
-from .tracking.identity_resolver import FaceQualityMode, ResolverConfig
+from .tracking.identity_resolver import FaceQualityMode, HeightMode, ResolverConfig
 from .tracking.world.config import WorldTrackerConfig
 from .tracking.world.wearable_config import FaceAttestationMode, WearableConfig
 from .trajectory.appearance_profile import AppearanceSettings
@@ -345,6 +363,7 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
         # cannot disagree. ResolverConfig validates it; the cast only narrows the type for mypy.
         face_evidence_policy=cast(FaceEvidencePolicy, s.as_str("face_id.evidence_policy")),
         uncalibrated_face_max_likelihood=r.as_float("uncalibrated_face_max_likelihood"),
+        height_mode=cast(HeightMode, r.as_str("height_mode")),
     )
 
 
@@ -583,6 +602,38 @@ def _build_gallery_retention_config(s: Settings) -> GalleryRetentionConfig:
     )
 
 
+def _build_height_estimation_config(s: Settings) -> HeightEstimationConfig:
+    he = s.section("height_estimation")
+    wt = s.section("world_tracker")
+    return HeightEstimationConfig(
+        pose_height_tolerance_m=he.as_float("pose_height_tolerance_m"),
+        pose_tilt_tolerance_deg=he.as_float("pose_tilt_tolerance_deg"),
+        sigma_head_px=he.as_float("sigma_head_px"),
+        sigma_model_m=he.as_float("sigma_model_m"),
+        top_margin_px=he.as_int("top_margin_px"),
+        edge_margin_frac=he.as_float("edge_margin_frac"),
+        max_torso_tilt_deg=he.as_float("max_torso_tilt_deg"),
+        min_aspect_ratio=he.as_float("min_aspect_ratio"),
+        min_height_m=he.as_float("min_height_m"),
+        max_height_m=he.as_float("max_height_m"),
+        base_footpoint_sigma_px=wt.as_float("base_footpoint_sigma_px"),
+        occluded_footpoint_inflation=wt.as_float("occluded_footpoint_inflation"),
+    )
+
+
+def _build_height_learner_config(s: Settings) -> HeightProfileLearnerConfig:
+    hl = s.section("height_estimation.learner")
+    return HeightProfileLearnerConfig(
+        enabled=hl.as_bool("enabled"),
+        min_samples=hl.as_int("min_samples"),
+        min_days=hl.as_int("min_days"),
+        min_cameras=hl.as_int("min_cameras"),
+        min_sigma_m=hl.as_float("min_sigma_m"),
+        lookback_days=hl.as_int("lookback_days"),
+        interval_s=hl.as_float("interval_s"),
+    )
+
+
 def _optional_str(section: SettingsSection, key: str, default: str = "") -> str:
     """Read a string from a settings section, returning default if the key is absent."""
     try:
@@ -803,6 +854,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         gait_min_daily_bouts=settings.as_int("gait.min_daily_bouts"),
         gait_min_daily_walking_s=settings.as_float("gait.min_daily_walking_s"),
         appearance=_build_appearance_settings(settings),
+        height_estimation=_build_height_estimation_config(settings),
     )
     _pipeline = FrameProcessingPipeline(config)
 
@@ -1141,6 +1193,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.exception("wearable_fix_subscriber_init_failed")
                 wearable_fix_subscriber = None
 
+    height_profile_repo: IdentityHeightProfileRepository = (
+        PostgresIdentityHeightProfileRepository(_pool)
+        if _pool is not None
+        else InMemoryIdentityHeightProfileRepository()
+    )
+    height_sample_repo: PHHeightSampleRepository = (
+        PostgresPHHeightSampleRepository(_pool)
+        if _pool is not None
+        else InMemoryPHHeightSampleRepository()
+    )
+    set_height_profiles_context(height_profile_repo)
+
     deps = PipelineDependencies(
         detector=detector,
         gallery_repo=gallery_repo,
@@ -1171,6 +1235,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         wearable_teaching_hold_repo=wearable_teaching_hold_repo,
         wearable_revocation_service=wearable_revocation_service,
         image_only_evaluation=image_only_evaluation,
+        height_profile_repo=height_profile_repo,
+        height_sample_repo=height_sample_repo,
     )
     await _pipeline.initialize(deps)
 
@@ -1205,6 +1271,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     camera_profile_map = CameraProfileMap(initial_camera_profiles)
     _pipeline.set_camera_profile_map(camera_profile_map)
     _pipeline.set_wearable_site_config_map(wearable_site_config_map)
+    if _pipeline._height_estimation_stage is not None:
+        from .routers.calibration import set_height_pose_provider
+
+        set_height_pose_provider(_pipeline._height_estimation_stage.pose_cache.snapshot_all)
+
     _poll_s = settings.as_float("cc_sync.poll_interval_s")
     cc_sync_service = CCConfigSyncService(
         client=cc_client,
@@ -1216,6 +1287,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         overlap_group_sink=_pipeline.set_overlap_groups,
         camera_profile_map=camera_profile_map,
         wearable_site_config_map=wearable_site_config_map,
+        height_profile_repo=height_profile_repo,
+        on_height_profiles_updated=(
+            _pipeline._identity_resolver.invalidate_identity_cache
+            if _pipeline._identity_resolver is not None
+            else None
+        ),
     )
     app.state.cc_sync_service = cc_sync_service
     app.state.cc_sync_task = asyncio.create_task(cc_sync_service.run())
@@ -1312,6 +1389,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             wearable_association_repo=wearable_association_repo,
             image_only_evaluation=image_only_evaluation,
             face_attestation=_pipeline.face_attestation if _pipeline is not None else None,
+            height_profile_repo=height_profile_repo,
             interval_s=60.0,
         )
         await roster_sync_service.start()
@@ -1377,11 +1455,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.ph_maintenance = ph_maintenance
     app.state.ph_maintenance_task = asyncio.create_task(ph_maintenance.run())
 
+    if _pool is not None:
+        height_learner = HeightProfileLearner(
+            sample_source=PostgresHeightSampleSource(_pool),
+            profile_repo=height_profile_repo,
+            config=_build_height_learner_config(settings),
+            on_profiles_updated=(
+                _pipeline._identity_resolver.invalidate_identity_cache
+                if _pipeline is not None and _pipeline._identity_resolver is not None
+                else None
+            ),
+        )
+        app.state.height_profile_learner = height_learner
+        app.state.height_profile_learner_task = asyncio.create_task(height_learner.run())
+
     yield
 
     # -------------------------------------------------------------------
     # Shutdown
     # -------------------------------------------------------------------
+    _height_learner = getattr(app.state, "height_profile_learner", None)
+    if _height_learner is not None:
+        await _height_learner.stop()
     # Stop keyframe revalidator.
     _m3_revalidator = getattr(app.state, "keyframe_revalidator", None)
     if _m3_revalidator is not None:
@@ -1459,6 +1554,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router)
     app.include_router(corrections_router)
     app.include_router(gallery_router)
+    app.include_router(height_profiles_router)
     app.include_router(reid_review_router)
     app.include_router(readiness_router)
     app.include_router(wearables_router)

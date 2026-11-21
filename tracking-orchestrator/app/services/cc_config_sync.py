@@ -52,12 +52,15 @@ from ..services.wearable_site_config_map import WearableSiteConfigMap
 
 if TYPE_CHECKING:
     from ..services.cc_client import CognitiveCompanionClient
+    from ..storage.height_profiles import IdentityHeightProfileRepository
 
 logger = get_logger(__name__)
 
 _PRIVACY_POLICIES: Final[frozenset[str]] = frozenset(get_args(PrivacyPolicy))
 _CAMERAS_PATH: Final = "/api/v1/cts/cameras"
 WEARABLES_SITE_CONFIG_PATH: Final = "/api/v1/wearables/site-config"
+PERSON_HEIGHTS_PATH: Final = "/api/v1/persons/heights"
+_OPERATOR_HEIGHT_SIGMA_M: Final[float] = 0.05
 
 
 def _log_fetch_retry(retry_state: RetryCallState) -> None:
@@ -286,6 +289,23 @@ def parse_wearable_site_config(payload: Any) -> WearableSiteConfig:
     )
 
 
+def parse_person_heights(raw: Any) -> dict[str, float | None]:
+    """Decode CC ``GET /api/v1/persons/heights`` into ``{person_id: height_cm | None}``."""
+    items = _require_list(raw, context=PERSON_HEIGHTS_PATH)
+    heights: dict[str, float | None] = {}
+    for index, entry in enumerate(items):
+        context = f"{PERSON_HEIGHTS_PATH}[{index}]"
+        row = _require_mapping(entry, context=context)
+        person_id = _require_non_empty_str(row, "person_id", context=context)
+        height_cm = _optional_float(row, "height_cm", context=context)
+        if height_cm is not None and not (90.0 <= height_cm <= 220.0):
+            raise CCConfigSyncContractError(
+                f"{context}.height_cm must be in [90.0, 220.0], got {height_cm!r}"
+            )
+        heights[person_id] = height_cm
+    return heights
+
+
 def parse_camera_profile(
     cam: dict[str, Any], *, context: str
 ) -> tuple[CameraProfile | None, CameraProfileRejectReason | None]:
@@ -496,6 +516,8 @@ class CCConfigSyncService:
         overlap_group_sink: Callable[[Sequence[OverlapGroup]], None] | None = None,
         camera_profile_map: CameraProfileMap | None = None,
         wearable_site_config_map: WearableSiteConfigMap | None = None,
+        height_profile_repo: IdentityHeightProfileRepository | None = None,
+        on_height_profiles_updated: Callable[[], None] | None = None,
     ) -> None:
         self._client = client
         self._calibration_state = calibration_state
@@ -506,6 +528,8 @@ class CCConfigSyncService:
             camera_profile_map if camera_profile_map is not None else CameraProfileMap()
         )
         self._wearable_site_config_map = wearable_site_config_map
+        self._height_profile_repo = height_profile_repo
+        self._on_height_profiles_updated = on_height_profiles_updated
         self._poll_interval_s = poll_interval_s
         self._fetch_retry_attempts = fetch_retry_attempts
         self._fetch_retry_initial_s = fetch_retry_initial_s
@@ -705,6 +729,7 @@ class CCConfigSyncService:
 
         await self._sync_overlap_groups()
         await self._sync_wearables()
+        await self._sync_person_heights(now)
 
         scale_m = await self._floor_plan_scale_m()
         if scale_m is None:
@@ -751,6 +776,42 @@ class CCConfigSyncService:
             binding_count=len(parsed.bindings),
             device_count=len(parsed.devices),
         )
+
+    async def _sync_person_heights(self, now: datetime) -> None:
+        """Fetch operator-entered member heights from CC and upsert operator profiles.
+
+        Never overwrites a ``learned`` profile; removes stale ``operator`` profiles when
+        cleared in CC. Keeps previous profiles intact on any transport or contract failure.
+        """
+        if self._height_profile_repo is None:
+            return
+        try:
+            raw = await self._fetch_with_retry(PERSON_HEIGHTS_PATH)
+            entries = parse_person_heights(raw)
+        except Exception:
+            _m.metrics.cc_sync_failures_total.labels(
+                resource=CCSyncResource.PERSON_HEIGHTS.value
+            ).inc()
+            logger.warning("cc_config_sync_person_heights_failed", exc_info=True)
+            return
+
+        changed = False
+        for person_id, height_cm in entries.items():
+            if height_cm is None:
+                if await self._height_profile_repo.delete_operator_profile(person_id):
+                    changed = True
+                continue
+            height_m = height_cm / 100.0
+            if await self._height_profile_repo.upsert_operator_if_not_learned(
+                person_id,
+                height_m=height_m,
+                height_sigma_m=_OPERATOR_HEIGHT_SIGMA_M,
+                updated_at=now,
+            ):
+                changed = True
+
+        if changed and self._on_height_profiles_updated is not None:
+            self._on_height_profiles_updated()
 
     async def _sync_overlap_groups(self) -> None:
         """Apply CC's overlap groups to the tracker; keep the last applied set on failure.

@@ -6,6 +6,7 @@ from .detection_backfill import DetectionBackfillStage
 from .face_identity import FaceIdentityStage
 from .fall_detection import FallDetectionConfig, FallDetectionStage
 from .fetch import FetchStage
+from .height_estimation import HeightEstimationConfig, HeightEstimationStage
 from .image_only_evaluation import ImageOnlyEvaluationStage
 from .inference import InferenceStage
 from .keyframes import KeyframeStage
@@ -31,6 +32,8 @@ __all__ = [
     "FallDetectionStage",
     "FetchStage",
     "FrameStage",
+    "HeightEstimationConfig",
+    "HeightEstimationStage",
     "ImageOnlyEvaluationStage",
     "InferenceStage",
     "KeyframeStage",

@@ -253,21 +253,27 @@ async def test_migrations_0011_and_0012_down_refusal_and_round_trip(db_pool: Any
     )
 
     runner = MigrationRunner(db_pool, _MIGRATIONS_DIR)
-    # Roll back 0012 cleanly.
-    await runner.rollback(1)
-    # Rolling back 0011 MUST fail while an expired row exists.
-    with pytest.raises(Exception, match="expired"):
-        await runner.rollback(1)
+    try:
+        # Roll back every migration newer than 0011 (0012, 0013, ...) so 0011 is next.
+        applied = (await runner.status())["applied"]
+        above_0011 = sum(1 for name in applied if name > "0011_reid_gallery_expired_state")
+        if above_0011 > 0:
+            await runner.rollback(above_0011)
 
-    # Clean up the expired row and audit events, then 0011 down and re-migrate succeed.
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM continuous_tracking.gallery_review_events WHERE entry_id = $1::uuid",
-            _uid("exp-mig"),
-        )
-        await conn.execute(
-            "DELETE FROM continuous_tracking.reid_gallery WHERE id = $1::uuid",
-            _uid("exp-mig"),
-        )
-    await runner.rollback(1)
-    await runner.migrate()
+        # Rolling back 0011 MUST fail while an expired row exists.
+        with pytest.raises(Exception, match="expired"):
+            await runner.rollback(1)
+
+        # Clean up the expired row and audit events, then 0011 down succeeds.
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM continuous_tracking.gallery_review_events WHERE entry_id = $1::uuid",
+                _uid("exp-mig"),
+            )
+            await conn.execute(
+                "DELETE FROM continuous_tracking.reid_gallery WHERE id = $1::uuid",
+                _uid("exp-mig"),
+            )
+        await runner.rollback(1)
+    finally:
+        await runner.migrate()

@@ -48,6 +48,8 @@ from ..pipeline.stages import (
     FallDetectionConfig,
     FallDetectionStage,
     FetchStage,
+    HeightEstimationConfig,
+    HeightEstimationStage,
     ImageOnlyEvaluationStage,
     InferenceStage,
     KeyframeStage,
@@ -121,6 +123,12 @@ from ..storage.base import (
 from ..storage.face_stats import (
     FaceObservationStatsRepository,
     InMemoryFaceObservationStatsRepository,
+)
+from ..storage.height_profiles import (
+    IdentityHeightProfileRepository,
+    InMemoryIdentityHeightProfileRepository,
+    InMemoryPHHeightSampleRepository,
+    PHHeightSampleRepository,
 )
 from ..storage.wearable_associations import (
     InMemoryWearableAssociationRepository,
@@ -250,6 +258,8 @@ class PipelineDependencies:
     wearable_revocation_service: WearableTeachingRevocationService | None = None
     # Wired only while the wearable channel runs (shadow or enabled); measurement only.
     image_only_evaluation: ImageOnlyEvaluationSink | None = None
+    height_profile_repo: IdentityHeightProfileRepository | None = None
+    height_sample_repo: PHHeightSampleRepository | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -273,6 +283,7 @@ class PipelineConfig:
     # --- Tracking ---
     world_tracker: WorldTrackerConfig = field(default_factory=WorldTrackerConfig)
     wearable: WearableConfig = field(default_factory=WearableConfig)
+    height_estimation: HeightEstimationConfig = field(default_factory=HeightEstimationConfig)
 
     # --- Identity resolution ---
     resolver: ResolverConfig = field(default_factory=ResolverConfig)
@@ -486,12 +497,18 @@ class FrameProcessingPipeline:
         self._floor_projector = FloorProjector(calibration_state)
         self._spatial_projection = SpatialProjectionService(calibration_state)
 
+        self._height_profile_repo = (
+            deps.height_profile_repo or InMemoryIdentityHeightProfileRepository()
+        )
+        self._height_sample_repo = deps.height_sample_repo or InMemoryPHHeightSampleRepository()
+
         self._identity_resolver = IdentityResolver(
             gallery_repo=gallery,
             identities=self._config.known_identities,
             config=self._config.resolver,
             gallery_cache=self._gallery_cache,
             wearable_config=self._config.wearable,
+            height_profile_repo=self._height_profile_repo,
         )
 
         self._revision_publisher = RevisionPublisher(
@@ -701,6 +718,7 @@ class FrameProcessingPipeline:
             wearable_fix_window_s=max(
                 self._config.wearable.window_s, self._config.wearable.max_fix_age_s
             ),
+            height_sample_repo=self._height_sample_repo,
         )
 
         # Named stage groups — replace fragile integer slices so adding
@@ -721,6 +739,13 @@ class FrameProcessingPipeline:
             )
         self._reid_policy = _reid_policy
 
+        height_estimation_stage = HeightEstimationStage(
+            calibration_state=calibration_state,
+            camera_profiles_getter=lambda: self._live_config.camera_profile_map,
+            config=self._config.height_estimation,
+        )
+        self._height_estimation_stage = height_estimation_stage
+
         pre_world_stages = [
             PrivacyStage(),
             SpatialProjectionStage(projection_service=self._spatial_projection),
@@ -731,6 +756,7 @@ class FrameProcessingPipeline:
                 reid_policy=_reid_policy,
                 world_tracker=self._world_tracker,
             ),
+            height_estimation_stage,
             FaceIdentityStage(
                 face_stats_repo=self._face_stats_repo,
                 face_id_client=self._face_id_client,

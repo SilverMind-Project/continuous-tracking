@@ -104,47 +104,6 @@ class FloorProjector:
         floor_cov_m2 = jacobian_m_per_px @ pixel_cov_px2 @ jacobian_m_per_px.T
         return (point, cov2x2_to_tuple(floor_cov_m2))
 
-    def estimate_height_mm(self, camera_id: str, bbox: BoundingBox) -> float | None:
-        """Estimate person height from bbox geometry + homography.
-
-        Projects the head point (top-centre) and footpoint (bottom-centre)
-        through the camera homography and measures the Euclidean distance
-        between them in millimetres.
-
-        Returns:
-            Height in mm, or None when the camera lacks a calibrated
-            homography or the projection is degenerate (W ≈ 0).
-        """
-        homography = self._state.homographies.get(camera_id)
-        if not homography:
-            return None
-
-        # Footpoint: bottom-centre.
-        fx = (bbox.x_min + bbox.x_max) / 2.0
-        fy = float(bbox.y_max)
-
-        # Head point: top-centre.
-        hx = (bbox.x_min + bbox.x_max) / 2.0
-        hy = float(bbox.y_min)
-
-        h = homography
-
-        try:
-            foot_x_m, foot_y_m, _fw_h = _project_raw(h, fx, fy)
-        except ValueError:
-            return None
-
-        # Project head point.
-        try:
-            head_x_m, head_y_m, _hw_h = _project_raw(h, hx, hy)
-        except ValueError:
-            return None
-
-        # Euclidean distance in mm.
-        dx_m = head_x_m - foot_x_m
-        dy_m = head_y_m - foot_y_m
-        return math.hypot(dx_m, dy_m) * 1000.0
-
     @staticmethod
     def distance_m(a: FloorPoint, b: FloorPoint) -> float:
         """Euclidean distance between two floor points in metres."""

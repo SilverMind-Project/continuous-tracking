@@ -190,6 +190,7 @@ class WorldObservation:
     detection_confidence: float
     observation_id: str = ""
     height_estimate_m: float | None = None
+    height_sigma_m: float | None = None
     face_anchor: FaceAnchor | None = None
     detection_id: str = ""
     quality: float = 0.0  # composite crop quality [0,1] from CropQuality.quality
@@ -280,6 +281,7 @@ class PersonHypothesis:
     last_independent_identity_evidence_at: datetime | None = None
     gallery_mean: list[float] | None = None  # L2-normalised SOLIDER embedding
     height_estimate_m: float | None = None
+    height_sigma_m: float | None = None
     active_cameras: frozenset[str] = frozenset()
     closed_at: datetime | None = None
     last_floor_speed_m_s: float = 0.0
@@ -911,10 +913,35 @@ class Identity:
     identity_id: IdentityId
     display_name: str
     enrolled_at: datetime
-    height_mm: float | None = None
-    height_sigma_mm: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
+
+
+HeightProfileSource = Literal["operator", "learned"]
+
+
+@dataclass(frozen=True)
+class IdentityHeightProfile:
+    """Per-identity standing height profile in metres (household floor vertical frame)."""
+
+    identity_id: IdentityId
+    height_m: float
+    height_sigma_m: float
+    source: HeightProfileSource
+    samples: int
+    cameras: int
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class PHHeightSample:
+    """One accepted standing height measurement tied to a PH update's capture time."""
+
+    ph_id: PersonHypothesisId
+    camera_id: str
+    observed_at: datetime
+    height_m: float
+    height_sigma_m: float
 
 
 class GallerySeedSource(StrEnum):

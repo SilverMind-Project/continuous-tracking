@@ -20,13 +20,14 @@ from structlog import get_logger
 from app.domain import (
     FaceAnchor,
     Identity,
+    IdentityHeightProfile,
     IdentityResolvableEntity,
     PosteriorDist,
     WearableEvidence,
 )
 from app.tracking.identity.commit_policy import (
     _evidence_face_anchors,
-    _reid_evidence_identity,
+    _reid_evidence_identities,
     collect_evidence_identity_ids,
     identity_evidence_time,
 )
@@ -149,6 +150,7 @@ class ResolverInputs:
     face_evidence: tuple[FaceEvidence, ...]
     ph_heights_m: Mapping[str, float]
     ph_qualities: Mapping[str, float]
+    ph_height_sigmas_m: Mapping[str, float] = field(default_factory=dict)
     raw_face_anchors: tuple[FaceAnchor, ...] = ()
     raw_face_evidence: tuple[FaceEvidence, ...] = ()
     wearable_evidence: Mapping[str, WearableEvidence] = field(default_factory=dict)
@@ -565,15 +567,15 @@ class GalleryChannel:
 
     def wrap(self, distribution: PosteriorDist, *, captured_at: datetime) -> ChannelLikelihood:
         """Wrap an already-queried ReID distribution into a :class:`ChannelLikelihood`."""
-        reid_id = _reid_evidence_identity(distribution)
-        if reid_id is not None:
+        reid_ids = _reid_evidence_identities(distribution)
+        if reid_ids:
             return ChannelLikelihood(
                 channel=self.name,
                 distribution=distribution,
                 support_multiplier=self._support_multiplier,
                 evidence_at=captured_at,
-                clock_evidence_ids=frozenset({reid_id}),
-                evidence_at_by_identity={reid_id: captured_at},
+                clock_evidence_ids=reid_ids,
+                evidence_at_by_identity=dict.fromkeys(reid_ids, captured_at),
             )
         return ChannelLikelihood(
             channel=self.name,
@@ -594,65 +596,88 @@ class GalleryChannel:
 
 
 class HeightChannel:
-    """Anthropometric height likelihood channel (corroborating; never refreshes clock)."""
+    """Anthropometric standing-height channel (corroborating; never refreshes clock).
+
+    Reads PH standing height and uncertainty keyed by ``entity.entity_id`` in metres and
+    compares against stored per-identity height profiles in metres. Applies
+    ``height_weight_multiplier`` as a log-likelihood power (``exp(-0.5 * w * z^2)``,
+    floored at 0.01) with ``support_multiplier = 1.0`` so the weight scales resident-vs-resident
+    separation. Includes ``UNKNOWN`` at a neutral baseline (0.5) so mismatched profiles never
+    normalize above ``UNKNOWN``, while leaving unprofiled residents absent (Laplace fill).
+    """
 
     name: str = "height"
+    _UNKNOWN_BASELINE: float = 0.5
+    _MIN_LIKELIHOOD: float = 0.01
 
     def __init__(
         self,
         *,
-        identities_getter: Callable[[], Mapping[str, Identity]],
+        height_profiles_getter: Callable[[], Mapping[str, IdentityHeightProfile]],
         height_weight_multiplier: float,
+        default_ph_sigma_m: float = 0.08,
     ) -> None:
-        self._identities_getter = identities_getter
+        self._height_profiles_getter = height_profiles_getter
         self._height_weight_multiplier = height_weight_multiplier
+        self._default_ph_sigma_m = default_ph_sigma_m
 
     def evaluate_heights(
         self,
         entity: IdentityResolvableEntity,
-        ph_heights: Mapping[str, float],
+        ph_heights_m: Mapping[str, float],
+        ph_height_sigmas_m: Mapping[str, float] | None = None,
     ) -> ChannelLikelihood:
-        """Build height likelihood against enrolled identity height profiles."""
-        heights_mm: list[float] = []
-        for oid in entity.observation_ids:
-            h = ph_heights.get(oid)
-            if h is not None:
-                heights_mm.append(h)
-
-        if not heights_mm:
+        """Build height likelihood against per-identity standing height profiles (metres)."""
+        ph_height_m = ph_heights_m.get(entity.entity_id)
+        if ph_height_m is None or not math.isfinite(ph_height_m):
             return ChannelLikelihood(
                 channel=self.name,
                 distribution=PosteriorDist({}),
-                support_multiplier=self._height_weight_multiplier,
+                support_multiplier=1.0,
                 evidence_at=None,
             )
 
-        identities = self._identities_getter()
-        has_profiles = any(ident.height_mm is not None for ident in identities.values())
-        if not has_profiles:
+        profiles = self._height_profiles_getter()
+        if not profiles:
             return ChannelLikelihood(
                 channel=self.name,
                 distribution=PosteriorDist({}),
-                support_multiplier=self._height_weight_multiplier,
+                support_multiplier=1.0,
                 evidence_at=None,
             )
 
-        mean_h = sum(heights_mm) / len(heights_mm)
+        raw_sigma_ph = (
+            ph_height_sigmas_m.get(entity.entity_id) if ph_height_sigmas_m is not None else None
+        )
+        sigma_ph = (
+            raw_sigma_ph
+            if (raw_sigma_ph is not None and math.isfinite(raw_sigma_ph) and raw_sigma_ph > 0.0)
+            else self._default_ph_sigma_m
+        )
 
         likelihood: dict[str, float] = {}
-        for identity_id, ident in identities.items():
-            ref_mm = ident.height_mm
-            if ref_mm is None:
+        weight = max(0.0, float(self._height_weight_multiplier))
+        for identity_id, profile in profiles.items():
+            sigma_comb = math.hypot(sigma_ph, profile.height_sigma_m)
+            if sigma_comb <= 0.0 or not math.isfinite(sigma_comb):
                 continue
-            sigma_mm = ident.height_sigma_mm or 150.0
-            z = (mean_h - ref_mm) / sigma_mm
-            p = math.exp(-0.5 * z * z)
-            likelihood[identity_id] = max(p, 0.01)
+            z = (ph_height_m - profile.height_m) / sigma_comb
+            p = max(self._MIN_LIKELIHOOD, math.exp(-0.5 * weight * z * z))
+            likelihood[identity_id] = p
 
+        if not likelihood:
+            return ChannelLikelihood(
+                channel=self.name,
+                distribution=PosteriorDist({}),
+                support_multiplier=1.0,
+                evidence_at=None,
+            )
+
+        likelihood["UNKNOWN"] = self._UNKNOWN_BASELINE
         return ChannelLikelihood(
             channel=self.name,
-            distribution=PosteriorDist(likelihood) if likelihood else PosteriorDist({}),
-            support_multiplier=self._height_weight_multiplier,
+            distribution=PosteriorDist(likelihood),
+            support_multiplier=1.0,
             evidence_at=None,
         )
 
@@ -662,4 +687,4 @@ class HeightChannel:
         inputs: ResolverInputs,
     ) -> ChannelLikelihood:
         """Implement :class:`EvidenceChannel`."""
-        return self.evaluate_heights(entity, inputs.ph_heights_m)
+        return self.evaluate_heights(entity, inputs.ph_heights_m, inputs.ph_height_sigmas_m)

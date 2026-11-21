@@ -22,10 +22,12 @@ from app.domain import (
     GalleryEmbedding,
     GlobalTrack,
     Identity,
+    IdentityHeightProfile,
     PersonHypothesis,
 )
 from app.inference.evidence import FaceEvidence
 from app.storage.base import InMemoryGalleryRepository, InMemoryPHRepository
+from app.storage.height_profiles import InMemoryIdentityHeightProfileRepository
 from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 
 # ---------------------------------------------------------------------------
@@ -757,12 +759,24 @@ class TestResolverEvidenceRouting:
             identity_id="alice",
             display_name="Alice",
             enrolled_at=now,
-            height_mm=1700.0,
-            height_sigma_mm=30.0,
         )
-        resolver = _make_resolver(
+        height_profiles = InMemoryIdentityHeightProfileRepository()
+        await height_profiles.upsert(
+            IdentityHeightProfile(
+                identity_id="alice",
+                height_m=1.70,
+                height_sigma_m=0.03,
+                source="learned",
+                samples=250,
+                cameras=2,
+                updated_at=now,
+            )
+        )
+        resolver = IdentityResolver(
+            gallery_repo=InMemoryGalleryRepository(),
             identities=[tall_alice],
-            config=ResolverConfig(enable_sticky_maintenance=False),
+            config=ResolverConfig(enable_sticky_maintenance=False, height_mode="enabled"),
+            height_profile_repo=height_profiles,
         )
 
         gt = GlobalTrack(
@@ -780,6 +794,7 @@ class TestResolverEvidenceRouting:
             new_face_anchors=[],
             captured_at=now,
             ph_heights={"gt-1": 1.70},  # matches alice's height exactly
+            ph_height_sigmas={"gt-1": 0.03},
         )
 
         decision = outcome.decisions[0]
