@@ -12,7 +12,7 @@ behind a divergent fixture.
 from __future__ import annotations
 
 import inspect
-from datetime import UTC, datetime
+from datetime import timedelta
 
 import pytest
 
@@ -28,14 +28,16 @@ from app.storage.postgres.gallery_repo import PostgresGalleryRepository
 from tests.storage._gallery_parity_fixtures import (
     ALICE,
     ALL_TRACKLET_IDS,
+    CAROL_INACTIVE,
     STATE_FILTER_CASES,
+    T0,
     entry_for,
     expected_ids,
     expected_state_counts,
     make_entries,
     make_identities,
-    max_age_entries,
     query_embedding,
+    vote_window_entries,
 )
 
 
@@ -75,6 +77,20 @@ class TestListGalleryEntriesParity:
         entries = await repo.list_gallery_entries(identity_id=ALICE, states=None)
         assert {e.gallery_entry_id for e in entries} == expected_ids(states=None, identity_id=ALICE)
 
+    @pytest.mark.asyncio
+    async def test_active_only_filters_inactive_identities(self) -> None:
+        repo = await _seeded_repo()
+        active_entries = await repo.list_gallery_entries(active_only=True, states=None)
+        all_entries = await repo.list_gallery_entries(active_only=False, states=None)
+        assert {e.gallery_entry_id for e in active_entries} == expected_ids(
+            states=None, active_only=True
+        )
+        assert {e.gallery_entry_id for e in all_entries} == expected_ids(
+            states=None, active_only=False
+        )
+        assert CAROL_INACTIVE not in {e.identity_id for e in active_entries}
+        assert CAROL_INACTIVE in {e.identity_id for e in all_entries}
+
 
 class TestSearchSimilarParity:
     @pytest.mark.asyncio
@@ -86,65 +102,68 @@ class TestSearchSimilarParity:
 
     @pytest.mark.asyncio
     async def test_default_excludes_pending_and_rejected(self) -> None:
-        """M02: the vote-path default is VOTING_STATES (operator_verified plus
-        auto_verified), not VERIFIED_ONLY; pending and rejected still never vote."""
+        """The vote-path default is VOTING_STATES; pending, rejected, and inactive never vote."""
         repo = await _seeded_repo()
         hits = await repo.search_similar(query_embedding(), limit=10)
         got = {entry.gallery_entry_id for entry, _sim in hits}
         assert got == expected_ids(states=VOTING_STATES)
 
-
-class TestSearchSimilarMaxAgeParity:
-    """M03: hard vote-age cutoff boundary matrix (InMemory half).
-
-    The Postgres twin lives in
-    ``tests/integration/test_gallery_state_parity_postgres.py``. Both peers
-    must agree that an entry at or older than the cutoff age is excluded
-    (strict ``>``, matching ``PostgresGalleryRepository``'s
-    ``seen_at > now() - interval`` predicate); the ``near_cutoff`` entry
-    (11h59m59s) brackets the 12h line to within about a second instead of
-    leaving a wide untested band. Neither peer's `search_similar` takes an
-    injectable "now", so no wall-clock test can pin the exact
-    age-equals-cutoff tie to the microsecond -- see ``max_age_entries``'s
-    docstring.
-    """
-
     @pytest.mark.asyncio
-    async def test_max_age_seconds_boundary(self) -> None:
-        repo = InMemoryGalleryRepository()
-        for identity in make_identities():
-            await repo.upsert_identity(identity)
-        now = datetime.now(UTC)
-        fresh, near_cutoff, boundary, stale = max_age_entries(now)
-        for entry in (fresh, near_cutoff, boundary, stale):
-            await repo.upsert_gallery_entry(entry)
-
-        hits = await repo.search_similar(query_embedding(), limit=10, max_age_seconds=12 * 3600)
-
-        got = {entry.gallery_entry_id for entry, _sim in hits}
-        assert got == {fresh.gallery_entry_id, near_cutoff.gallery_entry_id}, (
-            "11h and 11h59m59s kept; 12h boundary and 13h stale both excluded"
+    async def test_active_only_filters_inactive_identities(self) -> None:
+        repo = await _seeded_repo()
+        active_hits = await repo.search_similar(
+            query_embedding(), limit=10, states=None, active_only=True
         )
+        all_hits = await repo.search_similar(
+            query_embedding(), limit=10, states=None, active_only=False
+        )
+        assert {e.gallery_entry_id for e, _ in active_hits} == expected_ids(
+            states=None, active_only=True
+        )
+        assert {e.gallery_entry_id for e, _ in all_hits} == expected_ids(
+            states=None, active_only=False
+        )
+        assert CAROL_INACTIVE not in {e.identity_id for e, _ in active_hits}
+        assert CAROL_INACTIVE in {e.identity_id for e, _ in all_hits}
+
+
+class TestSearchSimilarVoteWindowParity:
+    """Capture-time vote window boundary matrix ``(seen_after, seen_before]`` (InMemory half)."""
 
     @pytest.mark.asyncio
-    async def test_none_disables_the_cutoff(self) -> None:
+    async def test_seen_after_strict_and_seen_before_inclusive(self) -> None:
         repo = InMemoryGalleryRepository()
         for identity in make_identities():
             await repo.upsert_identity(identity)
-        now = datetime.now(UTC)
-        fresh, near_cutoff, boundary, stale = max_age_entries(now)
-        for entry in (fresh, near_cutoff, boundary, stale):
+        as_of = T0 + timedelta(days=2)
+        stale, at_lower, inside, at_upper, future = vote_window_entries(as_of)
+        for entry in (stale, at_lower, inside, at_upper, future):
             await repo.upsert_gallery_entry(entry)
 
-        hits = await repo.search_similar(query_embedding(), limit=10, max_age_seconds=None)
-
+        hits = await repo.search_similar(
+            query_embedding(),
+            limit=10,
+            seen_after=as_of - timedelta(hours=12),
+            seen_before=as_of,
+        )
         got = {entry.gallery_entry_id for entry, _sim in hits}
-        assert got == {
-            fresh.gallery_entry_id,
-            near_cutoff.gallery_entry_id,
-            boundary.gallery_entry_id,
-            stale.gallery_entry_id,
-        }
+        assert got == {inside.gallery_entry_id, at_upper.gallery_entry_id}
+
+    @pytest.mark.asyncio
+    async def test_none_disables_bounds(self) -> None:
+        repo = InMemoryGalleryRepository()
+        for identity in make_identities():
+            await repo.upsert_identity(identity)
+        as_of = T0 + timedelta(days=2)
+        entries = vote_window_entries(as_of)
+        for entry in entries:
+            await repo.upsert_gallery_entry(entry)
+
+        hits = await repo.search_similar(
+            query_embedding(), limit=10, seen_after=None, seen_before=None
+        )
+        got = {entry.gallery_entry_id for entry, _sim in hits}
+        assert got == {e.gallery_entry_id for e in entries}
 
 
 class TestListGalleryEntriesForTrackletsParity:
@@ -155,15 +174,18 @@ class TestListGalleryEntriesForTrackletsParity:
         entries = await repo.list_gallery_entries_for_tracklets(
             ALL_TRACKLET_IDS, limit=20, allowed_states=states
         )
-        assert {e.gallery_entry_id for e in entries} == expected_ids(states=states)
+        assert {e.gallery_entry_id for e in entries} == expected_ids(
+            states=states, active_only=False
+        )
 
     @pytest.mark.asyncio
     async def test_default_excludes_pending_and_rejected(self) -> None:
-        """M02: the vote-path default is VOTING_STATES; pending and rejected
-        still never vote."""
+        """The vote-path default is VOTING_STATES; pending and rejected still never vote."""
         repo = await _seeded_repo()
         entries = await repo.list_gallery_entries_for_tracklets(ALL_TRACKLET_IDS, limit=20)
-        assert {e.gallery_entry_id for e in entries} == expected_ids(states=VOTING_STATES)
+        assert {e.gallery_entry_id for e in entries} == expected_ids(
+            states=VOTING_STATES, active_only=False
+        )
 
 
 class TestGallerySimilarityDefault:

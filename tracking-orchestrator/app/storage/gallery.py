@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Final
 
 from ..domain import (
@@ -116,12 +116,16 @@ class GalleryRepository(ABC):
         identity_id: str,
         orientation: int,
         states: frozenset[str] | None = PENDING_AND_VERIFIED,
+        seen_since: datetime | None = None,
     ) -> int:
         """Count gallery rows for *(identity_id, orientation)* used by the creation cap.
 
-        Defaults to counting ``pending_review`` and ``operator_verified``
-        rows (never ``rejected``) so a flood of unreviewed candidates still
-        engages the per-(identity, orientation) cap.
+        Defaults to counting ``pending_review``, ``auto_verified``, and
+        ``operator_verified`` rows (never ``rejected`` or ``expired``) so a flood of
+        unreviewed candidates still engages the per-(identity, orientation) cap.
+        When *seen_since* is given, only rows with ``seen_at > seen_since`` count,
+        matching the vote window's strict lower bound so the cap bounds the active
+        working set rather than lifetime rows.
         """
 
     @abstractmethod
@@ -145,10 +149,11 @@ class GalleryRepository(ABC):
         embedding: list[float],
         limit: int = 10,
         camera_id: str | None = None,
-        max_age_seconds: int | None = None,
+        seen_after: datetime | None = None,
         states: frozenset[str] | None = VOTING_STATES,
         exclude_seed_sources: frozenset[str] = NO_SEED_SOURCE_EXCLUSION,
         seen_before: datetime | None = None,
+        active_only: bool = True,
     ) -> list[tuple[GalleryEmbedding, float]]:
         """Nearest-neighbor search over gallery embeddings.
 
@@ -160,10 +165,8 @@ class GalleryRepository(ABC):
             embedding: query embedding vector.
             limit: maximum number of results.
             camera_id: if provided, filter to gallery entries from this camera.
-            max_age_seconds: if provided, filter to entries with
-                seen_at > now - max_age_seconds (strict; an entry exactly at
-                the cutoff age is excluded, pinned identically on both the
-                InMemory and Postgres peers).
+            seen_after: if provided, keep only entries with ``seen_at > seen_after``
+                (strict lower bound; an entry exactly at *seen_after* is excluded).
             states: lifecycle-state filter; the default excludes pending/rejected
                 rows so unverified vectors never vote (operator_verified and
                 auto_verified both vote, at their configured trust
@@ -171,7 +174,9 @@ class GalleryRepository(ABC):
                 for administrative/service callers, each of which must carry
                 a one-line justification comment.
             exclude_seed_sources: drop rows whose ``seed_source`` is in this set.
-            seen_before: keep only rows with ``seen_at`` strictly before this capture time.
+            seen_before: if provided, keep only entries with ``seen_at <= seen_before``
+                (inclusive upper bound, forming the vote window ``(seen_after, seen_before]``).
+            active_only: when True (default), exclude entries whose identity is inactive.
         """
 
     @abstractmethod
@@ -255,6 +260,7 @@ class GalleryRepository(ABC):
         model_version: str | None = None,
         source_type: str | None = None,
         seed_source: str | None = None,
+        seed_association_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -262,6 +268,30 @@ class GalleryRepository(ABC):
     ) -> tuple[list[ReviewCandidate], int]:
         """Paginated review candidates plus the total matching count."""
         return ([], 0)
+
+    async def count_by_seed_association(self, seed_association_id: str) -> dict[str, int]:
+        """Counts of gallery rows seeded by *seed_association_id*, grouped by lifecycle state."""
+        return {
+            "pending_review": 0,
+            "auto_verified": 0,
+            "operator_verified": 0,
+            "rejected": 0,
+            "expired": 0,
+        }
+
+    async def count_past_retention(self, *, state: str, seen_before: datetime) -> int:
+        """Count rows in *state* with ``seen_at < seen_before`` (read-only, used in shadow)."""
+        return 0
+
+    async def expire_past_retention(
+        self, *, state: str, seen_before: datetime, limit: int
+    ) -> list[str]:
+        """Transition up to *limit* rows in *state* with ``seen_at < seen_before`` to ``expired``.
+
+        Nulls each row's embedding, records a ``system:retention`` audit event with the
+        previous state, and returns the non-empty crop keys released for object deletion.
+        """
+        return []
 
     async def get_review_candidate(self, candidate_id: str) -> ReviewCandidate | None:
         """One review candidate with full provenance, or ``None``."""
@@ -477,6 +507,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         identity_id: str,
         orientation: int,
         states: frozenset[str] | None = PENDING_AND_VERIFIED,
+        seen_since: datetime | None = None,
     ) -> int:
         return sum(
             1
@@ -484,6 +515,7 @@ class InMemoryGalleryRepository(GalleryRepository):
             if entry.identity_id == identity_id
             and entry.orientation == orientation
             and (states is None or entry.state in states)
+            and (seen_since is None or entry.seen_at > seen_since)
         )
 
     async def count_seeded_entries(
@@ -528,6 +560,7 @@ class InMemoryGalleryRepository(GalleryRepository):
         model_version: str | None = None,
         source_type: str | None = None,
         seed_source: str | None = None,
+        seed_association_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -544,6 +577,8 @@ class InMemoryGalleryRepository(GalleryRepository):
             rows = [c for c in rows if c.candidate_reason == source_type]
         if seed_source is not None:
             rows = [c for c in rows if c.seed_source == seed_source]
+        if seed_association_id is not None:
+            rows = [c for c in rows if c.seed_association_id == seed_association_id]
         if since is not None:
             rows = [c for c in rows if c.capture_time is not None and c.capture_time >= since]
         if until is not None:
@@ -552,6 +587,99 @@ class InMemoryGalleryRepository(GalleryRepository):
         rows.sort(key=lambda c: c.created_at or c.seen_at or datetime.min.replace(tzinfo=UTC))
         total = len(rows)
         return (rows[offset : offset + limit], total)
+
+    async def count_by_seed_association(self, seed_association_id: str) -> dict[str, int]:
+        counts: dict[str, int] = {
+            "pending_review": 0,
+            "auto_verified": 0,
+            "operator_verified": 0,
+            "rejected": 0,
+            "expired": 0,
+        }
+        for row_id in self._entries.keys() | self._candidates.keys():
+            candidate = self._candidates.get(row_id)
+            assoc = (
+                candidate.seed_association_id
+                if candidate is not None
+                else self._entries[row_id].seed_association_id
+            )
+            if assoc != seed_association_id:
+                continue
+            state = candidate.state if candidate is not None else self._entries[row_id].state
+            counts[state] = counts.get(state, 0) + 1
+        return counts
+
+    async def count_past_retention(self, *, state: str, seen_before: datetime) -> int:
+        total = 0
+        for row_id in self._entries.keys() | self._candidates.keys():
+            candidate = self._candidates.get(row_id)
+            entry = self._entries.get(row_id)
+            row_state = candidate.state if candidate is not None else entry.state  # type: ignore[union-attr]
+            seen_at = (
+                candidate.seen_at
+                if candidate is not None and candidate.seen_at is not None
+                else (entry.seen_at if entry is not None else None)
+            )
+            if row_state == state and seen_at is not None and seen_at < seen_before:
+                total += 1
+        return total
+
+    async def expire_past_retention(
+        self, *, state: str, seen_before: datetime, limit: int
+    ) -> list[str]:
+        from dataclasses import replace
+
+        if limit <= 0:
+            return []
+        eligible: list[tuple[datetime, str]] = []
+        for row_id in self._entries.keys() | self._candidates.keys():
+            candidate = self._candidates.get(row_id)
+            entry = self._entries.get(row_id)
+            row_state = candidate.state if candidate is not None else entry.state  # type: ignore[union-attr]
+            seen_at = (
+                candidate.seen_at
+                if candidate is not None and candidate.seen_at is not None
+                else (entry.seen_at if entry is not None else None)
+            )
+            if row_state == state and seen_at is not None and seen_at < seen_before:
+                eligible.append((seen_at, row_id))
+        eligible.sort(key=lambda item: (item[0], item[1]))
+        chosen = eligible[:limit]
+        now = datetime.now(UTC)
+        released_crops: list[str] = []
+        for _seen_at, row_id in chosen:
+            candidate = self._candidates.get(row_id)
+            if candidate is not None:
+                next_version = candidate.audit_version + 1
+                updated = replace(
+                    candidate,
+                    state="expired",
+                    reviewed_actor="system:retention",
+                    reviewed_time=now,
+                    review_reason="retention_expired",
+                    audit_version=next_version,
+                )
+                self._candidates[row_id] = updated
+                self._events.setdefault(row_id, []).append(
+                    ReviewEvent(
+                        event_id=f"evt-{row_id}-{next_version}",
+                        entry_id=row_id,
+                        previous_state=candidate.state,
+                        new_state="expired",
+                        actor="system:retention",
+                        reason="retention_expired",
+                        note=None,
+                        event_time=now,
+                        audit_version=next_version,
+                    )
+                )
+                if candidate.crop_key:
+                    released_crops.append(candidate.crop_key)
+            entry = self._entries.get(row_id)
+            if entry is not None:
+                self._entries[row_id] = replace(entry, state="expired", embedding=[])
+        released_crops.sort()
+        return released_crops
 
     async def get_review_candidate(self, candidate_id: str) -> ReviewCandidate | None:
         return self._candidates.get(candidate_id)
@@ -569,6 +697,7 @@ class InMemoryGalleryRepository(GalleryRepository):
             "auto_verified": 0,
             "operator_verified": 0,
             "rejected": 0,
+            "expired": 0,
         }
         # Postgres counts every reid_gallery row, including rows written by
         # upsert_gallery_entry that never became review candidates; the
@@ -697,10 +826,10 @@ class InMemoryGalleryRepository(GalleryRepository):
             entry,
             state=updated.state,
             identity_id=updated.identity_id if updated.identity_id else entry.identity_id,
-            # Rejection deletes the vector (governance rule); voided here too
-            # so a rejected row can never contribute to a similarity query,
+            # Rejection and expiration delete the vector; voided here too so a
+            # rejected or expired row can never contribute to a similarity query,
             # even one that bypasses the state filter.
-            embedding=[] if updated.state == "rejected" else entry.embedding,
+            embedding=[] if updated.state in ("rejected", "expired") else entry.embedding,
         )
 
     async def compensate_review(
@@ -780,20 +909,17 @@ class InMemoryGalleryRepository(GalleryRepository):
         embedding: list[float],
         limit: int = 10,
         camera_id: str | None = None,
-        max_age_seconds: int | None = None,
+        seen_after: datetime | None = None,
         states: frozenset[str] | None = VOTING_STATES,
         exclude_seed_sources: frozenset[str] = NO_SEED_SOURCE_EXCLUSION,
         seen_before: datetime | None = None,
+        active_only: bool = True,
     ) -> list[tuple[GalleryEmbedding, float]]:
-        entries = await self.list_gallery_entries(states=None)
+        entries = await self.list_gallery_entries(active_only=active_only, states=None)
         if camera_id is not None:
             entries = [e for e in entries if e.camera_id == camera_id]
-        if max_age_seconds is not None:
-            # Strict `>` matches the Postgres peer's `seen_at > now() - interval`
-            # so an entry exactly at the cutoff age is
-            # excluded on both peers.
-            cutoff = datetime.now(UTC) - timedelta(seconds=max_age_seconds)
-            entries = [e for e in entries if e.seen_at > cutoff]
+        if seen_after is not None:
+            entries = [e for e in entries if e.seen_at > seen_after]
         if states is not None:
             entries = [e for e in entries if e.state in states]
         entries = _apply_provenance_filters(entries, exclude_seed_sources, seen_before)
@@ -855,11 +981,11 @@ def _apply_provenance_filters(
     exclude_seed_sources: frozenset[str],
     seen_before: datetime | None,
 ) -> list[GalleryEmbedding]:
-    """The InMemory twin of the Postgres ``seed_source <> ALL`` and ``seen_at <`` predicates."""
+    """The InMemory twin of the Postgres ``seed_source <> ALL`` and ``seen_at <=`` predicates."""
     if exclude_seed_sources:
         entries = [e for e in entries if e.seed_source not in exclude_seed_sources]
     if seen_before is not None:
-        entries = [e for e in entries if e.seen_at < seen_before]
+        entries = [e for e in entries if e.seen_at <= seen_before]
     return entries
 
 

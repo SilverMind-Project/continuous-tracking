@@ -80,6 +80,10 @@ class WearableConfig:
     # attested-exemplar queue. "off" sends nothing.
     face_attestation: FaceAttestationMode = "off"
 
+    # Automatically revoke what a tag taught and hold teaching when a segment is first marked
+    # swap_suspected. Acts only when a wearable channel is running.
+    revocation_auto_on_swap: bool = True
+
     def __post_init__(self) -> None:
         if self.mode not in WEARABLE_MODES:
             raise ValueError(f"wearable.mode must be one of {WEARABLE_MODES}, got {self.mode!r}")

@@ -88,6 +88,7 @@ from ..services.image_only_evaluator import ImageOnlyEvaluationSink
 from ..services.transit_zone_map import TransitZoneMap
 from ..services.unknown_backfill import BackfillConfig, UnknownBackfillService
 from ..services.wearable_face_attestation import WearableFaceAttestationService
+from ..services.wearable_revocation import WearableTeachingRevocationService
 from ..services.wearable_site_config_map import WearableSiteConfigMap
 from ..storage.appearance import DailyAppearanceRepo, InMemoryDailyAppearanceRepo
 from ..storage.base import (
@@ -125,6 +126,7 @@ from ..storage.wearable_associations import (
     InMemoryWearableAssociationRepository,
     WearableAssociationRepository,
 )
+from ..storage.wearable_teaching_holds import WearableTeachingHoldRepository
 from ..tracking.floor_projector import FloorProjector
 from ..tracking.identity.candidate_eligibility import CandidatePolicy
 from ..tracking.identity.face_template_buffer import FaceTemplatePolicy
@@ -244,6 +246,8 @@ class PipelineDependencies:
     external_evidence: ExternalIdentityEvidenceSource | None = None
     wearable_fix_source: WearableFixSource | None = None
     wearable_association_repo: WearableAssociationRepository | None = None
+    wearable_teaching_hold_repo: WearableTeachingHoldRepository | None = None
+    wearable_revocation_service: WearableTeachingRevocationService | None = None
     # Wired only while the wearable channel runs (shadow or enabled); measurement only.
     image_only_evaluation: ImageOnlyEvaluationSink | None = None
 
@@ -518,6 +522,7 @@ class FrameProcessingPipeline:
                     max_range_s=resolver_cfg.backfill_max_range_s,
                     wearable_enabled=resolver_cfg.enable_wearable_backfill,
                 ),
+                teaching_holds=deps.wearable_teaching_hold_repo if deps else None,
             )
 
         self._ph_continuation_publisher = PHContinuationPublisher(
@@ -659,7 +664,10 @@ class FrameProcessingPipeline:
                 self._config.wearable.mode != "off"
                 and self._config.wearable.face_attestation == "enabled"
             ):
-                self._face_attestation = WearableFaceAttestationService(self._face_id_client)
+                self._face_attestation = WearableFaceAttestationService(
+                    self._face_id_client,
+                    teaching_holds=deps.wearable_teaching_hold_repo if deps else None,
+                )
 
         # ---- Build the stage runner (order matters) ----
         fetch_stage = FetchStage(
@@ -768,7 +776,12 @@ class FrameProcessingPipeline:
             wearable_repo = (
                 deps.wearable_association_repo or InMemoryWearableAssociationRepository()
             )
-            wearable_persist_stage = WearableAssociationPersistStage(repo=wearable_repo)
+            wearable_persist_stage = WearableAssociationPersistStage(
+                repo=wearable_repo,
+                revocation_service=deps.wearable_revocation_service if deps else None,
+                auto_on_swap=self._config.wearable.revocation_auto_on_swap,
+                swap_conflict_window_s=self._config.wearable.swap_conflict_window_s,
+            )
         image_only_stage = (
             ImageOnlyEvaluationStage(deps.image_only_evaluation)
             if deps.image_only_evaluation is not None
@@ -834,6 +847,7 @@ class FrameProcessingPipeline:
                 gallery_repo=self._gallery_repo,
                 crop_storage=self._frame_fetcher,  # type: ignore[arg-type]
                 policy=self._config.reid_candidates,
+                teaching_holds=deps.wearable_teaching_hold_repo if deps else None,
             ),
             PublishStage(
                 transport=self._transport,

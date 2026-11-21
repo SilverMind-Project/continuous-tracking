@@ -124,7 +124,8 @@ async def test_only_voting_state_entries_vote() -> None:
             _obs("d-grandma", grandma),  # matches only a pending entry
             _obs("d-chandra", chandra),  # matches an auto_verified entry
             _obs("d-none", []),  # no embedding
-        ]
+        ],
+        as_of=NOW,
     )
 
     assert resolved == ["amma", None, "chandra", None]
@@ -159,7 +160,7 @@ async def test_disagreement_probe_uses_cutoff_and_voting_states() -> None:
         ),
     )
 
-    resolved = await tracker._resolve_verified_reid_identities([_obs("d1", amma)])
+    resolved = await tracker._resolve_verified_reid_identities([_obs("d1", amma)], as_of=NOW)
 
     assert resolved == [None]
 
@@ -172,7 +173,7 @@ async def test_disagreement_probe_uses_cutoff_and_voting_states() -> None:
         ),
     )
     resolved_no_cutoff = await tracker_no_cutoff._resolve_verified_reid_identities(
-        [_obs("d1", amma)]
+        [_obs("d1", amma)], as_of=NOW
     )
 
     assert resolved_no_cutoff == ["amma"]
@@ -186,7 +187,7 @@ async def test_sub_threshold_match_contributes_no_identity() -> None:
     await _add_entry(gallery, "g1", "amma", amma, "operator_verified")
     tracker = _tracker(gallery, WorldTrackerConfig(enable_reid_disagreement_cost=True))
 
-    resolved = await tracker._resolve_verified_reid_identities([_obs("d1", orthogonal)])
+    resolved = await tracker._resolve_verified_reid_identities([_obs("d1", orthogonal)], as_of=NOW)
 
     assert resolved == [None]
 

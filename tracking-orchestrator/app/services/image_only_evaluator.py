@@ -16,6 +16,7 @@ seconds, which keeps the comparison paired.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -51,6 +52,58 @@ def classify(decided: str | None, truth: str) -> ImageOnlyOutcome:
     if decided is None:
         return ImageOnlyOutcome.UNKNOWN
     return ImageOnlyOutcome.CORRECT if decided == truth else ImageOnlyOutcome.WRONG
+
+
+@dataclass(frozen=True)
+class DayRates:
+    """One day's rates for one arm; a rate is None when its denominator is zero."""
+
+    attribution: float | None
+    wrong: float | None
+    seconds: float
+
+
+def daily_rates(total: ImageOnlyDailyTotal | None) -> DayRates:
+    """Compute attribution and wrong rates from one day/arm total."""
+    if total is None:
+        return DayRates(attribution=None, wrong=None, seconds=0.0)
+    seconds = total.correct_s + total.wrong_s + total.unknown_s
+    named = total.correct_s + total.wrong_s
+    return DayRates(
+        attribution=total.correct_s / seconds if seconds > 0 else None,
+        wrong=total.wrong_s / named if named > 0 else None,
+        seconds=seconds,
+    )
+
+
+def summarize_attribution_difference(
+    totals: Sequence[ImageOnlyDailyTotal],
+) -> tuple[int, float | None]:
+    """Return ``(distinct_paired_days, mean_treatment_minus_control_attribution)``.
+
+    Matches the paired daily calculation in ``scripts/image_only_evaluation_report.py``:
+    each ``(identity_id, attestation_grade, day)`` where both ``control`` and ``treatment``
+    arms have positive total seconds contributes ``treatment.attribution - control.attribution``.
+    """
+    by_key: dict[tuple[str, str], dict[date, dict[str, ImageOnlyDailyTotal]]] = defaultdict(
+        lambda: defaultdict(dict)
+    )
+    for total in totals:
+        by_key[(total.identity_id, str(total.attestation_grade))][total.day][total.arm] = total
+
+    paired_days: set[date] = set()
+    diffs: list[float] = []
+    for days in by_key.values():
+        for day, by_arm in days.items():
+            control = daily_rates(by_arm.get("control"))
+            treatment = daily_rates(by_arm.get("treatment"))
+            if control.attribution is not None and treatment.attribution is not None:
+                paired_days.add(day)
+                diffs.append(treatment.attribution - control.attribution)
+
+    if not diffs:
+        return 0, None
+    return len(paired_days), sum(diffs) / len(diffs)
 
 
 class ImageOnlyEvaluationService:

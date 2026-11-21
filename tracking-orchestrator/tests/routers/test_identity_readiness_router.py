@@ -121,6 +121,7 @@ async def test_reports_policies_counts_and_camera_calibration(
         "auto_verified": 1,
         "operator_verified": 0,
         "rejected": 0,
+        "expired": 0,
     }
     # Rows a wearable taught, by state, for the readiness page's body-sample step.
     assert body["wearable_gallery_counts"] == {
@@ -128,6 +129,7 @@ async def test_reports_policies_counts_and_camera_calibration(
         "auto_verified": 1,
         "operator_verified": 0,
         "rejected": 0,
+        "expired": 0,
     }
     assert body["cameras"] == [
         {"camera_id": "hall", "calibrated": False},

@@ -156,6 +156,7 @@ class CountsResponse(BaseModel):
     auto_verified: int
     operator_verified: int
     rejected: int
+    expired: int = 0
 
 
 class ApproveRequest(BaseModel):
@@ -248,6 +249,7 @@ async def list_candidates(
     model_version: str | None = None,
     source_type: str | None = None,
     seed_source: GallerySeedSource | None = None,
+    seed_association_id: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
     limit: int = 50,
@@ -264,6 +266,7 @@ async def list_candidates(
         model_version=model_version,
         source_type=source_type,
         seed_source=str(seed_source) if seed_source is not None else None,
+        seed_association_id=seed_association_id,
         since=since,
         until=until,
         limit=limit,
@@ -286,6 +289,7 @@ async def review_counts(ctx: _ReviewContext = Depends(get_context)) -> CountsRes
         auto_verified=counts.get("auto_verified", 0),
         operator_verified=counts.get("operator_verified", 0),
         rejected=counts.get("rejected", 0),
+        expired=counts.get("expired", 0),
     )
 
 

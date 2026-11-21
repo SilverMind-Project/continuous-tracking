@@ -116,8 +116,8 @@ class PostgresIdentityCorrectionRepository:
                     range_id, revision_id, correction_id, ph_id,
                     effective_identity_id, authority, range_start, range_end,
                     supersedes_range_id, superseded_by_range_id,
-                    compensated_by_revision_id, created_at
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                    compensated_by_revision_id, source_association_id, created_at
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
                 ON CONFLICT (range_id) DO NOTHING
                 """,
                 revision_range.range_id,
@@ -131,8 +131,17 @@ class PostgresIdentityCorrectionRepository:
                 revision_range.supersedes_range_id,
                 revision_range.superseded_by_range_id,
                 revision_range.compensated_by_revision_id,
+                revision_range.source_association_id,
                 revision_range.created_at,
             )
+
+    async def get_range(self, range_id: str) -> IdentityRevisionRange | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM continuous_tracking.identity_revision_ranges WHERE range_id = $1",
+                range_id,
+            )
+        return _range_from_row(row) if row is not None else None
 
     async def supersede_range(self, range_id: str, *, by_range_id: str) -> None:
         async with self._pool.acquire() as conn:
@@ -141,6 +150,15 @@ class PostgresIdentityCorrectionRepository:
                 "SET superseded_by_range_id = $2 WHERE range_id = $1",
                 range_id,
                 by_range_id,
+            )
+
+    async def mark_range_compensated(self, range_id: str, *, by_revision_id: str) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE continuous_tracking.identity_revision_ranges "
+                "SET compensated_by_revision_id = $2 WHERE range_id = $1",
+                range_id,
+                by_revision_id,
             )
 
     async def list_ranges(
@@ -152,6 +170,20 @@ class PostgresIdentityCorrectionRepository:
         sql += " ORDER BY created_at ASC"
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(sql, ph_id)
+        return [_range_from_row(r) for r in rows]
+
+    async def list_ranges_by_source_association(
+        self, source_association_id: str, *, live_only: bool = True
+    ) -> list[IdentityRevisionRange]:
+        sql = (
+            "SELECT * FROM continuous_tracking.identity_revision_ranges "
+            "WHERE source_association_id = $1::uuid"
+        )
+        if live_only:
+            sql += " AND superseded_by_range_id IS NULL AND compensated_by_revision_id IS NULL"
+        sql += " ORDER BY created_at ASC"
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, source_association_id)
         return [_range_from_row(r) for r in rows]
 
     async def live_ranges_for_phs(
@@ -399,6 +431,9 @@ def _range_from_row(row: Any) -> IdentityRevisionRange:
         else None,
         compensated_by_revision_id=str(row["compensated_by_revision_id"])
         if row["compensated_by_revision_id"]
+        else None,
+        source_association_id=str(row["source_association_id"])
+        if row.get("source_association_id")
         else None,
         created_at=row["created_at"],
     )

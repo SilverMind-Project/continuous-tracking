@@ -1172,6 +1172,7 @@ class IdentityRevisionRange:
     supersedes_range_id: str | None = None
     superseded_by_range_id: str | None = None
     compensated_by_revision_id: RevisionId | None = None
+    source_association_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -1616,4 +1617,7 @@ from .wearables import (  # noqa: E402
 )
 from .wearables import (  # noqa: E402
     WearableSiteConfig as WearableSiteConfig,
+)
+from .wearables import (  # noqa: E402
+    WearableTeachingHold as WearableTeachingHold,
 )

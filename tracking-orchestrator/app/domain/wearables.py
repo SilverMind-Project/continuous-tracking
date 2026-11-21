@@ -198,6 +198,21 @@ class WearableAssociationSegment:
     mean_residual_m: float | None
     swap_suspected: bool = False
     close_reason: str | None = None
+    revoked_at: datetime | None = None
+    revoked_by: str | None = None
+    revoke_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class WearableTeachingHold:
+    """Pause on wearable-driven learning for one tag until an operator resumes it."""
+
+    hold_id: str
+    tag_id: str
+    held_at: datetime
+    reason: str
+    cleared_at: datetime | None = None
+    cleared_by: str | None = None
 
 
 @dataclass(frozen=True)

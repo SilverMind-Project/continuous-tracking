@@ -578,11 +578,11 @@ reid_candidates:
   # entirely (rollback path) without touching candidate creation itself.
   auto_verify_min_confidence: 0.90
   # Wearable-attested seeding: when no face seed qualifies and the detection's PH carries an
-  # attested wearable association naming its committed identity, mint a body sample from the
-  # wearable. Trajectory grade mints auto_verified (seed_source wearable_attested, vote trust
-  # resolver.gallery_wearable_trust_multiplier); room grade mints pending_review and votes only
-  # after operator approval. Off until the wearable channel itself is enabled and its shadow
-  # review passed; startup refuses true unless wearable.mode is "enabled".
+  # attested wearable association, mint a body sample from the wearable. Trajectory grade mints
+  # auto_verified (seed_source wearable_attested, vote trust
+  # resolver.gallery_wearable_trust_multiplier) only when wearable.mode is "enabled"; room grade
+  # mints pending_review and votes only after operator approval (accepted under both "shadow" and
+  # "enabled"). Startup refuses true when wearable.mode is "off".
   wearable_seeding_enabled: false
   # Seconds between two wearable seeds of one identity and orientation (seed spacing).
   wearable_min_seed_interval_s: 120.0
@@ -590,6 +590,23 @@ reid_candidates:
   wearable_max_similarity_to_recent: 0.92
   # Room-grade seeds per identity per UTC day; they all wait for review, so keep the queue small.
   wearable_room_grade_max_per_day: 10
+
+# ReID gallery lifecycle retention: expires aged body-sample rows (nulling their vector,
+# deleting their crop object, keeping audit metadata as an expired tombstone).
+reid_gallery:
+  retention:
+    # "off": disabled; "shadow": counts rows past retention without mutating; "enabled": expires.
+    mode: "enabled"
+    # Days before auto_verified body samples expire (keeps a 14-day appearance window).
+    auto_verified_days: 14
+    # Days before unreviewed pending_review body samples expire (matches unlabeled face captures).
+    pending_review_days: 30
+    # Days before operator_verified body samples expire.
+    operator_verified_days: 90
+    # Seconds between daily retention sweeps.
+    interval_s: 86400
+    # Maximum rows expired per database batch.
+    batch_size: 1000
 
 # Keyframe sampler
 sampler:
@@ -902,6 +919,11 @@ wearable:
     # (never enrollment or recognition on their own). person-identification-service must also
     # have calibration_capture.attestation_enabled on, or every offer is a buffer miss.
     face_attestation: "off"
+  revocation:
+    # Automatically revoke what a tag taught (demote auto_verified rows, revoke attested faces,
+    # compensate inferred backfill ranges, and hold further teaching until an operator resumes)
+    # when a segment is first marked swap_suspected.
+    auto_on_swap: true
 
 # Environment label (dev / staging / production)
 env: production

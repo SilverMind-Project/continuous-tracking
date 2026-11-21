@@ -56,16 +56,22 @@ class _CountingGalleryRepo(InMemoryGalleryRepository):
         embedding: list[float],
         limit: int = 10,
         camera_id: str | None = None,
-        max_age_seconds: int | None = None,
+        seen_after: datetime | None = None,
+        seen_before: datetime | None = None,
         states: frozenset[str] | None = VERIFIED_ONLY,
+        exclude_seed_sources: frozenset[str] | None = None,
+        active_only: bool = True,
     ) -> list[tuple[GalleryEmbedding, float]]:
         self.search_similar_calls += 1
         return await super().search_similar(
             embedding=embedding,
             limit=limit,
             camera_id=camera_id,
-            max_age_seconds=max_age_seconds,
+            seen_after=seen_after,
+            seen_before=seen_before,
             states=states,
+            exclude_seed_sources=exclude_seed_sources,
+            active_only=active_only,
         )
 
     async def list_gallery_entries_for_tracklets(
@@ -74,6 +80,8 @@ class _CountingGalleryRepo(InMemoryGalleryRepository):
         limit: int = 20,
         allowed_states: frozenset[str] | None = VERIFIED_ONLY,
         model_versions: set[str] | None = None,
+        exclude_seed_sources: frozenset[str] | None = None,
+        seen_before: datetime | None = None,
     ) -> list[GalleryEmbedding]:
         self.list_for_tracklets_calls += 1
         return await super().list_gallery_entries_for_tracklets(
@@ -81,6 +89,8 @@ class _CountingGalleryRepo(InMemoryGalleryRepository):
             limit=limit,
             allowed_states=allowed_states,
             model_versions=model_versions,
+            exclude_seed_sources=exclude_seed_sources,
+            seen_before=seen_before,
         )
 
     @property
@@ -162,13 +172,14 @@ async def gallery() -> _CountingGalleryRepo:
             identity_id=_BOB_ID, display_name="Bob", enrolled_at=datetime(2026, 1, 1, tzinfo=UTC)
         )
     )
+    seen_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
     for i in range(5):
         await repo.upsert_gallery_entry(
             GalleryEmbedding(
                 gallery_entry_id=f"alice-front-{i}",
                 identity_id=_ALICE_ID,
                 embedding=_FRONT_EMB,
-                seen_at=datetime.now(UTC),
+                seen_at=seen_at,
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.FRONT,
@@ -182,7 +193,7 @@ async def gallery() -> _CountingGalleryRepo:
                 gallery_entry_id=f"alice-back-{i}",
                 identity_id=_ALICE_ID,
                 embedding=_BACK_EMB,
-                seen_at=datetime.now(UTC),
+                seen_at=seen_at,
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.BACK,
@@ -200,7 +211,7 @@ async def gallery() -> _CountingGalleryRepo:
                 gallery_entry_id=f"bob-back-{i}",
                 identity_id=_BOB_ID,
                 embedding=_BOB_BACK_EMB,
-                seen_at=datetime.now(UTC),
+                seen_at=seen_at,
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.BACK,

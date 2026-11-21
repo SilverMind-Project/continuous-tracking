@@ -61,6 +61,14 @@ class CandidatePolicy:
     # Room-attested seeds are reviewed by hand; this caps them per identity per UTC day so the
     # ReID Review Queue stays reviewable.
     wearable_room_grade_max_per_day: int = 10
+    # Working-set creation cap window in seconds, wired from resolver.gallery_vote_max_age_s in
+    # app/main.py. When set, max_per_identity_orientation counts only rows seen within this window
+    # so the gallery keeps learning today's outfit instead of locking after lifetime rows fill.
+    # None disables the time bound (counts all non-rejected/non-expired rows).
+    gallery_vote_max_age_s: float | None = None
+    # True when wearable.mode == "enabled". Under "shadow", room-grade seeds still mint
+    # pending_review rows for operator review while trajectory seeds skip with channel_not_live.
+    wearable_channel_live: bool = True
 
     def __post_init__(self) -> None:
         if self.wearable_min_seed_interval_s < 0.0:
@@ -69,6 +77,8 @@ class CandidatePolicy:
             raise ValueError("reid_candidates.wearable_max_similarity_to_recent must be in (0, 1]")
         if self.wearable_room_grade_max_per_day < 0:
             raise ValueError("reid_candidates.wearable_room_grade_max_per_day must be >= 0")
+        if self.gallery_vote_max_age_s is not None and self.gallery_vote_max_age_s <= 0.0:
+            raise ValueError("gallery_vote_max_age_s must be positive or None")
 
 
 @dataclass(frozen=True)
@@ -129,9 +139,6 @@ def evaluate_candidate(
     paths: neither a face nor a tag naming a different person than the PH's committed identity
     may seed under the held label.
     """
-    if not committed_identity_id:
-        return _ineligible("no_identity")
-
     if isinstance(seed, WearableSeed):
         return _evaluate_wearable_seed(
             committed_identity_id=committed_identity_id,
@@ -142,6 +149,9 @@ def evaluate_candidate(
             orientation_confidence=orientation_confidence,
             cfg=cfg,
         )
+
+    if not committed_identity_id:
+        return _ineligible("no_identity")
 
     if seed is None:
         return _ineligible("no_face_anchor")
@@ -185,7 +195,7 @@ def evaluate_candidate(
 
 def _evaluate_wearable_seed(
     *,
-    committed_identity_id: str,
+    committed_identity_id: str | None,
     seed: WearableSeed,
     embedding: Sequence[float] | None,
     quality: float,
@@ -195,9 +205,11 @@ def _evaluate_wearable_seed(
 ) -> CandidateEligibility:
     """Gate a wearable-attested seed. The grade decides the mint state, never the operator.
 
-    Trajectory grade mints ``auto_verified`` (the wearable placed the person on this track);
-    room grade mints ``pending_review`` and votes only after an operator approves it, because a
-    sole-occupant inference is weaker than a matched trajectory.
+    Trajectory grade mints ``auto_verified`` (the wearable placed the person on this track)
+    only when the wearable channel is live (``wearable_channel_live=True``); in shadow mode
+    trajectory seeds skip with ``channel_not_live``. Room grade mints ``pending_review`` and
+    votes only after an operator approves it, so it is accepted in shadow even when the PH has
+    no live committed identity yet (still refusing any mismatch against a committed identity).
     """
     evidence = seed.evidence
     if not cfg.wearable_seeding_enabled:
@@ -206,15 +218,25 @@ def _evaluate_wearable_seed(
     if not evidence.attested:
         return _ineligible("wearable_not_attested")
 
-    if evidence.identity_id != committed_identity_id:
-        return _ineligible("identity_mismatch")
+    is_trajectory = evidence.attestation_grade == WearableAttestationGrade.TRAJECTORY
+    if is_trajectory and not cfg.wearable_channel_live:
+        return _ineligible("channel_not_live")
+
+    if committed_identity_id is None:
+        if cfg.wearable_channel_live or is_trajectory:
+            return _ineligible("no_identity")
+        target_identity_id = evidence.identity_id
+    else:
+        if evidence.identity_id != committed_identity_id:
+            return _ineligible("identity_mismatch")
+        target_identity_id = committed_identity_id
 
     # Stricter than the face path: the wearable cannot see the face, so any recognition of
     # someone else on this detection, at any similarity, vetoes the seed.
     if any(
         face.recognition_state == "recognized"
         and face.person_id is not None
-        and face.person_id != committed_identity_id
+        and face.person_id != target_identity_id
         for face in seed.detection_faces
     ):
         return _ineligible("face_conflict")
@@ -223,7 +245,7 @@ def _evaluate_wearable_seed(
     if shared is not None:
         return shared
 
-    if evidence.attestation_grade == WearableAttestationGrade.TRAJECTORY:
+    if is_trajectory:
         return CandidateEligibility(
             eligible=True,
             reason="",

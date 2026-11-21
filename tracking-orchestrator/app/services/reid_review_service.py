@@ -96,6 +96,7 @@ class ReIDReviewService:
         model_version: str | None = None,
         source_type: str | None = None,
         seed_source: str | None = None,
+        seed_association_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -108,6 +109,7 @@ class ReIDReviewService:
             model_version=model_version,
             source_type=source_type,
             seed_source=seed_source,
+            seed_association_id=seed_association_id,
             since=since,
             until=until,
             limit=limit,
@@ -133,8 +135,8 @@ class ReIDReviewService:
         reasons: list[str] = []
         # Reviewable states are pending_review and auto_verified: an
         # operator may still approve, relabel, or reject a machine-trusted
-        # row. Only the terminal states are "already reviewed".
-        if candidate.state in ("operator_verified", "rejected"):
+        # row. Terminal states (operator_verified, rejected, expired) are not reviewable.
+        if candidate.state in ("operator_verified", "rejected", "expired"):
             reasons.append(f"already_reviewed:{candidate.state}")
         if candidate.is_truncated:
             reasons.append("truncated")

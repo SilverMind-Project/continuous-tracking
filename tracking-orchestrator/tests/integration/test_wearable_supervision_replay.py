@@ -52,8 +52,8 @@ from app.tracking.world.tracker import WorldTracker
 from app.tracking.world.wearable_config import WearableConfig
 from app.transport.redis_streams import FrameReady
 
-# The gallery's vote-age cutoff runs on wall clock, so scenarios end shortly before now.
-T0 = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=3)
+# Fixed capture-time anchor: vote-window and recency decay use captured_at, never wall clock.
+T0 = datetime(2026, 6, 1, 9, 0, 0, tzinfo=UTC)
 _ROOMS = {
     "1": [(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (0.0, 5.0)],
     "2": [(5.0, 0.0), (10.0, 0.0), (10.0, 5.0), (5.0, 5.0)],
@@ -408,3 +408,294 @@ async def test_the_tag_teaches_the_cameras_and_the_paired_evaluation_shows_it() 
         identity_id="resident-1", orientation=int(OrientationBin.BACK), states=PENDING_AND_VERIFIED
     )
     assert counted == len(rows)
+
+
+@pytest.mark.asyncio
+async def test_two_day_replay_mints_fresh_rows_on_day_two_after_day_one_hits_cap() -> None:
+    """Task 2 regression: filling the cap of 10 on day 1 must not starve day 2."""
+    policy = CandidatePolicy(
+        model_version="reid",
+        max_per_identity_orientation=10,
+        wearable_seeding_enabled=True,
+        wearable_min_seed_interval_s=60.0,
+        wearable_max_similarity_to_recent=1.0,
+        gallery_vote_max_age_s=43200.0,
+        wearable_channel_live=True,
+    )
+    stack = await _stack(seeding=True)
+    stack.stage = ReIDCandidateStage(stack.gallery, _CropStorage(), policy)
+
+    # Day 1: wear tag for 15 minutes with 60s spacing -> fills cap of 10.
+    frame = 0
+    for t in range(0, 900, 2):
+        at = T0 + timedelta(seconds=t)
+        for k in range(2):
+            fx, fy = _walk(t + k)
+            stack.fixes.add(_position_fix(at + timedelta(seconds=k), fx, fy, t + k))
+        x, y = _walk(t)
+        frame += 1
+        await _round(
+            stack,
+            at,
+            [_Person("d1", _RESIDENT, x, y)],
+            camera_id="cam-cal",
+            calibrated=True,
+            frame_index=frame,
+        )
+
+    day1_rows = await _wearable_rows(stack)
+    assert len(day1_rows) == 10
+
+    # Day 2 (24h later, new outfit embedding): cap counts only the 12h vote window, so day 2 mints.
+    day2_start = T0 + timedelta(hours=24)
+    day2_emb = [0.0, 0.0, 1.0, 0.0]
+    for t in range(0, 300, 2):
+        at = day2_start + timedelta(seconds=t)
+        for k in range(2):
+            fx, fy = _walk(t + k)
+            stack.fixes.add(_position_fix(at + timedelta(seconds=k), fx, fy, 10000 + t + k))
+        x, y = _walk(t)
+        frame += 1
+        await _round(
+            stack,
+            at,
+            [_Person("d2", day2_emb, x, y)],
+            camera_id="cam-cal",
+            calibrated=True,
+            frame_index=frame,
+        )
+
+    total_rows = await _wearable_rows(stack)
+    assert len(total_rows) > 10
+
+
+@pytest.mark.asyncio
+async def test_wrong_band_swap_auto_revokes_taught_rows_and_holds_until_resume() -> None:
+    """Task 5 replay: a family member wears the resident's band; calibrated face conflicts
+    trip swap_suspected, auto-revocation demotes every taught row, and no new seed mints
+    until an operator resumes teaching."""
+    from app.domain import FaceAnchor
+    from app.pipeline.stages.wearable_associations import WearableAssociationPersistStage
+    from app.services.wearable_revocation import WearableTeachingRevocationService
+    from app.storage.wearable_associations import InMemoryWearableAssociationRepository
+    from app.storage.wearable_teaching_holds import InMemoryWearableTeachingHoldRepository
+
+    assoc_repo = InMemoryWearableAssociationRepository()
+    holds_repo = InMemoryWearableTeachingHoldRepository()
+    stack = await _stack(seeding=True)
+    await stack.gallery.upsert_identity(
+        Identity(identity_id="family-member", display_name="Family", enrolled_at=T0)
+    )
+    policy = CandidatePolicy(
+        model_version="reid",
+        wearable_seeding_enabled=True,
+        wearable_min_seed_interval_s=30.0,
+        wearable_max_similarity_to_recent=1.0,
+        gallery_vote_max_age_s=43200.0,
+        wearable_channel_live=True,
+    )
+    stack.stage = ReIDCandidateStage(
+        stack.gallery, _CropStorage(), policy, teaching_holds=holds_repo
+    )
+    revocation = WearableTeachingRevocationService(
+        association_repo=assoc_repo,
+        teaching_holds=holds_repo,
+        gallery_repo=stack.gallery,
+    )
+    persist_stage = WearableAssociationPersistStage(
+        repo=assoc_repo,
+        revocation_service=revocation,
+        auto_on_swap=True,
+        swap_conflict_window_s=600.0,
+    )
+
+    frame = 0
+    # Phase 1: family member wears resident-1's band (no face yet) and teaches auto_verified rows.
+    for t in range(0, 180, 2):
+        at = T0 + timedelta(seconds=t)
+        for k in range(2):
+            fx, fy = _walk(t + k)
+            stack.fixes.add(_position_fix(at + timedelta(seconds=k), fx, fy, t + k))
+        x, y = _walk(t)
+        frame += 1
+        obs = WorldObservation(
+            camera_id="cam-cal",
+            frame_index=frame,
+            captured_at=at,
+            floor_point=FloorPoint(x_mm=int(x * 1000), y_mm=int(y * 1000), calibrated=True),
+            bbox=BoundingBox(x_min=100, y_min=100, x_max=220, y_max=400),
+            embedding=_VISITOR,
+            detection_confidence=0.92,
+            detection_id=f"fm-{frame}",
+            quality=0.65,
+            orientation=OrientationBin.BACK,
+            orientation_confidence=0.9,
+            floor_cov_random=(0.04, 0.0, 0.0, 0.04),
+            footpoint_reliable=True,
+        )
+        res = await stack.tracker.step(
+            observations=[obs],
+            now=at,
+            room_polygons=_ROOMS,
+            camera_room_map={"cam-cal": "1"},
+            wearable_fixes=stack.fixes.recent(now=at, max_age_s=15.0),
+        )
+        ctx = FrameContext(
+            frame=FrameReady(
+                camera_id="cam-cal",
+                minio_key="k",
+                width=640,
+                height=480,
+                frame_index=frame,
+                capture_time_unix_ns=int(at.timestamp() * 1e9),
+            ),
+            event_time=at,
+            capture_time=at,
+        )
+        ctx.effective_width, ctx.effective_height = 640, 480
+        ctx.domain_detections = [
+            Detection(
+                detection_id=obs.detection_id,
+                camera_id="cam-cal",
+                bbox=obs.bbox,
+                embedding=_VISITOR,
+                capture_time=at,
+                event_time=at,
+                confidence=0.92,
+                floor_point=obs.floor_point,
+                crop_quality=0.9,
+            )
+        ]
+        ctx.crops = [np.zeros((256, 128, 3), dtype=np.uint8)]
+        ctx.orientation_by_detection = {obs.detection_id: (OrientationBin.BACK, 0.9)}
+        ctx.det_to_ph = dict(res.det_to_ph)
+        ctx.det_to_observation_id = dict(res.det_to_observation_id)
+        ctx.committed_ids = {ph.ph_id: ph.current_identity_id for ph in res.updated_phs}
+        ctx.wearable_evidence_by_ph = dict(res.wearable_evidence_by_ph)
+        ctx.wearable_association_transitions = list(res.wearable_association_transitions)
+        await persist_stage.run(ctx)
+        await stack.stage.run(ctx)
+
+    taught_before = await stack.gallery.list_gallery_entries(active_only=False, states=None)
+    assert len(taught_before) >= 1
+    assert all(r.state == "auto_verified" for r in taught_before)
+
+    # Phase 2: 3 calibrated face conflicts identifying "family-member" trip swap_suspected.
+    # Run continuously from t=180 so the PH stays alive while each conflict closes the active
+    # segment and the tag re-associates before the next conflict.
+    last_obs_id: str | None = None
+    for conflict_idx in range(3):
+        t = 180 + conflict_idx * 40
+        for sub in range(0, 40, 2):
+            at = T0 + timedelta(seconds=t + sub)
+            for k in range(2):
+                fx, fy = _walk(t + sub + k)
+                stack.fixes.add(
+                    _position_fix(at + timedelta(seconds=k), fx, fy, 5000 + t + sub + k)
+                )
+            x, y = _walk(t + sub)
+            frame += 1
+            anchor = (
+                FaceAnchor(
+                    person_id="family-member",
+                    match_score=0.95,
+                    quality=0.9,
+                    tracklet_id=last_obs_id,
+                    detection_id=f"fm-{frame}",
+                    captured_at=at,
+                    similarity=0.95,
+                    calibrated_confidence=0.98,
+                )
+                if sub == 38 and last_obs_id is not None
+                else None
+            )
+            obs = WorldObservation(
+                camera_id="cam-cal",
+                frame_index=frame,
+                captured_at=at,
+                floor_point=FloorPoint(x_mm=int(x * 1000), y_mm=int(y * 1000), calibrated=True),
+                bbox=BoundingBox(x_min=100, y_min=100, x_max=220, y_max=400),
+                embedding=_VISITOR,
+                detection_confidence=0.92,
+                detection_id=f"fm-{frame}",
+                quality=0.65,
+                orientation=OrientationBin.BACK,
+                orientation_confidence=0.9,
+                floor_cov_random=(0.04, 0.0, 0.0, 0.04),
+                footpoint_reliable=True,
+            )
+            res = await stack.tracker.step(
+                observations=[obs],
+                now=at,
+                room_polygons=_ROOMS,
+                camera_room_map={"cam-cal": "1"},
+                face_anchors=[anchor] if anchor is not None else None,
+                wearable_fixes=stack.fixes.recent(now=at, max_age_s=15.0),
+            )
+            last_obs_id = res.det_to_observation_id.get(obs.detection_id) or last_obs_id
+            ctx = FrameContext(
+                frame=FrameReady(
+                    camera_id="cam-cal",
+                    minio_key="k",
+                    width=640,
+                    height=480,
+                    frame_index=frame,
+                    capture_time_unix_ns=int(at.timestamp() * 1e9),
+                ),
+                event_time=at,
+                capture_time=at,
+            )
+            ctx.effective_width, ctx.effective_height = 640, 480
+            ctx.domain_detections = [
+                Detection(
+                    detection_id=obs.detection_id,
+                    camera_id="cam-cal",
+                    bbox=obs.bbox,
+                    embedding=_VISITOR,
+                    capture_time=at,
+                    event_time=at,
+                    confidence=0.92,
+                    floor_point=obs.floor_point,
+                    crop_quality=0.9,
+                )
+            ]
+            ctx.crops = [np.zeros((256, 128, 3), dtype=np.uint8)]
+            ctx.orientation_by_detection = {obs.detection_id: (OrientationBin.BACK, 0.9)}
+            ctx.det_to_ph = dict(res.det_to_ph)
+            ctx.det_to_observation_id = dict(res.det_to_observation_id)
+            ctx.committed_ids = {ph.ph_id: ph.current_identity_id for ph in res.updated_phs}
+            ctx.wearable_evidence_by_ph = dict(res.wearable_evidence_by_ph)
+            ctx.wearable_association_transitions = list(res.wearable_association_transitions)
+            await persist_stage.run(ctx)
+            await stack.stage.run(ctx)
+
+    # Every row taught before the swap is demoted to pending_review, and the tag is held.
+    assert await holds_repo.is_held("tag-traj") is True
+    after_swap = await stack.gallery.list_gallery_entries(active_only=False, states=None)
+    assert all(r.state == "pending_review" for r in after_swap)
+    count_held = len(after_swap)
+
+    # Phase 3: further rounds while held mint zero new rows until operator resumes teaching.
+    for t in range(400, 500, 2):
+        at = T0 + timedelta(seconds=t)
+        for k in range(2):
+            fx, fy = _walk(t + k)
+            stack.fixes.add(_position_fix(at + timedelta(seconds=k), fx, fy, 9000 + t + k))
+        x, y = _walk(t)
+        frame += 1
+        await _round(
+            stack,
+            at,
+            [_Person("after", _RESIDENT, x, y)],
+            camera_id="cam-cal",
+            calibrated=True,
+            frame_index=frame,
+        )
+    assert (
+        len(await stack.gallery.list_gallery_entries(active_only=False, states=None)) == count_held
+    )
+
+    # Operator resumes teaching -> tag hold cleared.
+    resumed = await revocation.resume_teaching("tag-traj", actor="admin:alice")
+    assert resumed is not None
+    assert await holds_repo.is_held("tag-traj") is False

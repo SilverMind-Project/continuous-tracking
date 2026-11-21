@@ -105,7 +105,7 @@ _SQL_LIST_GALLERY_ENTRIES = """
     FROM continuous_tracking.reid_gallery rg
     INNER JOIN continuous_tracking.identities i ON rg.identity_id = i.identity_id
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
-      AND ($2 IS TRUE OR i.is_active = TRUE)
+      AND ($2 IS FALSE OR i.is_active = TRUE)
       AND (
           $3::continuous_tracking.gallery_entry_state[] IS NULL
           OR rg.state = ANY($3::continuous_tracking.gallery_entry_state[])
@@ -123,21 +123,24 @@ _SQL_SEARCH_SIMILAR = """
     FROM continuous_tracking.reid_gallery rg
     WHERE ($1::text IS NULL OR rg.identity_id = $1)
       AND rg.identity_id IS NOT NULL AND rg.identity_id != ''
-      AND ($2 IS TRUE
-           OR (
-               SELECT is_active
-               FROM continuous_tracking.identities
-               WHERE identity_id = rg.identity_id
+      AND ($2 IS FALSE
+           OR COALESCE(
+               (
+                   SELECT is_active
+                   FROM continuous_tracking.identities
+                   WHERE identity_id = rg.identity_id
+               ),
+               FALSE
            ))
-      AND ($4::integer IS NULL OR rg.seen_at > now() - ($5::integer || 'seconds')::interval)
+      AND ($4::timestamptz IS NULL OR rg.seen_at > $4)
       AND (
-          $7::continuous_tracking.gallery_entry_state[] IS NULL
-          OR rg.state = ANY($7::continuous_tracking.gallery_entry_state[])
+          $6::continuous_tracking.gallery_entry_state[] IS NULL
+          OR rg.state = ANY($6::continuous_tracking.gallery_entry_state[])
       )
-      AND rg.seed_source <> ALL($8::text[])
-      AND ($9::timestamptz IS NULL OR rg.seen_at < $9)
+      AND rg.seed_source <> ALL($7::text[])
+      AND ($8::timestamptz IS NULL OR rg.seen_at <= $8)
     ORDER BY rg.embedding <=> $3::vector
-    LIMIT $6
+    LIMIT $5
 """
 
 _SQL_INSERT_REVIEW_CANDIDATE = """
@@ -165,6 +168,7 @@ _SQL_COUNT_GALLERY_ENTRIES = """
           $3::continuous_tracking.gallery_entry_state[] IS NULL
           OR state = ANY($3::continuous_tracking.gallery_entry_state[])
       )
+      AND ($4::timestamptz IS NULL OR seen_at > $4)
 """
 
 _SQL_COUNT_SEEDED_ENTRIES = """
@@ -189,7 +193,7 @@ _SQL_LIST_GALLERY_FOR_TRACKLETS = """
           OR rg.state = ANY($3::continuous_tracking.gallery_entry_state[])
       )
       AND rg.seed_source <> ALL($4::text[])
-      AND ($5::timestamptz IS NULL OR rg.seen_at < $5)
+      AND ($5::timestamptz IS NULL OR rg.seen_at <= $5)
     ORDER BY rg.seen_at DESC
     LIMIT $2
 """
@@ -539,6 +543,7 @@ class PostgresGalleryRepository(GalleryRepository):
         identity_id: str,
         orientation: int,
         states: frozenset[str] | None = PENDING_AND_VERIFIED,
+        seen_since: datetime | None = None,
     ) -> int:
         async with self._pool.acquire() as conn:
             count = await conn.fetchval(
@@ -546,6 +551,7 @@ class PostgresGalleryRepository(GalleryRepository):
                 identity_id,
                 orientation,
                 sorted(states) if states is not None else None,
+                seen_since,
             )
         return int(count or 0)
 
@@ -621,24 +627,24 @@ class PostgresGalleryRepository(GalleryRepository):
         embedding: list[float],
         limit: int = 10,
         camera_id: str | None = None,
-        max_age_seconds: int | None = None,
+        seen_after: datetime | None = None,
         states: frozenset[str] | None = VOTING_STATES,
         exclude_seed_sources: frozenset[str] = NO_SEED_SOURCE_EXCLUSION,
         seen_before: datetime | None = None,
+        active_only: bool = True,
     ) -> list[tuple[GalleryEmbedding, float]]:
         embedding_str = _embedding_to_pgvector(embedding)
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 _SQL_SEARCH_SIMILAR,
                 None,  # $1: identity_id filter
-                True,  # $2: active_only filter
+                active_only,  # $2: active_only filter
                 embedding_str,  # $3: query embedding
-                max_age_seconds,  # $4: IS NULL check
-                max_age_seconds,  # $5: interval seconds value
-                limit,  # $6: LIMIT
-                sorted(states) if states is not None else None,  # $7: state filter
-                sorted(exclude_seed_sources),  # $8: provenance exclusion (empty keeps all)
-                seen_before,  # $9: capture-time upper bound
+                seen_after,  # $4: strict lower bound (seen_at > $4)
+                limit,  # $5: LIMIT
+                sorted(states) if states is not None else None,  # $6: state filter
+                sorted(exclude_seed_sources),  # $7: provenance exclusion (empty keeps all)
+                seen_before,  # $8: inclusive upper bound (seen_at <= $8)
             )
         return [
             (
@@ -733,6 +739,7 @@ class PostgresGalleryRepository(GalleryRepository):
         model_version: str | None = None,
         source_type: str | None = None,
         seed_source: str | None = None,
+        seed_association_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 50,
@@ -749,6 +756,7 @@ class PostgresGalleryRepository(GalleryRepository):
               AND ($6::timestamptz IS NULL OR capture_time >= $6)
               AND ($7::timestamptz IS NULL OR capture_time <= $7)
               AND ($8::text IS NULL OR seed_source = $8)
+              AND ($9::uuid IS NULL OR seed_association_id = $9::uuid)
         """
         params = [
             state,
@@ -759,6 +767,7 @@ class PostgresGalleryRepository(GalleryRepository):
             since,
             until,
             seed_source,
+            uuid.UUID(seed_association_id) if seed_association_id is not None else None,
         ]
         async with self._pool.acquire() as conn:
             total = await conn.fetchval(
@@ -771,13 +780,104 @@ class PostgresGalleryRepository(GalleryRepository):
                 FROM continuous_tracking.reid_gallery
                 {where}
                 ORDER BY created_at ASC NULLS LAST, seen_at ASC
-                LIMIT $9 OFFSET $10
+                LIMIT $10 OFFSET $11
                 """,
                 *params,
                 limit,
                 offset,
             )
         return ([_row_to_review_candidate(r) for r in rows], int(total or 0))
+
+    async def count_by_seed_association(self, seed_association_id: str) -> dict[str, int]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT state, count(*) AS n
+                FROM continuous_tracking.reid_gallery
+                WHERE seed_association_id = $1::uuid
+                GROUP BY state
+                """,
+                uuid.UUID(seed_association_id),
+            )
+        counts = {
+            "pending_review": 0,
+            "auto_verified": 0,
+            "operator_verified": 0,
+            "rejected": 0,
+            "expired": 0,
+        }
+        for r in rows:
+            counts[str(r["state"])] = int(r["n"])
+        return counts
+
+    async def count_past_retention(self, *, state: str, seen_before: datetime) -> int:
+        async with self._pool.acquire() as conn:
+            count = await conn.fetchval(
+                """
+                SELECT count(*)
+                FROM continuous_tracking.reid_gallery
+                WHERE state = $1::continuous_tracking.gallery_entry_state
+                  AND seen_at < $2
+                """,
+                state,
+                seen_before,
+            )
+        return int(count or 0)
+
+    async def expire_past_retention(
+        self, *, state: str, seen_before: datetime, limit: int
+    ) -> list[str]:
+        if limit <= 0:
+            return []
+        async with self._pool.acquire() as conn, conn.transaction():
+            rows = await conn.fetch(
+                """
+                SELECT id, state, crop_key, audit_version
+                FROM continuous_tracking.reid_gallery
+                WHERE state = $1::continuous_tracking.gallery_entry_state
+                  AND seen_at < $2
+                ORDER BY seen_at ASC, id ASC
+                LIMIT $3
+                FOR UPDATE SKIP LOCKED
+                """,
+                state,
+                seen_before,
+                limit,
+            )
+            if not rows:
+                return []
+            ids = [r["id"] for r in rows]
+            await conn.execute(
+                """
+                UPDATE continuous_tracking.reid_gallery
+                SET state = 'expired',
+                    embedding = NULL,
+                    reviewed_actor = 'system:retention',
+                    reviewed_time = now(),
+                    review_reason = 'retention_expired',
+                    audit_version = audit_version + 1,
+                    updated_at = now()
+                WHERE id = ANY($1::uuid[])
+                """,
+                ids,
+            )
+            await conn.executemany(
+                """
+                INSERT INTO continuous_tracking.gallery_review_events
+                    (entry_id, previous_state, new_state, actor, reason, note, audit_version)
+                VALUES (
+                    $1,
+                    $2::continuous_tracking.gallery_entry_state,
+                    'expired'::continuous_tracking.gallery_entry_state,
+                    'system:retention',
+                    'retention_expired',
+                    NULL,
+                    $3
+                )
+                """,
+                [(r["id"], str(r["state"]), int(r["audit_version"]) + 1) for r in rows],
+            )
+        return sorted(str(r["crop_key"]) for r in rows if r["crop_key"])
 
     async def get_review_candidate(self, candidate_id: str) -> ReviewCandidate | None:
         async with self._pool.acquire() as conn:
@@ -832,6 +932,7 @@ class PostgresGalleryRepository(GalleryRepository):
             "auto_verified": 0,
             "operator_verified": 0,
             "rejected": 0,
+            "expired": 0,
         }
         for r in rows:
             counts[str(r["state"])] = int(r["n"])

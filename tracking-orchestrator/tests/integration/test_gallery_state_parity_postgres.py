@@ -12,7 +12,7 @@ Marked @pytest.mark.integration; CI selects this marker against a testcontainer
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -23,13 +23,15 @@ from app.storage.postgres.gallery_repo import PostgresGalleryRepository
 from tests.storage._gallery_parity_fixtures import (
     ALICE,
     ALL_TRACKLET_IDS,
+    CAROL_INACTIVE,
     STATE_FILTER_CASES,
+    T0,
     expected_ids,
     expected_state_counts,
     make_entries,
     make_identities,
-    max_age_entries,
     query_embedding,
+    vote_window_entries,
 )
 
 pytestmark = pytest.mark.integration
@@ -74,44 +76,75 @@ async def test_search_similar_state_filter(db_pool: Any, states: frozenset[str] 
 
 
 @pytest.mark.asyncio
-async def test_search_similar_max_age_seconds_boundary(db_pool: Any) -> None:
-    """M03: strict `>` excludes an entry at or older than the cutoff age,
-    matching the InMemory peer
-    (``tests/storage/test_gallery_state_parity.py::TestSearchSimilarMaxAgeParity``).
-    """
-    repo = PostgresGalleryRepository(db_pool)
-    for identity in make_identities():
-        await repo.upsert_identity(identity)
-    now = datetime.now(UTC)
-    fresh, near_cutoff, boundary, stale = max_age_entries(now)
-    for entry in (fresh, near_cutoff, boundary, stale):
-        await repo.upsert_gallery_entry(entry)
-
-    hits = await repo.search_similar(query_embedding(), limit=10, max_age_seconds=12 * 3600)
-
-    got = {str(entry.gallery_entry_id) for entry, _sim in hits}
-    assert got == {str(fresh.gallery_entry_id), str(near_cutoff.gallery_entry_id)}
+async def test_list_gallery_entries_active_only_filters_inactive(db_pool: Any) -> None:
+    repo = await _seeded_repo(db_pool)
+    active_entries = await repo.list_gallery_entries(active_only=True, states=None)
+    all_entries = await repo.list_gallery_entries(active_only=False, states=None)
+    assert {str(e.gallery_entry_id) for e in active_entries} == expected_ids(
+        states=None, active_only=True
+    )
+    assert {str(e.gallery_entry_id) for e in all_entries} == expected_ids(
+        states=None, active_only=False
+    )
+    assert CAROL_INACTIVE not in {e.identity_id for e in active_entries}
+    assert CAROL_INACTIVE in {e.identity_id for e in all_entries}
 
 
 @pytest.mark.asyncio
-async def test_search_similar_max_age_seconds_none_disables_cutoff(db_pool: Any) -> None:
+async def test_search_similar_active_only_filters_inactive(db_pool: Any) -> None:
+    repo = await _seeded_repo(db_pool)
+    active_hits = await repo.search_similar(
+        query_embedding(), limit=10, states=None, active_only=True
+    )
+    all_hits = await repo.search_similar(
+        query_embedding(), limit=10, states=None, active_only=False
+    )
+    assert {str(e.gallery_entry_id) for e, _ in active_hits} == expected_ids(
+        states=None, active_only=True
+    )
+    assert {str(e.gallery_entry_id) for e, _ in all_hits} == expected_ids(
+        states=None, active_only=False
+    )
+    assert CAROL_INACTIVE not in {e.identity_id for e, _ in active_hits}
+    assert CAROL_INACTIVE in {e.identity_id for e, _ in all_hits}
+
+
+@pytest.mark.asyncio
+async def test_search_similar_vote_window_boundary(db_pool: Any) -> None:
+    """Strict lower (seen_at > seen_after) and inclusive upper (seen_at <= seen_before) bounds."""
     repo = PostgresGalleryRepository(db_pool)
     for identity in make_identities():
         await repo.upsert_identity(identity)
-    now = datetime.now(UTC)
-    fresh, near_cutoff, boundary, stale = max_age_entries(now)
-    for entry in (fresh, near_cutoff, boundary, stale):
+    as_of = T0 + timedelta(days=2)
+    stale, at_lower, inside, at_upper, future = vote_window_entries(as_of)
+    for entry in (stale, at_lower, inside, at_upper, future):
         await repo.upsert_gallery_entry(entry)
 
-    hits = await repo.search_similar(query_embedding(), limit=10, max_age_seconds=None)
+    hits = await repo.search_similar(
+        query_embedding(),
+        limit=10,
+        seen_after=as_of - timedelta(hours=12),
+        seen_before=as_of,
+    )
 
     got = {str(entry.gallery_entry_id) for entry, _sim in hits}
-    assert got == {
-        str(fresh.gallery_entry_id),
-        str(near_cutoff.gallery_entry_id),
-        str(boundary.gallery_entry_id),
-        str(stale.gallery_entry_id),
-    }
+    assert got == {str(inside.gallery_entry_id), str(at_upper.gallery_entry_id)}
+
+
+@pytest.mark.asyncio
+async def test_search_similar_vote_window_none_disables_bounds(db_pool: Any) -> None:
+    repo = PostgresGalleryRepository(db_pool)
+    for identity in make_identities():
+        await repo.upsert_identity(identity)
+    as_of = T0 + timedelta(days=2)
+    entries = vote_window_entries(as_of)
+    for entry in entries:
+        await repo.upsert_gallery_entry(entry)
+
+    hits = await repo.search_similar(query_embedding(), limit=10, seen_after=None, seen_before=None)
+
+    got = {str(entry.gallery_entry_id) for entry, _sim in hits}
+    assert got == {str(e.gallery_entry_id) for e in entries}
 
 
 @pytest.mark.asyncio
@@ -123,7 +156,9 @@ async def test_list_gallery_entries_for_tracklets_state_filter(
     entries = await repo.list_gallery_entries_for_tracklets(
         ALL_TRACKLET_IDS, limit=20, allowed_states=states
     )
-    assert {str(e.gallery_entry_id) for e in entries} == expected_ids(states=states)
+    assert {str(e.gallery_entry_id) for e in entries} == expected_ids(
+        states=states, active_only=False
+    )
 
 
 @pytest.mark.asyncio

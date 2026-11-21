@@ -16,6 +16,7 @@ from app.domain import GalleryEmbedding
 from app.observability.metrics import build_metrics
 from app.observability.metrics import metrics as global_metrics
 from app.storage.gallery import InMemoryGalleryRepository
+from app.tracking.identity.channels import VoteWindow
 from app.tracking.identity_resolver import IdentityResolver
 
 # Substrings that would indicate an unbounded ID leaked into a label name.
@@ -66,21 +67,25 @@ async def test_rejected_vector_vote_attempt_is_counted() -> None:
     counter = global_metrics.reid_rejected_vector_vote_attempts_total
     before = counter._value.get()
 
+    now = datetime.now(UTC)
     pending_entry = GalleryEmbedding(
         gallery_entry_id="g-pending",
         identity_id="amma",
         embedding=[1.0] * 8,
-        seen_at=datetime.now(UTC),
+        seen_at=now,
         state="pending_review",  # not operator_verified
     )
     verified_entry = GalleryEmbedding(
         gallery_entry_id="g-verified",
         identity_id="amma",
         embedding=[1.0] * 8,
-        seen_at=datetime.now(UTC),
+        seen_at=now,
         state="operator_verified",
     )
-    resolver._score_gallery_hits([(pending_entry, 0.9), (verified_entry, 0.9)])
+    resolver._score_gallery_hits(
+        [(pending_entry, 0.9), (verified_entry, 0.9)],
+        VoteWindow(as_of=now, max_age_s=None),
+    )
 
     # Exactly one attempt (the pending vector); the verified one is legitimate.
     assert counter._value.get() == before + 1

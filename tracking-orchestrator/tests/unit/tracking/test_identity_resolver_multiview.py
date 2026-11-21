@@ -15,6 +15,7 @@ from app.domain import (
 )
 from app.storage.gallery import InMemoryGalleryRepository
 from app.tracking import identity_resolver as identity_resolver_module
+from app.tracking.identity.channels import VoteWindow
 from app.tracking.identity.gallery_scoring import ScoredHit
 from app.tracking.identity.gallery_scoring import score_hits as _real_score_hits
 from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
@@ -98,13 +99,14 @@ async def gallery_with_alice_back() -> InMemoryGalleryRepository:
     )
     # Add alice back entries. state="operator_verified" so search_similar's
     # verified-only default can see them.
+    seen_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
     for i in range(5):
         await repo.upsert_gallery_entry(
             GalleryEmbedding(
                 gallery_entry_id=f"alice-back-{i}",
                 identity_id=_ALICE_ID,
                 embedding=_BACK_EMB,
-                seen_at=datetime.now(UTC),
+                seen_at=seen_at,
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.BACK,
@@ -118,7 +120,7 @@ async def gallery_with_alice_back() -> InMemoryGalleryRepository:
                 gallery_entry_id=f"bob-front-{i}",
                 identity_id=_BOB_ID,
                 embedding=_FRONT_EMB,
-                seen_at=datetime.now(UTC),
+                seen_at=seen_at,
                 quality=0.8,
                 face_confirmed=True,
                 orientation=OrientationBin.FRONT,
@@ -397,7 +399,10 @@ async def test_multiview_vote_caps_same_episode() -> None:
     for i in range(10):
         await ten_dupes_repo.upsert_gallery_entry(_make_entry(f"alice-back-dup-{i}"))
     ten_dupes_resolver = IdentityResolver(gallery_repo=ten_dupes_repo, config=config)
-    ten_dupes_posterior = await ten_dupes_resolver._from_gallery_multiview(ph, (back_proto,))
+    window = VoteWindow(as_of=now, max_age_s=config.gallery_vote_max_age_s)
+    ten_dupes_posterior = await ten_dupes_resolver._from_gallery_multiview(
+        ph, (back_proto,), window=window
+    )
 
     single_repo = InMemoryGalleryRepository()
     await single_repo.upsert_identity(
@@ -409,7 +414,9 @@ async def test_multiview_vote_caps_same_episode() -> None:
     )
     await single_repo.upsert_gallery_entry(_make_entry("alice-back-single"))
     single_resolver = IdentityResolver(gallery_repo=single_repo, config=config)
-    single_posterior = await single_resolver._from_gallery_multiview(ph, (back_proto,))
+    single_posterior = await single_resolver._from_gallery_multiview(
+        ph, (back_proto,), window=window
+    )
 
     # All ten duplicates land in the same (identity, episode, camera,
     # orientation) group, so the capped result must equal a single vote --
@@ -443,8 +450,11 @@ async def test_backstop_counter_increments_on_multiview_path(
         *,
         embedding: list[float],
         limit: int = 20,
-        max_age_seconds: int | None = None,
+        seen_after: datetime | None = None,
+        seen_before: datetime | None = None,
         states: frozenset[str] | None = None,
+        exclude_seed_sources: frozenset[str] | None = None,
+        active_only: bool = True,
     ) -> list[tuple[GalleryEmbedding, float]]:
         return [(pending_entry, 0.9)]
 
@@ -460,7 +470,9 @@ async def test_backstop_counter_increments_on_multiview_path(
     counter = global_metrics.reid_rejected_vector_vote_attempts_total
     before = counter._value.get()
 
-    await resolver._from_gallery_multiview(ph, (back_proto,))
+    await resolver._from_gallery_multiview(
+        ph, (back_proto,), window=VoteWindow(as_of=pending_entry.seen_at, max_age_s=None)
+    )
 
     assert counter._value.get() == before + 1
 

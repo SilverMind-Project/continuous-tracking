@@ -76,6 +76,11 @@ from .services.cc_identity_assertion_subscriber import (
     CCIdentityAssertionSubscriber,
     IdentityAssertionCache,
 )
+from .services.gallery_retention import (
+    GalleryRetentionConfig,
+    GalleryRetentionMode,
+    GalleryRetentionService,
+)
 from .services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
 from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
 from .services.image_only_evaluator import ImageOnlyEvaluationService
@@ -83,8 +88,12 @@ from .services.overlap_group_sync import fetch_overlap_groups
 from .services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
 from .services.wearable_fix_buffer import WearableFixBuffer
 from .services.wearable_fix_subscriber import WearableFixSubscriber
+from .services.wearable_revocation import WearableTeachingRevocationService
 from .services.wearable_site_config_map import WearableSiteConfigMap
-from .storage.image_only_evaluation import InMemoryImageOnlyEvaluationRepository
+from .storage.image_only_evaluation import (
+    ImageOnlyEvaluationRepository,
+    InMemoryImageOnlyEvaluationRepository,
+)
 from .storage.migrations import MigrationRunner
 from .storage.postgres.appearance_repo import PostgresDailyAppearanceRepo
 from .storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
@@ -99,9 +108,14 @@ from .storage.postgres.settings_repo import PostgresSettingsRepository
 from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
 from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
 from .storage.postgres.wearable_association_repo import PostgresWearableAssociationRepository
+from .storage.postgres.wearable_teaching_hold_repo import PostgresWearableTeachingHoldRepository
 from .storage.wearable_associations import (
     InMemoryWearableAssociationRepository,
     WearableAssociationRepository,
+)
+from .storage.wearable_teaching_holds import (
+    InMemoryWearableTeachingHoldRepository,
+    WearableTeachingHoldRepository,
 )
 from .tracking.identity.candidate_eligibility import CandidatePolicy
 from .tracking.identity_resolver import FaceQualityMode, ResolverConfig
@@ -337,8 +351,9 @@ def _build_resolver_config(s: Settings) -> ResolverConfig:
 def _build_candidate_policy(s: Settings, wearable: WearableConfig) -> CandidatePolicy:
     """Build CandidatePolicy from required settings.yaml keys.
 
-    Refuses wearable seeding unless the wearable channel is enabled: an auto_verified seed votes
-    at once, so seeding under a shadow channel would change live identity.
+    Refuses wearable seeding when wearable.mode is "off". Accepts "shadow" so room-grade
+    pending_review seeds can gather review evidence while trajectory seeds skip as
+    channel_not_live.
     """
     rc = s.section("reid_candidates")
     policy = CandidatePolicy(
@@ -356,10 +371,12 @@ def _build_candidate_policy(s: Settings, wearable: WearableConfig) -> CandidateP
         wearable_min_seed_interval_s=rc.as_float("wearable_min_seed_interval_s"),
         wearable_max_similarity_to_recent=rc.as_float("wearable_max_similarity_to_recent"),
         wearable_room_grade_max_per_day=rc.as_int("wearable_room_grade_max_per_day"),
+        gallery_vote_max_age_s=_optional_max_age_s(s, "resolver.gallery_vote_max_age_s"),
+        wearable_channel_live=wearable.mode == "enabled",
     )
-    if policy.wearable_seeding_enabled and wearable.mode != "enabled":
+    if policy.wearable_seeding_enabled and wearable.mode == "off":
         raise ValueError(
-            "reid_candidates.wearable_seeding_enabled requires wearable.mode 'enabled' "
+            "reid_candidates.wearable_seeding_enabled requires wearable.mode 'shadow' or 'enabled' "
             f"(got {wearable.mode!r})"
         )
     return policy
@@ -554,6 +571,18 @@ def _build_ph_unknown_purge_config(s: Settings) -> PHUnknownPurgeConfig:
     )
 
 
+def _build_gallery_retention_config(s: Settings) -> GalleryRetentionConfig:
+    ret = s.section("reid_gallery.retention")
+    return GalleryRetentionConfig(
+        mode=cast(GalleryRetentionMode, ret.as_str("mode")),
+        auto_verified_days=ret.as_int("auto_verified_days"),
+        pending_review_days=ret.as_int("pending_review_days"),
+        operator_verified_days=ret.as_int("operator_verified_days"),
+        interval_s=ret.as_float("interval_s"),
+        batch_size=ret.as_int("batch_size"),
+    )
+
+
 def _optional_str(section: SettingsSection, key: str, default: str = "") -> str:
     """Read a string from a settings section, returning default if the key is absent."""
     try:
@@ -618,6 +647,11 @@ def _build_identity_policy_snapshot(config: PipelineConfig) -> IdentityPolicySna
         expected_arcface_model_version=config.face_id.expected_arcface_model_version or None,
         expected_quality_version=config.face_id.expected_quality_version,
         wearable_mode=config.wearable.mode,
+        wearable_seeding_enabled=config.reid_candidates.wearable_seeding_enabled,
+        wearable_face_attestation_mode=config.wearable.face_attestation,
+        wearable_backfill_enabled=config.resolver.enable_wearable_backfill,
+        wearable_auto_on_swap=config.wearable.revocation_auto_on_swap,
+        wearable_evaluation_sample_rate=config.wearable.evaluation_sample_rate,
     )
 
 
@@ -663,6 +697,7 @@ def _build_wearable_config(s: Settings) -> WearableConfig:
         face_attestation=cast(
             FaceAttestationMode, s.as_str("wearable.supervision.face_attestation")
         ),
+        revocation_auto_on_swap=s.as_bool("wearable.revocation.auto_on_swap"),
     )
 
 
@@ -1051,14 +1086,34 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.wearable_association_repo = wearable_association_repo
 
+    wearable_teaching_hold_repo: WearableTeachingHoldRepository = (
+        PostgresWearableTeachingHoldRepository(_pool)
+        if _pool is not None
+        else InMemoryWearableTeachingHoldRepository()
+    )
+    wearable_revocation_service: WearableTeachingRevocationService | None = None
+    if gallery_repo is not None:
+        wearable_revocation_service = WearableTeachingRevocationService(
+            association_repo=wearable_association_repo,
+            teaching_holds=wearable_teaching_hold_repo,
+            gallery_repo=gallery_repo,
+            correction_repo=correction_repo_obj,
+            correction_service=correction_service,
+            face_id_client=None,
+        )
+    app.state.wearable_revocation_service = wearable_revocation_service
+
     # Image-only evaluation runs only while the wearable channel does; its sample rate (0.0 by
     # default) decides whether the resolver produces any evaluations at all.
+    image_only_eval_repo: ImageOnlyEvaluationRepository = (
+        PostgresImageOnlyEvaluationRepository(_pool)
+        if _pool is not None
+        else InMemoryImageOnlyEvaluationRepository()
+    )
     image_only_evaluation: ImageOnlyEvaluationService | None = None
     if wearable_config.mode != "off":
         image_only_evaluation = ImageOnlyEvaluationService(
-            PostgresImageOnlyEvaluationRepository(_pool)
-            if _pool is not None
-            else InMemoryImageOnlyEvaluationRepository(),
+            image_only_eval_repo,
             max_gap_s=wearable_config.evaluation_max_gap_s,
         )
     app.state.image_only_evaluation = image_only_evaluation
@@ -1113,6 +1168,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         external_evidence=cc_assertion_cache,
         wearable_fix_source=wearable_fix_buffer,
         wearable_association_repo=wearable_association_repo,
+        wearable_teaching_hold_repo=wearable_teaching_hold_repo,
+        wearable_revocation_service=wearable_revocation_service,
         image_only_evaluation=image_only_evaluation,
     )
     await _pipeline.initialize(deps)
@@ -1123,6 +1180,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # earlier, before initialize, where it is intentionally still a no-op;
     # see the comment at that call site.)
     correction_service.set_publisher(_pipeline._revision_publisher)
+    if wearable_revocation_service is not None:
+        wearable_revocation_service.set_face_id_client(_pipeline._face_id_client)
 
     from .calibration.state import calibration_state
 
@@ -1273,6 +1332,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         set_reid_review_context(reid_review_service)
 
+        gallery_retention = GalleryRetentionService(
+            gallery_repo=gallery_repo,
+            config=_build_gallery_retention_config(settings),
+            crop_storage=_frame_fetcher,
+        )
+        app.state.gallery_retention = gallery_retention
+        app.state.gallery_retention_task = asyncio.create_task(gallery_retention.run())
+
     app.state.identity_readiness_service = IdentityReadinessService(
         policy=_build_identity_policy_snapshot(config),
         calibration_state=calibration_state,
@@ -1280,6 +1347,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         overlap_groups=_pipeline,
         gallery_repo=gallery_repo,
         wearable_associations=_pipeline,
+        image_only_eval_repo=image_only_eval_repo,
+        wearable_assoc_repo=wearable_association_repo,
+        teaching_holds_repo=wearable_teaching_hold_repo,
     )
 
     if signal_repo is not None and trajectory_repo is not None and keyframe_repo is not None:
@@ -1321,6 +1391,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _ph_maintenance = getattr(app.state, "ph_maintenance", None)
     if _ph_maintenance is not None:
         await _ph_maintenance.stop()
+
+    # Stop gallery retention.
+    _gallery_retention = getattr(app.state, "gallery_retention", None)
+    if _gallery_retention is not None:
+        await _gallery_retention.stop()
 
     # Stop identity roster sync.
     _roster_sync = getattr(app.state, "identity_roster_sync", None)
@@ -1375,6 +1450,7 @@ def create_app() -> FastAPI:
     # Set by the lifespan once the pipeline is built; the route answers 503 until then.
     app.state.identity_readiness_service = None
     app.state.wearable_association_repo = None
+    app.state.wearable_revocation_service = None
     app.state.image_only_evaluation = None
     # Internal calibration endpoints consumed by the CC BFF.
     # Reserved for future use: separate :8510 listener

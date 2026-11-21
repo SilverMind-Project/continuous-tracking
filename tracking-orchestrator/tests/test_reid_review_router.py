@@ -239,6 +239,7 @@ def test_counts(client_repo):
         "auto_verified": 0,
         "operator_verified": 1,
         "rejected": 1,
+        "expired": 0,
     }
 
 

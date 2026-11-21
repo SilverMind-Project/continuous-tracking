@@ -210,13 +210,13 @@ PH `gallery_mean` and view prototypes are inferred tracking state, not labeled i
 
 ## ReID gallery lifecycle
 
-Every ReID entry has one explicit state: `pending_review`, `auto_verified`, `operator_verified`, or
-`rejected`. Pending and rejected entries never
+Every ReID entry has one explicit state: `pending_review`, `auto_verified`, `operator_verified`,
+`rejected`, or `expired` (migration `0011`). Pending, rejected, and expired entries never
 vote, including through caches, fallback queries, or compatibility code; `auto_verified` and
 `operator_verified` vote at their configured trust (`resolver.gallery_auto_verified_trust_multiplier`
 default 1.5, `resolver.gallery_verified_trust_multiplier` default 2.0).
 
-The only pipeline write into `reid_gallery` is `ReIDCandidateStage` →
+The only pipeline write into `reid_gallery` is `ReIDCandidateStage` ->
 `GalleryRepository.create_review_candidate`, always with crop + frame provenance,
 `origin_tracklet_id`/`ph_id`, and a `seed_source` (`face`, `wearable_attested`,
 `wearable_room_attested`, `operator`; migration `0009`). A face-derived candidate requires the recognized ArcFace identity to
@@ -224,10 +224,15 @@ equal the committed identity, with calibrated confidence at or above the authori
 minting state is `pending_review` unless the calibrated confidence also clears
 `reid_candidates.auto_verify_min_confidence` (default 0.90), in which case it mints straight into
 `auto_verified`; raw (uncalibrated) confidence never mints `auto_verified` (fail-closed, same
-posture as the ArcFace authority gate). Caps count `pending_review` + `auto_verified` +
-`operator_verified` rows (`PENDING_AND_VERIFIED` in `app/storage/gallery.py`), never `rejected`.
-Review mutations go through `apply_review_action`/`compensate_review` only, never raw SQL, never
-`_pool`.
+posture as the ArcFace authority gate). The per-(identity, orientation) working-set cap
+(`reid_candidates.max_entries_per_orientation`, default 10) counts `pending_review` +
+`auto_verified` + `operator_verified` rows (`PENDING_AND_VERIFIED` in `app/storage/gallery.py`)
+within the active vote window (`seen_since = capture_time - gallery_vote_max_age_s`), never
+`rejected` or `expired` rows and never rows already outside the vote window.
+Review mutations go through `apply_review_action`/`compensate_review` only; retention expiry goes
+through `GalleryRetentionService` (`app/services/gallery_retention.py`, default `enabled` mode;
+14d `auto_verified`, 30d `pending_review`, 90d `operator_verified`, deleting vector and crop on
+expiry and keeping audit metadata), never raw SQL or `_pool`.
 
 `app/storage/gallery.py` exports two vocabulary constants: `VERIFIED_ONLY` (`operator_verified`
 only, the default for the one admin/list surface with no vote-path caller) and `VOTING_STATES`
@@ -301,19 +306,23 @@ hand instead of delegating) is a defect.
 ### Hard vote-age cutoff
 
 `resolver.gallery_vote_max_age_s` (default 43200s/12h; `None`/absent/zero disables it) is a hard
-filter enforced one level below the shared scorer, at `GalleryRepository.search_similar` itself:
-gallery entries older than the cutoff never reach `score_hits` at all, on any path. SOLIDER-REID
-embeddings are clothing-dominated and clothing validity is a step function at wardrobe change, not
-a smooth decay; the cutoff encodes the step, and `gallery_recency_half_life_days` handles staleness
-inside the window.
+window evaluated on capture time, never wall-clock time (`datetime.now()` is forbidden in
+`app/tracking/identity_resolver.py` and `app/storage/gallery.py` search paths). A `VoteWindow(as_of,
+max_age_s)` (`app/tracking/identity/channels.py`) translates the frame's capture time into
+half-open bounds `(seen_after, seen_before]` enforced at `GalleryRepository.search_similar` itself:
+entries with `seen_at <= seen_after` or `seen_at > seen_before` never reach `score_hits` on any
+path, so replays and live runs see identical candidate sets. `search_similar` also enforces
+`active_only=True` identically in Postgres and in-memory peers so inactive identities never vote.
+SOLIDER-REID embeddings are clothing-dominated and clothing validity is a step function at wardrobe
+change, not a smooth decay; the cutoff encodes the step, and `gallery_recency_half_life_days`
+handles staleness inside the window (also measured from capture time).
 
-`IdentityResolver._gallery_search_kwargs()` is the single helper that builds the cutoff plus the
-`VOTING_STATES` filter for every `search_similar` call. A new resolver gallery query path must call
-it (`**self._gallery_search_kwargs()`); recomputing `max_age_seconds`/`states` by hand at a new call
-site is a defect, exactly like inline scoring above. The tracker's verified-ReID disagreement probe
-(`WorldTracker._resolve_verified_reid_identities`) mirrors this with its own
-`world_tracker.reid_disagreement_max_age_s`, so a future flip of `enable_reid_disagreement_cost`
-inherits correct temporal behavior without further changes.
+`IdentityResolver._gallery_search_kwargs(as_of=...)` is the single helper that builds the
+capture-time window plus `VOTING_STATES` and `active_only` for every `search_similar` call. A new
+resolver gallery query path must call it; recomputing bounds or states by hand at a new call site
+is a defect, exactly like inline scoring above. The tracker's verified-ReID disagreement probe
+(`WorldTracker._resolve_verified_reid_identities(observations, as_of)`) mirrors this with
+`world_tracker.reid_disagreement_max_age_s` on the same capture time.
 
 One read is deliberately exempt: `list_gallery_entries_for_tracklets`, called from the single-query
 fallback's corpus-building step to build a PH's own query embedding from its recent gallery entries,

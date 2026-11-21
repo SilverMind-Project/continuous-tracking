@@ -39,6 +39,7 @@ from ..domain import (
 )
 from ..observability import metrics as _metrics
 from ..storage.base import IdentityDecisionRepositoryProtocol, PHRepositoryProtocol
+from ..storage.wearable_teaching_holds import WearableTeachingHoldRepository
 from ..tracking.identity.types import IdentityAuthority
 from .identity_correction_service import CorrectionConflictError, IdentityCorrectionService
 from .identity_rewriter import IdentityRewriter
@@ -138,6 +139,7 @@ class UnknownBackfillService:
         identity_rewriter: IdentityRewriter,
         revision_publisher: object | None,
         config: BackfillConfig,
+        teaching_holds: WearableTeachingHoldRepository | None = None,
     ) -> None:
         self._ph_repo = ph_repo
         self._decision_repo = identity_decision_repo
@@ -145,6 +147,7 @@ class UnknownBackfillService:
         self._rewriter = identity_rewriter
         self._publisher = revision_publisher
         self._cfg = config
+        self._teaching_holds = teaching_holds
         # (ph_id, identity_id) -> last attempt monotonic time.
         self._rate_limit: dict[tuple[str, str], float] = {}
         # Wearable segments already handled -> monotonic time; one backfill per segment.
@@ -185,6 +188,9 @@ class UnknownBackfillService:
         """
         if segment.segment_id in self._wearable_done:
             return
+        if self._teaching_holds is not None and await self._teaching_holds.is_held(segment.tag_id):
+            self._record_skip("teaching_held")
+            return
         self._wearable_done[segment.segment_id] = time.monotonic()
         self._prune_wearable_done()
 
@@ -221,6 +227,7 @@ class UnknownBackfillService:
             backfill_range,
             evidence_source="wearable",
             applied_outcome="wearable_applied",
+            source_association_id=segment.segment_id,
         )
 
     def _prune_wearable_done(self) -> None:
@@ -351,6 +358,7 @@ class UnknownBackfillService:
         *,
         evidence_source: str = "direct_face",
         applied_outcome: str = "applied",
+        source_association_id: str | None = None,
     ) -> None:
         revision_id = str(uuid.uuid4())
 
@@ -361,6 +369,7 @@ class UnknownBackfillService:
                 effective_identity_id=new_identity_id,
                 start=r.start,
                 end=r.end,
+                source_association_id=source_association_id,
             )
         except CorrectionConflictError:
             _metrics.metrics.identity_backfill_total.labels(

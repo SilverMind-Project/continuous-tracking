@@ -44,9 +44,14 @@ class IdentityCorrectionRepositoryProtocol(Protocol):
 
     # -- revision ranges (effective projection) --
     async def save_range(self, revision_range: IdentityRevisionRange) -> None: ...
+    async def get_range(self, range_id: str) -> IdentityRevisionRange | None: ...
     async def supersede_range(self, range_id: str, *, by_range_id: str) -> None: ...
+    async def mark_range_compensated(self, range_id: str, *, by_revision_id: str) -> None: ...
     async def list_ranges(
         self, ph_id: str, *, live_only: bool = True
+    ) -> list[IdentityRevisionRange]: ...
+    async def list_ranges_by_source_association(
+        self, source_association_id: str, *, live_only: bool = True
     ) -> list[IdentityRevisionRange]: ...
     async def live_ranges_for_phs(
         self, ph_ids: list[str]
@@ -131,12 +136,23 @@ class InMemoryIdentityCorrectionRepository:
         async with self._lock:
             self._ranges[revision_range.range_id] = revision_range
 
+    async def get_range(self, range_id: str) -> IdentityRevisionRange | None:
+        return self._ranges.get(range_id)
+
     async def supersede_range(self, range_id: str, *, by_range_id: str) -> None:
         async with self._lock:
             existing = self._ranges.get(range_id)
             if existing is not None:
                 self._ranges[range_id] = dataclasses.replace(
                     existing, superseded_by_range_id=by_range_id
+                )
+
+    async def mark_range_compensated(self, range_id: str, *, by_revision_id: str) -> None:
+        async with self._lock:
+            existing = self._ranges.get(range_id)
+            if existing is not None:
+                self._ranges[range_id] = dataclasses.replace(
+                    existing, compensated_by_revision_id=by_revision_id
                 )
 
     async def list_ranges(
@@ -146,6 +162,21 @@ class InMemoryIdentityCorrectionRepository:
             r
             for r in self._ranges.values()
             if r.ph_id == ph_id and (not live_only or r.superseded_by_range_id is None)
+        ]
+        rows.sort(key=lambda r: r.created_at)
+        return rows
+
+    async def list_ranges_by_source_association(
+        self, source_association_id: str, *, live_only: bool = True
+    ) -> list[IdentityRevisionRange]:
+        rows = [
+            r
+            for r in self._ranges.values()
+            if r.source_association_id == source_association_id
+            and (
+                not live_only
+                or (r.superseded_by_range_id is None and r.compensated_by_revision_id is None)
+            )
         ]
         rows.sort(key=lambda r: r.created_at)
         return rows

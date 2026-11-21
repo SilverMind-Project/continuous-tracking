@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.domain import GallerySeedSource, Identity, NewReviewCandidate
 
-T0 = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=1)
+T0 = datetime(2026, 6, 1, 9, 0, 0, tzinfo=UTC)
 MEMBER = "seed-member"
 SEGMENT = "33333333-3333-3333-3333-333333333333"
 _DIM = 768
@@ -32,7 +32,7 @@ _ROWS: tuple[tuple[str, GallerySeedSource, int], ...] = (
 
 CUTOFF = T0 + timedelta(minutes=10)
 
-# (exclude_seed_sources, seen_before, expected row names)
+# (exclude_seed_sources, seen_before, expected row names); seen_before is inclusive (<=).
 FILTER_CASES: tuple[tuple[frozenset[str], datetime | None, frozenset[str]], ...] = (
     (frozenset(), None, frozenset(name for name, _, _ in _ROWS)),
     (
@@ -40,8 +40,8 @@ FILTER_CASES: tuple[tuple[frozenset[str], datetime | None, frozenset[str]], ...]
         None,
         frozenset({"face-early", "face-late"}),
     ),
-    (frozenset(), CUTOFF, frozenset({"face-early", "wear-early"})),
-    (frozenset({"wearable_attested"}), CUTOFF, frozenset({"face-early"})),
+    (frozenset(), CUTOFF, frozenset({"face-early", "wear-early", "room-mid"})),
+    (frozenset({"wearable_attested"}), CUTOFF, frozenset({"face-early", "room-mid"})),
 )
 
 

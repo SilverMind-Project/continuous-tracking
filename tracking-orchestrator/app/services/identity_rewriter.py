@@ -84,6 +84,23 @@ class IdentityRewriter(ABC):
         segment were never computed, so there is nothing to relabel there.
         """
 
+    async def clear_identity_rows(
+        self,
+        revision_id: str,
+        ph_id: str,
+        old_identity_id: str,
+        applies_from: datetime,
+        applies_to: datetime,
+    ) -> None:
+        """Reset rows in the window currently labeled *old_identity_id* back to NULL.
+
+        Inverse of :meth:`backfill_null_rows`, used when compensating an inferred backfill
+        range (for example, when a wearable association segment is revoked). Touches only
+        rows matching *old_identity_id* so rows rewritten to another identity by an operator
+        or later decision are never cleared.
+        """
+        return None
+
 
 class InMemoryIdentityRewriter(IdentityRewriter):
     """No-op rewriter for unit tests."""
@@ -288,6 +305,53 @@ class PostgresIdentityRewriter(IdentityRewriter):
                     """,
                 new_identity_id,
                 ph_id,
+                applies_from,
+                applies_to,
+            )
+            dwell_count = _parse_rowcount(dwell_rows)
+            if dwell_count > 0:
+                _metrics.metrics.revision_rows_rewritten_total.labels(table="room_dwells").inc(
+                    dwell_count
+                )
+
+    async def clear_identity_rows(
+        self,
+        revision_id: str,
+        ph_id: str,
+        old_identity_id: str,
+        applies_from: datetime,
+        applies_to: datetime,
+    ) -> None:
+        async with self._pool.acquire() as conn, conn.transaction():
+            traj_rows = await conn.execute(
+                """
+                    UPDATE continuous_tracking.person_trajectories
+                    SET identity_id = NULL
+                    WHERE ph_id = $1
+                      AND identity_id = $2
+                      AND observed_at BETWEEN $3 AND $4
+                    """,
+                ph_id,
+                old_identity_id,
+                applies_from,
+                applies_to,
+            )
+            traj_count = _parse_rowcount(traj_rows)
+            if traj_count > 0:
+                _metrics.metrics.revision_rows_rewritten_total.labels(
+                    table="person_trajectories"
+                ).inc(traj_count)
+
+            dwell_rows = await conn.execute(
+                """
+                    UPDATE continuous_tracking.room_dwells
+                    SET identity_id = NULL
+                    WHERE ph_id = $1
+                      AND identity_id = $2
+                      AND entered_at BETWEEN $3 AND $4
+                    """,
+                ph_id,
+                old_identity_id,
                 applies_from,
                 applies_to,
             )

@@ -29,7 +29,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, get_args
 
 import numpy as np
@@ -65,6 +65,7 @@ from .identity.channels import (
     GalleryChannel,
     HeightChannel,
     ResolverInputs,
+    VoteWindow,
 )
 from .identity.commit_policy import (
     CommitEvaluation,
@@ -97,14 +98,14 @@ _CommitEvaluation = CommitEvaluation
 class _GallerySearchKwargs(TypedDict):
     """Kwargs shape returned by ``IdentityResolver._gallery_search_kwargs``.
 
-    The provenance keys appear only for an image-only evaluation arm; the live vote path never
-    narrows by provenance.
+    The provenance key ``exclude_seed_sources`` appears only for an image-only
+    evaluation arm; the live vote path never narrows by provenance.
     """
 
-    max_age_seconds: int | None
+    seen_after: datetime | None
+    seen_before: datetime
     states: frozenset[str] | None
     exclude_seed_sources: NotRequired[frozenset[str]]
-    seen_before: NotRequired[datetime]
 
 
 # Rows a wearable taught: the image-only control arm votes without any of them.
@@ -531,7 +532,7 @@ class IdentityResolver:
         outcome = await resolver.resolve(
             hypotheses=active_phs,
             new_face_anchors=face_anchors,
-            captured_at=datetime.now(UTC),
+            captured_at=frame.capture_time,
         )
 
         for decision in outcome.decisions:
@@ -672,6 +673,10 @@ class IdentityResolver:
             hypotheses, face_evidence or [], augmented_anchors
         )
 
+        vote_window = VoteWindow(
+            as_of=captured_at,
+            max_age_s=self._config.gallery_vote_max_age_s,
+        )
         inputs = ResolverInputs(
             captured_at=captured_at,
             face_anchors=tuple(augmented_anchors),
@@ -681,6 +686,7 @@ class IdentityResolver:
             raw_face_anchors=tuple(new_face_anchors),
             raw_face_evidence=tuple(face_evidence or ()),
             wearable_evidence=wearable_evidence or {},
+            vote_window=vote_window,
         )
 
         wearable_mode = self._wearable_config.mode
@@ -770,6 +776,7 @@ class IdentityResolver:
                     entity_quality,
                     commit_evidence_ids,
                     feature="multiview_gallery",
+                    vote_window=vote_window,
                     enable_multiview=True,
                 )
 
@@ -792,6 +799,7 @@ class IdentityResolver:
                     entity_quality,
                     commit_evidence_ids,
                     feature="coherence_boost",
+                    vote_window=vote_window,
                     enable_coherence_boost=True,
                 )
 
@@ -907,6 +915,7 @@ class IdentityResolver:
                         height_likelihood,
                         captured_at,
                         entity_quality,
+                        window=vote_window,
                         calibrated=live_calibrated,
                         face_quality_mode=live_quality_mode,
                     )
@@ -999,7 +1008,7 @@ class IdentityResolver:
                 decision.identity_id is not None
                 and decision.revises_previous
                 and await self._has_cross_camera_reid_assist(
-                    entity_by_id[decision.ph_id], decision.identity_id
+                    entity_by_id[decision.ph_id], decision.identity_id, window=vote_window
                 )
             ):
                 metrics.metrics.reid_cross_camera_assist_total.inc()
@@ -1462,6 +1471,7 @@ class IdentityResolver:
         captured_at: datetime,
         entity_quality: float,
         *,
+        window: VoteWindow,
         calibrated: bool,
         face_quality_mode: FaceQualityMode,
     ) -> ImageOnlyEvaluation:
@@ -1482,7 +1492,7 @@ class IdentityResolver:
         )
         decided: list[str | None] = []
         for arm in arms:
-            reid = await self._from_gallery(unheld, arm=arm)
+            reid = await self._from_gallery(unheld, window, arm=arm)
             decided.append(
                 self._counterfactual_identity(
                     unheld,
@@ -1739,6 +1749,7 @@ class IdentityResolver:
     async def _from_gallery(
         self,
         entity: IdentityResolvableEntity,
+        window: VoteWindow,
         *,
         enable_coherence_boost: bool | None = None,
         enable_multiview: bool = False,
@@ -1760,7 +1771,7 @@ class IdentityResolver:
         prototypes = entity.view_prototypes if use_multiview else ()
 
         if prototypes:
-            return await self._from_gallery_multiview(entity, prototypes, arm=arm)
+            return await self._from_gallery_multiview(entity, prototypes, window, arm=arm)
 
         # --- Single-query path (original behaviour) ---
         try:
@@ -1803,9 +1814,9 @@ class IdentityResolver:
         )
         coherence_active = False
         if use_coherence_boost and len(embs) >= 2:
-            window = embs[-self._config.embedding_coherence_window :]
-            norms = np.linalg.norm(window, axis=1, keepdims=True)
-            normed = window / np.maximum(norms, 1e-8)
+            coherence_slice = embs[-self._config.embedding_coherence_window :]
+            norms = np.linalg.norm(coherence_slice, axis=1, keepdims=True)
+            normed = coherence_slice / np.maximum(norms, 1e-8)
             consecutive_sims = [float(normed[i] @ normed[i + 1]) for i in range(len(normed) - 1)]
             coherence_active = (
                 bool(consecutive_sims)
@@ -1816,7 +1827,7 @@ class IdentityResolver:
             similar = await self._gallery_repo.search_similar(
                 embedding=query,
                 limit=20,
-                **self._gallery_search_kwargs(arm),
+                **self._gallery_search_kwargs(window, arm),
             )
         except Exception:
             logger.warning(
@@ -1837,12 +1848,13 @@ class IdentityResolver:
             )
             return PosteriorDist({})
 
-        return self._score_gallery_hits(similar, coherence_active)
+        return self._score_gallery_hits(similar, window, coherence_active)
 
     async def _from_gallery_multiview(
         self,
         entity: IdentityResolvableEntity,
         prototypes: tuple[ViewPrototype, ...],
+        window: VoteWindow,
         *,
         arm: _GalleryArm | None = None,
     ) -> PosteriorDist:
@@ -1873,7 +1885,7 @@ class IdentityResolver:
                 similar = await self._gallery_repo.search_similar(
                     embedding=query_emb,
                     limit=20,
-                    **self._gallery_search_kwargs(arm),
+                    **self._gallery_search_kwargs(window, arm),
                 )
             except Exception:
                 logger.warning(
@@ -1899,7 +1911,7 @@ class IdentityResolver:
         cfg = self._gallery_scoring_config()
         scored = score_hits(
             all_hits,
-            now=datetime.now(UTC),
+            now=window.as_of,
             cfg=cfg,
             logistic=self._logistic,
             on_nonvoting_state=self._on_nonvoting_gallery_vote,
@@ -1938,25 +1950,26 @@ class IdentityResolver:
             identified_entry_min_likelihood=self._config.identified_entry_min_likelihood,
         )
 
-    def _gallery_search_kwargs(self, arm: _GalleryArm | None = None) -> _GallerySearchKwargs:
+    def _gallery_search_kwargs(
+        self, window: VoteWindow, arm: _GalleryArm | None = None
+    ) -> _GallerySearchKwargs:
         """Kwargs every vote-path ``search_similar`` call must pass.
 
-        Centralizes the hard vote-age cutoff and the voting-states filter so
-        a future call site cannot forget either. ``gallery_vote_max_age_s``
-        is ``None`` when the cutoff is disabled (rollback state); truncating
-        to ``int`` matches the repository signature (whole seconds). An
-        image-only evaluation *arm* adds its provenance filter here, never at
-        a call site.
+        Centralizes the capture-time vote window ``(seen_after, seen_before]`` and the
+        voting-states filter so a future call site cannot forget either or read wall clock.
+        An image-only evaluation *arm* tightens ``seen_before`` via ``min(arm.seen_before,
+        window.as_of)`` and adds its provenance filter here, never at a call site.
         """
-        cutoff = self._config.gallery_vote_max_age_s
+        seen_before = window.seen_before
+        if arm is not None and arm.seen_before is not None:
+            seen_before = min(arm.seen_before, window.as_of)
         kwargs: _GallerySearchKwargs = {
-            "max_age_seconds": int(cutoff) if cutoff is not None else None,
+            "seen_after": window.seen_after,
+            "seen_before": seen_before,
             "states": VOTING_STATES,
         }
         if arm is not None:
             kwargs["exclude_seed_sources"] = arm.exclude_seed_sources
-            if arm.seen_before is not None:
-                kwargs["seen_before"] = arm.seen_before
         return kwargs
 
     @staticmethod
@@ -1974,13 +1987,14 @@ class IdentityResolver:
     def _score_gallery_hits(
         self,
         similar: list[tuple[GalleryEmbedding, float]],
+        window: VoteWindow,
         coherence_active: bool = False,
     ) -> PosteriorDist:
         """Score gallery search hits into a PosteriorDist with trust-aware scoring."""
         cfg = self._gallery_scoring_config()
         scored = score_hits(
             similar,
-            now=datetime.now(UTC),
+            now=window.as_of,
             cfg=cfg,
             logistic=self._logistic,
             on_nonvoting_state=self._on_nonvoting_gallery_vote,
@@ -2016,6 +2030,8 @@ class IdentityResolver:
         self,
         entity: IdentityResolvableEntity,
         identity_id: str,
+        *,
+        window: VoteWindow,
     ) -> bool:
         """Return True when the committed identity's top ReID hit is cross-camera."""
         try:
@@ -2040,7 +2056,7 @@ class IdentityResolver:
             similar = await self._gallery_repo.search_similar(
                 embedding=query,
                 limit=20,
-                **self._gallery_search_kwargs(),
+                **self._gallery_search_kwargs(window),
             )
         except Exception:
             logger.warning(
@@ -2139,6 +2155,7 @@ class IdentityResolver:
         evidence_identity_ids: frozenset[str],
         *,
         feature: str,
+        vote_window: VoteWindow,
         enable_coherence_boost: bool | None = None,
         enable_multiview: bool = False,
     ) -> None:
@@ -2151,6 +2168,7 @@ class IdentityResolver:
         """
         shadow_reid = await self._from_gallery(
             entity,
+            vote_window,
             enable_coherence_boost=enable_coherence_boost,
             enable_multiview=enable_multiview,
         )

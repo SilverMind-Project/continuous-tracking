@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from structlog import get_logger
@@ -111,6 +111,29 @@ class ChannelLikelihood:
 
 
 @dataclass(frozen=True)
+class VoteWindow:
+    """Capture-time gallery vote window ``(as_of - max_age_s, as_of]``.
+
+    Built once per ``resolve()`` call from the round's ``captured_at``. Using one
+    window for repository bounds and recency decay keeps replay deterministic and
+    prevents rows minted later in a batch from voting for an earlier context.
+    """
+
+    as_of: datetime
+    max_age_s: float | None = None
+
+    @property
+    def seen_after(self) -> datetime | None:
+        if self.max_age_s is None:
+            return None
+        return self.as_of - timedelta(seconds=self.max_age_s)
+
+    @property
+    def seen_before(self) -> datetime:
+        return self.as_of
+
+
+@dataclass(frozen=True)
 class ResolverInputs:
     """Per-round evidence shared by all channels. Epoch: one ``resolve()`` call.
 
@@ -129,6 +152,7 @@ class ResolverInputs:
     raw_face_anchors: tuple[FaceAnchor, ...] = ()
     raw_face_evidence: tuple[FaceEvidence, ...] = ()
     wearable_evidence: Mapping[str, WearableEvidence] = field(default_factory=dict)
+    vote_window: VoteWindow | None = None
 
 
 class EvidenceChannel(Protocol):
@@ -533,7 +557,7 @@ class GalleryChannel:
     def __init__(
         self,
         *,
-        query_fn: Callable[[IdentityResolvableEntity], Awaitable[PosteriorDist]],
+        query_fn: Callable[[IdentityResolvableEntity, VoteWindow], Awaitable[PosteriorDist]],
         support_multiplier: float = 1.0,
     ) -> None:
         self._query_fn = query_fn
@@ -564,7 +588,8 @@ class GalleryChannel:
         inputs: ResolverInputs,
     ) -> ChannelLikelihood:
         """Query the ReID gallery for *entity* and return its :class:`ChannelLikelihood`."""
-        dist = await self._query_fn(entity)
+        window = inputs.vote_window or VoteWindow(as_of=inputs.captured_at)
+        dist = await self._query_fn(entity, window)
         return self.wrap(dist, captured_at=inputs.captured_at)
 
 

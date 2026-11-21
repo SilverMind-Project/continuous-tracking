@@ -36,6 +36,7 @@ from ...domain import (
 from ...observability import metrics as _metrics
 from ...observability.metrics import WearableSeedOutcome
 from ...storage.gallery import PENDING_AND_VERIFIED, GalleryRepository
+from ...storage.wearable_teaching_holds import WearableTeachingHoldRepository
 from ...tracking.identity.candidate_eligibility import (
     CandidateEligibility,
     CandidatePolicy,
@@ -87,10 +88,12 @@ class ReIDCandidateStage(FrameStage):
         gallery_repo: GalleryRepository | None = None,
         crop_storage: CropStorageProtocol | None = None,
         policy: CandidatePolicy = CandidatePolicy(),
+        teaching_holds: WearableTeachingHoldRepository | None = None,
     ) -> None:
         self._gallery_repo = gallery_repo
         self._crop_storage = crop_storage
         self._policy = policy
+        self._teaching_holds = teaching_holds
         self._warned_no_storage = False
 
     async def run(self, ctx: FrameContext) -> None:
@@ -151,11 +154,11 @@ class ReIDCandidateStage(FrameStage):
             # evaluate_candidate's no_identity/no_face_anchor gates guarantee both below.
             assert committed_identity_id is not None
             assert face_anchor is not None
-            existing = await self._gallery_repo.count_gallery_entries(
+            if await self._at_orientation_cap(
                 identity_id=committed_identity_id,
-                orientation=int(orientation),
-            )
-            if existing >= self._policy.max_per_identity_orientation:
+                orientation=orientation,
+                capture_time=det.capture_time,
+            ):
                 _metrics.metrics.reid_candidate_rejected_total.labels(reason="cap_reached").inc()
                 return
             confidence = (
@@ -212,6 +215,9 @@ class ReIDCandidateStage(FrameStage):
         """
         assert self._gallery_repo is not None
         seed_outcomes = _metrics.metrics.cts_wearable_seed_outcomes_total
+        if self._teaching_holds is not None and await self._teaching_holds.is_held(evidence.tag_id):
+            seed_outcomes.labels(outcome=WearableSeedOutcome.TEACHING_HELD).inc()
+            return
         eligibility = evaluate_candidate(
             committed_identity_id=committed_identity_id,
             seed=WearableSeed(evidence=evidence, detection_faces=detection_faces),
@@ -224,13 +230,13 @@ class ReIDCandidateStage(FrameStage):
         if not eligibility.eligible:
             seed_outcomes.labels(outcome=WearableSeedOutcome(eligibility.reason)).inc()
             return
-        assert committed_identity_id is not None
+        seed_identity_id = committed_identity_id or evidence.identity_id
         assert det.embedding is not None
 
         capture_time = det.capture_time
         if eligibility.seed_source == GallerySeedSource.WEARABLE_ROOM_ATTESTED:
             minted_today = await self._gallery_repo.count_seeded_entries(
-                identity_id=committed_identity_id,
+                identity_id=seed_identity_id,
                 seed_source=GallerySeedSource.WEARABLE_ROOM_ATTESTED,
                 seen_since=_utc_day_start(capture_time),
             )
@@ -238,16 +244,16 @@ class ReIDCandidateStage(FrameStage):
                 seed_outcomes.labels(outcome=WearableSeedOutcome.ROOM_DAILY_CAP).inc()
                 return
 
-        existing = await self._gallery_repo.count_gallery_entries(
-            identity_id=committed_identity_id,
-            orientation=int(orientation),
-        )
-        if existing >= self._policy.max_per_identity_orientation:
+        if await self._at_orientation_cap(
+            identity_id=seed_identity_id,
+            orientation=orientation,
+            capture_time=capture_time,
+        ):
             seed_outcomes.labels(outcome=WearableSeedOutcome.CAP_REACHED).inc()
             return
 
         rejection = await self._recent_rows_rejection(
-            identity_id=committed_identity_id,
+            identity_id=seed_identity_id,
             orientation=orientation,
             embedding=list(det.embedding),
             capture_time=capture_time,
@@ -261,7 +267,7 @@ class ReIDCandidateStage(FrameStage):
             det,
             det_idx,
             ph_id=ph_id,
-            identity_id=committed_identity_id,
+            identity_id=seed_identity_id,
             orientation=orientation,
             eligibility=eligibility,
             confidence=None,
@@ -278,6 +284,28 @@ class ReIDCandidateStage(FrameStage):
                 else WearableSeedOutcome.CREATE_FAILED
             )
         ).inc()
+
+    async def _at_orientation_cap(
+        self,
+        *,
+        identity_id: str,
+        orientation: OrientationBin,
+        capture_time: datetime,
+    ) -> bool:
+        """Whether *(identity_id, orientation)* has reached its working-set cap.
+
+        Both seed paths share this check: only rows inside the active vote window count,
+        so yesterday's outfit never prevents today's samples from minting.
+        """
+        assert self._gallery_repo is not None
+        max_age_s = self._policy.gallery_vote_max_age_s
+        seen_since = capture_time - timedelta(seconds=max_age_s) if max_age_s is not None else None
+        existing = await self._gallery_repo.count_gallery_entries(
+            identity_id=identity_id,
+            orientation=int(orientation),
+            seen_since=seen_since,
+        )
+        return existing >= self._policy.max_per_identity_orientation
 
     async def _recent_rows_rejection(
         self,

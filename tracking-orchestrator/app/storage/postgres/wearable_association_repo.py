@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import asyncpg
@@ -33,7 +34,8 @@ _SQL_UPSERT_SEGMENT = """
 _SQL_SELECT_COLUMNS = """
     segment_id, ph_id, tag_id, identity_id, started_at, ended_at,
     attestation_grade, window_llr, margin_llr, matched_fixes,
-    mean_residual_m, swap_suspected, close_reason
+    mean_residual_m, swap_suspected, close_reason,
+    revoked_at, revoked_by, revoke_reason
 """
 
 
@@ -54,6 +56,9 @@ def _row_to_segment(row: asyncpg.Record) -> WearableAssociationSegment:
         ),
         swap_suspected=bool(row["swap_suspected"]),
         close_reason=str(row["close_reason"]) if row["close_reason"] is not None else None,
+        revoked_at=row["revoked_at"],
+        revoked_by=str(row["revoked_by"]) if row["revoked_by"] is not None else None,
+        revoke_reason=str(row["revoke_reason"]) if row["revoke_reason"] is not None else None,
     )
 
 
@@ -131,6 +136,70 @@ class PostgresWearableAssociationRepository:
                 *params,
             )
         return [_row_to_segment(r) for r in rows]
+
+    async def mark_revoked(
+        self,
+        segment_id: str,
+        *,
+        revoked_at: datetime,
+        revoked_by: str,
+        revoke_reason: str,
+    ) -> bool:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE continuous_tracking.wearable_associations
+                SET revoked_at = $2,
+                    revoked_by = $3,
+                    revoke_reason = $4,
+                    updated_at = now()
+                WHERE segment_id = $1::uuid
+                  AND revoked_at IS NULL
+                RETURNING segment_id
+                """,
+                segment_id,
+                revoked_at,
+                revoked_by,
+                revoke_reason,
+            )
+        return row is not None
+
+    async def list_unrevoked_overlapping(
+        self,
+        tag_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> list[WearableAssociationSegment]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT {_SQL_SELECT_COLUMNS}
+                FROM continuous_tracking.wearable_associations
+                WHERE tag_id = $1
+                  AND revoked_at IS NULL
+                  AND started_at <= $3
+                  AND (ended_at IS NULL OR ended_at >= $2)
+                ORDER BY started_at ASC, segment_id ASC
+                """,
+                tag_id,
+                since,
+                until,
+            )
+        return [_row_to_segment(r) for r in rows]
+
+    async def count_revoked_since(self, since: datetime) -> int:
+        async with self._pool.acquire() as conn:
+            count = await conn.fetchval(
+                """
+                SELECT count(*)
+                FROM continuous_tracking.wearable_associations
+                WHERE revoked_at IS NOT NULL
+                  AND revoked_at >= $1
+                """,
+                since,
+            )
+        return int(count or 0)
 
     async def purge_identity(self, identity_id: str) -> int:
         async with self._pool.acquire() as conn:

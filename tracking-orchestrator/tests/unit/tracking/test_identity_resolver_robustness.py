@@ -137,13 +137,25 @@ class _ControlledGallery(InMemoryGalleryRepository):
         embedding: list[float],
         limit: int = 10,
         camera_id: str | None = None,
-        max_age_seconds: int | None = None,
+        seen_after: datetime | None = None,
+        seen_before: datetime | None = None,
         states: frozenset[str] | None = VERIFIED_ONLY,
+        exclude_seed_sources: frozenset[str] | None = None,
+        active_only: bool = True,
     ) -> list[tuple[GalleryEmbedding, float]]:
         # This fake returns its pre-scripted matches unconditionally: the tests
         # using it exercise coherence/propagation scoring, not gallery
         # governance, so it deliberately does not apply `states`.
-        del embedding, limit, camera_id, max_age_seconds, states
+        del (
+            embedding,
+            limit,
+            camera_id,
+            seen_after,
+            seen_before,
+            states,
+            exclude_seed_sources,
+            active_only,
+        )
         now = datetime.now(UTC)
         return [
             (

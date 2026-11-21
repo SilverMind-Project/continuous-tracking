@@ -25,37 +25,20 @@ import os
 import sys
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import date
 
 import asyncpg
 import numpy as np
 
 from app.domain import ImageOnlyDailyTotal
+from app.services.image_only_evaluator import DayRates, daily_rates
 from app.storage.postgres.image_only_evaluation_repo import PostgresImageOnlyEvaluationRepository
 
 _ARMS = ("control", "treatment")
 
 
-@dataclass(frozen=True)
-class DayRates:
-    """One day's rates for one arm; a rate is None when its denominator is zero."""
-
-    attribution: float | None
-    wrong: float | None
-    seconds: float
-
-
 def _rates(total: ImageOnlyDailyTotal | None) -> DayRates:
-    if total is None:
-        return DayRates(attribution=None, wrong=None, seconds=0.0)
-    seconds = total.correct_s + total.wrong_s + total.unknown_s
-    named = total.correct_s + total.wrong_s
-    return DayRates(
-        attribution=total.correct_s / seconds if seconds > 0 else None,
-        wrong=total.wrong_s / named if named > 0 else None,
-        seconds=seconds,
-    )
+    return daily_rates(total)
 
 
 def bootstrap_mean_interval(

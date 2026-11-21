@@ -16,6 +16,7 @@ from app.main import (
     _build_candidate_policy,
     _build_face_id_config,
     _build_face_template_policy,
+    _build_gallery_retention_config,
     _build_resolver_config,
     _build_sampler_config,
     _build_signal_config,
@@ -24,6 +25,7 @@ from app.main import (
 )
 from app.pipeline.frame_pipeline import FaceIdConfig, PipelineConfig
 from app.sampling.keyframe_sampler import SamplerConfig
+from app.services.gallery_retention import GalleryRetentionConfig
 from app.tracking.identity.candidate_eligibility import CandidatePolicy
 from app.tracking.identity.face_template_buffer import FaceTemplatePolicy
 from app.tracking.identity_resolver import ResolverConfig
@@ -77,6 +79,11 @@ def test_settings_loads_full_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(sampler, SamplerConfig)
     assert isinstance(face_id, FaceIdConfig)
     assert isinstance(appearance, AppearanceSettings)
+    retention = _build_gallery_retention_config(settings)
+    assert isinstance(retention, GalleryRetentionConfig)
+    assert retention == GalleryRetentionConfig()
+    wearable = _build_wearable_config(settings)
+    assert wearable.revocation_auto_on_swap is True
 
 
 def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -193,6 +200,7 @@ def test_no_dead_settings() -> None:
         FaceIdConfig: _build_face_id_config,
         FaceTemplatePolicy: _build_face_template_policy,
         CandidatePolicy: _build_candidate_policy,
+        GalleryRetentionConfig: _build_gallery_retention_config,
     }
     externally_supplied = {
         (FaceIdConfig, "camera_configs"),
@@ -230,11 +238,14 @@ def test_candidate_policy_is_built_from_settings(monkeypatch: pytest.MonkeyPatch
     assert policy.wearable_seeding_enabled is rc["wearable_seeding_enabled"] is False
     assert policy.wearable_min_seed_interval_s == pytest.approx(rc["wearable_min_seed_interval_s"])
     assert policy.wearable_room_grade_max_per_day == rc["wearable_room_grade_max_per_day"]
+    assert policy.gallery_vote_max_age_s == pytest.approx(
+        data["resolver"]["gallery_vote_max_age_s"]
+    )
     main_source = Path("app/main.py").read_text()
     assert "reid_candidates=_build_candidate_policy(settings, wearable_config)" in main_source
 
 
-def test_wearable_seeding_refused_unless_wearable_channel_enabled(
+def test_wearable_seeding_refused_unless_wearable_channel_running(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     for key, value in ENV_FOR_SETTINGS.items():
@@ -249,7 +260,11 @@ def test_wearable_seeding_refused_unless_wearable_channel_enabled(
         settings = Settings(path)
         return _build_candidate_policy(settings, _build_wearable_config(settings))
 
-    for mode in ("off", "shadow"):
-        with pytest.raises(ValueError, match="wearable_seeding_enabled requires"):
-            build(mode)
-    assert build("enabled").wearable_seeding_enabled is True
+    with pytest.raises(ValueError, match="wearable_seeding_enabled requires"):
+        build("off")
+    shadow_policy = build("shadow")
+    assert shadow_policy.wearable_seeding_enabled is True
+    assert shadow_policy.wearable_channel_live is False
+    live_policy = build("enabled")
+    assert live_policy.wearable_seeding_enabled is True
+    assert live_policy.wearable_channel_live is True

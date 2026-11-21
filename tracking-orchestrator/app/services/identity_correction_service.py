@@ -42,6 +42,7 @@ from ..domain import (
     IdentitySegmentCorrection,
     PersonHypothesis,
     ProjectionAck,
+    RevisionAuthority,
     SegmentBoundary,
     SegmentProposal,
     WorldObservation,
@@ -583,6 +584,7 @@ class IdentityCorrectionService:
         effective_identity_id: str | None,
         start: datetime,
         end: datetime,
+        source_association_id: str | None = None,
     ) -> IdentityRevisionRange:
         """Record an inferred effective range, refusing operator overlaps.
 
@@ -606,10 +608,106 @@ class IdentityCorrectionService:
             range_start=start,
             range_end=end,
             effective_identity_id=effective_identity_id,
+            source_association_id=source_association_id,
             created_at=datetime.now(UTC),
         )
         await self._corr.save_range(new_range)
         return new_range
+
+    async def compensate_inferred_range(
+        self,
+        range_id: str,
+        *,
+        actor: str,
+        reason: str = "wearable_revocation",
+    ) -> CorrectionResult | None:
+        """Undo a live inferred backfill range using the same projection and ack path.
+
+        Idempotent: returns None if *range_id* does not exist, is not an inferred range,
+        or was already superseded/compensated. Never touches operator-authored ranges.
+        """
+        original = await self._corr.get_range(range_id)
+        if (
+            original is None
+            or original.authority != "inferred"
+            or original.superseded_by_range_id is not None
+            or original.compensated_by_revision_id is not None
+        ):
+            return None
+
+        now = datetime.now(UTC)
+        revision_id = str(uuid.uuid4())
+        comp_range = IdentityRevisionRange(
+            range_id=str(uuid.uuid4()),
+            revision_id=revision_id,
+            ph_id=original.ph_id,
+            authority="inferred",
+            range_start=original.range_start,
+            range_end=original.range_end,
+            effective_identity_id=None,
+            supersedes_range_id=original.range_id,
+            source_association_id=None,
+            created_at=now,
+        )
+        await self._corr.save_range(comp_range)
+        await self._corr.supersede_range(original.range_id, by_range_id=comp_range.range_id)
+        await self._corr.mark_range_compensated(original.range_id, by_revision_id=revision_id)
+
+        if original.effective_identity_id is not None:
+            await self._rewriter.clear_identity_rows(
+                revision_id,
+                original.ph_id,
+                original.effective_identity_id,
+                original.range_start,
+                original.range_end,
+            )
+
+        job = IdentityRevisionJob(
+            job_id=str(uuid.uuid4()),
+            revision_id=revision_id,
+            status="applying",
+            required_projections=self._cfg.required_projections,
+            created_at=now,
+            updated_at=now,
+        )
+        await self._corr.save_job(job)
+        await self._corr.record_ack(
+            ProjectionAck(
+                revision_id=revision_id,
+                consumer=CTS_INTERNAL,
+                schema_version=CTS_PROJECTION_SCHEMA_VERSION,
+                status="acked",
+                applied_at=now,
+            )
+        )
+        await self._corr.complete_job_if_ready(revision_id)
+
+        await self._publish(
+            revision_id=revision_id,
+            ph_id=original.ph_id,
+            previous_identity_id=original.effective_identity_id,
+            new_identity_id=None,
+            actor=actor,
+            reason=reason,
+            applied_at=now,
+            rewritten_rows=0,
+            range_start=original.range_start,
+            range_end=original.range_end,
+            revision_range_id=comp_range.range_id,
+            range_authority="inferred",
+            evidence_sources=("wearable_revocation",),
+        )
+
+        return CorrectionResult(
+            revision_id=revision_id,
+            correction_id="",
+            ph_id=original.ph_id,
+            previous_identity_id=original.effective_identity_id,
+            new_identity_id=None,
+            range_id=comp_range.range_id,
+            new_ph_id=None,
+            job=job,
+        )
 
     # -- compensation (undo) -------------------------------------------------
 
@@ -767,6 +865,8 @@ class IdentityCorrectionService:
         range_end: datetime | None = None,
         revision_range_id: str = "",
         correction_id: str = "",
+        range_authority: RevisionAuthority = "operator",
+        evidence_sources: tuple[str, ...] = ("operator",),
     ) -> None:
         revision = IdentityRevision(
             revision_id=revision_id,
@@ -777,11 +877,11 @@ class IdentityCorrectionService:
             reason=reason,
             applied_at=applied_at,
             rewritten_rows=rewritten_rows,
-            evidence=IdentityEvidence(evidence_sources=["operator"]),
+            evidence=IdentityEvidence(evidence_sources=list(evidence_sources)),
             revision_kind=reason,
             range_start=range_start,
             range_end=range_end,
-            range_authority="operator",
+            range_authority=range_authority,
             revision_range_id=revision_range_id,
             correction_id=correction_id,
             required_projections=tuple(self._cfg.required_projections),

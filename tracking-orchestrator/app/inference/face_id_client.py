@@ -127,6 +127,36 @@ class FaceAttestationResult:
 
 
 @dataclass(frozen=True)
+class PromotedAttestationRef:
+    """An attested face that an operator had already promoted into face prototypes."""
+
+    candidate_id: str
+    person_id: str | None = None
+    pose_bin: str = "frontal"
+
+
+@dataclass(frozen=True)
+class FaceRevocationResult:
+    """What person-identification-service revoked for one association segment."""
+
+    association_id: str
+    revoked: int
+    total_revoked: int
+    already_promoted: tuple[PromotedAttestationRef, ...] = ()
+
+
+@dataclass(frozen=True)
+class FaceAttestationCounts:
+    """Counts of attested face captures recorded for one association segment."""
+
+    association_id: str
+    total: int
+    active: int
+    revoked: int
+    promoted: int
+
+
+@dataclass(frozen=True)
 class TemplateMatchResult:
     """person-identification-service's verdict on a face template (several faces of one PH)."""
 
@@ -502,6 +532,93 @@ class FaceIdentificationClient:
         except (KeyError, TypeError, ValueError):
             logger.warning(
                 "face_attestation_malformed_response", detection_count=len(detection_ids)
+            )
+            return None
+
+    async def revoke_attestations(
+        self,
+        *,
+        association_id: str,
+        revoked_by: str,
+    ) -> FaceRevocationResult | None:
+        """Mark every attested face capture of *association_id* revoked in person-id."""
+        if self._client is None:
+            return None
+        body = {
+            "association_id": association_id,
+            "revoked_by": revoked_by,
+        }
+        try:
+            resp = await self._client.post(
+                f"{self._base_url}/api/v1/calibration/attestations/revoke", json=body
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            promoted_raw = data.get("already_promoted") or []
+            promoted = tuple(
+                PromotedAttestationRef(
+                    candidate_id=str(item["candidate_id"]),
+                    person_id=item.get("person_id"),
+                    pose_bin=str(item.get("pose_bin") or "frontal"),
+                )
+                for item in promoted_raw
+                if isinstance(item, dict) and item.get("candidate_id")
+            )
+            return FaceRevocationResult(
+                association_id=str(data.get("association_id") or association_id),
+                revoked=int(data["revoked"]),
+                total_revoked=int(data["total_revoked"]),
+                already_promoted=promoted,
+            )
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "face_attestation_revoke_rejected",
+                status_code=exc.response.status_code,
+                code=_error_code(exc.response),
+                association_id=association_id,
+            )
+            return None
+        except httpx.HTTPError:
+            logger.warning("face_attestation_revoke_http_error", association_id=association_id)
+            return None
+        except (KeyError, TypeError, ValueError):
+            logger.warning(
+                "face_attestation_revoke_malformed_response", association_id=association_id
+            )
+            return None
+
+    async def count_attestations(self, *, association_id: str) -> FaceAttestationCounts | None:
+        """Fetch counts of attested face captures for *association_id*."""
+        if self._client is None:
+            return None
+        try:
+            resp = await self._client.get(
+                f"{self._base_url}/api/v1/calibration/attestations/counts",
+                params={"association_id": association_id},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return FaceAttestationCounts(
+                association_id=str(data.get("association_id") or association_id),
+                total=int(data["total"]),
+                active=int(data["active"]),
+                revoked=int(data["revoked"]),
+                promoted=int(data["promoted"]),
+            )
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "face_attestation_counts_rejected",
+                status_code=exc.response.status_code,
+                code=_error_code(exc.response),
+                association_id=association_id,
+            )
+            return None
+        except httpx.HTTPError:
+            logger.warning("face_attestation_counts_http_error", association_id=association_id)
+            return None
+        except (KeyError, TypeError, ValueError):
+            logger.warning(
+                "face_attestation_counts_malformed_response", association_id=association_id
             )
             return None
 

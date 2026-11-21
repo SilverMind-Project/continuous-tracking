@@ -21,25 +21,59 @@ the grade it says.
 - Authority: a wearable is never an authority rung (`WEARABLE.grants_authority` is False).
 - Calibration fitting, until the person-id audit bar is met (at least 200 audited, Wilson 95%
   lower bound of precision 0.99 or better); the manifest builder enforces it, not a setting.
-- Any learner while `wearable.mode` is not `enabled` for gallery seeding: an `auto_verified` row
-  votes at once, so startup refuses `reid_candidates.wearable_seeding_enabled` otherwise.
+- Any learner while `wearable.mode` is `off`: startup refuses
+  `reid_candidates.wearable_seeding_enabled` when `wearable.mode == "off"`. Under
+  `wearable.mode: shadow`, trajectory-grade seeds are skipped (`channel_not_live`, because
+  `auto_verified` rows would vote immediately), while room-grade seeds may still propose
+  `pending_review` rows (`wearable_room_attested`) for operator inspection when the PH has no
+  conflicting committed identity (`committed_identity_id is None` or matches the tag's member) and
+  no face conflict.
 
 ## Gallery seeding rules
 
 - The wearable path runs only when no face seed qualifies on the detection. Gates, in order:
-  `no_identity`, `wearable_not_attested`, `identity_mismatch` (the tag's member must equal the
-  PH's committed identity), `face_conflict` (any recognized face of anyone else on the detection,
-  live or shadow-only, at any similarity), then the shared orientation, embedding, and quality
-  gates.
+  `wearable_not_attested`, `channel_not_live` (trajectory grade under `wearable.mode != "enabled"`),
+  `teaching_held` (active hold on `tag_id` in `wearable_teaching_holds`), `no_identity` (unless
+  room-grade shadow proposal with `committed_identity_id is None`), `identity_mismatch` (committed
+  identity differs from the tag's member), `face_conflict` (any recognized face of anyone else on
+  the detection, live or shadow-only, at any similarity), then the shared orientation, embedding,
+  and quality gates.
 - Spacing and diversity read the identity's own rows from the repository (no in-memory map):
   at most one wearable seed per identity and orientation per
   `reid_candidates.wearable_min_seed_interval_s`, none whose cosine to a same-day row exceeds
   `wearable_max_similarity_to_recent`, at most `wearable_room_grade_max_per_day` room-grade seeds
-  per identity per UTC day, and the shared per-orientation creation cap.
+  per identity per UTC day, and the shared per-orientation working-set cap (counted inside the
+  active vote window).
 - Every seeded row records `seed_association_id` (the association segment), so a wrong binding
-  is demoted per segment through the review service, never raw SQL.
+  is demoted per segment through `WearableTeachingRevocationService`, never raw SQL.
 - `gallery_scoring.score_hits` is the only place the trust multiplier is applied; an
   `operator_verified` row votes at full trust whatever its seed source.
+
+## Revoking what a wearable taught
+
+`WearableTeachingRevocationService` (`app/services/wearable_revocation.py`, migration `0012`)
+undoes everything a single association segment (`segment_id`) taught, idempotently:
+
+1. Demotes every `auto_verified` gallery row with `seed_association_id = segment_id` back to
+   `pending_review` via `GalleryRepository.apply_review_action(action="demote", reason="wearable_revoked:<reason>")`
+   (vector kept, one audit event per row; `operator_verified` rows are never touched).
+2. Calls person-id `POST /api/v1/calibration/attestations/revoke` to mark every attested face
+   capture from that segment revoked (excluded from manifest, audit, and promotion, and purged by
+   retention even if previously audited `correct`). Already-promoted prototypes are returned for
+   manual review and never removed automatically.
+3. Compensates live inferred backfill ranges with `source_association_id = segment_id` through
+   `IdentityCorrectionService.compensate_inferred_range` (setting `source_association_id = None` on
+   the compensating range, clearing backfilled rows to `NULL` via `IdentityRewriter.clear_identity_rows`,
+   and publishing a compensating `IdentityRevision`).
+4. Opens a teaching hold on `segment.tag_id` in `wearable_teaching_holds` (at most one open hold
+   per tag). While held, gallery seeding, face attestation, and wearable backfill skip that tag
+   until an operator clears the hold via `POST /internal/wearables/tags/{tag_id}/resume-teaching`.
+5. Stamps `revoked_at`, `revoked_by`, and `revoke_reason` on the association segment.
+
+When `wearable.revocation.auto_on_swap` is true (default), `WearableAssociationPersistStage`
+invokes `revoke_for_swap(segment_id, window_s=wearable.swap_conflict_window_s)` whenever a
+segment transitions to `swap_suspected`, revoking the triggering segment plus any other unrevoked
+segments of the same tag overlapping the swap-conflict window and holding the tag.
 
 ## Image-only evaluation
 
@@ -51,8 +85,9 @@ votes, so the arms differ only in older wearable-taught rows. Arm reads pass a `
 through `_gallery_search_kwargs`, never kwargs built at a call site. Seconds are capture-time
 gaps between consecutive sampled evaluations of a PH (capped by `max_gap_s`) and persist per
 identity, UTC day, arm, and grade in `image_only_evaluation_daily` (migration `0010`).
-`scripts/image_only_evaluation_report.py` reports the paired difference with a bootstrap
-interval over days.
+`app/services/image_only_evaluator.py` owns the shared daily-rate and paired-bootstrap summary
+used by both `GET /internal/identity/readiness` (`wearable_learners`) and
+`scripts/image_only_evaluation_report.py`.
 
 ## Confirmation-loop guard
 

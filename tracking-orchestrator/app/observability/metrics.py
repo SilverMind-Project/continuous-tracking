@@ -118,6 +118,24 @@ class WearableSeedOutcome(StrEnum):
     ROOM_DAILY_CAP = "room_daily_cap"
     CAP_REACHED = "cap_reached"
     CREATE_FAILED = "create_failed"
+    TEACHING_HELD = "teaching_held"
+    CHANNEL_NOT_LIVE = "channel_not_live"
+    NO_IDENTITY = "no_identity"
+
+
+class GalleryRetentionState(StrEnum):
+    """Bounded lifecycle-state label set for ``cts_gallery_retention_rows_total{state, mode}``."""
+
+    AUTO_VERIFIED = "auto_verified"
+    PENDING_REVIEW = "pending_review"
+    OPERATOR_VERIFIED = "operator_verified"
+
+
+class GalleryRetentionModeLabel(StrEnum):
+    """Bounded mode label set for ``cts_gallery_retention_rows_total{state, mode}``."""
+
+    SHADOW = "shadow"
+    ENABLED = "enabled"
 
 
 class ImageOnlyArm(StrEnum):
@@ -144,6 +162,7 @@ class WearableFaceAttestationResult(StrEnum):
     MOVED = "moved"
     BUFFER_MISS = "buffer_miss"
     FAILED = "failed"
+    TEACHING_HELD = "teaching_held"
 
 
 class DeadLetterStream(StrEnum):
@@ -402,6 +421,11 @@ class Metrics:
     # labels: arm (ImageOnlyArm), outcome (ImageOnlyOutcome), grade (room|trajectory)
     cts_image_only_eval_seconds_total: Counter
     cts_wearable_face_attestations_total: Counter  # label: result
+
+    # ---- gallery retention ----
+    # labels: state (GalleryRetentionState), mode (GalleryRetentionModeLabel)
+    cts_gallery_retention_rows_total: Counter
+    cts_gallery_retention_crop_delete_failures_total: Counter
 
 
 def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
@@ -1140,6 +1164,16 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "Faces of wearable-attested PHs offered to person-identification-service's "
             "attested-exemplar queue, by result.",
             ["result"],
+        ),
+        cts_gallery_retention_rows_total=_counter(
+            "cts_gallery_retention_rows_total",
+            "ReID gallery rows counted (shadow) or expired (enabled) by retention, by prior "
+            "lifecycle state and retention mode.",
+            ["state", "mode"],
+        ),
+        cts_gallery_retention_crop_delete_failures_total=_counter(
+            "cts_gallery_retention_crop_delete_failures_total",
+            "Crop deletion failures during ReID gallery retention sweeps (retried on next tick).",
         ),
     )
 

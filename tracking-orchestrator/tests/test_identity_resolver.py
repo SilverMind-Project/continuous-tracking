@@ -467,15 +467,20 @@ class TestIdentityResolver:
         gallery_repo = InMemoryGalleryRepository()
         resolver = _make_resolver(identities=identities, gallery_repo=gallery_repo)
 
+        from app.tracking.identity.channels import VoteWindow
+
+        now = datetime.now(UTC)
         entry = GalleryEmbedding(
             gallery_entry_id="alice-mid-sim",
             identity_id="alice",
             embedding=[0.5] * 8,
-            seen_at=datetime.now(UTC),
+            seen_at=now,
             state="operator_verified",
         )
 
-        posterior = resolver._score_gallery_hits([(entry, 0.70)])
+        posterior = resolver._score_gallery_hits(
+            [(entry, 0.70)], VoteWindow(as_of=now, max_age_s=None)
+        )
 
         # boosted weighted_logit=1.6 for alice; boost triggers the non-match
         # floor spread, giving UNKNOWN = (1 - 0.80) / 1 = 0.2. Normalized:

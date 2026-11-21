@@ -26,6 +26,7 @@ from app.domain import FaceAnchor, WearableEvidence
 from app.inference.face_id_client import FaceAttestationResult
 from app.observability import metrics as _metrics
 from app.observability.metrics import WearableFaceAttestationResult
+from app.storage.wearable_teaching_holds import WearableTeachingHoldRepository
 
 logger = get_logger(__name__)
 
@@ -59,10 +60,12 @@ class WearableFaceAttestationService:
         *,
         batch_interval_s: float = 10.0,
         max_batch: int = 64,
+        teaching_holds: WearableTeachingHoldRepository | None = None,
     ) -> None:
         self._client = client
         self._interval = timedelta(seconds=batch_interval_s)
         self._max_batch = max_batch
+        self._teaching_holds = teaching_holds
         # (segment_id, grade) -> pending detection ids. A grade change opens a new batch, so a
         # face collected while the association was room grade is never sent as trajectory.
         self._batches: dict[tuple[str, str], _Batch] = {}
@@ -94,6 +97,11 @@ class WearableFaceAttestationService:
             evidence = evidence_by_ph.get(ph_id)
             faces = emitted_by_det.get(det_id)
             if evidence is None or not evidence.attested or not faces or not evidence.segment_id:
+                continue
+            if self._teaching_holds is not None and await self._teaching_holds.is_held(
+                evidence.tag_id
+            ):
+                counter.labels(result=WearableFaceAttestationResult.TEACHING_HELD).inc()
                 continue
             if any(
                 face.recognition_state == "recognized"

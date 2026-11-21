@@ -11,7 +11,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from ..services.identity_readiness import GalleryStateCounts, IdentityReadinessService
+from ..services.identity_readiness import (
+    GalleryStateCounts,
+    IdentityReadinessService,
+    WearableLearnersReadiness,
+)
 
 router = APIRouter(prefix="/internal/identity", tags=["identity-readiness-internal"])
 
@@ -31,11 +35,31 @@ class GalleryStateCountsOut(BaseModel):
     auto_verified: int = Field(ge=0)
     operator_verified: int = Field(ge=0)
     rejected: int = Field(ge=0)
+    expired: int = Field(default=0, ge=0)
 
 
 class CameraCalibrationOut(BaseModel):
     camera_id: str
     calibrated: bool = Field(description="A floor homography for this camera is in use")
+
+
+class WearableLearnersReadinessOut(BaseModel):
+    wearable_mode: str = Field(description="wearable.mode")
+    wearable_seeding_enabled: bool = Field(description="reid_candidates.wearable_seeding_enabled")
+    face_attestation_mode: str = Field(description="wearable.supervision.face_attestation")
+    wearable_backfill_enabled: bool = Field(description="resolver.enable_wearable_backfill")
+    auto_on_swap: bool = Field(description="wearable.revocation.auto_on_swap")
+    evaluation_sample_rate: float = Field(ge=0.0, le=1.0)
+    evaluation_days_14d: int = Field(ge=0)
+    attribution_difference_14d: float | None = Field(
+        default=None,
+        description=(
+            "Mean daily treatment-minus-control attribution difference over the last 14 UTC days; "
+            "null until at least one paired day is recorded"
+        ),
+    )
+    open_teaching_holds: int = Field(ge=0)
+    revoked_segments_14d: int = Field(ge=0)
 
 
 class IdentityReadinessResponse(BaseModel):
@@ -72,6 +96,13 @@ class IdentityReadinessResponse(BaseModel):
             "wearable_room_attested), by state; null without a gallery repository"
         ),
     )
+    wearable_learners: WearableLearnersReadinessOut | None = Field(
+        default=None,
+        description=(
+            "Wearable-supervision learner flags, 14-day paired evaluation summary, and teaching "
+            "revocation/hold counts"
+        ),
+    )
 
 
 @router.get("/readiness", response_model=IdentityReadinessResponse)
@@ -96,6 +127,7 @@ async def get_identity_readiness(
         identities_known=snap.identities_known,
         wearable_active_associations=snap.wearable_active_associations,
         wearable_gallery_counts=_counts_out(snap.wearable_gallery_counts),
+        wearable_learners=_learners_out(snap.wearable_learners),
     )
 
 
@@ -107,4 +139,24 @@ def _counts_out(counts: GalleryStateCounts | None) -> GalleryStateCountsOut | No
         auto_verified=counts.auto_verified,
         operator_verified=counts.operator_verified,
         rejected=counts.rejected,
+        expired=counts.expired,
+    )
+
+
+def _learners_out(
+    learners: WearableLearnersReadiness | None,
+) -> WearableLearnersReadinessOut | None:
+    if learners is None:
+        return None
+    return WearableLearnersReadinessOut(
+        wearable_mode=learners.wearable_mode,
+        wearable_seeding_enabled=learners.wearable_seeding_enabled,
+        face_attestation_mode=learners.face_attestation_mode,
+        wearable_backfill_enabled=learners.wearable_backfill_enabled,
+        auto_on_swap=learners.auto_on_swap,
+        evaluation_sample_rate=learners.evaluation_sample_rate,
+        evaluation_days_14d=learners.evaluation_days_14d,
+        attribution_difference_14d=learners.attribution_difference_14d,
+        open_teaching_holds=learners.open_teaching_holds,
+        revoked_segments_14d=learners.revoked_segments_14d,
     )

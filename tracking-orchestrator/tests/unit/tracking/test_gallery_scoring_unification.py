@@ -19,6 +19,7 @@ import pytest
 from app.domain import GalleryEmbedding, OrientationBin, ViewPrototype
 from app.storage.gallery import InMemoryGalleryRepository
 from app.tracking import identity_resolver as identity_resolver_module
+from app.tracking.identity.channels import VoteWindow
 from app.tracking.identity.gallery_scoring import ScoredHit
 from app.tracking.identity.gallery_scoring import score_hits as _real_score_hits
 from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
@@ -112,13 +113,20 @@ async def test_multiview_and_fallback_paths_score_identical_hits_identically(
         *,
         embedding: list[float],
         limit: int = 20,
-        max_age_seconds: int | None = None,
+        seen_after: datetime | None = None,
+        seen_before: datetime | None = None,
         states: frozenset[str] | None = None,
+        exclude_seed_sources: frozenset[str] | None = None,
+        active_only: bool = True,
     ) -> list[tuple[GalleryEmbedding, float]]:
         return hits
 
     async def _fake_list_for_tracklets(
-        *, tracklet_ids: set[str], limit: int = 20
+        *,
+        tracklet_ids: set[str],
+        limit: int = 20,
+        exclude_seed_sources: frozenset[str] | None = None,
+        seen_before: datetime | None = None,
     ) -> list[GalleryEmbedding]:
         return [hits[0][0]]
 
@@ -135,9 +143,10 @@ async def test_multiview_and_fallback_paths_score_identical_hits_identically(
         return result
 
     monkeypatch.setattr(identity_resolver_module, "score_hits", _spy)
+    window = VoteWindow(as_of=_NOW, max_age_s=None)
 
     ph_fallback = _FakePH(entity_id="ph-fallback", obs_ids=["obs-1"])
-    await resolver._from_gallery(ph_fallback, enable_multiview=False)
+    await resolver._from_gallery(ph_fallback, window=window, enable_multiview=False)
 
     back_proto = ViewPrototype(
         orientation=OrientationBin.BACK,
@@ -147,7 +156,7 @@ async def test_multiview_and_fallback_paths_score_identical_hits_identically(
     ph_multiview = _FakePH(
         entity_id="ph-multiview", obs_ids=["obs-2"], view_prototypes=(back_proto,)
     )
-    await resolver._from_gallery(ph_multiview, enable_multiview=True)
+    await resolver._from_gallery(ph_multiview, window=window, enable_multiview=True)
 
     assert len(captured) == 2
     fallback_scored, multiview_scored = captured

@@ -371,27 +371,26 @@ class WorldTracker:
         return self._wearable_tracker.reset_ph(ph_id, now=now, reason=reason)
 
     async def _resolve_verified_reid_identities(
-        self, observations: list[WorldObservation]
+        self, observations: list[WorldObservation], as_of: datetime
     ) -> list[str | None]:
         """Resolve each observation's verified-ReID identity from the gallery.
 
         ``operator_verified`` and ``auto_verified`` gallery entries vote
-        (``VOTING_STATES``, decision D3): the probe must see the same corpus
-        the resolver votes with, per identity-continuity M03. A hard vote-age
-        cutoff (``reid_disagreement_max_age_s``, mirroring the resolver's
-        ``gallery_vote_max_age_s``) is applied at the repository boundary so a
-        stale clothing match cannot disagree-cost a fresh observation. Returns
-        a list aligned to *observations*; an entry is ``None`` when there is
-        no embedding, no gallery repository, or no voting-state match clears
-        ``reid_disagreement_min_similarity``. The caller only invokes this
-        when ``enable_reid_disagreement_cost`` is true, so it adds no
-        per-frame gallery queries while the flag is off.
+        (``VOTING_STATES``): the probe sees the same corpus the resolver votes
+        with. A capture-time vote window ``(as_of - reid_disagreement_max_age_s, as_of]``
+        is applied at the repository boundary so stale clothing matches cannot
+        disagree-cost a fresh observation and replays reproduce live behavior.
+        Returns a list aligned to *observations*; an entry is ``None`` when there
+        is no embedding, no gallery repository, or no voting-state match clears
+        ``reid_disagreement_min_similarity``. The caller only invokes this when
+        ``enable_reid_disagreement_cost`` is true, so it adds no per-frame gallery
+        queries while the flag is off.
         """
         if self._gallery_repo is None:
             return [None] * len(observations)
         cfg = self._config
         max_age = cfg.reid_disagreement_max_age_s
-        max_age_seconds = int(max_age) if max_age is not None else None
+        seen_after = as_of - timedelta(seconds=max_age) if max_age is not None else None
         resolved: list[str | None] = []
         for obs in observations:
             identity: str | None = None
@@ -399,7 +398,8 @@ class WorldTracker:
                 hits = await self._gallery_repo.search_similar(
                     obs.embedding,
                     limit=1,
-                    max_age_seconds=max_age_seconds,
+                    seen_after=seen_after,
+                    seen_before=as_of,
                     states=VOTING_STATES,
                 )
                 if hits:
@@ -515,7 +515,7 @@ class WorldTracker:
         # None, leaving association behaviour unchanged.
         obs_verified_reid_ids: list[str | None] | None = None
         if cfg.enable_reid_disagreement_cost:
-            obs_verified_reid_ids = await self._resolve_verified_reid_identities(observations)
+            obs_verified_reid_ids = await self._resolve_verified_reid_identities(observations, now)
 
         # 3. Associate.
         assignment = associate(
