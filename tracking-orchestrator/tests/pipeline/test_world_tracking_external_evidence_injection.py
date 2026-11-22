@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from prometheus_client import CollectorRegistry
@@ -146,7 +146,14 @@ async def test_world_tracking_stage_uses_constructor_injected_source() -> None:
 async def test_pipeline_dependencies_wires_external_evidence_into_world_tracking_stage() -> None:
     source = _FakeExternalSource([])
     pipeline = FrameProcessingPipeline(PipelineConfig(allow_skeleton=True))
-    await pipeline.initialize(PipelineDependencies(external_evidence=source))
+    with (
+        patch("app.pipeline.frame_pipeline.RedisStreamsTransport", return_value=AsyncMock()),
+        patch("app.pipeline.frame_pipeline.RevisionPublisher", return_value=AsyncMock()),
+        patch("app.pipeline.frame_pipeline.PHContinuationPublisher", return_value=AsyncMock()),
+        patch("app.pipeline.frame_pipeline.SceneSamplesPublisher", return_value=AsyncMock()),
+        patch("app.pipeline.frame_pipeline.SignalPublisher", return_value=AsyncMock()),
+    ):
+        await pipeline.initialize(PipelineDependencies(external_evidence=source))
 
     assert pipeline._world_tracking_stage is not None
     assert pipeline._world_tracking_stage._external_evidence is source
