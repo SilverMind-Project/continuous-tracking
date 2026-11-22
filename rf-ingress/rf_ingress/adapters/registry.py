@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
+from rf_ingress.adapters.anchor_ranging_mqtt import build_anchor_ranging_mqtt_adapter
 from rf_ingress.adapters.base import AdapterDeps, AnyAdapter
 from rf_ingress.adapters.ble_scanner_mqtt import build_ble_scanner_mqtt_adapter
 from rf_ingress.adapters.device_ranging_mqtt import build_device_ranging_mqtt_adapter
@@ -62,4 +63,5 @@ def build_default_registry() -> AdapterRegistry:
     registry.register("simulator", build_simulator_adapter)
     registry.register("device_ranging_mqtt", build_device_ranging_mqtt_adapter)
     registry.register("ble_scanner_mqtt", build_ble_scanner_mqtt_adapter)
+    registry.register("anchor_ranging_mqtt", build_anchor_ranging_mqtt_adapter)
     return registry

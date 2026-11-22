@@ -23,6 +23,7 @@ from cts_contracts.wearables import (
 )
 
 from rf_ingress.adapters._mqtt_transport import InMemoryMqttMessageStream
+from rf_ingress.adapters.anchor_ranging_mqtt import AnchorRangingMqttAdapter
 from rf_ingress.adapters.base import AdapterDeps, AnyAdapter
 from rf_ingress.adapters.ble_scanner_mqtt import BleScannerMqttAdapter
 from rf_ingress.adapters.device_ranging_mqtt import DeviceRangingMqttAdapter
@@ -406,6 +407,127 @@ def _build_ble_scanner_mqtt_case() -> AdapterConformanceContext:
     )
 
 
+def _build_anchor_ranging_mqtt_case() -> AdapterConformanceContext:
+    t0 = datetime(2026, 11, 22, 12, 0, 0, tzinfo=UTC)
+    hw_key = "uwb:AA:BB:CC:01"
+    snap = SiteConfigSnapshot(
+        floor_plan_id="household:1",
+        nodes=(
+            RfNodeGeometry(
+                anchor_id="living-room-uwb-1",
+                x_m=0.2,
+                y_m=0.2,
+                z_m=2.3,
+                adapter_id="uwb-home",
+                node_role=RfNodeRole.RANGING_ANCHOR,
+                technology=RangingTechnology.UWB,
+                room_id="1",
+                uwb_address_hex="00:01",
+                uwb_channel=9,
+                uwb_preamble_index=10,
+            ),
+            RfNodeGeometry(
+                anchor_id="living-room-uwb-2",
+                x_m=5.8,
+                y_m=0.2,
+                z_m=1.4,
+                adapter_id="uwb-home",
+                node_role=RfNodeRole.RANGING_ANCHOR,
+                technology=RangingTechnology.UWB,
+                room_id="1",
+                uwb_address_hex="00:02",
+                uwb_channel=9,
+                uwb_preamble_index=10,
+            ),
+            RfNodeGeometry(
+                anchor_id="living-room-uwb-3",
+                x_m=5.8,
+                y_m=4.8,
+                z_m=2.4,
+                adapter_id="uwb-home",
+                node_role=RfNodeRole.RANGING_ANCHOR,
+                technology=RangingTechnology.UWB,
+                room_id="1",
+                uwb_address_hex="00:03",
+                uwb_channel=9,
+                uwb_preamble_index=10,
+            ),
+        ),
+        devices=(
+            SiteDevice(
+                tag_id="senior-uwb-clip-1",
+                adapter_id="uwb-home",
+                hardware_key=hw_key,
+                device_kind=DeviceKind.UWB_TAG,
+                is_active=True,
+            ),
+        ),
+        bindings=(
+            SiteBinding(
+                tag_id="senior-uwb-clip-1",
+                member_id="resident-1",
+                valid_from=t0 - timedelta(hours=1),
+                valid_to=None,
+            ),
+        ),
+        version="conf:anchor-uwb:v1",
+    )
+    provider = InMemorySiteConfigProvider(snap)
+
+    def _msg(
+        anchor_id: str,
+        tag_hw_key: str,
+        dist_m: float,
+        epoch_seq: int,
+        offset_s: float,
+    ) -> tuple[str, bytes]:
+        ts = t0 + timedelta(seconds=offset_s)
+        payload = json.dumps(
+            {
+                "schema": "fira_anchor.v1",
+                "anchor_id": anchor_id,
+                "hardware_key": tag_hw_key,
+                "epoch_seq": epoch_seq,
+                "measured_at_unix_ns": datetime_to_unix_ns(ts),
+                "sent_at_unix_ns": datetime_to_unix_ns(ts + timedelta(milliseconds=25)),
+                "distance_m": dist_m,
+                "wear_state": "on_body",
+                "motion_state": "moving",
+                "charging": False,
+                "battery_fraction": 0.84,
+            }
+        ).encode("utf-8")
+        return (f"rf/anchors/{anchor_id}/ranges", payload)
+
+    stream = InMemoryMqttMessageStream(
+        [
+            _msg("living-room-uwb-1", hw_key, 3.10, 1, 0.0),
+            _msg("living-room-uwb-2", hw_key, 3.25, 1, 0.02),
+            _msg("living-room-uwb-3", hw_key, 3.40, 1, 0.04),
+            ("rf/anchors/living-room-uwb-1/ranges", b"{not valid json"),
+            (
+                "rf/anchors/living-room-uwb-1/ranges",
+                json.dumps({"schema": "fira_anchor.v1", "unexpected": 1}).encode("utf-8"),
+            ),
+            _msg("living-room-uwb-1", "uwb:FF:FF:FF:FF", 2.0, 2, 0.5),
+            _msg("living-room-uwb-1", hw_key, 2.95, 2, 1.0),
+            _msg("living-room-uwb-2", hw_key, 3.15, 2, 1.02),
+        ]
+    )
+    adapter = AnchorRangingMqttAdapter(
+        adapter_id="uwb-home",
+        deps=AdapterDeps(site_config=provider, clock=lambda: t0),
+        stream=stream,
+    )
+    return AdapterConformanceContext(
+        adapter=adapter,
+        site_config=provider,
+        expected_registered_tags=frozenset({"senior-uwb-clip-1"}),
+        expected_unregistered_tags=frozenset({"uwb:FF:FF:FF:FF"}),
+        expects_malformed_drop=True,
+    )
+
+
 CONFORMANCE_CASES: tuple[AdapterConformanceCase, ...] = (
     AdapterConformanceCase(name="simulator-range", build=_build_simulator_range_case),
     AdapterConformanceCase(
@@ -423,6 +545,10 @@ CONFORMANCE_CASES: tuple[AdapterConformanceCase, ...] = (
     AdapterConformanceCase(
         name="ble-scanner-mqtt-v1",
         build=_build_ble_scanner_mqtt_case,
+    ),
+    AdapterConformanceCase(
+        name="anchor-ranging-mqtt-v1",
+        build=_build_anchor_ranging_mqtt_case,
     ),
 )
 

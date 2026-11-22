@@ -11,7 +11,7 @@ Guidance for Claude Code agents working in this repository.
 | `.claude/skills/cts-signals/SKILL.md` | Dementia signals, detectors, baselines, robust z-scores, hysteresis, severity, protobuf/CC kind plumbing, and signal tests |
 | `.claude/skills/cts-spatial-fusion/SKILL.md` | Floor-plane localization, homography Jacobian, measurement covariance, cross-camera fusion, Kalman/ZUPT, primary camera selection, and posture geometry weighting |
 | `.claude/skills/cts-identity-governance/SKILL.md` | PH identity evidence, the identity resolver, authority order, ReID gallery lifecycle, revisions, operator corrections, external identity evidence, and identity provenance |
-| `.claude/skills/rf-ingress/SKILL.md` | `rf-ingress/` adapters (`simulator`, `device_ranging_mqtt`), conformance kit, multilateration solver, clock offset tracking, replay CLI, and wearable stream publishing |
+| `.claude/skills/rf-ingress/SKILL.md` | `rf-ingress/` adapters (`simulator`, `device_ranging_mqtt`, `ble_scanner_mqtt`, `anchor_ranging_mqtt`), conformance kit, multilateration solver, clock offset tracking, replay/bench CLI, and wearable stream publishing |
 | `.claude/skills/wear-companion/SKILL.md` | `wear-companion/` Wear OS companion app (`:core` pure Kotlin FSMs/batcher, `:app` `bleOnly`/`dualMode` flavors, zero-network manifest invariant) |
 | `/home/sriram/code/nanai/.claude/skills/nanai-workspace/SKILL.md` | Any change spanning more than one repository: repo map, gates, proto two-repo rule, milestone workflow |
 

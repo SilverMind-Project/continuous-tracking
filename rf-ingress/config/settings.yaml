@@ -60,4 +60,22 @@ clock:
 #       default:
 #         rssi_at_1m_dbm: -59
 #     nodes: {}            # per-node path_loss_exponent from bench calibration; default 2.5
+#
+# Example optional UWB anchor-side ranging adapter (add as a second adapter
+# instance once fixed FiRa ranging anchors are surveyed in calibrated rooms and
+# bench ranging variance has been measured):
+#
+#   - id: uwb-home
+#     kind: anchor_ranging_mqtt
+#     payload_profile: fira_anchor_v1
+#     broker_url: "${MQTT_URL}"
+#     username: "${MQTT_USERNAME}"
+#     password: "${MQTT_PASSWORD}"
+#     topic: "rf/anchors/+/ranges"
+#     nominal_rate_hz: 1.0
+#     uwb_default_sigma_m: 0.25   # replace with empirical worn-tag bench sigma
+#     sigma_floor_m: 0.10
+#     max_range_m: 25.0
+#     calibrated_floor_plan_azimuth: false
+#     nodes: {}            # optional per-anchor sigma_m and range_bias_m overrides
 adapters: []

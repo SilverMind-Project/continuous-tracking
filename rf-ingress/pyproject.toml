@@ -139,6 +139,7 @@ source_modules = [
     "rf_ingress.solver",
 ]
 forbidden_modules = [
+    "rf_ingress.adapters.anchor_ranging_mqtt",
     "rf_ingress.adapters.ble_motion",
     "rf_ingress.adapters.ble_scanner_mqtt",
     "rf_ingress.adapters.device_ranging_mqtt",

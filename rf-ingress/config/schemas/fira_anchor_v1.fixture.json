@@ -1,0 +1,141 @@
+{
+  "schema": "fira_anchor.v1",
+  "topic_pattern": "rf/anchors/{anchor_id}/ranges",
+  "description": "Canonical fira_anchor.v1 MQTT report fixtures owned by rf-ingress and shared with future standalone UWB anchor/tag firmware tests.",
+  "valid_samples": [
+    {
+      "name": "moving_on_body_full",
+      "topic": "rf/anchors/living-room-uwb-1/ranges",
+      "payload": {
+        "schema": "fira_anchor.v1",
+        "anchor_id": "living-room-uwb-1",
+        "uwb_address_hex": "00:01",
+        "tag_id": "senior-uwb-clip-1",
+        "hardware_key": "uwb:AA:BB:CC:01",
+        "epoch_seq": 101,
+        "measured_at_unix_ns": 1763812800000000000,
+        "sent_at_unix_ns": 1763812800040000000,
+        "distance_m": 2.41,
+        "variance_m2": 0.04,
+        "los_confidence": 0.94,
+        "wear_state": "on_body",
+        "motion_state": "moving",
+        "charging": false,
+        "battery_fraction": 0.86
+      }
+    },
+    {
+      "name": "still_on_body_address_and_hw_key_only",
+      "topic": "rf/anchors/living-room-uwb-2/ranges",
+      "payload": {
+        "schema": "fira_anchor.v1",
+        "uwb_address_hex": "00:02",
+        "hardware_key": "uwb:AA:BB:CC:01",
+        "epoch_seq": 102,
+        "measured_at_unix_ns": 1763812810000000000,
+        "distance_m": 3.12,
+        "wear_state": "on_body",
+        "motion_state": "still",
+        "charging": false,
+        "battery_fraction": 0.85
+      }
+    },
+    {
+      "name": "charging_forces_off_body",
+      "topic": "rf/anchors/living-room-uwb-1/ranges",
+      "payload": {
+        "schema": "fira_anchor.v1",
+        "anchor_id": "living-room-uwb-1",
+        "hardware_key": "uwb:AA:BB:CC:01",
+        "epoch_seq": 103,
+        "measured_at_unix_ns": 1763812820000000000,
+        "distance_m": 1.15,
+        "wear_state": "on_body",
+        "motion_state": "still",
+        "charging": true,
+        "battery_fraction": 0.99
+      }
+    },
+    {
+      "name": "calibrated_fixed_anchor_bearing",
+      "topic": "rf/anchors/living-room-uwb-1/ranges",
+      "payload": {
+        "schema": "fira_anchor.v1",
+        "anchor_id": "living-room-uwb-1",
+        "tag_id": "senior-uwb-clip-1",
+        "epoch_seq": 104,
+        "measured_at_unix_ns": 1763812830000000000,
+        "distance_m": 2.05,
+        "azimuth_deg": 42.5,
+        "azimuth_variance_deg2": 16.0,
+        "elevation_deg": -12.0,
+        "wear_state": "on_body",
+        "motion_state": "moving",
+        "charging": false,
+        "battery_fraction": 0.84
+      }
+    }
+  ],
+  "invalid_samples": [
+    {
+      "name": "unknown_schema_version",
+      "payload": {
+        "schema": "fira_anchor.v99",
+        "anchor_id": "living-room-uwb-1",
+        "tag_id": "senior-uwb-clip-1",
+        "measured_at_unix_ns": 1763812800000000000,
+        "distance_m": 2.0
+      }
+    },
+    {
+      "name": "unknown_extra_field",
+      "payload": {
+        "schema": "fira_anchor.v1",
+        "anchor_id": "living-room-uwb-1",
+        "tag_id": "senior-uwb-clip-1",
+        "measured_at_unix_ns": 1763812800000000000,
+        "distance_m": 2.0,
+        "vendor_blob": "unexpected"
+      }
+    },
+    {
+      "name": "missing_anchor_reference",
+      "payload": {
+        "schema": "fira_anchor.v1",
+        "tag_id": "senior-uwb-clip-1",
+        "measured_at_unix_ns": 1763812800000000000,
+        "distance_m": 2.0
+      }
+    },
+    {
+      "name": "missing_tag_reference",
+      "payload": {
+        "schema": "fira_anchor.v1",
+        "anchor_id": "living-room-uwb-1",
+        "measured_at_unix_ns": 1763812800000000000,
+        "distance_m": 2.0
+      }
+    },
+    {
+      "name": "negative_distance",
+      "payload": {
+        "schema": "fira_anchor.v1",
+        "anchor_id": "living-room-uwb-1",
+        "tag_id": "senior-uwb-clip-1",
+        "measured_at_unix_ns": 1763812800000000000,
+        "distance_m": -0.5
+      }
+    },
+    {
+      "name": "non_positive_variance",
+      "payload": {
+        "schema": "fira_anchor.v1",
+        "anchor_id": "living-room-uwb-1",
+        "tag_id": "senior-uwb-clip-1",
+        "measured_at_unix_ns": 1763812800000000000,
+        "distance_m": 2.0,
+        "variance_m2": 0.0
+      }
+    }
+  ]
+}
