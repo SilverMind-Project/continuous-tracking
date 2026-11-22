@@ -83,14 +83,27 @@ R*   = ( Σ (J Σ_px Jᵀ)ᵢ⁻¹ )⁻¹  +  R_bias_floor
   `now` (`max(ctx.capture_time)`) are transient for association and `coasting=True` snapshots,
   and matched updates predict from `last_seen_at` to `obs.captured_at` (see
   `reference/time-model.md`).
-- **Wearable-to-PH association innovation covariance.** Trajectory-class wearable fixes
-  (`sqrt(lambda_max(Sigma_f)) <= wearable.trajectory_max_sigma_m`, default `0.75 m`) score
-  against calibrated PH floor history (`tracking-orchestrator/app/tracking/world/ph_floor_history.py`,
-  appended only on calibrated rounds, never synthetic virtual tiles or coasting predictions)
-  interpolated at `fix.measured_at` with innovation covariance
+- **Wearable-to-PH association innovation covariance and loosely-coupled UWB spatial fusion.**
+  Trajectory-class wearable fixes (`sqrt(lambda_max(Sigma_f)) <= wearable.trajectory_max_sigma_m`,
+  default `0.75 m`) score against calibrated PH floor history
+  (`tracking-orchestrator/app/tracking/world/ph_floor_history.py`, appended only on calibrated
+  rounds, never synthetic virtual tiles or coasting predictions) interpolated at `fix.measured_at`
+  with innovation covariance
   `S = Sigma_f + Sigma_j + (v_j * sigma_t)^2 * I + sigma_bias^2 * I` (`sigma_t = 0.5 s`,
   `sigma_bias = 0.15 m`, chi-square gate `9.21`). Wide-covariance fixes reduce their 2D
-  Gaussian over room polygons and use sole-occupant room rules.
+  Gaussian over room polygons and use sole-occupant room rules. Once a segment achieves
+  `attestation_grade == TRAJECTORY` with zero face conflicts (and `wearable.spatial_fusion_mode`
+  is `"enabled"`), fresh `FIX_KIND_POSITION` fixes (`sigma <= wearable.spatial_fusion_max_sigma_m`)
+  may apply a loosely-coupled, chi-square-gated 2x2 Kalman position update (adding a non-shrinking
+  `R_uwb_bias` floor) to refine oblique camera viewing-ray uncertainty and extend short camera
+  occlusions, while never altering raw `PHFloorHistory` camera samples.
+- **Device-free anonymous position sensors (`AnonymousPositionTrack` on `position.tracks`).**
+  mmWave radars and 2D/3D LiDARs publish anonymous floor-plane tracks (`x_mm`, `y_mm`,
+  `cov_xx_m2`, `cov_xy_m2`, `cov_yy_m2`) in the shared floor frame without identity. When fused
+  with cameras in `WorldTracker`, only random covariance is inverse-summed while per-sensor
+  systematic bias (`R_sensor_bias`) is added as a non-shrinking floor. In camera-free privacy
+  zones (bathrooms, bedrooms), `AnonymousPositionTrack` observations sustain or spawn PHs that
+  `WearableAssociationTracker` and `IdentityResolver` bind to household members.
 
 ## Primary-camera selection
 
