@@ -9,8 +9,8 @@ from typing import Protocol
 
 from structlog import get_logger
 
-from ...observability import metrics as _metrics
-from ..frame_context import FrameContext
+from app.observability import metrics as _metrics
+from app.pipeline.frame_context import FrameContext
 
 logger = get_logger(__name__)
 

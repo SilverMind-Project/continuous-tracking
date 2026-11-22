@@ -8,11 +8,11 @@ import numpy as np
 import numpy.typing as npt
 from structlog import get_logger
 
-from ...inference.detector import PersonDetector
-from ...inference.schemas import DetectionBox
-from ...observability import metrics as _metrics
-from ..frame_context import FrameContext
-from .base import FrameStage
+from app.inference.detector import PersonDetector
+from app.inference.schemas import DetectionBox
+from app.observability import metrics as _metrics
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
 
 logger = get_logger(__name__)
 

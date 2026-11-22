@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from structlog import get_logger
 
-from ..domain import RoomTransitionEvent
-from .base_publisher import BasePublisher
+from app.domain import RoomTransitionEvent
+from app.transport.base_publisher import BasePublisher
 
 logger = get_logger(__name__)
 

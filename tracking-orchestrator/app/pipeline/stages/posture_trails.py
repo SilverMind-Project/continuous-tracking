@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections import deque
 
-from ..frame_context import FrameContext
-from .base import FrameStage
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
 
 
 class TrailsStage(FrameStage):

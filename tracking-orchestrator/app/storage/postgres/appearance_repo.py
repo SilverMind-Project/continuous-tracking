@@ -7,8 +7,8 @@ from typing import Any
 
 import asyncpg
 
-from ...trajectory.appearance_profile import DailyAppearanceProfile
-from ..appearance import DailyAppearanceRepo
+from app.storage.appearance import DailyAppearanceRepo
+from app.trajectory.appearance_profile import DailyAppearanceProfile
 
 _SQL_UPSERT = """
 INSERT INTO continuous_tracking.daily_appearance_profiles

@@ -12,8 +12,8 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from ..domain import BoundingBox
-from ..inference.schemas import DetectionBox
+from app.domain import BoundingBox
+from app.inference.schemas import DetectionBox
 
 # Minimum crop dimensions before a crop is considered degenerate.
 # ReID requires 384x128; RTMPose requires 256x192.  Below these thresholds

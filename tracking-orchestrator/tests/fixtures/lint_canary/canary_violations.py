@@ -7,6 +7,8 @@ Excluded from normal lint runs via pyproject.toml. Intentionally omits
 import datetime
 import logging
 
+from . import config  # relative import (TID252)
+
 logger = logging.getLogger(__name__)
 
 

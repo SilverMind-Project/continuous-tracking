@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
-from ..domain import BboxAnnotation
+from app.domain import BboxAnnotation
 
 
 class BboxBatchOperation:

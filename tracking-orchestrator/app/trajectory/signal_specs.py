@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from ..domain import DementiaSignal
+    from app.domain import DementiaSignal
 
 EvidenceGrade = Literal[
     "clinical_review",

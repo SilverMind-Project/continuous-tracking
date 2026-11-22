@@ -16,8 +16,8 @@ import json
 import asyncpg
 from structlog import get_logger
 
-from ...domain import CameraConfig, StreamConfig
-from ..base import SettingsRepository
+from app.domain import CameraConfig, StreamConfig
+from app.storage.base import SettingsRepository
 
 logger = get_logger(__name__)
 

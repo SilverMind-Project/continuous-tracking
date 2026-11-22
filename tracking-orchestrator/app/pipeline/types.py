@@ -13,12 +13,12 @@ from typing import Protocol
 import numpy as np
 import numpy.typing as npt
 
-from ..domain import RoomTransitionEvent, TransitZone
-from ..inference.schemas import Embedding
-from ..services.camera_profile_map import CameraProfileMap
-from ..services.camera_room_map import CameraRoomMap, RoomPolygonMap
-from ..services.transit_zone_map import TransitZoneMap
-from ..services.wearable_site_config_map import WearableSiteConfigMap
+from app.domain import RoomTransitionEvent, TransitZone
+from app.inference.schemas import Embedding
+from app.services.camera_profile_map import CameraProfileMap
+from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+from app.services.transit_zone_map import TransitZoneMap
+from app.services.wearable_site_config_map import WearableSiteConfigMap
 
 
 class FrameImageFetcher(Protocol):

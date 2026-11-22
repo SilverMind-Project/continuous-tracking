@@ -17,10 +17,9 @@ from typing import Any, Literal, Protocol
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from structlog import get_logger
 
-from ..domain import IdentityRevision
-from ..observability.metrics import metrics
-from ..storage.base import PHRepositoryProtocol
-from .ph_schemas import (
+from app.domain import IdentityRevision
+from app.observability.metrics import metrics
+from app.routers.ph_schemas import (
     BatchCorrectRequest,
     BatchCorrectResponse,
     BatchDeleteRequest,
@@ -48,6 +47,7 @@ from .ph_schemas import (
     SplitResponse,
     TrailPointResponse,
 )
+from app.storage.base import PHRepositoryProtocol
 
 logger = get_logger(__name__)
 
@@ -117,8 +117,8 @@ def _get_correction_service() -> Any:
     global _correction_service
     if _correction_service is not None:
         return _correction_service
-    from ..services.identity_correction_service import IdentityCorrectionService
-    from ..storage.corrections import InMemoryIdentityCorrectionRepository
+    from app.services.identity_correction_service import IdentityCorrectionService
+    from app.storage.corrections import InMemoryIdentityCorrectionRepository
 
     if _repo is None:
         raise HTTPException(
@@ -343,7 +343,7 @@ async def batch_correct(
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> BatchCorrectResponse:
     actor = _actor_from_request(request)
-    from ..services.identity_correction_service import CorrectionError
+    from app.services.identity_correction_service import CorrectionError
 
     service = _get_correction_service()
     results = []
@@ -531,7 +531,7 @@ async def correct_identity(
     repo: PHRepositoryProtocol = Depends(get_repo),
 ) -> CorrectIdentityResponse:
     actor = _actor_from_request(request)
-    from ..services.identity_correction_service import CorrectionError
+    from app.services.identity_correction_service import CorrectionError
 
     service = _get_correction_service()
     try:

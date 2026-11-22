@@ -11,8 +11,8 @@ import numpy.typing as npt
 from shapely import Point, Polygon
 from structlog import get_logger
 
-from ..calibration.state import CalibrationState, PrivacyZoneConfig
-from ..domain import BoundingBox
+from app.calibration.state import CalibrationState, PrivacyZoneConfig
+from app.domain import BoundingBox
 
 logger = get_logger(__name__)
 

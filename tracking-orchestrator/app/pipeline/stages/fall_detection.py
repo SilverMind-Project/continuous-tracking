@@ -39,19 +39,19 @@ from typing import TYPE_CHECKING
 
 from structlog import get_logger
 
-from ...domain import DementiaSignal, DementiaSignalKind, DementiaSignalSeverity
-from ...observability import metrics as _metrics
-from ...trajectory.dementia_signals import SignalHysteresis
-from ...trajectory.fall_detector import FallDetector, FallDetectorConfig
-from ...trajectory.fall_features import FallFeatureExtractor, FallFrameInput
-from ...trajectory.signal_specs import FALL_SUSPECTED_SPEC
-from ..frame_context import FrameContext
-from .base import FrameStage
+from app.domain import DementiaSignal, DementiaSignalKind, DementiaSignalSeverity
+from app.observability import metrics as _metrics
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
+from app.trajectory.dementia_signals import SignalHysteresis
+from app.trajectory.fall_detector import FallDetector, FallDetectorConfig
+from app.trajectory.fall_features import FallFeatureExtractor, FallFrameInput
+from app.trajectory.signal_specs import FALL_SUSPECTED_SPEC
 
 if TYPE_CHECKING:
-    from ...storage.signals import DementiaSignalRepository
-    from ...trajectory.motion_energy import MotionEnergyTracker
-    from ...transport.signal_publisher import SignalPublisher
+    from app.storage.signals import DementiaSignalRepository
+    from app.trajectory.motion_energy import MotionEnergyTracker
+    from app.transport.signal_publisher import SignalPublisher
 
 logger = get_logger(__name__)
 

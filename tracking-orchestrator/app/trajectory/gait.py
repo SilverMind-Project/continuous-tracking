@@ -26,7 +26,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..storage.gait import GaitBoutRepository, GaitDailyRepository
+    from app.storage.gait import GaitBoutRepository, GaitDailyRepository
 
 # UUID namespace for stable bout IDs — arbitrary fixed UUID.
 _BOUT_NAMESPACE = uuid.UUID("a3e4f8c2-1b5d-4e7a-9f6c-2d0b3e8a1c5f")
@@ -350,7 +350,7 @@ class GaitAggregator:
         bouts: list[WalkingBout],
         computed_at: datetime,
     ) -> GaitDailyRecord:
-        from .stats import weighted_median
+        from app.trajectory.stats import weighted_median
 
         speeds = [b.median_speed_m_s for b in bouts]
         weights = [b.duration_s for b in bouts]

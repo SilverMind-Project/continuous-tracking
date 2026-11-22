@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from structlog import get_logger
 
-from ..domain import (
+from app.domain import (
     CameraTopologyEdge,
     CoPresenceLink,
     IdentityProvenanceDecision,
@@ -19,20 +19,24 @@ from ..domain import (
     PersonHypothesis,
     WorldObservation,
 )
-from ..tracking.identity.types import IdentityAuthority
-from .annotations import BboxAnnotationRepository, InMemoryBboxAnnotationRepository
-from .corrections import (
+from app.storage.annotations import BboxAnnotationRepository, InMemoryBboxAnnotationRepository
+from app.storage.corrections import (
     IdentityCorrectionRepositoryProtocol,
     InMemoryIdentityCorrectionRepository,
 )
-from .gait import (
+from app.storage.gait import (
     GaitBoutRepository,
     GaitDailyRepository,
     InMemoryGaitBoutRepository,
     InMemoryGaitDailyRepository,
 )
-from .gallery import VERIFIED_ONLY, VOTING_STATES, GalleryRepository, InMemoryGalleryRepository
-from .misc import (
+from app.storage.gallery import (
+    VERIFIED_ONLY,
+    VOTING_STATES,
+    GalleryRepository,
+    InMemoryGalleryRepository,
+)
+from app.storage.misc import (
     ActivityRepository,
     AssignmentRepository,
     CorrectionRepository,
@@ -44,7 +48,7 @@ from .misc import (
     PrivacyRepository,
     SettingsRepository,
 )
-from .signals import (
+from app.storage.signals import (
     BehaviorBaselineRepository,
     DailyWindowSample,
     DementiaSignalRepository,
@@ -53,12 +57,13 @@ from .signals import (
     InMemoryDementiaSignalRepository,
     StillnessEpisode,
 )
-from .trajectory import (
+from app.storage.trajectory import (
     InMemoryKeyframeRepository,
     InMemoryTrajectoryRepository,
     KeyframeRepository,
     TrajectoryRepository,
 )
+from app.tracking.identity.types import IdentityAuthority
 
 logger = get_logger(__name__)
 

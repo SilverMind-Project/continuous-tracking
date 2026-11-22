@@ -12,8 +12,8 @@ from typing import Any
 import asyncpg
 from structlog import get_logger
 
-from ...domain import BboxAnnotation, TaggedKeyframe
-from ..base import KeyframeRepository
+from app.domain import BboxAnnotation, TaggedKeyframe
+from app.storage.base import KeyframeRepository
 
 logger = get_logger(__name__)
 

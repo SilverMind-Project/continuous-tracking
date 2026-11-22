@@ -17,12 +17,12 @@ from typing import TYPE_CHECKING
 
 from structlog import get_logger
 
-from ...domain import FaceAnchor, IdentityResolvableEntity, PosteriorDist
-from .evidence_grades import grade_of
-from .policy import CommitPolicy
+from app.domain import FaceAnchor, IdentityResolvableEntity, PosteriorDist
+from app.tracking.identity.evidence_grades import grade_of
+from app.tracking.identity.policy import CommitPolicy
 
 if TYPE_CHECKING:
-    from ...inference.evidence import FaceEvidence
+    from app.inference.evidence import FaceEvidence
 
 logger = get_logger(__name__)
 

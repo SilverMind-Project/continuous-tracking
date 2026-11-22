@@ -24,9 +24,9 @@ import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ..domain import PostureType
-from ..inference.schemas import Keypoint, PoseResult
-from ..observability import metrics as _metrics
+from app.domain import PostureType
+from app.inference.schemas import Keypoint, PoseResult
+from app.observability import metrics as _metrics
 
 # ── Keypoint confidence floor ─────────────────────────────────────────────────
 _SCORE_FLOOR = 0.3

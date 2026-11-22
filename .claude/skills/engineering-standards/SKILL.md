@@ -58,8 +58,8 @@ contract it describes.
     **changed)`, never field-by-field reconstruction and never `object.__setattr__`. A new
     `PersonHypothesis` field is classified in `test_ph_field_carryover.py`.
 14. All imports at the top; no conditional imports on runtime data; no import side effects; no
-    wildcard imports. Imports are absolute (`from app.x import ...`); only `__init__.py` re-export
-    blocks may be relative. Cross-boundary type-only imports go under `TYPE_CHECKING`.
+    wildcard imports. Absolute imports only (ruff `TID252`); `__init__.py` re-exports may be
+    relative. Cross-boundary type-only imports go under `TYPE_CHECKING`.
 15. `from __future__ import annotations` in every file (ruff `I002`); every signature annotated;
     `T | None`, never `Optional`; `# type: ignore[code]` only with a code (ruff `PGH003`); no
     `Any` in constructors or returns.

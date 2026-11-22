@@ -25,9 +25,9 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from ..calibration.state import CalibrationState, PrivacyZoneConfig
-from ..calibration.validator import validate_homography
-from ..domain import (
+from app.calibration.state import CalibrationState, PrivacyZoneConfig
+from app.calibration.validator import validate_homography
+from app.domain import (
     CameraProfile,
     OverlapGroup,
     PrivacyPolicy,
@@ -37,22 +37,22 @@ from ..domain import (
     WearableDevice,
     WearableSiteConfig,
 )
-from ..observability import metrics as _m
-from ..observability.metrics import CameraProfileRejectReason, CCSyncResource
-from ..services.camera_profile_map import CameraProfileMap
-from ..services.camera_room_map import (
+from app.observability import metrics as _m
+from app.observability.metrics import CameraProfileRejectReason, CCSyncResource
+from app.services.camera_profile_map import CameraProfileMap
+from app.services.camera_room_map import (
     CameraRoomBinding,
     CameraRoomMap,
     RoomPolygonBinding,
     RoomPolygonMap,
 )
-from ..services.overlap_group_sync import OVERLAP_GROUPS_PATH, parse_overlap_groups
-from ..services.transit_zone_map import TransitZoneBinding, TransitZoneMap
-from ..services.wearable_site_config_map import WearableSiteConfigMap
+from app.services.overlap_group_sync import OVERLAP_GROUPS_PATH, parse_overlap_groups
+from app.services.transit_zone_map import TransitZoneBinding, TransitZoneMap
+from app.services.wearable_site_config_map import WearableSiteConfigMap
 
 if TYPE_CHECKING:
-    from ..services.cc_client import CognitiveCompanionClient
-    from ..storage.height_profiles import IdentityHeightProfileRepository
+    from app.services.cc_client import CognitiveCompanionClient
+    from app.storage.height_profiles import IdentityHeightProfileRepository
 
 logger = get_logger(__name__)
 

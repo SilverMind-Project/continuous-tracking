@@ -23,12 +23,12 @@ import numpy.typing as npt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from structlog import get_logger
 
-from ..domain import GalleryEmbedding
-from ..storage.base import GalleryRepository, InMemoryGalleryRepository
+from app.domain import GalleryEmbedding
+from app.storage.base import GalleryRepository, InMemoryGalleryRepository
 
 if TYPE_CHECKING:
-    from ..inference.reid_embedder import ReidEmbedder
-    from ..services.identity_roster_sync import IdentityRosterSyncService
+    from app.inference.reid_embedder import ReidEmbedder
+    from app.services.identity_roster_sync import IdentityRosterSyncService
 
 logger = get_logger(__name__)
 

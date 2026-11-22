@@ -22,20 +22,20 @@ import numpy as np
 import numpy.typing as npt
 from structlog import get_logger
 
-from ...domain import FloorPoint
-from ...domain import cov2x2_to_tuple as _cov2x2_to_tuple
-from ...domain import tuple_to_cov2x2 as _tuple_to_cov2x2
-from ..identity.evidence_grades import grade_of
-from .helpers import cosine_similarity
-from .observation_model import (
+from app.domain import FloorPoint
+from app.domain import cov2x2_to_tuple as _cov2x2_to_tuple
+from app.domain import tuple_to_cov2x2 as _tuple_to_cov2x2
+from app.tracking.identity.evidence_grades import grade_of
+from app.tracking.world.helpers import cosine_similarity
+from app.tracking.world.observation_model import (
     bias_floor_from_residual,
     fuse_information_form,
     total_observation_cov,
 )
 
 if TYPE_CHECKING:
-    from ...domain import FaceAnchor, OverlapGroup, WorldObservation
-    from .config import WorldTrackerConfig
+    from app.domain import FaceAnchor, OverlapGroup, WorldObservation
+    from app.tracking.world.config import WorldTrackerConfig
 
 NDArrayF8 = npt.NDArray[np.float64]
 

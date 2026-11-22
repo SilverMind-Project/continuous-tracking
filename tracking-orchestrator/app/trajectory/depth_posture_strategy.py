@@ -26,10 +26,10 @@ import numpy as np
 import numpy.typing as npt
 from structlog import get_logger
 
-from ..domain import Detection, PostureType
-from ..inference.depth import DepthEstimator
-from ..observability import metrics as _metrics
-from .posture import _MIN_EVIDENCE, PostureScores
+from app.domain import Detection, PostureType
+from app.inference.depth import DepthEstimator
+from app.observability import metrics as _metrics
+from app.trajectory.posture import _MIN_EVIDENCE, PostureScores
 
 logger = get_logger(__name__)
 

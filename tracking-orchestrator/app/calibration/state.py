@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from ..domain import CalibrationQuality, CameraCalibration
+from app.domain import CalibrationQuality, CameraCalibration
 
 
 @dataclass

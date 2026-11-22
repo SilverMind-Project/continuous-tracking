@@ -14,7 +14,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from ...domain import (
+from app.domain import (
     FaceAnchor,
     GallerySeedSource,
     OrientationBin,

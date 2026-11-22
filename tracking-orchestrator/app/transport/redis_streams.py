@@ -28,12 +28,12 @@ from typing import Any
 import redis.asyncio as redis
 from structlog import get_logger
 
-from ..domain import Detection
-from ..inference.schemas import PoseResult
-from ..observability import metrics
-from ..proto.continuoustracking.v1 import frame_pb2, tracking_pb2
-from .codec import decode as proto_decode
-from .codec import encode as proto_encode
+from app.domain import Detection
+from app.inference.schemas import PoseResult
+from app.observability import metrics
+from app.proto.continuoustracking.v1 import frame_pb2, tracking_pb2
+from app.transport.codec import decode as proto_decode
+from app.transport.codec import encode as proto_encode
 
 logger = get_logger(__name__)
 

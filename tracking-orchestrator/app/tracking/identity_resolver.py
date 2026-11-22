@@ -36,9 +36,9 @@ import numpy as np
 from structlog import get_logger
 
 if TYPE_CHECKING:
-    from ..pipeline.gallery_cache import GalleryCache
+    from app.pipeline.gallery_cache import GalleryCache
 
-from ..domain import (
+from app.domain import (
     FACE_EVIDENCE_POLICIES,
     AppearanceFeature,
     FaceAnchor,
@@ -61,16 +61,16 @@ from ..domain import (
     WearableEvidence,
     WearableEvidenceClass,
 )
-from ..inference.evidence import FaceEvidence
-from ..observability import metrics
-from ..observability.metrics import (
+from app.inference.evidence import FaceEvidence
+from app.observability import metrics
+from app.observability.metrics import (
     ClosedWorldShadowOutcome,
     HouseholdClassifierShadowOutcome,
     WearableShadowOutcome,
 )
-from ..storage.base import VOTING_STATES, GalleryRepository
-from ..storage.height_profiles import IdentityHeightProfileRepository
-from .identity.channels import (
+from app.storage.base import VOTING_STATES, GalleryRepository
+from app.storage.height_profiles import IdentityHeightProfileRepository
+from app.tracking.identity.channels import (
     ChannelLikelihood,
     EvidenceChannel,
     FaceChannel,
@@ -79,16 +79,11 @@ from .identity.channels import (
     ResolverInputs,
     VoteWindow,
 )
-from .identity.closed_world_channel import ClosedWorldChannel, ClosedWorldConfig
-from .identity.commit_policy import (
-    CommitEvaluation,
-    compute_contradiction,
-)
-from .identity.commit_policy import (
-    evaluate_commit as _evaluate_commit_pure,
-)
-from .identity.evidence import IdentityEvidence
-from .identity.evidence_grades import (
+from app.tracking.identity.closed_world_channel import ClosedWorldChannel, ClosedWorldConfig
+from app.tracking.identity.commit_policy import CommitEvaluation, compute_contradiction
+from app.tracking.identity.commit_policy import evaluate_commit as _evaluate_commit_pure
+from app.tracking.identity.evidence import IdentityEvidence
+from app.tracking.identity.evidence_grades import (
     CLOSED_WORLD,
     HOUSEHOLD_CLASSIFIER,
     NATIVE_TEMPLATE,
@@ -96,23 +91,23 @@ from .identity.evidence_grades import (
     EvidenceGrade,
     grade_of,
 )
-from .identity.gallery_scoring import (
+from app.tracking.identity.gallery_scoring import (
     GalleryScoringConfig,
     aggregate_max_over_views,
     aggregate_mean,
     cap_votes,
     score_hits,
 )
-from .identity.household_classifier import (
+from app.tracking.identity.household_classifier import (
     HouseholdClassifierChannel,
     HouseholdClassifierConfig,
     HouseholdClassifierEvaluator,
 )
-from .identity.policy import CommitPolicy as _CommitPolicy
-from .identity.posterior import EvidencePosterior, combine_channels
-from .identity.types import IdentityAuthority
-from .identity.wearable_channel import WearableChannel
-from .world.wearable_config import WearableConfig
+from app.tracking.identity.policy import CommitPolicy as _CommitPolicy
+from app.tracking.identity.posterior import EvidencePosterior, combine_channels
+from app.tracking.identity.types import IdentityAuthority
+from app.tracking.identity.wearable_channel import WearableChannel
+from app.tracking.world.wearable_config import WearableConfig
 
 logger = get_logger(__name__)
 

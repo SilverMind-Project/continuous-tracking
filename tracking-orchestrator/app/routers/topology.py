@@ -19,7 +19,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from ..storage.base import CameraTopologyRepository, InMemoryCameraTopologyRepository
+from app.storage.base import CameraTopologyRepository, InMemoryCameraTopologyRepository
 
 router = APIRouter(prefix="/internal/topology", tags=["topology-internal"])
 

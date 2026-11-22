@@ -6,20 +6,20 @@ from typing import TYPE_CHECKING
 
 from structlog import get_logger
 
-from ...domain import FloorPoint, PostureType
-from ...inference.schemas import PoseResult
-from ...storage.gait import GaitBoutRepository
-from ...tracking.floor_projector import FloorProjector
-from ...tracking.world import observation_model
-from ...trajectory.gait import WalkingBoutSegmenter
-from ...trajectory.motion_energy import MotionEnergyTracker
-from ...trajectory.posture import GlobalPostureTracker
-from ...trajectory.trajectory_writer import TrajectoryWriter
-from ..frame_context import FrameContext
-from .base import FrameStage
+from app.domain import FloorPoint, PostureType
+from app.inference.schemas import PoseResult
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
+from app.storage.gait import GaitBoutRepository
+from app.tracking.floor_projector import FloorProjector
+from app.tracking.world import observation_model
+from app.trajectory.gait import WalkingBoutSegmenter
+from app.trajectory.motion_energy import MotionEnergyTracker
+from app.trajectory.posture import GlobalPostureTracker
+from app.trajectory.trajectory_writer import TrajectoryWriter
 
 if TYPE_CHECKING:
-    from .fall_detection import FallDetectionStage
+    from app.pipeline.stages.fall_detection import FallDetectionStage
 
 logger = get_logger(__name__)
 

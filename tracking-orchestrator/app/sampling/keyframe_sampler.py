@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ..domain import BboxAnnotation, TaggedKeyframe
-from ..storage.base import KeyframeRepository
+from app.domain import BboxAnnotation, TaggedKeyframe
+from app.storage.base import KeyframeRepository
 
 
 @dataclass(frozen=True)

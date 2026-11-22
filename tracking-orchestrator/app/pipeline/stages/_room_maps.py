@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ...services.camera_room_map import CameraRoomMap, RoomPolygonMap
+    from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
 
 
 async def camera_room_name(camera_room_map: CameraRoomMap, camera_id: str) -> str | None:

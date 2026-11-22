@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from ..domain import BoundingBox
+from app.domain import BoundingBox
 
 
 @dataclass(frozen=True)

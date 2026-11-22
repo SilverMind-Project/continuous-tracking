@@ -16,8 +16,8 @@ from typing import Final
 
 from structlog import get_logger
 
-from ..domain import OverlapGroup
-from .cc_client import CognitiveCompanionClient
+from app.domain import OverlapGroup
+from app.services.cc_client import CognitiveCompanionClient
 
 logger = get_logger(__name__)
 

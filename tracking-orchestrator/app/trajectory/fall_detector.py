@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .fall_features import FallFeatures
+from app.trajectory.fall_features import FallFeatures
 
 
 @dataclass(frozen=True)

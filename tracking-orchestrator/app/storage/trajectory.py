@@ -5,8 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from ..domain import BboxAnnotation, PersonTrajectoryPoint, RoomDwell, TaggedKeyframe
-from .annotations import BboxAnnotationRepository
+from app.domain import BboxAnnotation, PersonTrajectoryPoint, RoomDwell, TaggedKeyframe
+from app.storage.annotations import BboxAnnotationRepository
 
 
 class TrajectoryRepository(ABC):

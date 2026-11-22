@@ -16,10 +16,10 @@ import json
 from cts_contracts import DementiaSignalKind, DementiaSignalSeverity
 from structlog import get_logger
 
-from ..domain import DementiaSignal
-from ..observability import metrics
-from ..proto.continuoustracking.v1 import signals_pb2
-from .base_publisher import BasePublisher
+from app.domain import DementiaSignal
+from app.observability import metrics
+from app.proto.continuoustracking.v1 import signals_pb2
+from app.transport.base_publisher import BasePublisher
 
 logger = get_logger(__name__)
 

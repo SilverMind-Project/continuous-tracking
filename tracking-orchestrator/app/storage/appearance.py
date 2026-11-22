@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import date
 
-from ..trajectory.appearance_profile import DailyAppearanceProfile
+from app.trajectory.appearance_profile import DailyAppearanceProfile
 
 
 class DailyAppearanceRepo(ABC):

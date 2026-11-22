@@ -13,7 +13,7 @@ import numpy.typing as npt
 from triton_shared.client import TritonClientProtocol
 from triton_shared.client import TritonGrpcClient as _BaseTritonGrpcClient
 
-from ..observability import metrics as _metrics
+from app.observability import metrics as _metrics
 
 
 class TritonGrpcClient(_BaseTritonGrpcClient):

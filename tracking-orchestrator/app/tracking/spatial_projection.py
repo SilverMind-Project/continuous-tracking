@@ -11,8 +11,8 @@ import math
 
 from structlog import get_logger
 
-from ..calibration.state import CalibrationState
-from ..domain import BoundingBox, FloorPoint
+from app.calibration.state import CalibrationState
+from app.domain import BoundingBox, FloorPoint
 
 logger = get_logger(__name__)
 

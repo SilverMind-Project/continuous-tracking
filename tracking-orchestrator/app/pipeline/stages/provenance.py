@@ -12,10 +12,10 @@ from datetime import UTC, datetime
 
 from structlog import get_logger
 
-from ...domain import IdentityProvenanceDecision
-from ...storage.base import IdentityDecisionRepositoryProtocol
-from ..frame_context import FrameContext
-from .base import FrameStage
+from app.domain import IdentityProvenanceDecision
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
+from app.storage.base import IdentityDecisionRepositoryProtocol
 
 logger = get_logger(__name__)
 

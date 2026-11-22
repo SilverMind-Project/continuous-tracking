@@ -25,7 +25,7 @@ from datetime import datetime
 
 import asyncpg
 
-from ..observability import metrics as _metrics
+from app.observability import metrics as _metrics
 
 _SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 

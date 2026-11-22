@@ -19,10 +19,10 @@ from datetime import UTC, datetime
 import numpy as np
 import numpy.typing as npt
 
-from ..domain import Detection, PostureType
-from ..inference.schemas import PoseResult
-from .posture import PostureScores
-from .posture_strategy import PostureStrategy
+from app.domain import Detection, PostureType
+from app.inference.schemas import PoseResult
+from app.trajectory.posture import PostureScores
+from app.trajectory.posture_strategy import PostureStrategy
 
 
 @dataclass(frozen=True)

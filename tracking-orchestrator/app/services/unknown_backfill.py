@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 
 from structlog import get_logger
 
-from ..domain import (
+from app.domain import (
     IdentityDecision,
     IdentityEvidence,
     IdentityRevision,
@@ -37,12 +37,15 @@ from ..domain import (
     WearableAssociationTransition,
     WearableAttestationGrade,
 )
-from ..observability import metrics as _metrics
-from ..storage.base import IdentityDecisionRepositoryProtocol, PHRepositoryProtocol
-from ..storage.wearable_teaching_holds import WearableTeachingHoldRepository
-from ..tracking.identity.types import IdentityAuthority
-from .identity_correction_service import CorrectionConflictError, IdentityCorrectionService
-from .identity_rewriter import IdentityRewriter
+from app.observability import metrics as _metrics
+from app.services.identity_correction_service import (
+    CorrectionConflictError,
+    IdentityCorrectionService,
+)
+from app.services.identity_rewriter import IdentityRewriter
+from app.storage.base import IdentityDecisionRepositoryProtocol, PHRepositoryProtocol
+from app.storage.wearable_teaching_holds import WearableTeachingHoldRepository
+from app.tracking.identity.types import IdentityAuthority
 
 logger = get_logger(__name__)
 

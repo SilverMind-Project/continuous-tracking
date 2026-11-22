@@ -11,8 +11,8 @@ from datetime import datetime
 
 from structlog import get_logger
 
-from ...calibration.state import calibration_state
-from ...domain import (
+from app.calibration.state import calibration_state
+from app.domain import (
     BoundingBox,
     ExternalIdentityEvidenceSource,
     FaceAnchor,
@@ -23,25 +23,25 @@ from ...domain import (
     WearableFixSource,
     WorldObservation,
 )
-from ...inference.evidence import FaceEvidence
-from ...observability import metrics as _metrics
-from ...services.face_templates import FaceTemplateService
-from ...storage.height_profiles import PHHeightSampleRepository
-from ...tracking.floor_projector import FloorProjector
-from ...tracking.identity.evidence_grades import grade_of
-from ...tracking.world.assertion_matching import match_assertions_to_face_anchors
-from ...tracking.world.config import WorldTrackerConfig
-from ...tracking.world.observation_model import (
+from app.inference.evidence import FaceEvidence
+from app.observability import metrics as _metrics
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.privacy import PrivacyZoneFilter
+from app.pipeline.stages._room_maps import camera_room_names, room_polygon_snapshot
+from app.pipeline.stages.base import FrameStage
+from app.pipeline.types import LiveConfigHolder
+from app.services.face_templates import FaceTemplateService
+from app.storage.height_profiles import PHHeightSampleRepository
+from app.tracking.floor_projector import FloorProjector
+from app.tracking.identity.evidence_grades import grade_of
+from app.tracking.world.assertion_matching import match_assertions_to_face_anchors
+from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.observation_model import (
     footpoint_reliable,
     pixel_covariance,
     primary_camera_score,
 )
-from ...tracking.world.tracker import WorldTracker, WorldTrackerResult
-from ..frame_context import FrameContext
-from ..privacy import PrivacyZoneFilter
-from ..types import LiveConfigHolder
-from ._room_maps import camera_room_names, room_polygon_snapshot
-from .base import FrameStage
+from app.tracking.world.tracker import WorldTracker, WorldTrackerResult
 
 logger = get_logger(__name__)
 

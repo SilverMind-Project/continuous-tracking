@@ -7,8 +7,8 @@ from typing import Any
 
 import asyncpg
 
-from ...trajectory.gait import GaitDailyRecord, WalkingBout
-from ..gait import GaitBoutRepository, GaitDailyRepository
+from app.storage.gait import GaitBoutRepository, GaitDailyRepository
+from app.trajectory.gait import GaitDailyRecord, WalkingBout
 
 _SQL_UPSERT_BOUT = """
 INSERT INTO continuous_tracking.gait_bouts

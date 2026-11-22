@@ -20,8 +20,8 @@ from pathlib import Path
 import asyncpg
 from structlog import get_logger
 
-from .config import settings
-from .storage.migrations import MigrationRunner
+from app.config import settings
+from app.storage.migrations import MigrationRunner
 
 logger = get_logger(__name__)
 

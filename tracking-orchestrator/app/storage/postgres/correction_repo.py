@@ -16,7 +16,7 @@ from typing import Any
 import asyncpg
 from structlog import get_logger
 
-from ...domain import (
+from app.domain import (
     IdentityRevisionJob,
     IdentityRevisionRange,
     IdentitySegmentCorrection,

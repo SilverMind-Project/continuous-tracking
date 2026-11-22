@@ -16,12 +16,12 @@ from dataclasses import replace
 
 from structlog import get_logger
 
-from ...trajectory.posture import PostureScores, score_posture
-from ...trajectory.posture_strategy import PostureStrategy
-from ..frame_context import FrameContext
-from ..types import LiveConfigHolder
-from ._room_maps import camera_room_name
-from .base import FrameStage
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages._room_maps import camera_room_name
+from app.pipeline.stages.base import FrameStage
+from app.pipeline.types import LiveConfigHolder
+from app.trajectory.posture import PostureScores, score_posture
+from app.trajectory.posture_strategy import PostureStrategy
 
 logger = get_logger(__name__)
 

@@ -28,11 +28,11 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from ...domain import OrientationBin, ViewPrototype
-from ..orientation import update_view_prototypes
-from .appearance_policy import evaluate_appearance_update
-from .config import WorldTrackerConfig
-from .helpers import update_gallery_mean
+from app.domain import OrientationBin, ViewPrototype
+from app.tracking.orientation import update_view_prototypes
+from app.tracking.world.appearance_policy import evaluate_appearance_update
+from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.helpers import update_gallery_mean
 
 
 @dataclass(frozen=True)

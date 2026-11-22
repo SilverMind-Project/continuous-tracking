@@ -17,13 +17,13 @@ from typing import TYPE_CHECKING, Protocol
 
 from structlog import get_logger
 
-from ..domain import Identity
+from app.domain import Identity
 
 if TYPE_CHECKING:
-    from ..pipeline.gallery_cache import GalleryCache
-    from ..storage.gallery import GalleryRepository
-    from ..storage.height_profiles import IdentityHeightProfileRepository
-    from ..tracking.identity_resolver import IdentityResolver
+    from app.pipeline.gallery_cache import GalleryCache
+    from app.storage.gallery import GalleryRepository
+    from app.storage.height_profiles import IdentityHeightProfileRepository
+    from app.tracking.identity_resolver import IdentityResolver
 
 logger = get_logger(__name__)
 

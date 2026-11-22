@@ -12,9 +12,9 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 import numpy.typing as npt
 
-from ..domain import Detection, PostureType
-from ..inference.schemas import PoseResult
-from .posture import PostureScores, classify_posture, score_posture
+from app.domain import Detection, PostureType
+from app.inference.schemas import PoseResult
+from app.trajectory.posture import PostureScores, classify_posture, score_posture
 
 
 @runtime_checkable

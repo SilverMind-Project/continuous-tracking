@@ -24,7 +24,7 @@ import dataclasses
 from datetime import UTC, datetime
 from typing import Protocol
 
-from ..domain import (
+from app.domain import (
     IdentityRevisionJob,
     IdentityRevisionRange,
     IdentitySegmentCorrection,

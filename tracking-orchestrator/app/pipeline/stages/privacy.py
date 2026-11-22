@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from structlog import get_logger
 
-from ...calibration.state import calibration_state
-from ...inference.schemas import DetectionBox
-from ...observability import metrics as _metrics
-from ..frame_context import FrameContext
-from ..privacy import PrivacyZoneFilter
-from .base import FrameStage
+from app.calibration.state import calibration_state
+from app.inference.schemas import DetectionBox
+from app.observability import metrics as _metrics
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.privacy import PrivacyZoneFilter
+from app.pipeline.stages.base import FrameStage
 
 logger = get_logger(__name__)
 

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from ...services.identity_rewriter import IdentityRewriter
-from ...services.unknown_backfill import UnknownBackfillService
-from ...storage.base import BboxAnnotationRepository
-from ...transport.revision_publisher import RevisionPublisher
-from ..frame_context import FrameContext
-from .base import FrameStage
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
+from app.services.identity_rewriter import IdentityRewriter
+from app.services.unknown_backfill import UnknownBackfillService
+from app.storage.base import BboxAnnotationRepository
+from app.transport.revision_publisher import RevisionPublisher
 
 
 class RevisionsStage(FrameStage):

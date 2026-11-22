@@ -15,10 +15,10 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
-from ..observability import metrics
+from app.observability import metrics
 
 if TYPE_CHECKING:
-    from ..transport.redis_streams import FrameReady
+    from app.transport.redis_streams import FrameReady
 
 
 class FrameBatcherProtocol(Protocol):

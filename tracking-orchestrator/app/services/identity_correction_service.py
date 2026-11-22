@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 
 from structlog import get_logger
 
-from ..domain import (
+from app.domain import (
     CorrectionKind,
     CorrectionReasonCode,
     IdentityEvidence,
@@ -47,8 +47,8 @@ from ..domain import (
     SegmentProposal,
     WorldObservation,
 )
-from ..storage.base import IdentityCorrectionRepositoryProtocol, PHRepositoryProtocol
-from .identity_rewriter import IdentityRewriter, InMemoryIdentityRewriter
+from app.services.identity_rewriter import IdentityRewriter, InMemoryIdentityRewriter
+from app.storage.base import IdentityCorrectionRepositoryProtocol, PHRepositoryProtocol
 
 logger = get_logger(__name__)
 

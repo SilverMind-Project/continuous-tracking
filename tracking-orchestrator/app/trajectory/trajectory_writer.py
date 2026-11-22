@@ -13,8 +13,8 @@ import uuid
 from datetime import datetime
 from typing import cast
 
-from ..domain import FloorPoint, PersonTrajectoryPoint, PostureType, RoomDwell
-from ..storage.base import TrajectoryRepository
+from app.domain import FloorPoint, PersonTrajectoryPoint, PostureType, RoomDwell
+from app.storage.base import TrajectoryRepository
 
 # When motion_energy is below this threshold the frame is considered "still".
 _STILL_ENERGY_FLOOR = 0.005

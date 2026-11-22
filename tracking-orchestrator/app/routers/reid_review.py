@@ -28,9 +28,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
-from ..domain import GallerySeedSource, ReviewCandidate, ReviewEvent
-from ..services.reid_review_service import Eligibility, ReIDReviewService, ReviewIneligibleError
-from ..storage.gallery import ReviewConflictError, ReviewNotFoundError
+from app.domain import GallerySeedSource, ReviewCandidate, ReviewEvent
+from app.services.reid_review_service import Eligibility, ReIDReviewService, ReviewIneligibleError
+from app.storage.gallery import ReviewConflictError, ReviewNotFoundError
 
 logger = get_logger(__name__)
 

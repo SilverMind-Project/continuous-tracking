@@ -13,7 +13,7 @@ from typing import Any
 import asyncpg
 from structlog import get_logger
 
-from ..signals import (
+from app.storage.signals import (
     BehaviorBaselineRepository,
     DailyWindowSample,
     HourlyActivitySummary,

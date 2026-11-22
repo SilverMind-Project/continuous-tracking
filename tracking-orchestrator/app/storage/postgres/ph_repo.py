@@ -15,7 +15,7 @@ from typing import Any
 
 from structlog import get_logger
 
-from ...domain import (
+from app.domain import (
     BoundingBox,
     FloorPoint,
     IdentityEvidence,

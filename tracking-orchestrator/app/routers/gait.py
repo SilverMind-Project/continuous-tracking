@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
-from ..storage.gait import GaitDailyRepository, InMemoryGaitDailyRepository
+from app.storage.gait import GaitDailyRepository, InMemoryGaitDailyRepository
 
 logger = get_logger(__name__)
 

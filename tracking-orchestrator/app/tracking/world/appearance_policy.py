@@ -30,9 +30,9 @@ from enum import StrEnum
 
 import numpy as np
 
-from ...domain import OrientationBin, ViewPrototype
-from .config import WorldTrackerConfig
-from .helpers import cosine_similarity
+from app.domain import OrientationBin, ViewPrototype
+from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.helpers import cosine_similarity
 
 
 class AppearanceRejectReason(StrEnum):

@@ -15,10 +15,10 @@ import json
 
 from structlog import get_logger
 
-from ..domain import IdentityEvidence, IdentityRevision
-from ..observability import metrics
-from ..proto.continuoustracking.v1 import tracking_pb2
-from .base_publisher import BasePublisher
+from app.domain import IdentityEvidence, IdentityRevision
+from app.observability import metrics
+from app.proto.continuoustracking.v1 import tracking_pb2
+from app.transport.base_publisher import BasePublisher
 
 logger = get_logger(__name__)
 

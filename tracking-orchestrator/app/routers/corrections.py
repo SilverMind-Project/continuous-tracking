@@ -24,8 +24,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
-from ..domain import ProjectionAck
-from ..services.identity_correction_service import (
+from app.domain import ProjectionAck
+from app.services.identity_correction_service import (
     CorrectionConflictError,
     CorrectionError,
     EmptyIdentityError,

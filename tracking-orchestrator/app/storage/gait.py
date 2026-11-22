@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import date, datetime
 
-from ..trajectory.gait import GaitDailyRecord, WalkingBout
+from app.trajectory.gait import GaitDailyRecord, WalkingBout
 
 
 class GaitBoutRepository(ABC):

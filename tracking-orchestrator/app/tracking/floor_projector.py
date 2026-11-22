@@ -13,9 +13,9 @@ import numpy as np
 import numpy.typing as npt
 from structlog import get_logger
 
-from ..calibration.state import CalibrationState
-from ..domain import BoundingBox, FloorPoint, cov2x2_to_tuple
-from .world.observation_model import homography_jacobian
+from app.calibration.state import CalibrationState
+from app.domain import BoundingBox, FloorPoint, cov2x2_to_tuple
+from app.tracking.world.observation_model import homography_jacobian
 
 logger = get_logger(__name__)
 

@@ -70,8 +70,7 @@ select = [
     "DTZ", "ASYNC", "PGH", "G", "S608", "TID", "ERA",
 ]
 ignore = ["B008"]  # Depends() in FastAPI param defaults is idiomatic
-extend-ignore = ["TID252"]  # relative imports converted in EG-M12
-per-file-ignores = { "app/main.py" = ["E402"], "scripts/**" = ["ASYNC230", "ASYNC240"] }  # configure_logging before logger-using imports; offline CLI scripts
+per-file-ignores = { "app/main.py" = ["E402"], "scripts/**" = ["ASYNC230", "ASYNC240"], "**/__init__.py" = ["TID252"] }  # configure_logging before logger-using imports; offline CLI scripts; package re-exports
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

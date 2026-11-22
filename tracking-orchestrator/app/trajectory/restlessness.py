@@ -13,7 +13,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from ..domain import PersonTrajectoryPoint
+from app.domain import PersonTrajectoryPoint
 
 # ---------------------------------------------------------------------------
 # Configuration

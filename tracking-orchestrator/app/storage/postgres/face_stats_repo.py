@@ -8,7 +8,7 @@ from typing import Any
 
 import asyncpg
 
-from ...domain import FaceGateOutcome, FaceObservationStat
+from app.domain import FaceGateOutcome, FaceObservationStat
 
 _COLUMNS = """
     observed_at, camera_id, detection_id, crop_width_px, crop_height_px,

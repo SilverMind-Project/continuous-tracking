@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from ..domain import (
+from app.domain import (
     CameraConfig,
     IdentityCorrection,
     PersonActivity,

@@ -13,12 +13,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import asyncpg
 
-from ...domain import (
-    IdentityDecisionGalleryHit,
-    IdentityEvidenceItem,
-    IdentityProvenanceDecision,
-)
-from ..base import validate_identity_authority
+from app.domain import IdentityDecisionGalleryHit, IdentityEvidenceItem, IdentityProvenanceDecision
+from app.storage.base import validate_identity_authority
 
 
 class PostgresIdentityDecisionRepository:

@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from ..services.identity_readiness import (
+from app.services.identity_readiness import (
     ClosedWorldReadiness,
     GalleryStateCounts,
     IdentityReadinessService,

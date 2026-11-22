@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
-from ..domain import BoundingBox, FloorPoint
+from app.domain import BoundingBox, FloorPoint
 
 # ---------------------------------------------------------------------------
 # Person detection evidence (YOLO26L)

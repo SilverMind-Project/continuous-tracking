@@ -10,10 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from structlog import get_logger
 
-from ..storage.base import (
-    InMemoryTrajectoryRepository,
-    TrajectoryRepository,
-)
+from app.storage.base import InMemoryTrajectoryRepository, TrajectoryRepository
 
 logger = get_logger(__name__)
 

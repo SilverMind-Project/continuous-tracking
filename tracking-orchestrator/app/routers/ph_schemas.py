@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..domain import IdentityRevision, Keyframe, PersonHypothesis, WorldObservation
+from app.domain import IdentityRevision, Keyframe, PersonHypothesis, WorldObservation
 
 
 def _room_fields(ph: PersonHypothesis) -> dict[str, str | None]:

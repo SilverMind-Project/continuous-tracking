@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 
 from structlog import get_logger
 
-from ..domain import GalleryEmbedding
-from ..storage.base import VOTING_STATES, GalleryRepository
+from app.domain import GalleryEmbedding
+from app.storage.base import VOTING_STATES, GalleryRepository
 
 logger = get_logger(__name__)
 

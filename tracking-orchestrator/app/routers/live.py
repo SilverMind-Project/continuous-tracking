@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from structlog import get_logger
 
-from ..storage.base import (
+from app.storage.base import (
     GalleryRepository,
     InMemoryGalleryRepository,
     InMemoryPHRepository,

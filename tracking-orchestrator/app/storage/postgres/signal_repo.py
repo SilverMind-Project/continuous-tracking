@@ -12,8 +12,8 @@ from typing import Any
 
 import asyncpg
 
-from ...domain import DementiaSignal
-from ..base import DementiaSignalRepository
+from app.domain import DementiaSignal
+from app.storage.base import DementiaSignalRepository
 
 # The table is a hypertable with PRIMARY KEY (signal_id, emitted_at): the time
 # dimension must be in the key. ``emitted_at`` advances every run, so a plain

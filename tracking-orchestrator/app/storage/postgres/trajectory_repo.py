@@ -13,8 +13,8 @@ from typing import Any
 import asyncpg
 from structlog import get_logger
 
-from ...domain import PersonTrajectoryPoint, RoomDwell
-from ..base import TrajectoryRepository
+from app.domain import PersonTrajectoryPoint, RoomDwell
+from app.storage.base import TrajectoryRepository
 
 logger = get_logger(__name__)
 

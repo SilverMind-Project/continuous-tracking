@@ -6,10 +6,10 @@ carries a ``floor_point`` before tracking consumes it.
 
 from __future__ import annotations
 
-from ...domain import BoundingBox, FloorPoint
-from ...tracking.spatial_projection import SpatialProjectionService
-from ..frame_context import FrameContext
-from .base import FrameStage
+from app.domain import BoundingBox, FloorPoint
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
+from app.tracking.spatial_projection import SpatialProjectionService
 
 
 class SpatialProjectionStage(FrameStage):

@@ -12,7 +12,7 @@ from typing import Any
 
 import asyncpg
 
-from ...domain import BboxAnnotation
+from app.domain import BboxAnnotation
 
 
 class PostgresBboxAnnotationRepository:

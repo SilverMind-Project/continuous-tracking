@@ -527,7 +527,7 @@ async def apply_bbox_batch(
     repo: BboxAnnotationRepository = Depends(get_bbox_repo),
 ) -> dict[str, object]:
     """Apply a batch of bbox create/update/delete operations atomically."""
-    from ..storage.annotations import BboxBatchOperation
+    from app.storage.annotations import BboxBatchOperation
 
     operations = [
         BboxBatchOperation(

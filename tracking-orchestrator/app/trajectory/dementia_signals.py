@@ -26,23 +26,23 @@ from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
-from ..domain import (
+from app.domain import (
     DementiaSignal,
     DementiaSignalKind,
     DementiaSignalSeverity,
     PersonTrajectoryPoint,
     RoomDwell,
 )
-from ..storage.base import (
+from app.storage.base import (
     BehaviorBaselineRepository,
     DementiaSignalRepository,
     TrajectoryRepository,
 )
-from ..storage.gait import GaitDailyRepository
-from .gait import GaitDailyRecord
-from .restlessness import RestlessnessConfig, compute_restlessness
-from .signal_specs import NON_DIAGNOSTIC_DISCLAIMER, apply_algorithm_metadata
-from .stats import robust_z, weighted_median
+from app.storage.gait import GaitDailyRepository
+from app.trajectory.gait import GaitDailyRecord
+from app.trajectory.restlessness import RestlessnessConfig, compute_restlessness
+from app.trajectory.signal_specs import NON_DIAGNOSTIC_DISCLAIMER, apply_algorithm_metadata
+from app.trajectory.stats import robust_z, weighted_median
 
 _SIGNAL_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 _ALGORITHM_VERSION = 3  # Phase 3: robust baselines + hysteresis + detector rewrites
@@ -288,7 +288,7 @@ class DementiaSignalWorker:
 
         # Collect metrics (observability side-channel; failure must not suppress signals)
         try:
-            from ..observability import metrics as m
+            from app.observability import metrics as m
 
             m.metrics.signal_worker_identities.set(len(identities))
         except Exception:  # metrics are non-required side-channel
@@ -321,7 +321,7 @@ class DementiaSignalWorker:
 
         elapsed = time.monotonic() - t_start
         try:
-            from ..observability import metrics as m
+            from app.observability import metrics as m
 
             m.metrics.signal_worker_run_seconds.observe(elapsed)
             for s in all_signals:
@@ -1448,7 +1448,7 @@ class DementiaSignalWorker:
                 if now_ts - cached_at < self._cfg.baseline_cache_ttl_minutes * 60:
                     samples = cached_samples
                     try:
-                        from ..observability import metrics as m
+                        from app.observability import metrics as m
 
                         m.metrics.signal_baseline_cache_hits_total.inc()
                     except Exception:  # metrics are non-required side-channel

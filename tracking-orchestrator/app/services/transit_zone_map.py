@@ -10,7 +10,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 
-from ..domain import TransitZone
+from app.domain import TransitZone
 
 
 @dataclass(frozen=True)

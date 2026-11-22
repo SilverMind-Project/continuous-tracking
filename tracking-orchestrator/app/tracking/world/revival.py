@@ -7,10 +7,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from ...domain import CameraTopologyEdge, PersonHypothesis, WorldObservation
-from .config import WorldTrackerConfig
-from .helpers import cosine_similarity
-from .topology import plausible_transit
+from app.domain import CameraTopologyEdge, PersonHypothesis, WorldObservation
+from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.helpers import cosine_similarity
+from app.tracking.world.topology import plausible_transit
 
 
 def select_revival_candidate(

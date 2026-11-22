@@ -31,17 +31,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
-from ..domain import (
+from app.domain import (
     BboxAnnotation,
     IdentityProvenanceDecision,
     IdentityRevisionRange,
     TaggedKeyframe,
 )
-from ..storage.annotations import BboxAnnotationRepository
-from ..storage.base import IdentityDecisionRepositoryProtocol, KeyframeRepository
-from ..storage.corrections import IdentityCorrectionRepositoryProtocol
-from ..storage.gallery import GalleryRepository
-from ..tracking.identity.types import IdentityAuthority
+from app.storage.annotations import BboxAnnotationRepository
+from app.storage.base import IdentityDecisionRepositoryProtocol, KeyframeRepository
+from app.storage.corrections import IdentityCorrectionRepositoryProtocol
+from app.storage.gallery import GalleryRepository
+from app.tracking.identity.types import IdentityAuthority
 
 # Stable namespace for deriving ``physical_frame_id`` from the source tuple.
 _PHYSICAL_FRAME_NS = uuid.UUID("6f3d2c1a-0b4e-5a6f-9c8d-1e2f3a4b5c6d")

@@ -15,7 +15,7 @@ from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ...domain import GalleryEmbedding, GallerySeedSource
+from app.domain import GalleryEmbedding, GallerySeedSource
 
 _VERIFIED_STATE = "operator_verified"
 _AUTO_VERIFIED_STATE = "auto_verified"

@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from typing import Final
 
-from ..domain import (
+from app.domain import (
     GalleryEmbedding,
     GallerySeedSource,
     Identity,

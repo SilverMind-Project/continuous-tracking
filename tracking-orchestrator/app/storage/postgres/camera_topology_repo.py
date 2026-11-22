@@ -10,7 +10,7 @@ from structlog import get_logger
 if TYPE_CHECKING:
     import asyncpg
 
-from ...domain import CameraTopologyEdge, CoPresenceLink
+from app.domain import CameraTopologyEdge, CoPresenceLink
 
 logger = get_logger(__name__)
 

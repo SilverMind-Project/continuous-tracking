@@ -11,7 +11,7 @@ import numpy.typing as npt
 from cts_contracts import CameraRole
 from structlog import get_logger
 
-from ...domain import (
+from app.domain import (
     BoundingBox,
     Detection,
     FaceAnchor,
@@ -20,23 +20,23 @@ from ...domain import (
     FaceObservationStat,
     Identity,
 )
-from ...inference.evidence import FaceEvidence
-from ...inference.face_id_client import (
+from app.inference.evidence import FaceEvidence
+from app.inference.face_id_client import (
     SINGLE_FRAME_PROFILE,
     CaptureContext,
     CropQueryResult,
     FaceIdentificationClient,
     FaceResult,
 )
-from ...observability import metrics as _metrics
-from ...storage.base import GalleryRepository
-from ...storage.face_stats import FaceObservationStatsRepository
-from ...tracking.identity.face_template_buffer import BufferedFace
-from ..crops import FaceCropPadding, crop_detection_from_bbox, face_crop_box
-from ..face_attribution import FaceAttribution, HeadRegionPolicy, assign_face_to_person
-from ..frame_context import FrameContext
-from ..types import FaceIdCameraConfig, LiveConfigHolder
-from .base import FrameStage
+from app.observability import metrics as _metrics
+from app.pipeline.crops import FaceCropPadding, crop_detection_from_bbox, face_crop_box
+from app.pipeline.face_attribution import FaceAttribution, HeadRegionPolicy, assign_face_to_person
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
+from app.pipeline.types import FaceIdCameraConfig, LiveConfigHolder
+from app.storage.base import GalleryRepository
+from app.storage.face_stats import FaceObservationStatsRepository
+from app.tracking.identity.face_template_buffer import BufferedFace
 
 logger = get_logger(__name__)
 

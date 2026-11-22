@@ -41,9 +41,9 @@ from itertools import pairwise
 
 import numpy as np
 
-from ..domain import BoundingBox
-from ..inference.schemas import Keypoint
-from .posture import PostureScores
+from app.domain import BoundingBox
+from app.inference.schemas import Keypoint
+from app.trajectory.posture import PostureScores
 
 # COCO-17 keypoint index groups used for the vertical body proxy.
 _HEAD_INDICES = (0, 1, 2, 3, 4)  # nose, eyes, ears

@@ -15,10 +15,10 @@ import json
 
 from structlog import get_logger
 
-from ..domain import TaggedKeyframe
-from ..observability import metrics
-from ..proto.continuoustracking.v1 import scene_pb2
-from .base_publisher import BasePublisher
+from app.domain import TaggedKeyframe
+from app.observability import metrics
+from app.proto.continuoustracking.v1 import scene_pb2
+from app.transport.base_publisher import BasePublisher
 
 logger = get_logger(__name__)
 

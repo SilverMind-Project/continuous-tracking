@@ -12,19 +12,19 @@ import numpy as np
 import numpy.typing as npt
 from structlog import get_logger
 
-from ...domain import BoundingBox, Detection, FloorPoint
-from ...inference.evidence import AppearanceEvidence, PersonDetectionEvidence, PoseEvidence
-from ...inference.pose import PoseEstimator
-from ...inference.schemas import DetectionBox, Embedding, PoseResult
-from ...observability import metrics as _metrics
-from ...pipeline.crop_quality import CropQuality
-from ...pipeline.crops import crop_detection, is_degenerate
-from ...tracking.orientation import estimate_body_orientation
-from ...tracking.world.tracker import WorldTracker
-from ..frame_context import FrameContext
-from ..reid_policy import ReidNeedPolicy
-from ..types import ReidEmbedderProtocol
-from .base import FrameStage
+from app.domain import BoundingBox, Detection, FloorPoint
+from app.inference.evidence import AppearanceEvidence, PersonDetectionEvidence, PoseEvidence
+from app.inference.pose import PoseEstimator
+from app.inference.schemas import DetectionBox, Embedding, PoseResult
+from app.observability import metrics as _metrics
+from app.pipeline.crop_quality import CropQuality
+from app.pipeline.crops import crop_detection, is_degenerate
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.reid_policy import ReidNeedPolicy
+from app.pipeline.stages.base import FrameStage
+from app.pipeline.types import ReidEmbedderProtocol
+from app.tracking.orientation import estimate_body_orientation
+from app.tracking.world.tracker import WorldTracker
 
 logger = get_logger(__name__)
 

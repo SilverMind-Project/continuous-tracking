@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from ..domain import DementiaSignal, PersonTrajectoryPoint, RoomDwell
+from app.domain import DementiaSignal, PersonTrajectoryPoint, RoomDwell
 
 
 class DementiaSignalRepository(ABC):

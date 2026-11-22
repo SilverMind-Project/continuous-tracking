@@ -18,15 +18,15 @@ from zoneinfo import ZoneInfo
 
 from structlog import get_logger
 
-from ..domain import DementiaSignal, DementiaSignalSeverity, PersonHypothesis
-from .dementia_signals import SignalHysteresis, _stable_signal_id
-from .signal_specs import apply_algorithm_metadata
+from app.domain import DementiaSignal, DementiaSignalSeverity, PersonHypothesis
+from app.trajectory.dementia_signals import SignalHysteresis, _stable_signal_id
+from app.trajectory.signal_specs import apply_algorithm_metadata
 
 if TYPE_CHECKING:
-    from ..storage.appearance import DailyAppearanceRepo
-    from ..storage.base import PHRepositoryProtocol
-    from ..storage.gallery import GalleryRepository
-    from ..storage.trajectory import KeyframeRepository
+    from app.storage.appearance import DailyAppearanceRepo
+    from app.storage.base import PHRepositoryProtocol
+    from app.storage.gallery import GalleryRepository
+    from app.storage.trajectory import KeyframeRepository
 
 logger = get_logger(__name__)
 
@@ -269,7 +269,7 @@ class AppearanceEvaluator:
             today_sample_count=today_profile.sample_count,
         )
         try:
-            from ..observability import metrics as m
+            from app.observability import metrics as m
 
             m.metrics.appearance_signal_candidates_total.inc()
         except Exception:  # metrics are non-required side-channel

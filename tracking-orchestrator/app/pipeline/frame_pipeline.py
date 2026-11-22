@@ -20,8 +20,8 @@ from datetime import UTC, datetime
 
 from structlog import get_logger
 
-from ..calibration.state import calibration_state
-from ..domain import (
+from app.calibration.state import calibration_state
+from app.domain import (
     FACE_EVIDENCE_POLICIES,
     AppearanceFeatureExtractor,
     CameraConfig,
@@ -32,17 +32,17 @@ from ..domain import (
     OverlapGroup,
     WearableFixSource,
 )
-from ..inference.detector import PersonDetector
-from ..inference.face_id_client import FaceIdentificationClient
-from ..inference.pose import PoseEstimator
-from ..observability import metrics as _metrics
-from ..pipeline.batcher import FrameBatcher
-from ..pipeline.crops import FaceCropPadding
-from ..pipeline.face_attribution import HeadRegionPolicy
-from ..pipeline.frame_context import FrameContext
-from ..pipeline.gallery_cache import GalleryCache
-from ..pipeline.reid_policy import AdaptiveReidConfig, ReidNeedPolicy
-from ..pipeline.stages import (
+from app.inference.detector import PersonDetector
+from app.inference.face_id_client import FaceIdentificationClient
+from app.inference.pose import PoseEstimator
+from app.observability import metrics as _metrics
+from app.pipeline.batcher import FrameBatcher
+from app.pipeline.crops import FaceCropPadding
+from app.pipeline.face_attribution import HeadRegionPolicy
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.gallery_cache import GalleryCache
+from app.pipeline.reid_policy import AdaptiveReidConfig, ReidNeedPolicy
+from app.pipeline.stages import (
     AppearanceSampleRecorderStage,
     ClosePHStage,
     DetectionBackfillStage,
@@ -71,8 +71,8 @@ from ..pipeline.stages import (
     WorldTrackingStage,
     timed_phase,
 )
-from ..pipeline.stages._room_maps import camera_room_name
-from ..pipeline.types import (
+from app.pipeline.stages._room_maps import camera_room_name
+from app.pipeline.types import (
     FaceIdCameraConfig,
     FrameImageFetcher,
     LiveConfigHolder,
@@ -80,31 +80,28 @@ from ..pipeline.types import (
     RoomTransitionPublisherProtocol,
     TransitDetectorProtocol,
 )
-from ..sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
-from ..services.appearance_sample_recorder import (
+from app.sampling.keyframe_sampler import KeyframeSampler, SamplerConfig
+from app.services.appearance_sample_recorder import (
     AppearanceSampleRecorder,
     AppearanceSampleRecorderConfig,
 )
-from ..services.camera_profile_map import CameraProfileMap
-from ..services.camera_room_map import CameraRoomMap, RoomPolygonMap
-from ..services.face_templates import FaceTemplateService
-from ..services.identity_correction_service import IdentityCorrectionService
-from ..services.identity_rewriter import (
-    IdentityRewriter,
-    InMemoryIdentityRewriter,
-)
-from ..services.image_only_evaluator import ImageOnlyEvaluationSink
-from ..services.transit_zone_map import TransitZoneMap
-from ..services.unknown_backfill import BackfillConfig, UnknownBackfillService
-from ..services.wearable_face_attestation import WearableFaceAttestationService
-from ..services.wearable_revocation import WearableTeachingRevocationService
-from ..services.wearable_site_config_map import WearableSiteConfigMap
-from ..storage.appearance import DailyAppearanceRepo, InMemoryDailyAppearanceRepo
-from ..storage.appearance_samples import (
+from app.services.camera_profile_map import CameraProfileMap
+from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+from app.services.face_templates import FaceTemplateService
+from app.services.identity_correction_service import IdentityCorrectionService
+from app.services.identity_rewriter import IdentityRewriter, InMemoryIdentityRewriter
+from app.services.image_only_evaluator import ImageOnlyEvaluationSink
+from app.services.transit_zone_map import TransitZoneMap
+from app.services.unknown_backfill import BackfillConfig, UnknownBackfillService
+from app.services.wearable_face_attestation import WearableFaceAttestationService
+from app.services.wearable_revocation import WearableTeachingRevocationService
+from app.services.wearable_site_config_map import WearableSiteConfigMap
+from app.storage.appearance import DailyAppearanceRepo, InMemoryDailyAppearanceRepo
+from app.storage.appearance_samples import (
     AppearanceSampleRepository,
     InMemoryAppearanceSampleRepository,
 )
-from ..storage.base import (
+from app.storage.base import (
     BboxAnnotationRepository,
     BehaviorBaselineRepository,
     CameraTopologyRepository,
@@ -131,51 +128,47 @@ from ..storage.base import (
     TrajectoryRepository,
     WorldObservationRepositoryProtocol,
 )
-from ..storage.face_stats import (
+from app.storage.face_stats import (
     FaceObservationStatsRepository,
     InMemoryFaceObservationStatsRepository,
 )
-from ..storage.height_profiles import (
+from app.storage.height_profiles import (
     IdentityHeightProfileRepository,
     InMemoryIdentityHeightProfileRepository,
     InMemoryPHHeightSampleRepository,
     PHHeightSampleRepository,
 )
-from ..storage.wearable_associations import (
+from app.storage.wearable_associations import (
     InMemoryWearableAssociationRepository,
     WearableAssociationRepository,
 )
-from ..storage.wearable_teaching_holds import WearableTeachingHoldRepository
-from ..tracking.floor_projector import FloorProjector
-from ..tracking.identity.candidate_eligibility import CandidatePolicy
-from ..tracking.identity.closed_world_channel import ClosedWorldConfig
-from ..tracking.identity.face_template_buffer import FaceTemplatePolicy
-from ..tracking.identity.household_classifier import (
+from app.storage.wearable_teaching_holds import WearableTeachingHoldRepository
+from app.tracking.floor_projector import FloorProjector
+from app.tracking.identity.candidate_eligibility import CandidatePolicy
+from app.tracking.identity.closed_world_channel import ClosedWorldConfig
+from app.tracking.identity.face_template_buffer import FaceTemplatePolicy
+from app.tracking.identity.household_classifier import (
     HouseholdClassifierConfig,
     HouseholdClassifierEvaluator,
     SoliderFeatureExtractor,
 )
-from ..tracking.identity_resolver import IdentityResolver, ResolverConfig
-from ..tracking.spatial_projection import SpatialProjectionService
-from ..tracking.world.config import WorldTrackerConfig
-from ..tracking.world.tracker import WorldTracker
-from ..tracking.world.wearable_config import WearableConfig
-from ..trajectory.appearance_profile import AppearanceEvaluator, AppearanceSettings
-from ..trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
-from ..trajectory.gait import GaitAggregator, GaitConfig, WalkingBoutSegmenter
-from ..trajectory.motion_energy import MotionEnergyTracker
-from ..trajectory.posture import GlobalPostureTracker
-from ..trajectory.posture_strategy import PostureStrategy
-from ..trajectory.trajectory_writer import TrajectoryWriter
-from ..transport.ph_continuation_publisher import PHContinuationPublisher
-from ..transport.redis_streams import (
-    FrameReady,
-    RedisStreamsTransport,
-    TransportConfig,
-)
-from ..transport.revision_publisher import RevisionPublisher
-from ..transport.scene_publisher import SceneSamplesPublisher
-from ..transport.signal_publisher import SignalPublisher
+from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
+from app.tracking.spatial_projection import SpatialProjectionService
+from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.tracker import WorldTracker
+from app.tracking.world.wearable_config import WearableConfig
+from app.trajectory.appearance_profile import AppearanceEvaluator, AppearanceSettings
+from app.trajectory.dementia_signals import DementiaSignalWorker, SignalConfig
+from app.trajectory.gait import GaitAggregator, GaitConfig, WalkingBoutSegmenter
+from app.trajectory.motion_energy import MotionEnergyTracker
+from app.trajectory.posture import GlobalPostureTracker
+from app.trajectory.posture_strategy import PostureStrategy
+from app.trajectory.trajectory_writer import TrajectoryWriter
+from app.transport.ph_continuation_publisher import PHContinuationPublisher
+from app.transport.redis_streams import FrameReady, RedisStreamsTransport, TransportConfig
+from app.transport.revision_publisher import RevisionPublisher
+from app.transport.scene_publisher import SceneSamplesPublisher
+from app.transport.signal_publisher import SignalPublisher
 
 # Frames older than this are replayed backlog, not live feeds.  They are
 # XACK'd normally so the pending-entry list stays clean, but pipeline work

@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
-from ..domain import FaceObservationStat
+from app.domain import FaceObservationStat
 
 
 class FaceObservationStatsRepository(Protocol):

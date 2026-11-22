@@ -15,7 +15,7 @@ import numpy as np
 import numpy.typing as npt
 
 if TYPE_CHECKING:
-    from ..domain import (
+    from app.domain import (
         Detection,
         FaceAnchor,
         FloorPoint,
@@ -29,16 +29,16 @@ if TYPE_CHECKING:
         WearableEvidence,
         WorldFrameSnapshot,
     )
-    from ..inference.evidence import (
+    from app.inference.evidence import (
         AppearanceEvidence,
         FaceEvidence,
         PersonDetectionEvidence,
         PoseEvidence,
     )
-    from ..inference.schemas import DetectionBox, Embedding, PoseResult
-    from ..tracking.identity.face_template_buffer import BufferedFace
-    from ..trajectory.posture import PostureScores
-    from ..transport.redis_streams import FrameReady
+    from app.inference.schemas import DetectionBox, Embedding, PoseResult
+    from app.tracking.identity.face_template_buffer import BufferedFace
+    from app.trajectory.posture import PostureScores
+    from app.transport.redis_streams import FrameReady
 
 
 @dataclass

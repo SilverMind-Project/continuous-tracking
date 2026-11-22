@@ -7,9 +7,9 @@ from collections.abc import Callable
 import numpy as np
 from structlog import get_logger
 
-from ..frame_context import FrameContext
-from ..types import FrameImageFetcher
-from .base import FrameStage
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
+from app.pipeline.types import FrameImageFetcher
 
 logger = get_logger(__name__)
 

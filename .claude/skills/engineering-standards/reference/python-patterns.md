@@ -208,7 +208,7 @@ Use three groups separated by a blank line, enforced by ruff `I001`:
 2. Third-party (`import asyncpg`, `from pydantic import BaseModel`, ...)
 3. First-party (`from app.domain import ...`, `from .config import ...`)
 
-Imports are absolute (`from app.pipeline.stages import ...`); only `__init__.py` re-export blocks may stay relative. New code uses absolute imports; the existing relative imports are being converted, and ruff `TID252` is enabled when they are gone. A `..pipeline` import from inside `app/tracking/` is also a layering hazard (see Circular Import Prevention).
+Absolute imports only (ruff `TID252`); `__init__.py` re-exports may be relative. A `from app.pipeline` import from inside `app/tracking/` is still a layering hazard (see Circular Import Prevention).
 
 ### Wildcard imports are forbidden
 

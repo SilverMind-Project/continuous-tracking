@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from structlog import get_logger
 
-from ..storage.base import PHRepositoryProtocol
+from app.storage.base import PHRepositoryProtocol
 
 logger = get_logger(__name__)
 

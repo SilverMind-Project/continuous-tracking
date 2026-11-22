@@ -11,7 +11,7 @@ from datetime import datetime
 
 import asyncpg
 
-from ...domain import (
+from app.domain import (
     GalleryEmbedding,
     GallerySeedSource,
     Identity,
@@ -19,8 +19,8 @@ from ...domain import (
     ReviewCandidate,
     ReviewEvent,
 )
-from ..base import GalleryRepository
-from ..gallery import (
+from app.storage.base import GalleryRepository
+from app.storage.gallery import (
     NO_SEED_SOURCE_EXCLUSION,
     PENDING_AND_VERIFIED,
     REVIEWABLE_STATES,

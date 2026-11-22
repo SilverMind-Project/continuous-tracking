@@ -13,7 +13,7 @@ from datetime import datetime
 
 from shapely.geometry import LineString, Polygon
 
-from ...domain import RoomTransitionEvent, TransitZone
+from app.domain import RoomTransitionEvent, TransitZone
 
 
 @dataclass

@@ -25,8 +25,8 @@ from datetime import datetime
 
 import numpy as np
 
-from ..domain import BoundingBox, GlobalTrackId
-from ..inference.schemas import PoseResult
+from app.domain import BoundingBox, GlobalTrackId
+from app.inference.schemas import PoseResult
 
 _MAX_HISTORY = 30  # frames per track
 _EVICT_AFTER_S = 300  # seconds since last update

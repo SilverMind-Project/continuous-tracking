@@ -7,12 +7,12 @@ or identity-change-triggered keyframe sampling.
 
 from __future__ import annotations
 
-from ...domain import TaggedKeyframe
-from ...observability import metrics as _metrics
-from ...sampling.keyframe_sampler import FrameBbox, KeyframeSampler
-from ...transport.scene_publisher import SceneSamplesPublisher
-from ..frame_context import FrameContext
-from .base import FrameStage
+from app.domain import TaggedKeyframe
+from app.observability import metrics as _metrics
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
+from app.sampling.keyframe_sampler import FrameBbox, KeyframeSampler
+from app.transport.scene_publisher import SceneSamplesPublisher
 
 
 class KeyframeStage(FrameStage):

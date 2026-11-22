@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 
-from ...domain import CameraTopologyEdge
+from app.domain import CameraTopologyEdge
 
 # Default floor for unseen edges: small enough to allow first handoff,
 # large enough that implausible long jumps are filtered once data accumulates.

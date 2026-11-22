@@ -29,12 +29,8 @@ from typing import Any
 
 from structlog import get_logger
 
-from ..domain import ReviewCandidate, ReviewEvent
-from ..storage.gallery import (
-    GalleryRepository,
-    ReviewConflictError,
-    ReviewNotFoundError,
-)
+from app.domain import ReviewCandidate, ReviewEvent
+from app.storage.gallery import GalleryRepository, ReviewConflictError, ReviewNotFoundError
 
 logger = get_logger(__name__)
 

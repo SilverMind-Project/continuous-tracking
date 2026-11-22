@@ -21,8 +21,8 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 
-from ..domain import FloorPoint, PersonHypothesis
-from ..inference.schemas import DetectionBox
+from app.domain import FloorPoint, PersonHypothesis
+from app.inference.schemas import DetectionBox
 
 
 @dataclass(frozen=True)

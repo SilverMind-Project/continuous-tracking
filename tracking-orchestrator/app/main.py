@@ -23,8 +23,8 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from redis import asyncio as aioredis
 from structlog import get_logger
 
-from .config import SettingNotFoundError, Settings, SettingsSection, settings
-from .domain import (
+from app.config import SettingNotFoundError, Settings, SettingsSection, settings
+from app.domain import (
     CameraProfile,
     ClosedWorldMode,
     FaceEvidencePolicy,
@@ -32,142 +32,138 @@ from .domain import (
     OverlapGroup,
     WearableMode,
 )
-from .observability.logging_config import configure_logging
-from .tracking.identity.face_template_buffer import FaceTemplateMode, FaceTemplatePolicy
+from app.observability.logging_config import configure_logging
+from app.tracking.identity.face_template_buffer import FaceTemplateMode, FaceTemplatePolicy
 
 # Configure structlog before any logger is first used.
 configure_logging(settings.as_str("logging.level"))
-from .inference.depth import DepthEstimator
-from .inference.detector import PersonDetector
-from .inference.pose import PoseEstimator
-from .inference.reid_embedder import ReidEmbedder
-from .inference.triton_client import TritonClientProtocol, TritonGrpcClient
-from .pipeline import FrameProcessingPipeline
-from .pipeline.crops import FaceCropPadding
-from .pipeline.face_attribution import HeadRegionPolicy
-from .pipeline.frame_pipeline import (
-    FaceIdConfig,
-    PipelineConfig,
-    PipelineDependencies,
-)
-from .pipeline.reid_policy import AdaptiveReidConfig
-from .pipeline.stages.fall_detection import FallDetectionConfig
-from .pipeline.stages.height_estimation import HeightEstimationConfig
-from .pipeline.types import FaceIdCameraConfig
-from .routers import dashboard as dashboard_router_mod
-from .routers import gallery as gallery_router_mod
-from .routers.calibration import router as calibration_router
-from .routers.calibration import set_auto_calibration_context
-from .routers.corrections import router as corrections_router
-from .routers.corrections import set_context as set_corrections_context
-from .routers.dashboard import router as dashboard_router
-from .routers.gait import router as gait_router
-from .routers.gait import set_context as set_gait_context
-from .routers.gallery import router as gallery_router
-from .routers.height_profiles import router as height_profiles_router
-from .routers.height_profiles import set_context as set_height_profiles_context
-from .routers.live import router as live_router
-from .routers.live import set_context as set_live_context
-from .routers.ph import router as ph_router
-from .routers.ph import set_ph_repository, set_revision_publisher
-from .routers.readiness import router as readiness_router
-from .routers.reid_review import router as reid_review_router
-from .routers.reid_review import set_context as set_reid_review_context
-from .routers.topology import router as topology_router
-from .routers.topology import set_topology_repo
-from .routers.trajectory import router as trajectory_router
-from .routers.trajectory import set_context as set_trajectory_context
-from .routers.wearables import router as wearables_router
-from .sampling.keyframe_sampler import SamplerConfig
-from .services.camera_profile_map import CameraProfileMap
-from .services.cc_client import CognitiveCompanionClient
-from .services.cc_config_sync import parse_camera_profile
-from .services.cc_identity_assertion_subscriber import (
+from app.inference.depth import DepthEstimator
+from app.inference.detector import PersonDetector
+from app.inference.pose import PoseEstimator
+from app.inference.reid_embedder import ReidEmbedder
+from app.inference.triton_client import TritonClientProtocol, TritonGrpcClient
+from app.pipeline import FrameProcessingPipeline
+from app.pipeline.crops import FaceCropPadding
+from app.pipeline.face_attribution import HeadRegionPolicy
+from app.pipeline.frame_pipeline import FaceIdConfig, PipelineConfig, PipelineDependencies
+from app.pipeline.reid_policy import AdaptiveReidConfig
+from app.pipeline.stages.fall_detection import FallDetectionConfig
+from app.pipeline.stages.height_estimation import HeightEstimationConfig
+from app.pipeline.types import FaceIdCameraConfig
+from app.routers import dashboard as dashboard_router_mod
+from app.routers import gallery as gallery_router_mod
+from app.routers.calibration import router as calibration_router
+from app.routers.calibration import set_auto_calibration_context
+from app.routers.corrections import router as corrections_router
+from app.routers.corrections import set_context as set_corrections_context
+from app.routers.dashboard import router as dashboard_router
+from app.routers.gait import router as gait_router
+from app.routers.gait import set_context as set_gait_context
+from app.routers.gallery import router as gallery_router
+from app.routers.height_profiles import router as height_profiles_router
+from app.routers.height_profiles import set_context as set_height_profiles_context
+from app.routers.live import router as live_router
+from app.routers.live import set_context as set_live_context
+from app.routers.ph import router as ph_router
+from app.routers.ph import set_ph_repository, set_revision_publisher
+from app.routers.readiness import router as readiness_router
+from app.routers.reid_review import router as reid_review_router
+from app.routers.reid_review import set_context as set_reid_review_context
+from app.routers.topology import router as topology_router
+from app.routers.topology import set_topology_repo
+from app.routers.trajectory import router as trajectory_router
+from app.routers.trajectory import set_context as set_trajectory_context
+from app.routers.wearables import router as wearables_router
+from app.sampling.keyframe_sampler import SamplerConfig
+from app.services.camera_profile_map import CameraProfileMap
+from app.services.cc_client import CognitiveCompanionClient
+from app.services.cc_config_sync import parse_camera_profile
+from app.services.cc_identity_assertion_subscriber import (
     CCIdentityAssertionSubscriber,
     IdentityAssertionCache,
 )
-from .services.gallery_retention import (
+from app.services.gallery_retention import (
     GalleryRetentionConfig,
     GalleryRetentionMode,
     GalleryRetentionService,
 )
-from .services.height_profile_learner import (
+from app.services.height_profile_learner import (
     HeightProfileLearner,
     HeightProfileLearnerConfig,
     PostgresHeightSampleSource,
 )
-from .services.household_presence_subscriber import (
+from app.services.household_presence_subscriber import (
     HouseholdPresenceCache,
     HouseholdPresenceSubscriber,
 )
-from .services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
-from .services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
-from .services.image_only_evaluator import ImageOnlyEvaluationService
-from .services.overlap_group_sync import fetch_overlap_groups
-from .services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
-from .services.wearable_fix_buffer import WearableFixBuffer
-from .services.wearable_fix_subscriber import WearableFixSubscriber
-from .services.wearable_revocation import WearableTeachingRevocationService
-from .services.wearable_site_config_map import WearableSiteConfigMap
-from .storage.appearance_samples import (
+from app.services.identity_readiness import IdentityPolicySnapshot, IdentityReadinessService
+from app.services.identity_rewriter import InMemoryIdentityRewriter, PostgresIdentityRewriter
+from app.services.image_only_evaluator import ImageOnlyEvaluationService
+from app.services.overlap_group_sync import fetch_overlap_groups
+from app.services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
+from app.services.wearable_fix_buffer import WearableFixBuffer
+from app.services.wearable_fix_subscriber import WearableFixSubscriber
+from app.services.wearable_revocation import WearableTeachingRevocationService
+from app.services.wearable_site_config_map import WearableSiteConfigMap
+from app.storage.appearance_samples import (
     AppearanceSampleRepository,
     InMemoryAppearanceSampleRepository,
 )
-from .storage.height_profiles import (
+from app.storage.height_profiles import (
     IdentityHeightProfileRepository,
     InMemoryIdentityHeightProfileRepository,
     InMemoryPHHeightSampleRepository,
     PHHeightSampleRepository,
 )
-from .storage.image_only_evaluation import (
+from app.storage.image_only_evaluation import (
     ImageOnlyEvaluationRepository,
     InMemoryImageOnlyEvaluationRepository,
 )
-from .storage.migrations import MigrationRunner
-from .storage.postgres.appearance_repo import PostgresDailyAppearanceRepo
-from .storage.postgres.appearance_sample_repo import PostgresAppearanceSampleRepository
-from .storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
-from .storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
-from .storage.postgres.face_stats_repo import PostgresFaceObservationStatsRepository
-from .storage.postgres.gait_repo import PostgresGaitDailyRepository
-from .storage.postgres.gallery_repo import PostgresGalleryRepository
-from .storage.postgres.height_profile_repo import (
+from app.storage.migrations import MigrationRunner
+from app.storage.postgres.appearance_repo import PostgresDailyAppearanceRepo
+from app.storage.postgres.appearance_sample_repo import PostgresAppearanceSampleRepository
+from app.storage.postgres.baseline_repo import PostgresBehaviorBaselineRepository
+from app.storage.postgres.bbox_annotations import PostgresBboxAnnotationRepository
+from app.storage.postgres.face_stats_repo import PostgresFaceObservationStatsRepository
+from app.storage.postgres.gait_repo import PostgresGaitDailyRepository
+from app.storage.postgres.gallery_repo import PostgresGalleryRepository
+from app.storage.postgres.height_profile_repo import (
     PostgresIdentityHeightProfileRepository,
     PostgresPHHeightSampleRepository,
 )
-from .storage.postgres.image_only_evaluation_repo import PostgresImageOnlyEvaluationRepository
-from .storage.postgres.keyframe_repo import PostgresKeyframeRepository
-from .storage.postgres.ph_repo import PostgresPHRepository, PostgresWorldObservationRepository
-from .storage.postgres.settings_repo import PostgresSettingsRepository
-from .storage.postgres.signal_repo import PostgresDementiaSignalRepository
-from .storage.postgres.trajectory_repo import PostgresTrajectoryRepository
-from .storage.postgres.wearable_association_repo import PostgresWearableAssociationRepository
-from .storage.postgres.wearable_teaching_hold_repo import PostgresWearableTeachingHoldRepository
-from .storage.wearable_associations import (
+from app.storage.postgres.image_only_evaluation_repo import PostgresImageOnlyEvaluationRepository
+from app.storage.postgres.keyframe_repo import PostgresKeyframeRepository
+from app.storage.postgres.ph_repo import PostgresPHRepository, PostgresWorldObservationRepository
+from app.storage.postgres.settings_repo import PostgresSettingsRepository
+from app.storage.postgres.signal_repo import PostgresDementiaSignalRepository
+from app.storage.postgres.trajectory_repo import PostgresTrajectoryRepository
+from app.storage.postgres.wearable_association_repo import PostgresWearableAssociationRepository
+from app.storage.postgres.wearable_teaching_hold_repo import PostgresWearableTeachingHoldRepository
+from app.storage.wearable_associations import (
     InMemoryWearableAssociationRepository,
     WearableAssociationRepository,
 )
-from .storage.wearable_teaching_holds import (
+from app.storage.wearable_teaching_holds import (
     InMemoryWearableTeachingHoldRepository,
     WearableTeachingHoldRepository,
 )
-from .tracking.identity.candidate_eligibility import CandidatePolicy
-from .tracking.identity.closed_world_channel import ClosedWorldConfig
-from .tracking.identity.household_classifier import (
+from app.tracking.identity.candidate_eligibility import CandidatePolicy
+from app.tracking.identity.closed_world_channel import ClosedWorldConfig
+from app.tracking.identity.household_classifier import (
     HouseholdClassifierConfig,
     HouseholdClassifierEvaluator,
     SoliderFeatureExtractor,
 )
-from .tracking.identity_resolver import FaceQualityMode, HeightMode, ResolverConfig
-from .tracking.world.config import WorldTrackerConfig
-from .tracking.world.wearable_config import FaceAttestationMode, WearableConfig
-from .trajectory.appearance_profile import AppearanceSettings
-from .trajectory.dementia_signals import SignalConfig
-from .trajectory.depth_posture_strategy import DepthPostureStrategy
-from .trajectory.fused_posture_strategy import FusedPostureStrategy
-from .trajectory.posture_strategy import RTMPosePostureStrategy
-from .transport.minio_frames import MinioFrameConfig, MinioFrameFetcher
-from .transport.redis_streams import TransportConfig
+from app.tracking.identity_resolver import FaceQualityMode, HeightMode, ResolverConfig
+from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.wearable_config import FaceAttestationMode, WearableConfig
+from app.trajectory.appearance_profile import AppearanceSettings
+from app.trajectory.dementia_signals import SignalConfig
+from app.trajectory.depth_posture_strategy import DepthPostureStrategy
+from app.trajectory.fused_posture_strategy import FusedPostureStrategy
+from app.trajectory.posture_strategy import RTMPosePostureStrategy
+from app.transport.minio_frames import MinioFrameConfig, MinioFrameFetcher
+from app.transport.redis_streams import TransportConfig
 
 logger = get_logger(__name__)
 
@@ -242,7 +238,7 @@ async def _fetch_cc_camera_profiles(
     Delegates parsing to :func:`parse_camera_profile` so startup and periodic sync share
     one decode boundary. Unknown camera roles fail loudly with a warning and metric.
     """
-    from .observability import metrics as _m
+    from app.observability import metrics as _m
 
     try:
         cameras: list[dict[str, Any]] = await client.get("/api/v1/cts/cameras")
@@ -960,9 +956,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         gait_daily_repo = PostgresGaitDailyRepository(_pool)
         daily_appearance_repo = PostgresDailyAppearanceRepo(_pool)
         face_stats_repo = PostgresFaceObservationStatsRepository(_pool)
-        from .storage.postgres.identity_decision_repo import (
-            PostgresIdentityDecisionRepository,
-        )
+        from app.storage.postgres.identity_decision_repo import PostgresIdentityDecisionRepository
 
         identity_decision_repo = PostgresIdentityDecisionRepository(_pool)
     else:
@@ -1072,7 +1066,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # -- Auto-calibration (depth-based homography estimation) --
     if depth_estimator is not None:
-        from .calibration.auto_calibrator import AutoCalibrator
+        from app.calibration.auto_calibrator import AutoCalibrator
 
         auto_calibrator = AutoCalibrator(depth_estimator=depth_estimator)
         set_auto_calibration_context(auto_calibrator=auto_calibrator, frame_fetcher=_frame_fetcher)
@@ -1085,7 +1079,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("Posture strategy: RTMPose only (depth slow-path disabled)")
 
     # -- PH repository (Postgres or in-memory fallback) --
-    from .storage.base import InMemoryPHRepository as _InMemPH
+    from app.storage.base import InMemoryPHRepository as _InMemPH
 
     if _pool is not None:
         _ph_repo_n1: _InMemPH | PostgresPHRepository = PostgresPHRepository(_pool)
@@ -1099,7 +1093,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # in-memory repo when deps.obs_repo is None, so leaving this unset here
     # silently drops every observation instead of persisting it, even though
     # the PH rows themselves keep landing in Postgres via deps_ph_repo above.
-    from .storage.base import InMemoryWorldObservationRepository as _InMemObs
+    from app.storage.base import InMemoryWorldObservationRepository as _InMemObs
 
     if _pool is not None:
         _obs_repo_n1: _InMemObs | PostgresWorldObservationRepository = (
@@ -1110,8 +1104,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     deps_obs_repo = _obs_repo_n1
 
     # identity-correction repository (segment corrections + revision ranges).
-    from .storage.corrections import InMemoryIdentityCorrectionRepository
-    from .storage.postgres.correction_repo import PostgresIdentityCorrectionRepository
+    from app.storage.corrections import InMemoryIdentityCorrectionRepository
+    from app.storage.postgres.correction_repo import PostgresIdentityCorrectionRepository
 
     correction_repo_obj = (
         PostgresIdentityCorrectionRepository(_pool)
@@ -1144,7 +1138,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # after initialize returns. record_inferred_range() (the only method
     # UnknownBackfillService calls on this service before the publisher is
     # wired) never touches the publisher, so this ordering is safe.
-    from .services.identity_correction_service import IdentityCorrectionService
+    from app.services.identity_correction_service import IdentityCorrectionService
 
     correction_service = IdentityCorrectionService(
         ph_repo=deps_ph_repo,  # type: ignore[arg-type]
@@ -1154,12 +1148,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     # Cross-camera topology and co-presence repositories.
-    from .storage.base import (
+    from app.storage.base import (
         CachedCameraTopologyRepository,
         InMemoryCameraTopologyRepository,
         InMemoryCoPresenceRepository,
     )
-    from .storage.postgres.camera_topology_repo import (
+    from app.storage.postgres.camera_topology_repo import (
         PostgresCameraTopologyRepository,
         PostgresCoPresenceRepository,
     )
@@ -1353,11 +1347,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if wearable_revocation_service is not None:
         wearable_revocation_service.set_face_id_client(_pipeline._face_id_client)
 
-    from .calibration.state import calibration_state
+    from app.calibration.state import calibration_state
 
     # Privacy zones live only in memory; load them before the first frame so a restart never
     # tracks people inside an excluded zone. CCConfigSyncService keeps them current afterwards.
-    from .services.cc_config_sync import restore_privacy_zones
+    from app.services.cc_config_sync import restore_privacy_zones
 
     zone_count = await restore_privacy_zones(cc_client, calibration_state)
     logger.info("Restored privacy zones from CC", zone_count=zone_count)
@@ -1365,9 +1359,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _pipeline.start()
 
     # CC config sync service (camera-to-room map + camera profiles + homography + wearables sync).
-    from .services.camera_room_map import CameraRoomMap, RoomPolygonMap
-    from .services.cc_config_sync import CCConfigSyncService
-    from .services.transit_zone_map import TransitZoneMap
+    from app.services.camera_room_map import CameraRoomMap, RoomPolygonMap
+    from app.services.cc_config_sync import CCConfigSyncService
+    from app.services.transit_zone_map import TransitZoneMap
 
     camera_room_map = CameraRoomMap()
     room_polygon_map = RoomPolygonMap()
@@ -1376,7 +1370,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _pipeline.set_camera_profile_map(camera_profile_map)
     _pipeline.set_wearable_site_config_map(wearable_site_config_map)
     if _pipeline._height_estimation_stage is not None:
-        from .routers.calibration import set_height_pose_provider
+        from app.routers.calibration import set_height_pose_provider
 
         set_height_pose_provider(_pipeline._height_estimation_stage.pose_cache.snapshot_all)
 
@@ -1411,8 +1405,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Wire live transit zones into the world tracker. CCConfigSyncService
     # populates TransitZoneMap every poll after converting zones to metres.
-    from .tracking.world.transit_detector import TransitDetector as _TransitDetector
-    from .transport.room_transition_publisher import (
+    from app.tracking.world.transit_detector import TransitDetector as _TransitDetector
+    from app.transport.room_transition_publisher import (
         RoomTransitionPublisher as _RoomTransitionPublisher,
     )
 
@@ -1455,7 +1449,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Keyframe revalidator background task.
     if bbox_repo is not None:
-        from .services.keyframe_revalidator import KeyframeRevalidator
+        from app.services.keyframe_revalidator import KeyframeRevalidator
 
         _revalidator = KeyframeRevalidator(
             bbox_repo=bbox_repo,
@@ -1470,8 +1464,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     set_corrections_context(correction_service)
     # Route the PH inspector and batch correction endpoints through the same
     # service so every correction writes an effective revision range.
-    from .routers.ph import set_correction_service as set_ph_correction_service
-    from .routers.ph import set_face_template_reset
+    from app.routers.ph import set_correction_service as set_ph_correction_service
+    from app.routers.ph import set_face_template_reset
 
     set_ph_correction_service(correction_service)
     set_face_template_reset(_pipeline.face_templates)
@@ -1488,8 +1482,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         set_gait_context(gait_daily_repo=gait_daily_repo)
 
     if gallery_repo is not None:
-        from .services.identity_roster_sync import IdentityRosterSyncService
-        from .services.reid_review_service import ReIDReviewService
+        from app.services.identity_roster_sync import IdentityRosterSyncService
+        from app.services.reid_review_service import ReIDReviewService
 
         roster_sync_service = IdentityRosterSyncService(
             gallery_repo=gallery_repo,
@@ -1717,7 +1711,7 @@ def create_app() -> FastAPI:
         # silently falls back to an in-memory repo when unwired, so "not None" alone
         # can't detect a misconfiguration -- check it's Postgres-backed whenever a
         # database pool is available.
-        from .storage.base import InMemoryWorldObservationRepository as _InMemObsCheck
+        from app.storage.base import InMemoryWorldObservationRepository as _InMemObsCheck
 
         _obs_repo_ref = _pipeline._obs_repo if _pipeline else None
         obs_repo_ok = _obs_repo_ref is not None and not (

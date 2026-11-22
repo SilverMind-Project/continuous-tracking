@@ -53,10 +53,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..domain import OrientationBin, ViewPrototype
+from app.domain import OrientationBin, ViewPrototype
 
 if TYPE_CHECKING:
-    from ..inference.schemas import Keypoint
+    from app.inference.schemas import Keypoint
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ import numpy as np
 import numpy.typing as npt
 from structlog import get_logger
 
-from ...domain import (
+from app.domain import (
     Detection,
     FaceAnchor,
     GallerySeedSource,
@@ -33,20 +33,20 @@ from ...domain import (
     OrientationBin,
     WearableEvidence,
 )
-from ...observability import metrics as _metrics
-from ...observability.metrics import WearableSeedOutcome
-from ...storage.gallery import PENDING_AND_VERIFIED, GalleryRepository
-from ...storage.wearable_teaching_holds import WearableTeachingHoldRepository
-from ...tracking.identity.candidate_eligibility import (
+from app.observability import metrics as _metrics
+from app.observability.metrics import WearableSeedOutcome
+from app.pipeline.frame_context import FrameContext
+from app.pipeline.stages.base import FrameStage
+from app.pipeline.types import CropStorageProtocol
+from app.storage.gallery import PENDING_AND_VERIFIED, GalleryRepository
+from app.storage.wearable_teaching_holds import WearableTeachingHoldRepository
+from app.tracking.identity.candidate_eligibility import (
     CandidateEligibility,
     CandidatePolicy,
     FaceSeed,
     WearableSeed,
     evaluate_candidate,
 )
-from ..frame_context import FrameContext
-from ..types import CropStorageProtocol
-from .base import FrameStage
 
 logger = get_logger(__name__)
 

@@ -16,13 +16,11 @@ import numpy as np
 from structlog import get_logger
 
 if TYPE_CHECKING:
-    from ...inference.evidence import FaceEvidence
-    from ...storage.base import GalleryRepository
-    from ...tracking.identity_resolver import IdentityResolver
+    from app.inference.evidence import FaceEvidence
+    from app.storage.base import GalleryRepository
+    from app.tracking.identity_resolver import IdentityResolver
 
-from app.tracking.camera_pose import update_ph_height_estimate
-
-from ...domain import (
+from app.domain import (
     AppearanceFeature,
     AppearanceFeatureExtractor,
     BoundingBox,
@@ -46,29 +44,30 @@ from ...domain import (
     WorldObservation,
     tuple_to_cov2x2,
 )
-from ...observability import metrics as _metrics
-from ...storage.base import (
+from app.observability import metrics as _metrics
+from app.storage.base import (
     VOTING_STATES,
     CameraTopologyRepository,
     CoPresenceRepository,
     PHRepositoryProtocol,
     WorldObservationRepositoryProtocol,
 )
-from ..identity.closed_world_channel import ClosedWorldConfig, canonical_ph_pair
-from ..identity.evidence_grades import grade_of
-from ..orientation import update_view_prototypes
-from .appearance_policy import AppearanceDecision, evaluate_appearance_update
-from .association import associate
-from .config import WorldTrackerConfig
-from .dedup import DedupMergeStats, _finalize_singleton, dedup_observations
-from .helpers import (
+from app.tracking.camera_pose import update_ph_height_estimate
+from app.tracking.identity.closed_world_channel import ClosedWorldConfig, canonical_ph_pair
+from app.tracking.identity.evidence_grades import grade_of
+from app.tracking.orientation import update_view_prototypes
+from app.tracking.world.appearance_policy import AppearanceDecision, evaluate_appearance_update
+from app.tracking.world.association import associate
+from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.dedup import DedupMergeStats, _finalize_singleton, dedup_observations
+from app.tracking.world.helpers import (
     is_in_any_room_polygon,
     position_sigma_m,
     resolve_room,
     speed_m_s,
     update_gallery_mean,
 )
-from .kalman import (
+from app.tracking.world.kalman import (
     KalmanState,
     initialize,
     isotropic_cov,
@@ -77,11 +76,11 @@ from .kalman import (
     update,
     zero_velocity_update,
 )
-from .ph_floor_history import PHFloorHistory
-from .revival import select_revival_candidate
-from .topology import record_handoff
-from .wearable_association import WearableAssociationTracker
-from .wearable_config import WearableConfig
+from app.tracking.world.ph_floor_history import PHFloorHistory
+from app.tracking.world.revival import select_revival_candidate
+from app.tracking.world.topology import record_handoff
+from app.tracking.world.wearable_association import WearableAssociationTracker
+from app.tracking.world.wearable_config import WearableConfig
 
 logger = get_logger(__name__)
 

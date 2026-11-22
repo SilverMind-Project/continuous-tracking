@@ -19,11 +19,11 @@ from enum import StrEnum
 import numpy as np
 import numpy.typing as npt
 
-from ...domain import ViewPrototype
-from .config import WorldTrackerConfig
-from .helpers import cosine_similarity
-from .kalman import KalmanState, isotropic_cov, mahalanobis2_position
-from .validation import is_finite_point, is_valid_covariance
+from app.domain import ViewPrototype
+from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.helpers import cosine_similarity
+from app.tracking.world.kalman import KalmanState, isotropic_cov, mahalanobis2_position
+from app.tracking.world.validation import is_finite_point, is_valid_covariance
 
 NDArrayF8 = npt.NDArray[np.float64]
 
