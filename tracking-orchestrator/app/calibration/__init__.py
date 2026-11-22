@@ -1,5 +1,7 @@
 """Calibration state and hot-reload for the tracking orchestrator."""
 
+from __future__ import annotations
+
 from .auto_calibrator import AutoCalibrationResult, AutoCalibrator
 from .floor_plane import (
     FloorPlaneFitter,

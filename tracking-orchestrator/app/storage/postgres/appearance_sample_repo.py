@@ -105,6 +105,7 @@ class PostgresAppearanceSampleRepository:
             [str(s) for s in sorted(label_sources)] if label_sources is not None else None
         )
         async with self._pool.acquire() as conn:
+            # _COLUMNS is a module-level constant; all filter values are $N params.
             rows = await conn.fetch(
                 f"""
                 SELECT {_COLUMNS}
@@ -115,7 +116,7 @@ class PostgresAppearanceSampleRepository:
                   AND ($4::boolean OR revoked_at IS NULL)
                   AND ($5::text[] IS NULL OR label_source = ANY($5::text[]))
                 ORDER BY observed_at ASC, sample_id ASC
-                """,
+                """,  # noqa: S608  # module constant _COLUMNS
                 feature_version,
                 since_day,
                 until_day,

@@ -315,12 +315,13 @@ class PostgresPHRepository:
         where = ("WHERE " + " AND ".join(predicates)) if predicates else ""
 
         async with self._pool.acquire() as conn:
+            # where is built from constant SQL predicates with $N parameter placeholders.
             total: int = await conn.fetchval(
-                f"SELECT COUNT(*) FROM continuous_tracking.person_hypotheses {where}",
+                f"SELECT COUNT(*) FROM continuous_tracking.person_hypotheses {where}",  # noqa: S608
                 *params,
             )
             rows = await conn.fetch(
-                f"SELECT * FROM continuous_tracking.person_hypotheses {where}"
+                f"SELECT * FROM continuous_tracking.person_hypotheses {where}"  # noqa: S608
                 f" ORDER BY last_seen_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
                 *params,
                 limit,
@@ -359,15 +360,16 @@ class PostgresPHRepository:
         where = " AND ".join(predicates) if predicates else "TRUE"
 
         async with self._pool.acquire() as conn:
+            # where is built from constant SQL predicates with $N parameter placeholders.
             count_row = await conn.fetchrow(
-                f"SELECT COUNT(*) FROM continuous_tracking.person_hypotheses WHERE {where}",
+                f"SELECT COUNT(*) FROM continuous_tracking.person_hypotheses WHERE {where}",  # noqa: S608
                 *params,
             )
             total = count_row[0] if count_row else 0
 
             params.extend([limit, offset])
             rows = await conn.fetch(
-                f"SELECT * FROM continuous_tracking.person_hypotheses "
+                "SELECT * FROM continuous_tracking.person_hypotheses "  # noqa: S608
                 f"WHERE {where} ORDER BY last_seen_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
                 *params,
             )
@@ -421,9 +423,10 @@ class PostgresPHRepository:
 
         where = " AND ".join(predicates)
         async with self._pool.acquire() as conn:
+            # where is built from constant SQL predicates with $N parameter placeholders.
             rows = await conn.fetch(
-                f"SELECT captured_at, floor_x_m, floor_y_m, camera_id "
-                f"FROM continuous_tracking.world_observations "
+                "SELECT captured_at, floor_x_m, floor_y_m, camera_id "  # noqa: S608
+                "FROM continuous_tracking.world_observations "
                 f"WHERE {where} ORDER BY captured_at ASC",
                 *params,
             )
@@ -1017,8 +1020,9 @@ class PostgresPHRepository:
         where = " AND ".join(predicates) if predicates else "TRUE"
 
         async with self._pool.acquire() as conn:
+            # where is built from constant SQL predicates with $N parameter placeholders.
             rows = await conn.fetch(
-                f"SELECT * FROM continuous_tracking.ph_revisions "
+                "SELECT * FROM continuous_tracking.ph_revisions "  # noqa: S608
                 f"WHERE {where} ORDER BY applied_at DESC LIMIT ${idx}",
                 *params,
                 limit,

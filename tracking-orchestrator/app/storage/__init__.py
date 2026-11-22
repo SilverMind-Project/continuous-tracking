@@ -6,6 +6,8 @@ Exports:
 - Postgres implementations for production
 """
 
+from __future__ import annotations
+
 from .base import (
     ActivityRepository,
     AssignmentRepository,

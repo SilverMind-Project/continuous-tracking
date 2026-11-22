@@ -195,8 +195,9 @@ async def _existing_tables(
 
 
 async def _count_rows(conn: asyncpg.Connection, schema: str, table: str) -> int:
+    # schema and table come strictly from the module allowlist constants above.
     quoted = f'"{schema}"."{table}"' if schema != "public" else f'"{table}"'
-    row = await conn.fetchrow(f"SELECT COUNT(*) AS n FROM {quoted}")
+    row = await conn.fetchrow(f"SELECT COUNT(*) AS n FROM {quoted}")  # noqa: S608
     return int(row["n"])
 
 

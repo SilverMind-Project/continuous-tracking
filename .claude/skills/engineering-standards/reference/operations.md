@@ -71,23 +71,14 @@ recording defect). The `app.tracking.identity` export surface is pinned by
 ## Security at Boundaries
 
 1. **Validate at entry points only.** Pydantic v2 for HTTP bodies, Redis payloads, and config files. Internal domain objects must already be valid when constructed.
-2. **Parameterized SQL, always.** asyncpg `$1..$N` -- never f-strings or `%` formatting.
+2. **Parameterized SQL, always** (enforced by ruff `S608`): asyncpg `$1..$N`, never caller input in SQL strings.
 3. **No secrets in code.** Environment variables only. `.env` never committed.
 4. **Protobuf for cross-service messages.** Bytes on the wire parse against a typed schema. No raw JSON blobs without Pydantic validation.
 5. **`go vet` + `staticcheck` + `golangci-lint` for Go.** Hard CI gates.
 
 ## Datetime and Timezones
 
-All timestamps are timezone-aware:
-
-```python
-from datetime import UTC, datetime
-
-now = datetime.now(UTC)          # correct
-now = datetime.now()             # WRONG -- naive, breaks TimescaleDB timestamptz
-```
-
-Pipeline stages must use the correct time for the domain concept:
+Timezone-aware timestamps only (enforced by ruff `DTZ`). Pipeline stages use the domain clock:
 - `ctx.capture_time` -- physical observation timestamp (from the camera).
 - `ctx.event_time` -- pipeline processing timestamp (set once at context init).
 - `datetime.now(UTC)` -- only for true wall-clock side effects (e.g., `emitted_at` on a signal).
@@ -96,7 +87,7 @@ In Go, use `time.Now().UTC()` for all timestamps written to Redis or Postgres.
 
 ## Structured Logging
 
-Python -- `structlog`, never `print` or `logging.getLogger`:
+Python -- `structlog` with structured `key=value` fields (no f-strings in log calls, enforced by ruff `G004`; never `print` or `logging.getLogger`):
 
 ```python
 from structlog import get_logger

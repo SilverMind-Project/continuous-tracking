@@ -775,8 +775,9 @@ class PostgresGalleryRepository(GalleryRepository):
             uuid.UUID(seed_association_id) if seed_association_id is not None else None,
         ]
         async with self._pool.acquire() as conn:
+            # where is a constant $1..$9 predicate template; _REVIEW_COLUMNS is a module constant.
             total = await conn.fetchval(
-                f"SELECT count(*) FROM continuous_tracking.reid_gallery {where}",
+                f"SELECT count(*) FROM continuous_tracking.reid_gallery {where}",  # noqa: S608
                 *params,
             )
             rows = await conn.fetch(
@@ -786,7 +787,7 @@ class PostgresGalleryRepository(GalleryRepository):
                 {where}
                 ORDER BY created_at ASC NULLS LAST, seen_at ASC
                 LIMIT $10 OFFSET $11
-                """,
+                """,  # noqa: S608  # module constant _REVIEW_COLUMNS and constant where
                 *params,
                 limit,
                 offset,
@@ -886,8 +887,9 @@ class PostgresGalleryRepository(GalleryRepository):
 
     async def get_review_candidate(self, candidate_id: str) -> ReviewCandidate | None:
         async with self._pool.acquire() as conn:
+            # _REVIEW_COLUMNS is a module-level constant; candidate_id is bound as $1.
             row = await conn.fetchrow(
-                f"SELECT {_REVIEW_COLUMNS} FROM continuous_tracking.reid_gallery WHERE id = $1",
+                f"SELECT {_REVIEW_COLUMNS} FROM continuous_tracking.reid_gallery WHERE id = $1",  # noqa: S608
                 candidate_id,
             )
         return _row_to_review_candidate(row) if row is not None else None

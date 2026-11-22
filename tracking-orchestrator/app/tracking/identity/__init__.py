@@ -1,5 +1,7 @@
 """Identity resolution subsystem: evidence grades, channels, ledger, posterior, commit policy."""
 
+from __future__ import annotations
+
 from .channels import ChannelLikelihood, EvidenceChannel, ResolverInputs
 from .commit_policy import (
     CommitEvaluation,

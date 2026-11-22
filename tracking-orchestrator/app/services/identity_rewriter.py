@@ -193,7 +193,7 @@ class PostgresIdentityRewriter(IdentityRewriter):
                 )
 
             # -- dementia_signals --
-            # PK is uuid5(identity_id, signal_kind, window_start, window_end)
+            # Primary key is uuid5 of (identity_id, signal_kind, window_start, window_end),
             # so we must SELECT, compute new PK, INSERT, DELETE.
             old_signals = await conn.fetch(
                 """

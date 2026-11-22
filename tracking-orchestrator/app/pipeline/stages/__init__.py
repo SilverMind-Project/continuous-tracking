@@ -1,5 +1,7 @@
 """Pipeline stage implementations."""
 
+from __future__ import annotations
+
 from .appearance_samples import AppearanceSampleRecorderStage
 from .base import FrameStage, StageRunner, timed_phase
 from .detect import DetectStage

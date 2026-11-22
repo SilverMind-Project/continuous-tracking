@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from app.pipeline.frame_pipeline import PipelineConfig
 
 

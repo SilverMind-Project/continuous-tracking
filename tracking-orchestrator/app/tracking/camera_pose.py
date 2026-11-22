@@ -324,7 +324,7 @@ def standing_height_m(
 
     # Line 1: P1(z) = (fx, fy, 0) + z * (0, 0, 1)
     # Line 2: P2(s) = C + s * d
-    # w0 = P1(0) - C
+    # Vector w0 from ray origin C to vertical line base P1(0).
     w0 = np.array([fx - pose.centre_m[0], fy - pose.centre_m[1], -pose.centre_m[2]])
     b = float(d[2])  # dot(u_hat, d)
     u_dot_w0 = float(w0[2])

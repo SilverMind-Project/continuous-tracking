@@ -105,7 +105,9 @@ def test_recency_half_life_config() -> None:
     cfg = GalleryScoringConfig(recency_half_life_days=7.0)
     one_half_life_ago = _NOW.replace(day=13)  # July 20 -> July 13 = 7 days
     one_hour_in_future = _NOW.replace(hour=13)
-    naive_same_instant = datetime(2026, 7, 20, 12, 0, 0)  # no tzinfo
+    naive_same_instant = datetime(  # noqa: DTZ001  # intentionally naive to test naive-input handling
+        2026, 7, 20, 12, 0, 0
+    )
 
     scored = score_hits(
         [

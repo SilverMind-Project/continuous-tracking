@@ -47,7 +47,7 @@ def _pose(**overrides: Keypoint) -> PoseResult:
 
 
 # ---------------------------------------------------------------------------
-# classify_posture (stateless, per-frame)
+# Tests for stateless per-frame classify_posture
 # ---------------------------------------------------------------------------
 
 

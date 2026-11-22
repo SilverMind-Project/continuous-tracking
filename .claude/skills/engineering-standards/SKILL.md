@@ -60,23 +60,26 @@ contract it describes.
 14. All imports at the top; no conditional imports on runtime data; no import side effects; no
     wildcard imports. Imports are absolute (`from app.x import ...`); only `__init__.py` re-export
     blocks may be relative. Cross-boundary type-only imports go under `TYPE_CHECKING`.
-15. `from __future__ import annotations` in every file; every signature annotated; `T | None`, never
-    `Optional`; `# type: ignore[code]` only with a code; no `Any` in constructors or returns.
+15. `from __future__ import annotations` in every file (ruff `I002`); every signature annotated;
+    `T | None`, never `Optional`; `# type: ignore[code]` only with a code (ruff `PGH003`); no
+    `Any` in constructors or returns.
 16. Declare every attribute in `__init__` with its type. Wrap numpy comparisons in `bool()` when
     returning `bool`.
 17. Pydantic v2 at boundaries (HTTP, Redis payloads, config); frozen dataclasses internally; never
     leak a Pydantic model into services or repositories.
-18. Background tasks are stored and cancelled in `stop()`; no blocking calls in async code;
-    work over about 1 ms goes to `asyncio.to_thread()`.
+18. Background tasks are stored and cancelled in `stop()`; no blocking calls in async code (ruff
+    `ASYNC`); work over about 1 ms goes to `asyncio.to_thread()`.
 19. Domain errors use the `ErrorCode` enum; no stack traces in API responses. Model failures
     degrade per model: a detector failure fails the frame, a ReID, pose, or face failure is missing
     evidence.
-20. Broad `except Exception` only with a per-site `# noqa: BLE001` and a documented reason.
+20. Broad `except Exception` only with a per-site `# noqa: BLE001` and a documented reason (ruff
+    `BLE001`). No commented-out code (ruff `ERA001`).
 
 ## Storage and SQL
 
-21. asyncpg `$N` params only; schema-qualify every table as `continuous_tracking.<table>`;
-    validate JSONB shape at the repository boundary (`.claude/rules/sql.md`).
+21. asyncpg `$N` params only (ruff `S608`); schema-qualify every table as
+    `continuous_tracking.<table>`; validate JSONB shape at the repository boundary
+    (`.claude/rules/sql.md`).
 22. Schema changes are new numbered `.up.sql` / `.down.sql` pairs on top of `0001_init`; the down
     file exactly reverses the up; never drop and recreate a database (`.claude/rules/migrations.md`).
 
@@ -88,13 +91,14 @@ contract it describes.
     proof, and a guardrail test; the flag is removed one release after enablement.
 25. Endpoints have explicit Pydantic request and response models and structured error `detail`
     codes; `/internal/*` endpoints are for the CC BFF only.
-26. Log with `structlog` `get_logger(__name__)`, event name first, with `camera_id` and `ph_id`
-    where known; never `print` or `logging.getLogger`; never log embeddings, face crops, images,
-    secrets, or names.
+26. Log with `structlog` `get_logger(__name__)`, event name first (no f-strings, ruff `G004`),
+    with `camera_id` and `ph_id` where known; never `print` or `logging.getLogger`; never log
+    embeddings, face crops, images, secrets, or names.
 27. Metrics register in `app/observability/metrics.py`; shadow computations are sample-gated with a
     rate defaulting to 0.0.
-28. Timestamps are timezone-aware; pipeline code uses `ctx.capture_time` or `ctx.event_time`, and
-    `datetime.now(UTC)` only for wall-clock side effects (`.claude/rules/time.md`).
+28. Timestamps are timezone-aware (ruff `DTZ`); pipeline code uses `ctx.capture_time` or
+    `ctx.event_time`, and `datetime.now(UTC)` only for wall-clock side effects
+    (`.claude/rules/time.md`).
 29. Image resizing uses `opencv-python-headless` `cv2.resize(INTER_LINEAR)`; never hand-rolled.
 
 ## Domain and contracts

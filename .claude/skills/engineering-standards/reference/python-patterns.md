@@ -236,7 +236,7 @@ The `tracking <-> pipeline` boundary is the most fragile import path in this cod
 
 ### `from __future__ import annotations` in every file
 
-All annotations are strings at runtime (PEP 563). This enables forward references and reduces import-time overhead. Every Python file in this codebase starts with this import.
+Enforced by ruff `I002` (PEP 563 postponed annotations).
 
 ### Exhaustive type annotations
 
@@ -269,9 +269,7 @@ Python 3.10+ union syntax (`T | None`, `int | str`) throughout. No `Optional[T]`
 
 ### No escape hatches without justification
 
-- `# type: ignore` must use the specific mypy error code: `# type: ignore[arg-type]`.
-- Bare `# type: ignore` is deprecated and fails CI.
-- Remove `type: ignore` comments when the underlying issue is resolved -- mypy flags unused suppressions with `[unused-ignore]`.
+- Specific `# type: ignore[code]` only (enforced by ruff `PGH003`); mypy flags unused suppressions with `[unused-ignore]`.
 - `Any` is prohibited in constructor signatures and return types. It is tolerated only in `**kwargs` passthrough to third-party libraries with `cast()` at the boundary.
 
 ### TypedDict for structured dicts, NamedTuple for simple carriers
@@ -334,8 +332,7 @@ Use Pydantic v2 models for HTTP request/response bodies, Redis payloads, config 
 
 ### No blocking calls in async context
 
-- CPU-bound work (numpy array ops, image decoding) is acceptable if it runs in under 1ms. Longer operations use `asyncio.to_thread()` or a process pool.
-- Never call `time.sleep()` in an async function. Use `asyncio.sleep()`.
+Enforced by ruff `ASYNC` (no blocking I/O or `time.sleep()` in async functions). CPU-bound work over about 1 ms goes to `asyncio.to_thread()` or a process pool.
 
 ## Error Handling
 

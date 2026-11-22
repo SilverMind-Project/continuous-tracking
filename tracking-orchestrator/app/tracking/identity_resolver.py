@@ -1801,8 +1801,13 @@ class IdentityResolver:
             return
         metrics.metrics.identity_shadow_mismatch_total.labels(feature=feature).inc()
         # The rollout review reads these events to judge each disagreement against keyframes.
+        event_name = (
+            "calibrated_face_shadow_mismatch"
+            if feature == "calibrated_face"
+            else "face_template_shadow_mismatch"
+        )
         logger.info(
-            f"{feature}_shadow_mismatch",
+            event_name,
             entity_id=entity.entity_id,
             outcome=outcome,
             live_identity_id=live_identity_id,

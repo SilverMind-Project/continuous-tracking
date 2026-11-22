@@ -48,6 +48,7 @@ from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 from app.tracking.world.wearable_config import WearableConfig
 
 T0 = datetime(2026, 11, 21, 12, 0, 0, tzinfo=UTC)
+_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
 
 
 class _Entity:
@@ -433,9 +434,8 @@ async def test_shadow_mode_and_part_e_classifier_arm_accumulate_outcomes() -> No
     assert totals["classifier"].correct_s == pytest.approx(5.0)
 
     # Verify scripts/image_only_evaluation_report.py summarizes classifier vs treatment.
-    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
+    if str(_SCRIPTS_DIR) not in sys.path:
+        sys.path.insert(0, str(_SCRIPTS_DIR))
     from image_only_evaluation_report import build_report, render_table
 
     report = build_report(list(totals.values()), samples=50, seed=0)

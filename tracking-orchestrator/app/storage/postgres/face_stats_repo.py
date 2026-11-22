@@ -17,10 +17,11 @@ _COLUMNS = """
     quality_score, quality_version, calibrated_confidence
 """
 
+# _COLUMNS is a module-level column list constant; all values are bound via $1..$18.
 _SQL_INSERT = f"""
 INSERT INTO continuous_tracking.face_observation_stats ({_COLUMNS})
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-"""
+"""  # noqa: S608  # module constant _COLUMNS
 
 _SQL_LIST = f"""
 SELECT {_COLUMNS}
@@ -28,7 +29,7 @@ FROM continuous_tracking.face_observation_stats
 WHERE observed_at >= $1 AND observed_at < $2
   AND ($3::text IS NULL OR camera_id = $3)
 ORDER BY observed_at
-"""
+"""  # noqa: S608  # module constant _COLUMNS
 
 
 class PostgresFaceObservationStatsRepository:

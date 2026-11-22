@@ -1,5 +1,7 @@
 """Tests for posture strategy settings."""
 
+from __future__ import annotations
+
 import pytest
 
 from app.config import Settings

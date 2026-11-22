@@ -616,7 +616,7 @@ class TestNighttimeColdStartTiers:
 
 
 # ---------------------------------------------------------------------------
-# run_once: persistence and multi-identity
+# Tests for run_once persistence and multi-identity
 # ---------------------------------------------------------------------------
 
 

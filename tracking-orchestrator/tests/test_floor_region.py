@@ -42,7 +42,7 @@ def _make_result(
 
 
 # ---------------------------------------------------------------------------
-# floor_region_polygon: correctness
+# Tests for floor_region_polygon correctness
 # ---------------------------------------------------------------------------
 
 

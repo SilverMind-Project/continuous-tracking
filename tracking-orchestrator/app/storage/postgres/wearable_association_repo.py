@@ -89,8 +89,9 @@ class PostgresWearableAssociationRepository:
 
     async def get_segment(self, segment_id: str) -> WearableAssociationSegment | None:
         async with self._pool.acquire() as conn:
+            # _SQL_SELECT_COLUMNS is a module-level constant; segment_id is bound as $1.
             row = await conn.fetchrow(
-                f"SELECT {_SQL_SELECT_COLUMNS} "
+                f"SELECT {_SQL_SELECT_COLUMNS} "  # noqa: S608
                 "FROM continuous_tracking.wearable_associations "
                 "WHERE segment_id = $1::uuid",
                 segment_id,
@@ -129,8 +130,9 @@ class PostgresWearableAssociationRepository:
         where = ("WHERE " + " AND ".join(predicates)) if predicates else ""
         params.append(limit)
         async with self._pool.acquire() as conn:
+            # _SQL_SELECT_COLUMNS is a module constant; where holds hardcoded $N predicates.
             rows = await conn.fetch(
-                f"SELECT {_SQL_SELECT_COLUMNS} "
+                f"SELECT {_SQL_SELECT_COLUMNS} "  # noqa: S608
                 f"FROM continuous_tracking.wearable_associations {where} "
                 f"ORDER BY started_at DESC, segment_id DESC LIMIT ${idx}",
                 *params,
@@ -172,6 +174,7 @@ class PostgresWearableAssociationRepository:
         until: datetime,
     ) -> list[WearableAssociationSegment]:
         async with self._pool.acquire() as conn:
+            # _SQL_SELECT_COLUMNS is a module-level constant; filter values are $1..$3 params.
             rows = await conn.fetch(
                 f"""
                 SELECT {_SQL_SELECT_COLUMNS}
@@ -181,7 +184,7 @@ class PostgresWearableAssociationRepository:
                   AND started_at <= $3
                   AND (ended_at IS NULL OR ended_at >= $2)
                 ORDER BY started_at ASC, segment_id ASC
-                """,
+                """,  # noqa: S608  # module constant _SQL_SELECT_COLUMNS
                 tag_id,
                 since,
                 until,

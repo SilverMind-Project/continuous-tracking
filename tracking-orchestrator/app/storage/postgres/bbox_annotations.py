@@ -258,8 +258,9 @@ class PostgresBboxAnnotationRepository:
                             }
                         )
                         continue
+                    # assignments uses only hardcoded allowlisted column names and $N placeholders.
                     result = await conn.execute(
-                        "UPDATE continuous_tracking.keyframe_bbox_annotations "
+                        "UPDATE continuous_tracking.keyframe_bbox_annotations "  # noqa: S608
                         f"SET {', '.join(assignments)} WHERE id = $1::uuid",
                         *values,
                     )

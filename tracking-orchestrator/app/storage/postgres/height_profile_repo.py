@@ -49,8 +49,9 @@ class PostgresIdentityHeightProfileRepository:
 
     async def get(self, identity_id: str) -> IdentityHeightProfile | None:
         async with self._pool.acquire() as conn:
+            # _PROFILE_COLUMNS is a module-level constant; identity_id is bound as $1.
             row = await conn.fetchrow(
-                f"SELECT {_PROFILE_COLUMNS} FROM continuous_tracking.identity_height_profiles "
+                f"SELECT {_PROFILE_COLUMNS} FROM continuous_tracking.identity_height_profiles "  # noqa: S608
                 "WHERE identity_id = $1",
                 identity_id,
             )
@@ -58,8 +59,9 @@ class PostgresIdentityHeightProfileRepository:
 
     async def list_all(self) -> list[IdentityHeightProfile]:
         async with self._pool.acquire() as conn:
+            # _PROFILE_COLUMNS is a module-level constant.
             rows = await conn.fetch(
-                f"SELECT {_PROFILE_COLUMNS} FROM continuous_tracking.identity_height_profiles "
+                f"SELECT {_PROFILE_COLUMNS} FROM continuous_tracking.identity_height_profiles "  # noqa: S608
                 "ORDER BY identity_id ASC"
             )
         return [_profile_from_row(r) for r in rows]
@@ -155,8 +157,9 @@ class PostgresPHHeightSampleRepository:
             (r.observed_at, r.ph_id, r.camera_id, r.height_m, r.height_sigma_m) for r in rows
         ]
         async with self._pool.acquire() as conn:
+            # _SAMPLE_COLUMNS is a module-level constant; row values are bound via $1..$5.
             await conn.executemany(
-                f"INSERT INTO continuous_tracking.ph_height_samples ({_SAMPLE_COLUMNS}) "
+                f"INSERT INTO continuous_tracking.ph_height_samples ({_SAMPLE_COLUMNS}) "  # noqa: S608
                 "VALUES ($1, $2::uuid, $3, $4, $5)",
                 args,
             )
@@ -170,8 +173,9 @@ class PostgresPHHeightSampleRepository:
         camera_id: str | None = None,
     ) -> list[PHHeightSample]:
         async with self._pool.acquire() as conn:
+            # _SAMPLE_COLUMNS is a module-level constant; filter values are bound via $1..$4.
             records = await conn.fetch(
-                f"SELECT {_SAMPLE_COLUMNS} FROM continuous_tracking.ph_height_samples "
+                f"SELECT {_SAMPLE_COLUMNS} FROM continuous_tracking.ph_height_samples "  # noqa: S608
                 "WHERE observed_at >= $1 AND observed_at < $2 "
                 "AND ($3::uuid IS NULL OR ph_id = $3::uuid) "
                 "AND ($4::text IS NULL OR camera_id = $4) "

@@ -46,6 +46,7 @@ call the project venv and the pinned Go and buf toolchain, never separately pinn
 - `SIM108`: ternary for simple conditional assignments.
 - `B017`: no `pytest.raises(Exception)` -- use the specific exception type.
 - `C401`: use set/dict comprehensions, not generator-wrapped constructors.
+- `DTZ`, `ASYNC`, `PGH`, `G`, `S608`, `TID`, `ERA`, `BLE`, `I002`: timezone-aware datetimes, no blocking calls in async code, specific `type: ignore[code]`, no f-strings in log calls, parameterized SQL, no commented-out code, justified `BLE001`, and `from __future__ import annotations` in every file (`TID252` is enabled in `rf-ingress` and waits in `extend-ignore` in `tracking-orchestrator` until relative imports are converted).
 
 ### What `make check` does NOT cover
 

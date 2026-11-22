@@ -150,7 +150,7 @@ they carry historical frame-level data.
 
 These rules come from bugs caught during implementation and are non-negotiable.
 
-**`$N` placeholders always.** asyncpg uses `$1, $2, …` positional params. Never use `%s` or `?`, and never build SQL with f-strings or `%`. `executemany` also requires `$N` style -- one row's worth of placeholders per statement.
+**`$N` placeholders always** (enforced by ruff `S608`): asyncpg uses `$1, $2, …` positional params, never `%s`, `?`, or caller-interpolated SQL strings (`executemany` uses one row's worth of `$N` placeholders). Constant-assembled SQL fragments (such as module-level `_COLUMNS` lists) carry `# noqa: S608` naming the constant source.
 
 **Match bind parameter count exactly.** Count `$1..$N` placeholders and verify the argument tuple has the same arity. Off-by-one raises `ValueError: bind parameter $N not found` at runtime.
 

@@ -402,7 +402,7 @@ async def retain_keyframe(
 
 
 # ---------------------------------------------------------------------------
-# GET /internal/keyframes/{keyframe_id}/bboxes
+# Keyframe bounding-box listing endpoint
 # ---------------------------------------------------------------------------
 
 
@@ -417,7 +417,7 @@ async def get_keyframe_bboxes(
 
 
 # ---------------------------------------------------------------------------
-# PUT /internal/bboxes/{annotation_id}/override
+# Bounding-box override endpoint
 # ---------------------------------------------------------------------------
 
 
@@ -461,7 +461,7 @@ async def override_bbox(
 
 
 # ---------------------------------------------------------------------------
-# PUT /internal/bboxes/{annotation_id}/tag
+# Bounding-box tag endpoint
 # ---------------------------------------------------------------------------
 
 
@@ -492,7 +492,7 @@ async def tag_bbox(
 
 
 # ---------------------------------------------------------------------------
-# DELETE /internal/bboxes/{annotation_id}
+# Bounding-box delete endpoint
 # ---------------------------------------------------------------------------
 
 
