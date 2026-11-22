@@ -37,6 +37,10 @@ rf-ingress/recordings/
 wear-companion/.gradle/
 wear-companion/**/build/
 wear-companion/local.properties
+wear-uwb-probe/.gradle/
+wear-uwb-probe/.kotlin/
+wear-uwb-probe/**/build/
+wear-uwb-probe/local.properties
 # Jetson-generated TensorRT engines are device and TensorRT-version specific.
 triton-models-jetson/**/1/*.plan
 triton-models-jetson/**/1/*.engine

@@ -32,6 +32,9 @@ RESOLVE_ROOTS: tuple[str, ...] = (
     "wear-companion",
     "wear-companion/core",
     "wear-companion/app",
+    "wear-uwb-probe",
+    "wear-uwb-probe/core",
+    "wear-uwb-probe/app",
     "rtsp-ingress",
 )
 

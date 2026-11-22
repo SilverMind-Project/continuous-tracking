@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Wear UWB Probe</string>
+    <string name="probe_channel_name">UWB Bench Probe</string>
+    <string name="probe_notification_title">Wear UWB Bench Probe Active</string>
+    <string name="probe_notification_body">Recording standalone bench telemetry to app-private storage.</string>
+</resources>

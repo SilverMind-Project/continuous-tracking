@@ -206,3 +206,25 @@ jobs:
           gradle-home-cache-cleanup: true
       - name: Run wear-companion quality gate
         run: make wear-check
+
+  wear-probe-check:
+    name: Wear OS UWB bench probe (Kotlin core + Python analyzer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-home-cache-cleanup: true
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          activate-environment: true
+      - name: Install rf-ingress (provides solver + pytest/ruff/mypy for probe analyzer)
+        working-directory: rf-ingress
+        run: uv sync --frozen --extra dev
+      - name: Run wear-uwb-probe quality gate
+        run: make wear-probe-check

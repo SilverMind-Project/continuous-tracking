@@ -20,7 +20,7 @@ PROTO_FILES    := \
 	proto/continuoustracking/v1/position_sensor.proto \
 	proto/continuoustracking/v1/household.proto
 
-.PHONY: help venv rf-venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint rf-lint rf-format rf-format-check rf-mypy rf-import-lint rf-test rf-test-integration rf-check rf-audit wear-format wear-lint wear-test wear-check check check-all check-toolchain deps-outdated deps-upgrade go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit hooks-test check-md docs-check
+.PHONY: help venv rf-venv venv-check proto proto-py proto-lint infra-up app-up docker-up docker-down docker-build lint format format-check test mypy import-lint rf-lint rf-format rf-format-check rf-mypy rf-import-lint rf-test rf-test-integration rf-check rf-audit wear-format wear-lint wear-test wear-check wear-probe-format wear-probe-lint wear-probe-test wear-probe-py-check wear-probe-check check check-all check-toolchain deps-outdated deps-upgrade go-install go-env-check go-tools go-lint go-test go-build go-check detector-equivalence install-hooks test-integration ci audit hooks-test check-md docs-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk '{printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -164,6 +164,25 @@ wear-test: ## Run wear-companion pure-Kotlin JUnit 5 tests
 wear-check: ## Run the wear-companion quality gate (ktlint, detekt, unit tests)
 	cd wear-companion && ./gradlew :core:check --no-daemon
 
+wear-probe-format: ## Format wear-uwb-probe Kotlin sources with ktlint
+	cd wear-uwb-probe && ./gradlew :core:ktlintFormat --no-daemon
+
+wear-probe-lint: ## Run wear-uwb-probe ktlint and detekt checks
+	cd wear-uwb-probe && ./gradlew :core:ktlintCheck :core:detekt --no-daemon
+
+wear-probe-test: ## Run wear-uwb-probe pure-Kotlin JUnit 5 tests
+	cd wear-uwb-probe && ./gradlew :core:test --no-daemon
+
+wear-probe-py-check: rf-venv ## Lint, type-check, and test wear-uwb-probe Python analyzer via rf-ingress/.venv
+	$(RF_BIN)/ruff check --config rf-ingress/pyproject.toml wear-uwb-probe/scripts
+	$(RF_BIN)/ruff format --config rf-ingress/pyproject.toml --check wear-uwb-probe/scripts
+	MYPYPATH=rf-ingress $(RF_BIN)/mypy --config-file rf-ingress/pyproject.toml wear-uwb-probe/scripts/analyze_probe_jsonl.py
+	$(RF_BIN)/pytest -c rf-ingress/pyproject.toml wear-uwb-probe/scripts/tests -v
+
+wear-probe-check: ## Run the wear-uwb-probe quality gate (Kotlin :core + Python analyzer)
+	cd wear-uwb-probe && ./gradlew :core:check --no-daemon
+	$(MAKE) wear-probe-py-check
+
 check-toolchain: ## Verify Go/Python/tool pins stay aligned across .tool-versions, Dockerfiles, go.mod, Makefile, and CI
 	@bash scripts/check-toolchain-sync.sh
 
@@ -192,7 +211,7 @@ test-integration: venv ## Run every integration-marked test (testcontainer Postg
 
 ci: check-all test-integration ## Authoritative CI gate: full check + integration proofs
 
-check-all: check go-check proto-lint wear-check ## Run the full repo quality gate
+check-all: check go-check proto-lint wear-check wear-probe-check ## Run the full repo quality gate
 
 detector-equivalence: venv ## Run the detector equivalence gate (requires GPU + Triton; not part of make ci)
 	# Requires: TRITON_GRPC_URL, DETECTOR_CALIB_IMAGES_DIR (path to private calibration images).

@@ -53,6 +53,7 @@ settings coupling rule, and the CTS-to-CC wire contract. The CC-side companion d
 │                                  media,metrics,motion,poll,reconciler,supervisor})
 ├── rf-ingress/                    Python hardware-neutral RF ingress (rf_ingress/{adapters,solver,clock,site_config,publish,pipeline,health,replay,proto}, config/scenarios/, tests/conformance/)
 ├── wear-companion/                Kotlin Wear OS companion (:core pure JVM FSMs/batcher, :app bleOnly + dualMode flavors)
+├── wear-uwb-probe/                Standalone Wear OS UWB bench probe (:core JVM, :app APK, scripts/analyze_probe_jsonl.py)
 ├── tracking-orchestrator/         Python ML orchestration service
 │   ├── app/domain/                Frozen dataclasses (Detection, WorldObservation, PersonHypothesis, …)
 │   ├── app/inference/             Triton gRPC client (delegates to triton_shared) + ReID/Pose wrappers

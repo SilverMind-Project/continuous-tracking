@@ -1,5 +1,5 @@
 ---
-paths: ["**/tracking-orchestrator/**/*.py", "**/rf-ingress/**/*.py", "**/rtsp-ingress/**/*.go", "**/wear-companion/**/*.kt"]
+paths: ["**/tracking-orchestrator/**/*.py", "**/rf-ingress/**/*.py", "**/rtsp-ingress/**/*.go", "**/wear-companion/**/*.kt", "**/wear-uwb-probe/**/*.kt", "**/wear-uwb-probe/**/*.py"]
 ---
 
 # Code comments

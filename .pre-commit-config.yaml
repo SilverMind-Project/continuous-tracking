@@ -103,3 +103,21 @@ repos:
         language: system
         pass_filenames: false
         files: ^wear-companion/.*\.kts?$
+      - id: wear-probe-lint
+        name: wear-uwb-probe ktlint + detekt (make wear-probe-lint)
+        entry: make wear-probe-lint
+        language: system
+        pass_filenames: false
+        files: ^wear-uwb-probe/.*\.kts?$
+      - id: wear-probe-py-ruff
+        name: wear-uwb-probe Python ruff check (rf-ingress venv)
+        entry: rf-ingress/.venv/bin/ruff check --config rf-ingress/pyproject.toml --fix
+        language: system
+        types: [python]
+        files: ^wear-uwb-probe/scripts/
+      - id: wear-probe-py-ruff-format
+        name: wear-uwb-probe Python ruff format (rf-ingress venv)
+        entry: rf-ingress/.venv/bin/ruff format --config rf-ingress/pyproject.toml
+        language: system
+        types: [python]
+        files: ^wear-uwb-probe/scripts/
