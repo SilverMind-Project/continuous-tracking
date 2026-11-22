@@ -8,7 +8,7 @@ from typing import Literal
 
 from fastapi import FastAPI, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from rf_ingress.domain import ensure_utc
 from rf_ingress.pipeline import RfIngressRuntime
@@ -50,6 +50,8 @@ class HealthOut(BaseModel):
     site_config: SiteConfigHealthOut
     publisher: PublisherHealthOut
     node_last_seen_age_s: dict[str, float]
+    tag_last_seen_age_s: dict[str, float] = Field(default_factory=dict)
+    tag_battery_fraction: dict[str, float] = Field(default_factory=dict)
 
 
 def create_health_app(
@@ -103,6 +105,8 @@ def create_health_app(
             ),
             publisher=PublisherHealthOut(healthy=snap.publisher_healthy),
             node_last_seen_age_s=snap.node_last_seen_age_s,
+            tag_last_seen_age_s=snap.tag_last_seen_age_s,
+            tag_battery_fraction=snap.tag_battery_fraction,
         )
 
     @app.get("/metrics")

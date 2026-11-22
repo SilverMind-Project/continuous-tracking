@@ -39,4 +39,25 @@ clock:
 
 # Adapters are configured explicitly per deployment. Keep empty by default so a
 # deployment never emits simulated fixes into a live household without opt-in.
+#
+# Example BLE room-receiver adapter (uncomment once receivers and the local
+# Mosquitto broker are configured in the environment):
+#
+# adapters:
+#   - id: ble-home
+#     kind: ble_scanner_mqtt
+#     payload_profile: espresense_node_v1
+#     broker_url: "${MQTT_URL}"
+#     username: "${MQTT_USERNAME}"
+#     password: "${MQTT_PASSWORD}"
+#     topic: "espresense/devices/+/+"
+#     epoch_window_s: 1.0
+#     max_range_m: 12.0
+#     sigma_floor_m: 1.0
+#     sigma_range_factor: 0.5
+#     motion_rssi_std_db: 3.0
+#     beacon_models:
+#       default:
+#         rssi_at_1m_dbm: -59
+#     nodes: {}            # per-node path_loss_exponent from bench calibration; default 2.5
 adapters: []

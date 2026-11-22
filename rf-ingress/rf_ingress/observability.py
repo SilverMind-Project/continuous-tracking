@@ -34,6 +34,7 @@ class DropReason(StrEnum):
     MALFORMED_INPUT = "malformed_input"
     SITE_CONFIG_RELOADED = "site_config_reloaded"
     INVALID_CONTRACT = "invalid_contract"
+    RANGE_OUT_OF_BOUNDS = "range_out_of_bounds"
 
 
 REPORTS_TOTAL = Counter(

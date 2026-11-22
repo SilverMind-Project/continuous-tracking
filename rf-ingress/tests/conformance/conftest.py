@@ -22,11 +22,10 @@ from cts_contracts.wearables import (
     WearState,
 )
 
+from rf_ingress.adapters._mqtt_transport import InMemoryMqttMessageStream
 from rf_ingress.adapters.base import AdapterDeps, AnyAdapter
-from rf_ingress.adapters.device_ranging_mqtt import (
-    DeviceRangingMqttAdapter,
-    InMemoryMqttMessageStream,
-)
+from rf_ingress.adapters.ble_scanner_mqtt import BleScannerMqttAdapter
+from rf_ingress.adapters.device_ranging_mqtt import DeviceRangingMqttAdapter
 from rf_ingress.adapters.simulator import (
     SimulatorAdapter,
     build_site_config_from_scenario,
@@ -308,6 +307,105 @@ def _build_device_ranging_mqtt_case() -> AdapterConformanceContext:
     )
 
 
+def _build_ble_scanner_mqtt_case() -> AdapterConformanceContext:
+    t0 = datetime(2026, 11, 21, 12, 0, 0, tzinfo=UTC)
+    hw_key = "iBeacon:e2c56db5-dffb-48d2-b060-d0f5a71096e0-1-42"
+    snap = SiteConfigSnapshot(
+        floor_plan_id="household:1",
+        nodes=(
+            RfNodeGeometry(
+                anchor_id="living-room",
+                x_m=0.0,
+                y_m=0.0,
+                z_m=1.2,
+                adapter_id="ble-home",
+                node_role=RfNodeRole.RECEIVER,
+                technology=RangingTechnology.BLE_RSSI,
+                room_id="1",
+            ),
+            RfNodeGeometry(
+                anchor_id="kitchen",
+                x_m=5.0,
+                y_m=0.0,
+                z_m=1.2,
+                adapter_id="ble-home",
+                node_role=RfNodeRole.RECEIVER,
+                technology=RangingTechnology.BLE_RSSI,
+                room_id="2",
+            ),
+            RfNodeGeometry(
+                anchor_id="hallway",
+                x_m=2.5,
+                y_m=4.5,
+                z_m=1.2,
+                adapter_id="ble-home",
+                node_role=RfNodeRole.RECEIVER,
+                technology=RangingTechnology.BLE_RSSI,
+                room_id="3",
+            ),
+        ),
+        devices=(
+            SiteDevice(
+                tag_id="senior-band-1",
+                adapter_id="ble-home",
+                hardware_key=hw_key,
+                device_kind=DeviceKind.BLE_BEACON,
+                is_active=True,
+            ),
+        ),
+        bindings=(
+            SiteBinding(
+                tag_id="senior-band-1",
+                member_id="resident-1",
+                valid_from=t0 - timedelta(hours=1),
+                valid_to=None,
+            ),
+        ),
+        version="conf:ble:v1",
+    )
+    provider = InMemorySiteConfigProvider(snap)
+
+    def _msg(device_id: str, node_id: str, rssi: float, offset_s: float) -> tuple[str, bytes]:
+        payload = json.dumps(
+            {
+                "id": device_id,
+                "rssi": rssi,
+                "distance": 2.0,
+                "measured_at": (t0 + timedelta(seconds=offset_s)).isoformat(),
+                "battery": 88.0,
+            }
+        ).encode("utf-8")
+        return (f"espresense/devices/{device_id}/{node_id}", payload)
+
+    stream = InMemoryMqttMessageStream(
+        [
+            _msg(hw_key, "living-room", -64.0, 0.1),
+            _msg(hw_key, "kitchen", -70.0, 0.2),
+            _msg(hw_key, "hallway", -72.0, 0.3),
+            ("espresense/devices/bad/living-room", b"{not valid json"),
+            (
+                "espresense/devices/bad/living-room",
+                json.dumps({"id": hw_key, "rssi": -65, "unknown_v9_field": 1}).encode("utf-8"),
+            ),
+            _msg("iBeacon:stranger-0000-0-0", "living-room", -61.0, 0.4),
+            _msg(hw_key, "living-room", -65.0, 1.2),
+            _msg(hw_key, "kitchen", -69.0, 1.3),
+        ]
+    )
+    adapter = BleScannerMqttAdapter(
+        adapter_id="ble-home",
+        deps=AdapterDeps(site_config=provider, clock=lambda: t0),
+        stream=stream,
+    )
+    return AdapterConformanceContext(
+        adapter=adapter,
+        site_config=provider,
+        expected_registered_tags=frozenset({"senior-band-1"}),
+        expected_unregistered_tags=frozenset({"iBeacon:stranger-0000-0-0"}),
+        expects_malformed_drop=True,
+    )
+
+
 CONFORMANCE_CASES: tuple[AdapterConformanceCase, ...] = (
     AdapterConformanceCase(name="simulator-range", build=_build_simulator_range_case),
     AdapterConformanceCase(
@@ -321,6 +419,10 @@ CONFORMANCE_CASES: tuple[AdapterConformanceCase, ...] = (
     AdapterConformanceCase(
         name="device-ranging-mqtt-v1",
         build=_build_device_ranging_mqtt_case,
+    ),
+    AdapterConformanceCase(
+        name="ble-scanner-mqtt-v1",
+        build=_build_ble_scanner_mqtt_case,
     ),
 )
 

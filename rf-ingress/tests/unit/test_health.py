@@ -54,6 +54,8 @@ async def test_health_and_metrics_endpoints() -> None:
     assert body["adapters"][0]["adapter_id"] == "sim-1"
     assert body["adapters"][0]["connected"] is True
     assert "uwb-lr-nw" in body["node_last_seen_age_s"]
+    assert "tag-resident-uwb" in body["tag_last_seen_age_s"]
+    assert isinstance(body["tag_battery_fraction"], dict)
 
     metrics_resp = client.get("/metrics")
     assert metrics_resp.status_code == 200

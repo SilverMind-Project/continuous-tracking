@@ -199,6 +199,37 @@ services:
       retries: 5
 
   # -----------------------------------------------------------------------
+  # Eclipse Mosquitto MQTT Broker (LAN-only RF receiver and wearable bus)
+  # Opt-in via `--profile wearables` alongside rf-ingress. Persistence is
+  # disabled so raw radio telemetry is never written to broker disk.
+  # -----------------------------------------------------------------------
+  mqtt:
+    profiles: ["wearables"]
+    env_file:
+      - .env
+    image: eclipse-mosquitto:2
+    container_name: cts-mqtt
+    networks:
+      - nanai
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - '[ -n "$MQTT_USERNAME" ] && [ -n "$MQTT_PASSWORD" ] || { echo "MQTT_USERNAME and MQTT_PASSWORD must be set" >&2; exit 1; }; rm -f /tmp/mosquitto.passwd && mosquitto_passwd -b -c /tmp/mosquitto.passwd "$MQTT_USERNAME" "$MQTT_PASSWORD" && chown mosquitto:mosquitto /tmp/mosquitto.passwd && chmod 0600 /tmp/mosquitto.passwd && exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf'
+    volumes:
+      - ./mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "1883:1883"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 1883"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------------------------
   # RF Ingress (Python — hardware-neutral wearable localization ingress)
   # Opt-in via `--profile wearables` so default camera-only deployments
   # never start an RF adapter unintentionally.
@@ -217,10 +248,15 @@ services:
       REDIS_URL: redis://redis:6379/0
       CC_API_URL: http://cc-backend:8000
       CC_INGRESS_API_KEY: ${CC_INGRESS_API_KEY:?err}
+      MQTT_URL: mqtt://mqtt:1883
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
     ports:
       - "8095:8095"
     depends_on:
       redis:
+        condition: service_healthy
+      mqtt:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8095/health"]

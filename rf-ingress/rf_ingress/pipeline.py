@@ -82,6 +82,8 @@ class RuntimeHealthSnapshot:
     binding_count: int
     publisher_healthy: bool
     node_last_seen_age_s: dict[str, float]
+    tag_last_seen_age_s: dict[str, float]
+    tag_battery_fraction: dict[str, float]
 
 
 class RfIngressRuntime:
@@ -123,6 +125,8 @@ class RfIngressRuntime:
         self._tasks: list[asyncio.Task[None]] = []
         self._stop_event: asyncio.Event = asyncio.Event()
         self._node_last_seen_at: dict[str, datetime] = {}
+        self._tag_last_seen_at: dict[str, datetime] = {}
+        self._tag_battery_fraction: dict[str, float] = {}
         self._position_seq_by_key: dict[tuple[str, str], int] = {}
         self._room_seq_by_key: dict[tuple[str, str], int] = {}
         self._last_applied_version: str = ""
@@ -189,6 +193,10 @@ class RfIngressRuntime:
         is_registered = (
             snapshot is not None and snapshot.device_by_tag_id(measurement.tag_id) is not None
         )
+        if is_registered:
+            self._tag_last_seen_at[measurement.tag_id] = arrival_utc
+            if measurement.battery_fraction is not None:
+                self._tag_battery_fraction[measurement.tag_id] = measurement.battery_fraction
 
         # Measure adapter skew against sent_at for batched traffic or measured_at otherwise.
         device_clock_sample = (
@@ -293,6 +301,10 @@ class RfIngressRuntime:
         is_registered = (
             snapshot is not None and snapshot.device_by_tag_id(report.tag_id) is not None
         )
+        if is_registered:
+            self._tag_last_seen_at[report.tag_id] = arrival_utc
+            if report.battery_fraction is not None:
+                self._tag_battery_fraction[report.tag_id] = report.battery_fraction
 
         device_clock_sample = report.sent_at if report.sent_at is not None else report.measured_at
         self._skew_estimator.observe(
@@ -372,6 +384,10 @@ class RfIngressRuntime:
         is_registered = (
             snapshot is not None and snapshot.device_by_tag_id(report.tag_id) is not None
         )
+        if is_registered:
+            self._tag_last_seen_at[report.tag_id] = arrival_utc
+            if report.battery_fraction is not None:
+                self._tag_battery_fraction[report.tag_id] = report.battery_fraction
 
         device_clock_sample = report.sent_at if report.sent_at is not None else report.measured_at
         self._skew_estimator.observe(
@@ -569,6 +585,11 @@ class RfIngressRuntime:
             anchor_id: max(0.0, (now - ensure_utc(ts)).total_seconds())
             for anchor_id, ts in sorted(self._node_last_seen_at.items())
         }
+        tag_ages = {
+            tag_id: max(0.0, (now - ensure_utc(ts)).total_seconds())
+            for tag_id, ts in sorted(self._tag_last_seen_at.items())
+        }
+        tag_batteries = dict(sorted(self._tag_battery_fraction.items()))
         return RuntimeHealthSnapshot(
             adapters=tuple(adapter.health() for adapter in self._adapters),
             site_config_loaded=snapshot is not None,
@@ -580,4 +601,6 @@ class RfIngressRuntime:
             binding_count=len(snapshot.bindings) if snapshot is not None else 0,
             publisher_healthy=self._publisher.is_healthy(),
             node_last_seen_age_s=node_ages,
+            tag_last_seen_age_s=tag_ages,
+            tag_battery_fraction=tag_batteries,
         )
