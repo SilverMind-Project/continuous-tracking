@@ -20,6 +20,7 @@ class ReportKind(StrEnum):
     RANGE = "range"
     POSITION = "position"
     ROOM = "room"
+    POSITION_TRACK = "position_track"
 
 
 class DropReason(StrEnum):
@@ -39,6 +40,20 @@ class DropReason(StrEnum):
     PUBLISH_FAILED = "publish_failed"
 
 
+class PositionTrackDropReason(StrEnum):
+    """Closed drop-reason label for ``rf_ingress_position_tracks_dropped_total``."""
+
+    NO_SITE_CONFIG = "no_site_config"
+    UNREGISTERED_SENSOR = "unregistered_sensor"
+    TOPIC_SENSOR_MISMATCH = "topic_sensor_mismatch"
+    MISSING_SENSOR_YAW = "missing_sensor_yaw"
+    FLOOR_PLAN_MISMATCH = "floor_plan_mismatch"
+    INVALID_COVARIANCE = "invalid_covariance"
+    MALFORMED_INPUT = "malformed_input"
+    INVALID_CONTRACT = "invalid_contract"
+    PUBLISH_FAILED = "publish_failed"
+
+
 REPORTS_TOTAL = Counter(
     "rf_ingress_reports_total",
     "Total internal RF reports received from adapters",
@@ -54,6 +69,18 @@ FIXES_PUBLISHED_TOTAL = Counter(
 FIXES_DROPPED_TOTAL = Counter(
     "rf_ingress_fixes_dropped_total",
     "Total candidate fixes or reports dropped before publishing",
+    labelnames=("reason",),
+)
+
+POSITION_TRACKS_PUBLISHED_TOTAL = Counter(
+    "rf_ingress_position_tracks_published_total",
+    "Total AnonymousPositionTrack messages published to position.tracks",
+    labelnames=("adapter_id",),
+)
+
+POSITION_TRACKS_DROPPED_TOTAL = Counter(
+    "rf_ingress_position_tracks_dropped_total",
+    "Total anonymous position tracks dropped before publishing",
     labelnames=("reason",),
 )
 

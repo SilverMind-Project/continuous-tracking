@@ -5,15 +5,107 @@ from __future__ import annotations
 import time as _time
 from typing import cast
 
+from cts_contracts import source_id_for_sensor
 from structlog import get_logger
 
+from app.domain import FloorPoint, IdentityDecision, WorldFrameSnapshot
 from app.pipeline.frame_context import FrameContext
-from app.pipeline.stages._room_maps import camera_room_name
+from app.pipeline.stages._room_maps import camera_room_name, room_polygon_snapshot
 from app.pipeline.stages.base import FrameStage
 from app.pipeline.types import LiveConfigHolder
-from app.transport.redis_streams import RedisStreamsTransport
+from app.transport.redis_streams import PositionOnlyDetection, RedisStreamsTransport
 
 logger = get_logger(__name__)
+
+
+def _build_identity_payload(
+    frame_snapshots: list[WorldFrameSnapshot],
+    frame_ph_ids: set[str],
+    outcome_decisions: list[IdentityDecision] | None,
+) -> tuple[
+    dict[str, tuple[str, float]],
+    dict[str, tuple[float, float, bool]],
+    list[dict[str, object]],
+]:
+    """Assemble (identities, evidence_by_ph, identity_snapshots) for one publish event."""
+    identities: dict[str, tuple[str, float]] = {}
+    evidence_by_ph: dict[str, tuple[float, float, bool]] = {}
+
+    for snap in frame_snapshots:
+        if snap.identity_id and snap.identity_id != "UNKNOWN":
+            identities[snap.ph_id] = (snap.identity_id, snap.identity_confidence)
+            evidence_by_ph[snap.ph_id] = (
+                snap.identity_confidence,
+                0.0,
+                snap.direct_face_evidence,
+            )
+
+    if outcome_decisions:
+        for decision in outcome_decisions:
+            if decision.ph_id not in frame_ph_ids:
+                continue
+            top_id, top_prob = decision.posterior.top_identity()
+            if top_id == "UNKNOWN" or top_prob <= 0.0:
+                continue
+            top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
+            top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
+            ph_id = decision.ph_id
+            identities[ph_id] = (top_id, top_prob)
+            evidence_by_ph[ph_id] = (top_prob, top2_prob, False)
+
+    identity_snapshots: list[dict[str, object]] = []
+    seen_ph_ids: set[str] = set()
+    for snap in frame_snapshots:
+        seen_ph_ids.add(snap.ph_id)
+        identity_snapshots.append(
+            {
+                "ph_id": snap.ph_id,
+                "identity_id": snap.identity_id or "",
+                "top_probability": snap.identity_confidence,
+                "second_probability": 0.0,
+                "posterior_entropy": snap.posterior_entropy,
+                "direct_face_evidence": snap.direct_face_evidence,
+                "mean_quality": snap.mean_quality,
+            }
+        )
+
+    if outcome_decisions:
+        for decision in outcome_decisions:
+            ph_id = decision.ph_id
+            if ph_id in seen_ph_ids or ph_id not in frame_ph_ids:
+                continue
+            _top_id, top_prob = decision.posterior.top_identity()
+            top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
+            top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
+            identity_snapshots.append(
+                {
+                    "ph_id": ph_id,
+                    "identity_id": decision.identity_id or "",
+                    "top_probability": top_prob,
+                    "second_probability": top2_prob,
+                    "posterior_entropy": decision.posterior.entropy(),
+                    "direct_face_evidence": (
+                        cast(float, decision.evidence.get("direct_face_confidence", 0.0)) > 0
+                        if decision.evidence
+                        else False
+                    ),
+                    "mean_quality": 0.0,
+                }
+            )
+
+    return identities, evidence_by_ph, identity_snapshots
+
+
+async def _resolve_device_free_room_name(
+    live_config: LiveConfigHolder,
+    source_id: str,
+) -> str:
+    site_cfg = live_config.wearable_site_config_map.get_sync()
+    _, room_names = await room_polygon_snapshot(live_config.room_polygon_map)
+    for sensor in site_cfg.position_sensors:
+        if source_id_for_sensor(sensor.sensor_id) == source_id and sensor.room_id:
+            return room_names.get(sensor.room_id, "")
+    return ""
 
 
 class PublishStage(FrameStage):
@@ -50,82 +142,20 @@ class PublishStage(FrameStage):
                 )
                 return
             self._last_publish_time[camera_id] = now
-        identities: dict[str, tuple[str, float]] = {}
-        evidence_by_ph: dict[str, tuple[float, float, bool]] = {}
         frame_snapshots = [
             snap for snap in ctx.world_snapshots if snap.camera_id == ctx.frame.camera_id
         ]
         frame_ph_ids = {snap.ph_id for snap in frame_snapshots} | {
             det.ph_id for det in ctx.domain_detections if det.ph_id
         }
-
-        # Primary source: WorldFrameSnapshots from this frame.
-        for snap in frame_snapshots:
-            if snap.identity_id and snap.identity_id != "UNKNOWN":
-                identities[snap.ph_id] = (snap.identity_id, snap.identity_confidence)
-                evidence_by_ph[snap.ph_id] = (
-                    snap.identity_confidence,
-                    0.0,
-                    snap.direct_face_evidence,
-                )
-
-        # Augment with outcome_decisions for the second-probability field.
-        if ctx.outcome_decisions:
-            for decision in ctx.outcome_decisions:
-                if decision.ph_id not in frame_ph_ids:
-                    continue
-                top_id, top_prob = decision.posterior.top_identity()
-                if top_id == "UNKNOWN" or top_prob <= 0.0:
-                    continue
-                top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
-                top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
-                ph_id = decision.ph_id
-                identities[ph_id] = (top_id, top_prob)
-                evidence_by_ph[ph_id] = (top_prob, top2_prob, False)
+        identities, evidence_by_ph, identity_snapshots = _build_identity_payload(
+            frame_snapshots,
+            frame_ph_ids,
+            ctx.outcome_decisions or None,
+        )
 
         ctx.identities = identities
         ctx.evidence_by_ph = evidence_by_ph
-
-        # Build identity_snapshots from WorldFrameSnapshots.
-        identity_snapshots: list[dict[str, object]] = []
-        seen_ph_ids: set[str] = set()
-        for snap in frame_snapshots:
-            seen_ph_ids.add(snap.ph_id)
-            id_snap: dict[str, object] = {
-                "ph_id": snap.ph_id,
-                "identity_id": snap.identity_id or "",
-                "top_probability": snap.identity_confidence,
-                "second_probability": 0.0,
-                "posterior_entropy": snap.posterior_entropy,
-                "direct_face_evidence": snap.direct_face_evidence,
-                "mean_quality": snap.mean_quality,
-            }
-            identity_snapshots.append(id_snap)
-
-        # Include outcome decisions for PHs not yet in snapshots.
-        if ctx.outcome_decisions:
-            for decision in ctx.outcome_decisions:
-                ph_id = decision.ph_id
-                if ph_id in seen_ph_ids or ph_id not in frame_ph_ids:
-                    continue
-                top_id, top_prob = decision.posterior.top_identity()
-                top_probs = sorted(decision.posterior.distribution.values(), reverse=True)
-                top2_prob = top_probs[1] if len(top_probs) > 1 else 0.0
-                identity_snapshots.append(
-                    {
-                        "ph_id": ph_id,
-                        "identity_id": decision.identity_id or "",
-                        "top_probability": top_prob,
-                        "second_probability": top2_prob,
-                        "posterior_entropy": decision.posterior.entropy(),
-                        "direct_face_evidence": (
-                            cast(float, decision.evidence.get("direct_face_confidence", 0.0)) > 0
-                            if decision.evidence
-                            else False
-                        ),
-                        "mean_quality": 0.0,
-                    }
-                )
 
         logger.info(
             "tracking_event_identity_payload",
@@ -167,4 +197,61 @@ class PublishStage(FrameStage):
             evidence_by_ph=evidence_by_ph or None,
             det_posture=cast("dict[str, str] | None", ctx.det_posture) if ctx.det_posture else None,
             identity_snapshots=identity_snapshots or None,
+        )
+
+
+class DeviceFreePublishStage(FrameStage):
+    """Publishes TrackingEvent messages for device-free position sensors."""
+
+    name = "device_free_publish"
+
+    def __init__(
+        self,
+        transport: RedisStreamsTransport,
+        live_config: LiveConfigHolder,
+    ) -> None:
+        self._transport = transport
+        self._live_config = live_config
+
+    async def run(self, ctx: FrameContext) -> None:
+        source_id = ctx.frame.camera_id
+        frame_snapshots = [snap for snap in ctx.world_snapshots if snap.camera_id == source_id]
+        if not frame_snapshots:
+            return
+        frame_ph_ids = {snap.ph_id for snap in frame_snapshots}
+        identities, evidence_by_ph, identity_snapshots = _build_identity_payload(
+            frame_snapshots,
+            frame_ph_ids,
+            ctx.outcome_decisions or None,
+        )
+        ctx.identities = identities
+        ctx.evidence_by_ph = evidence_by_ph
+
+        room_name = next((snap.room_name for snap in frame_snapshots if snap.room_name), "")
+        if not room_name:
+            room_name = await _resolve_device_free_room_name(self._live_config, source_id)
+
+        position_only_detections = [
+            PositionOnlyDetection(
+                detection_id=f"df:{snap.ph_id}:{ctx.frame.frame_index}",
+                confidence=1.0,
+                ph_id=snap.ph_id,
+                floor_point=FloorPoint(
+                    x_mm=round(snap.floor_x_m * 1000.0),
+                    y_mm=round(snap.floor_y_m * 1000.0),
+                    calibrated=True,
+                ),
+            )
+            for snap in frame_snapshots
+        ]
+
+        await self._transport.publish_event(
+            camera_id=source_id,
+            event_time=ctx.event_time,
+            frame_index=ctx.frame.frame_index,
+            room_name=room_name,
+            capture_time_unix_ns=ctx.frame.capture_time_unix_ns,
+            evidence_by_ph=evidence_by_ph or None,
+            identity_snapshots=identity_snapshots or None,
+            position_only_detections=position_only_detections,
         )

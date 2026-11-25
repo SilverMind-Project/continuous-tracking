@@ -107,12 +107,13 @@ Siblings: `../cognitive-companion/` (BFF, its own CLAUDE.md), `../triton-shared/
   person-identification-service `POST /api/v1/identify`; a `FaceDetection` field change lands in
   both repositories together.
 - **Configuration:** CC owns cameras, rooms, the floor plan, privacy zones, wearable devices,
-  bindings, and RF nodes; CTS reads them only through `app/services/cc_config_sync.py` (privacy
+  bindings, RF nodes, and position sensors; CTS reads them only through `app/services/cc_config_sync.py` (privacy
   zones arrive as each camera's `privacy_zones` in `GET /api/v1/cts/cameras` and are restored
-  before the pipeline starts; wearables arrive via `GET /api/v1/wearables/site-config`).
-- **Wearable streams:** `wearable.fixes` (`TagFix`, field `"fix"`, 72-hour `MINID` trim) and
-  `wearable.capabilities` (`AdapterCapability`, field `"capability"`) carry raw protobuf;
-  `position.tracks` (`AnonymousPositionTrack`) is reserved and unused.
+  before the pipeline starts; wearables and `position_sensors` arrive via `GET /api/v1/wearables/site-config`).
+- **Wearable and position-sensor streams:** `wearable.fixes` (`TagFix`, field `"fix"`, 72-hour `MINID` trim),
+  `wearable.capabilities` (`AdapterCapability`, field `"capability"`), and `position.tracks`
+  (`AnonymousPositionTrack`, field `"track"`, 1-hour `MINID` trim from `position_track_mqtt` or
+  `position_track_simulator` to `PositionTrackSubscriber`, gated by `position_sensor.mode`) carry raw protobuf.
 - **Household presence stream:** CC publishes `HouseholdPresence` (field `"presence"`, using shared
   `cts_contracts.household.PresenceStatus`) on `cc.household_presence`; CTS consumes it via
   `HouseholdPresenceSubscriber` for `ClosedWorldChannel` (fails closed when `roster_complete` is

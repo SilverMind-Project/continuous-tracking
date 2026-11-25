@@ -13,6 +13,8 @@ redis:
   fixes_stream: "wearable.fixes"
   capabilities_stream: "wearable.capabilities"
   retention_hours: 72.0
+  position_tracks_stream: "position.tracks"
+  position_tracks_retention_hours: 1.0
 
 site_config:
   cc_api_url: "${CC_API_URL}"
@@ -89,4 +91,14 @@ clock:
 #     max_range_m: 25.0
 #     calibrated_floor_plan_azimuth: false
 #     nodes: {}            # optional per-anchor sigma_m and range_bias_m overrides
+#
+# Example device-free mmWave radar / LiDAR anonymous position-track bridge:
+#
+#   - id: position-sensors-home
+#     kind: position_track_mqtt
+#     payload_profile: position_track_v1
+#     broker_url: "${MQTT_URL}"
+#     username: "${MQTT_USERNAME}"
+#     password: "${MQTT_PASSWORD}"
+#     topic: "sensors/position/+/tracks"
 adapters: []

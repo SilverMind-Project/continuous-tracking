@@ -15,6 +15,7 @@ from typing import Protocol, runtime_checkable
 
 from rf_ingress.domain import (
     AdapterCapabilityDescriptor,
+    AnonymousPositionTrackReport,
     PositionReport,
     RangeMeasurement,
     RoomReport,
@@ -74,4 +75,22 @@ class RoomAdapter(BaseAdapter, Protocol):
     def rooms(self) -> AsyncIterator[RoomReport]: ...
 
 
+@runtime_checkable
+class PositionTrackAdapter(Protocol):
+    """Input adapter emitting anonymous position tracks for ``position.tracks``.
+
+    Intentionally separate from wearable :class:`BaseAdapter` so anonymous sensors
+    never advertise wearable capabilities or produce ``TagFix`` messages.
+    """
+
+    adapter_id: str
+
+    def health(self) -> AdapterHealth: ...
+
+    async def close(self) -> None: ...
+
+    def position_tracks(self) -> AsyncIterator[AnonymousPositionTrackReport]: ...
+
+
 AnyAdapter = RangeAdapter | PositionAdapter | RoomAdapter
+ConfiguredAdapter = AnyAdapter | PositionTrackAdapter

@@ -128,6 +128,12 @@ Face scores have four names, and each name means one thing:
   without bypassing incumbents, never grants authority, and forces `Unknown` (`wearable_face`)
   when a qualifying calibrated direct-face anchor disagrees. Read `reference/wearable-evidence.md`
   before changing wearable association, attestation, or channel weighting.
+- Device-free anonymous position sensors (`AnonymousPositionTrack` on `position.tracks`,
+  `position_sensor.mode`: `off`, `shadow`, `enabled`) carry coordinates only, never identity or
+  visual crops, and never grant authority. In `WorldTracker._resolve_identities`, PHs with no
+  visual history (`has_visual_history(ph) == False`, only `sensor:` sources in `active_cameras`) are
+  omitted from `ph_qualities` so the crop-quality gate (`min_quality_to_commit`) never blocks a
+  wearable-driven commit on a radar/LiDAR-born track in a camera-free room.
 - An attested wearable association is a sensor-attested label: it may seed body-gallery rows by
   grade (trajectory `auto_verified` at 1.25 trust, room `pending_review`), offer face exemplars to
   person-id's operator-gated queue, backfill NULL history (trajectory only, flag off), and serve

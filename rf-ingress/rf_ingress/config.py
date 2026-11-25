@@ -68,6 +68,8 @@ class RedisSettings(BaseModel):
     fixes_stream: str = Field(default="wearable.fixes", min_length=1)
     capabilities_stream: str = Field(default="wearable.capabilities", min_length=1)
     retention_hours: float = Field(default=72.0, gt=0.0, le=72.0)
+    position_tracks_stream: str = Field(default="position.tracks", min_length=1)
+    position_tracks_retention_hours: float = Field(default=1.0, gt=0.0, le=72.0)
 
 
 class SiteConfigSettings(BaseModel):

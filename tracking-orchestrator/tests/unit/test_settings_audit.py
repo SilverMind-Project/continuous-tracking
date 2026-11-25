@@ -19,6 +19,7 @@ from app.main import (
     _build_gallery_retention_config,
     _build_height_estimation_config,
     _build_height_learner_config,
+    _build_position_sensor_config,
     _build_resolver_config,
     _build_sampler_config,
     _build_signal_config,
@@ -34,6 +35,7 @@ from app.tracking.identity.candidate_eligibility import CandidatePolicy
 from app.tracking.identity.face_template_buffer import FaceTemplatePolicy
 from app.tracking.identity_resolver import ResolverConfig
 from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.position_sensor_config import PositionSensorConfig
 from app.trajectory.appearance_profile import AppearanceSettings
 from app.trajectory.dementia_signals import SignalConfig
 
@@ -163,6 +165,8 @@ def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     assert world_tracker.zupt_consecutive_frames == 5
     assert world_tracker.zupt_velocity_sigma_m_s == pytest.approx(0.05)
     assert world_tracker.primary_switch_frames == 5
+    assert world_tracker.dedup_device_free_chi2 == pytest.approx(9.21)
+    assert PositionSensorConfig().mode == "off"
 
     appearance = _build_appearance_settings(settings)
     hyg = data["hygiene"]["same_clothes"]
@@ -211,6 +215,7 @@ def test_no_dead_settings() -> None:
         "face_id": _build_face_id_config,
         "face_templates": _build_face_template_policy,
         "reid_candidates": _build_candidate_policy,
+        "position_sensor": _build_position_sensor_config,
     }
     for section, builder in builder_by_section.items():
         source = inspect.getsource(builder)
@@ -232,6 +237,7 @@ def test_no_dead_settings() -> None:
         GalleryRetentionConfig: _build_gallery_retention_config,
         HeightEstimationConfig: _build_height_estimation_config,
         HeightProfileLearnerConfig: _build_height_learner_config,
+        PositionSensorConfig: _build_position_sensor_config,
     }
     externally_supplied = {
         (FaceIdConfig, "camera_configs"),

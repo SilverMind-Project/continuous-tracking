@@ -23,6 +23,7 @@ redis:
   presence_stream: tracking.presence
   dwell_stream: tracking.dwell
   wearable_fixes_stream: wearable.fixes
+  position_tracks_stream: position.tracks
   wearable_capabilities_stream: wearable.capabilities
   household_presence_stream: cc.household_presence
   batch_max_wait_ms: 100
@@ -700,6 +701,10 @@ world_tracker:
   # two cameras in the same batch, still capped at dedup_max_distance_ceiling_m.
   # 0.0 disables the skew term; set to ~1.4 m/s to cover normal walking speed.
   dedup_time_skew_speed_m_s: 0.0
+  # 2-DoF chi-square gate (99%) for merging two position sensors' tracks of one person
+  # (radar plus LiDAR over one room): Mahalanobis on the sum of their total covariances.
+  # A position-sensor track never merges with a camera observation.
+  dedup_device_free_chi2: 9.21
   # ---- PH revival ----
   # Reuse recently closed PHs across brief occlusions within revive_max_age_s.
   enable_ph_revival: true
@@ -955,6 +960,25 @@ wearable:
     # Fused fixes keep a camera-occluded, trajectory-attested PH open for at most this long
     # after its last camera observation (seconds). 0 disables the bridge.
     coasting_bridge_max_s: 10.0
+
+# Device-free anonymous position sensors (mmWave radar, room LiDAR) on position.tracks.
+# Sensors are registered in Cognitive Companion and arrive with the wearables site-config;
+# a track from an unregistered or inactive sensor is dropped. Tracks enter the world
+# tracker only in device-free rounds, which a timer drives so a camera-free bathroom is
+# tracked even when no camera sees motion. A position-sensor track spawns a PH only inside a
+# room polygon whose room has no camera; elsewhere it only updates existing PHs.
+position_sensor:
+  # "off": no subscriber, no rounds. "shadow": ingest and measure what a round would do,
+  # changing nothing. "enabled": device-free rounds update, spawn, and publish PHs.
+  mode: "off"
+  max_track_age_s: 5.0
+  buffer_max_age_s: 10.0
+  round_interval_s: 0.5
+  round_max_track_age_s: 1.5
+  # Radar ghost suppression: a track joins rounds only after it has existed this long.
+  min_track_age_s: 1.0
+  track_gap_s: 2.0
+  max_tracks: 64
 
 # Closed-world prior shaping (who is home, spatially verified joint elimination, guest slot).
 # Shapes Bayesian priors only; never commits an identity on its own or refreshes the evidence clock.

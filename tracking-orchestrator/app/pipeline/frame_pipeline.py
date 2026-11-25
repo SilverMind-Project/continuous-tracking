@@ -16,8 +16,9 @@ import time
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from cts_contracts import is_device_free_source, source_id_for_sensor
 from structlog import get_logger
 
 from app.calibration.state import calibration_state
@@ -30,12 +31,14 @@ from app.domain import (
     HouseholdPresenceSource,
     Identity,
     OverlapGroup,
+    PositionTrackSource,
     WearableFixSource,
 )
 from app.inference.detector import PersonDetector
 from app.inference.face_id_client import FaceIdentificationClient
 from app.inference.pose import PoseEstimator
 from app.observability import metrics as _metrics
+from app.observability.metrics import DeviceFreeRoundOutcome
 from app.pipeline.batcher import FrameBatcher
 from app.pipeline.crops import FaceCropPadding
 from app.pipeline.face_attribution import HeadRegionPolicy
@@ -47,6 +50,7 @@ from app.pipeline.stages import (
     ClosePHStage,
     DetectionBackfillStage,
     DetectStage,
+    DeviceFreePublishStage,
     FaceIdentityStage,
     FallDetectionConfig,
     FallDetectionStage,
@@ -71,7 +75,11 @@ from app.pipeline.stages import (
     WorldTrackingStage,
     timed_phase,
 )
-from app.pipeline.stages._room_maps import camera_room_name
+from app.pipeline.stages._room_maps import (
+    all_camera_room_ids,
+    camera_room_name,
+    room_polygon_snapshot,
+)
 from app.pipeline.types import (
     FaceIdCameraConfig,
     FrameImageFetcher,
@@ -155,6 +163,11 @@ from app.tracking.identity.household_classifier import (
 from app.tracking.identity_resolver import IdentityResolver, ResolverConfig
 from app.tracking.spatial_projection import SpatialProjectionService
 from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.device_free import (
+    anonymous_track_to_world_observation,
+    evaluate_device_free_shadow,
+)
+from app.tracking.world.position_sensor_config import PositionSensorConfig
 from app.tracking.world.tracker import WorldTracker
 from app.tracking.world.wearable_config import WearableConfig
 from app.trajectory.appearance_profile import AppearanceEvaluator, AppearanceSettings
@@ -274,6 +287,7 @@ class PipelineDependencies:
     appearance_sample_repo: AppearanceSampleRepository | None = None
     household_classifier_evaluator: HouseholdClassifierEvaluator | None = None
     appearance_feature_extractor: AppearanceFeatureExtractor | None = None
+    position_track_source: PositionTrackSource | None = None
 
 
 # NOTE: Every field in PipelineConfig has a default value. These defaults are
@@ -297,6 +311,7 @@ class PipelineConfig:
     # --- Tracking ---
     world_tracker: WorldTrackerConfig = field(default_factory=WorldTrackerConfig)
     wearable: WearableConfig = field(default_factory=WearableConfig)
+    position_sensor: PositionSensorConfig = field(default_factory=PositionSensorConfig)
     closed_world: ClosedWorldConfig = field(default_factory=ClosedWorldConfig)
     household_classifier: HouseholdClassifierConfig = field(
         default_factory=HouseholdClassifierConfig
@@ -400,6 +415,11 @@ class FrameProcessingPipeline:
         self._frame_tasks: set[asyncio.Task[None]] = set()
         self._frame_semaphore: asyncio.Semaphore | None = None
         self._camera_locks: dict[str, asyncio.Lock] = {}
+        self._world_round_lock = asyncio.Lock()
+        self._position_track_source: PositionTrackSource | None = None
+        self._device_free_frame_seq = 0
+        self._active_device_free_sources: set[str] = set()
+        self._shadow_evaluated_through: dict[tuple[str, str], datetime] = {}
         # Track previously active PH ids for ClosePHStage.
         self._prev_active_ph_ids: set[str] = set()
         # Dementia signal worker
@@ -443,9 +463,14 @@ class FrameProcessingPipeline:
         self._face_stats_repo: FaceObservationStatsRepository | None = None
         self._appearance_evaluator: AppearanceEvaluator | None = None
         self._stage_runner: StageRunner | None = None
+        self._io_runner: StageRunner | None = None
         self._post_detect_runner: StageRunner | None = None
         self._pre_world_runner: StageRunner | None = None
         self._post_world_runner: StageRunner | None = None
+        self._device_free_post_world_runner: StageRunner | None = None
+        self._device_free_per_sensor_runner: StageRunner | None = None
+        self._default_stage_runner: StageRunner | None = None
+        self._default_post_detect_runner: StageRunner | None = None
         self._world_tracking_stage: WorldTrackingStage | None = None
         self._fetch_stage: FetchStage | None = None
         self._detect_stage: DetectStage | None = None
@@ -485,6 +510,9 @@ class FrameProcessingPipeline:
         self._gallery_cache = GalleryCache(gallery)
         self._settings_repo = deps.settings_repo or InMemorySettingsRepository()
         self._seen_cameras = set()
+        self._position_track_source = deps.position_track_source
+        self._active_device_free_sources = set()
+        self._shadow_evaluated_through = {}
 
         # Detector
         self._detector = deps.detector
@@ -866,42 +894,46 @@ class FrameProcessingPipeline:
             )
             appearance_sample_stage = AppearanceSampleRecorderStage(recorder)
 
+        close_ph_stage = ClosePHStage(
+            trajectory_writer=self._trajectory_writer,
+            motion_energy_tracker=self._motion_energy_tracker,
+            posture_tracker=self._posture_tracker,
+            prev_active_ph_ids=self._prev_active_ph_ids,
+            fall_detection_stage=self._fall_detection_stage,
+            gait_segmenter=self._gait_segmenter,
+            gait_bout_repo=self._gait_bout_repo,
+        )
+        trajectory_stage = TrajectoryStage(
+            trajectory_writer=self._trajectory_writer,
+            floor_projector=self._floor_projector,
+            motion_energy_tracker=self._motion_energy_tracker,
+            posture_tracker=self._posture_tracker,
+            gait_segmenter=self._gait_segmenter,
+            gait_bout_repo=self._gait_bout_repo,
+        )
+        revisions_stage = RevisionsStage(
+            revision_publisher=self._revision_publisher,
+            identity_rewriter=self._identity_rewriter,
+            bbox_repo=self._bbox_repo,
+            identity_rewrite_on_face_commit=self._config.identity_rewrite_on_face_commit,
+            backfill_service=self._backfill_service,
+        )
+
         post_world_stages = [
             DetectionBackfillStage(),
-            ClosePHStage(
-                trajectory_writer=self._trajectory_writer,
-                motion_energy_tracker=self._motion_energy_tracker,
-                posture_tracker=self._posture_tracker,
-                prev_active_ph_ids=self._prev_active_ph_ids,
-                fall_detection_stage=self._fall_detection_stage,
-                gait_segmenter=self._gait_segmenter,
-                gait_bout_repo=self._gait_bout_repo,
-            ),
+            close_ph_stage,
             PostureStage(
                 live_config=self._live_config,
                 posture_strategy=self._posture_strategy,
             ),
             *([self._fall_detection_stage] if self._fall_detection_stage is not None else []),
-            TrajectoryStage(
-                trajectory_writer=self._trajectory_writer,
-                floor_projector=self._floor_projector,
-                motion_energy_tracker=self._motion_energy_tracker,
-                posture_tracker=self._posture_tracker,
-                gait_segmenter=self._gait_segmenter,
-                gait_bout_repo=self._gait_bout_repo,
-            ),
+            trajectory_stage,
             KeyframeStage(
                 keyframe_sampler=self._keyframe_sampler,
                 scene_publisher=self._scene_publisher,
                 min_keyframe_detection_confidence=self._config.min_keyframe_detection_confidence,
             ),
-            RevisionsStage(
-                revision_publisher=self._revision_publisher,
-                identity_rewriter=self._identity_rewriter,
-                bbox_repo=self._bbox_repo,
-                identity_rewrite_on_face_commit=self._config.identity_rewrite_on_face_commit,
-                backfill_service=self._backfill_service,
-            ),
+            revisions_stage,
             TrailsStage(
                 trail_by_tracklet=self._trail_by_ph,
                 trail_maxlen=self._TRAIL_MAXLEN,
@@ -935,17 +967,44 @@ class FrameProcessingPipeline:
             ),
         ]
 
+        device_free_publish_stage = DeviceFreePublishStage(
+            transport=self._transport,
+            live_config=self._live_config,
+        )
+        device_free_post_world_stages = [
+            close_ph_stage,
+            trajectory_stage,
+            revisions_stage,
+            *(
+                [self._provenance_persist_stage]
+                if self._provenance_persist_stage is not None
+                else []
+            ),
+            *([wearable_persist_stage] if wearable_persist_stage is not None else []),
+            *([image_only_stage] if image_only_stage is not None else []),
+            device_free_publish_stage,
+        ]
+        device_free_per_sensor_stages = [
+            trajectory_stage,
+            device_free_publish_stage,
+        ]
+
         stages = io_stages + pre_world_stages + [world_tracking_stage] + post_world_stages
 
         self._fetch_stage = fetch_stage
         self._detect_stage = detect_stage
         self._world_tracking_stage = world_tracking_stage
+        self._io_runner = StageRunner(io_stages)
         self._stage_runner = StageRunner(stages)
         self._post_detect_runner = StageRunner(
             [*pre_world_stages, world_tracking_stage, *post_world_stages]
         )
         self._pre_world_runner = StageRunner(pre_world_stages)
         self._post_world_runner = StageRunner(post_world_stages)
+        self._device_free_post_world_runner = StageRunner(device_free_post_world_stages)
+        self._device_free_per_sensor_runner = StageRunner(device_free_per_sensor_stages)
+        self._default_stage_runner = self._stage_runner
+        self._default_post_detect_runner = self._post_detect_runner
 
         logger.info(
             "Pipeline initialized",
@@ -979,6 +1038,8 @@ class FrameProcessingPipeline:
         ]
         if self._signal_worker is not None:
             self._tasks.append(asyncio.create_task(self._signal_loop()))
+        if self._config.position_sensor.mode != "off" and self._position_track_source is not None:
+            self._tasks.append(asyncio.create_task(self._device_free_round_loop()))
         self._frame_semaphore = asyncio.Semaphore(max(1, self._config.max_concurrent_frames))
         logger.info("Pipeline started")
 
@@ -1112,6 +1173,153 @@ class FrameProcessingPipeline:
                 logger.exception("Signal loop error, will retry on next cycle")
 
         logger.info("Signal loop stopped")
+
+    async def _device_free_round_loop(self) -> None:
+        """Periodic world-tracker rounds driven by device-free position sensors."""
+        interval_s = self._config.position_sensor.round_interval_s
+        logger.info(
+            "Device-free round loop started",
+            mode=self._config.position_sensor.mode,
+            interval_s=interval_s,
+        )
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=interval_s)
+                break
+            except TimeoutError:
+                pass
+            if self._stop_event.is_set():
+                break
+            try:
+                await self.run_device_free_round_once()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("Device-free round error, will retry on next cycle")
+        logger.info("Device-free round loop stopped")
+
+    async def run_device_free_round_once(self, *, now: datetime | None = None) -> int:
+        """Execute one device-free position-sensor round (or shadow evaluation).
+
+        Returns the number of position-sensor observations pulled in this tick.
+        """
+        cfg = self._config.position_sensor
+        if cfg.mode == "off" or self._position_track_source is None:
+            return 0
+        round_now = now or datetime.now(UTC)
+
+        if cfg.mode == "shadow":
+            peeked = self._position_track_source.peek_round_tracks(
+                now=round_now,
+                max_age_s=cfg.round_max_track_age_s,
+                min_track_age_s=cfg.min_track_age_s,
+            )
+            fresh = [
+                track
+                for track in peeked
+                if (
+                    track.track_key not in self._shadow_evaluated_through
+                    or track.measured_at > self._shadow_evaluated_through[track.track_key]
+                )
+            ]
+            if not fresh:
+                return 0
+            for track in fresh:
+                self._shadow_evaluated_through[track.track_key] = track.measured_at
+            cutoff = round_now - timedelta(seconds=cfg.buffer_max_age_s)
+            stale_keys = [k for k, ts in self._shadow_evaluated_through.items() if ts < cutoff]
+            for k in stale_keys:
+                del self._shadow_evaluated_through[k]
+
+            observations = [anonymous_track_to_world_observation(track) for track in fresh]
+            open_phs = self._world_tracker.last_open_phs if self._world_tracker is not None else []
+            room_ids_by_camera = await all_camera_room_ids(self._live_config.camera_room_map)
+            room_polygons, _ = await room_polygon_snapshot(self._live_config.room_polygon_map)
+            site_cfg = self._live_config.wearable_site_config_map.get_sync()
+            for sensor in site_cfg.position_sensors:
+                if sensor.room_id is not None:
+                    room_ids_by_camera[source_id_for_sensor(sensor.sensor_id)] = sensor.room_id
+            outcomes = evaluate_device_free_shadow(
+                observations,
+                open_phs,
+                now=round_now,
+                cfg=self._config.world_tracker,
+                room_polygons=room_polygons,
+                camera_room_ids=room_ids_by_camera,
+            )
+            for outcome in outcomes:
+                _metrics.metrics.cts_device_free_shadow_total.labels(outcome=outcome).inc()
+            return len(observations)
+
+        if self._world_tracking_stage is None or self._device_free_post_world_runner is None:
+            return 0
+
+        tracks = self._position_track_source.take_round_tracks(
+            now=round_now,
+            max_age_s=cfg.round_max_track_age_s,
+            min_track_age_s=cfg.min_track_age_s,
+        )
+        self._device_free_frame_seq += 1
+        seq = self._device_free_frame_seq
+        observations = [
+            anonymous_track_to_world_observation(track, frame_index=seq) for track in tracks
+        ]
+        source_ids = sorted(
+            {obs.camera_id for obs in observations} | self._active_device_free_sources
+        )
+        if not source_ids:
+            return 0
+
+        capture_ns = int(round_now.timestamp() * 1e9)
+        contexts = [
+            FrameContext(
+                frame=FrameReady(
+                    camera_id=src_id,
+                    frame_index=seq,
+                    minio_key="",
+                    capture_time_unix_ns=capture_ns,
+                ),
+                event_time=round_now,
+                capture_time=round_now,
+            )
+            for src_id in source_ids
+        ]
+
+        per_sensor_runner = (
+            self._device_free_per_sensor_runner or self._device_free_post_world_runner
+        )
+        try:
+            async with self._world_round_lock:
+                self._begin_tracker_round()
+                await self._world_tracking_stage.run_device_free_round(
+                    contexts, observations, now=round_now
+                )
+                await self._device_free_post_world_runner.run(contexts[0])
+                for ctx in contexts[1:]:
+                    await per_sensor_runner.run(ctx)
+        except Exception:
+            _metrics.metrics.cts_device_free_rounds_total.labels(
+                outcome=DeviceFreeRoundOutcome.FAILED
+            ).inc()
+            raise
+
+        active_ids = contexts[0].active_ph_ids
+        if not active_ids:
+            self._active_device_free_sources.clear()
+        else:
+            df_snap_sources = {
+                snap.camera_id
+                for snap in contexts[0].world_snapshots
+                if snap.ph_id in active_ids and is_device_free_source(snap.camera_id)
+            }
+            self._active_device_free_sources = df_snap_sources | {
+                obs.camera_id for obs in observations
+            }
+
+        _metrics.metrics.cts_device_free_rounds_total.labels(
+            outcome=DeviceFreeRoundOutcome.COMPLETED
+        ).inc()
+        return len(observations)
 
     async def _sample_stream_backlog_once(self) -> None:
         """Read pending and lag from Redis Streams and update Prometheus gauges."""
@@ -1316,24 +1524,25 @@ class FrameProcessingPipeline:
             if not ready_contexts:
                 continue
 
-            try:
-                with timed_phase(
-                    getattr(self._world_tracking_stage, "name", "world_tracking"), "batch"
-                ):
-                    await self._world_tracking_stage.run_many(ready_contexts)
-            except Exception:
-                logger.exception(
-                    "Cross-camera world tracking failed",
-                    count=len(ready_contexts),
-                )
-                for ctx in ready_contexts:
-                    await self._finish_frame(ctx.frame, failed_reason="processing_error")
-                continue
+            async with self._world_round_lock:
+                try:
+                    with timed_phase(
+                        getattr(self._world_tracking_stage, "name", "world_tracking"), "batch"
+                    ):
+                        await self._world_tracking_stage.run_many(ready_contexts)
+                except Exception:
+                    logger.exception(
+                        "Cross-camera world tracking failed",
+                        count=len(ready_contexts),
+                    )
+                    for ctx in ready_contexts:
+                        await self._finish_frame(ctx.frame, failed_reason="processing_error")
+                    continue
 
-            await asyncio.gather(
-                *(self._process_post_world_context(ctx) for ctx in ready_contexts),
-                return_exceptions=True,
-            )
+                await asyncio.gather(
+                    *(self._process_post_world_context(ctx) for ctx in ready_contexts),
+                    return_exceptions=True,
+                )
 
     async def _process_post_world_context(self, ctx: FrameContext) -> None:
         """Run camera-local stages after a shared world-tracking round."""
@@ -1366,7 +1575,21 @@ class FrameProcessingPipeline:
             start = time.monotonic()
             try:
                 await self._ensure_camera_row(ctx.frame.camera_id)
-                await self._post_detect_runner.run(ctx)
+                if (
+                    self._post_detect_runner is not self._default_post_detect_runner
+                    or self._pre_world_runner is None
+                    or self._world_tracking_stage is None
+                    or self._post_world_runner is None
+                ):
+                    async with self._world_round_lock:
+                        self._begin_tracker_round()
+                        await self._post_detect_runner.run(ctx)
+                else:
+                    await self._pre_world_runner.run(ctx)
+                    async with self._world_round_lock:
+                        self._begin_tracker_round()
+                        await self._world_tracking_stage.run(ctx)
+                        await self._post_world_runner.run(ctx)
                 await self._finish_frame(ctx.frame)
                 latency_us = int((time.monotonic() - start) * 1e6)
                 logger.debug(
@@ -1429,7 +1652,11 @@ class FrameProcessingPipeline:
         written by a future CC sync. The per-camera lock in ``_handle_frame``
         serialises this check, so ``_seen_cameras`` is race-free per camera.
         """
-        if camera_id in self._seen_cameras or self._settings_repo is None:
+        if (
+            is_device_free_source(camera_id)
+            or camera_id in self._seen_cameras
+            or self._settings_repo is None
+        ):
             return
         existing = await self._settings_repo.get_camera_config(camera_id)
         if existing is None:
@@ -1534,8 +1761,6 @@ class FrameProcessingPipeline:
 
     async def _process_frame(self, frame: FrameReady) -> None:
         """Process a single FrameReady through the full pipeline."""
-        self._begin_tracker_round()
-
         if self._is_stale(frame):
             return
         if self._detector is None:
@@ -1544,7 +1769,24 @@ class FrameProcessingPipeline:
 
         ctx = self._init_context(frame)
         assert self._stage_runner is not None
-        await self._stage_runner.run(ctx)
+        if (
+            self._stage_runner is not self._default_stage_runner
+            or self._io_runner is None
+            or self._pre_world_runner is None
+            or self._world_tracking_stage is None
+            or self._post_world_runner is None
+        ):
+            async with self._world_round_lock:
+                self._begin_tracker_round()
+                await self._stage_runner.run(ctx)
+            return
+
+        await self._io_runner.run(ctx)
+        await self._pre_world_runner.run(ctx)
+        async with self._world_round_lock:
+            self._begin_tracker_round()
+            await self._world_tracking_stage.run(ctx)
+            await self._post_world_runner.run(ctx)
 
     # ------------------------------------------------------------------
     # Per-frame helpers

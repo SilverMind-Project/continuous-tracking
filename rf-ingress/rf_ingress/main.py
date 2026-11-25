@@ -18,6 +18,7 @@ from rf_ingress.config import RfIngressSettings, load_settings
 from rf_ingress.health import create_health_app
 from rf_ingress.observability import configure_logging
 from rf_ingress.pipeline import RfIngressRuntime
+from rf_ingress.position_tracks import RedisPositionTrackPublisher
 from rf_ingress.publish import RedisTagFixPublisher
 from rf_ingress.site_config import HttpSiteConfigClient
 from rf_ingress.solver.multilateration import MultilaterationConfig
@@ -48,6 +49,12 @@ def build_runtime(
         capabilities_stream=settings.redis.capabilities_stream,
         retention_hours=settings.redis.retention_hours,
     )
+    position_track_publisher = RedisPositionTrackPublisher(
+        redis_client,
+        stream=settings.redis.position_tracks_stream,
+        retention_hours=settings.redis.position_tracks_retention_hours,
+        close_client=False,
+    )
     deps = AdapterDeps(site_config=site_config_client)
     adapters = adapter_registry.build_all(settings.adapters, deps)
 
@@ -64,6 +71,7 @@ def build_runtime(
         adapters=adapters,
         site_config=site_config_client,
         publisher=publisher,
+        position_track_publisher=position_track_publisher,
         solver_config=solver_cfg,
         epoch_window_s=settings.solver.epoch_window_s,
         epoch_flush_interval_s=settings.solver.epoch_flush_interval_s,

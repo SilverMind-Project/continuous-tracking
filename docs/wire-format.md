@@ -17,7 +17,11 @@ required.
 | `tracking.revisions` | `revision` | `continuoustracking.v1.IdentityRevision` | `tracking-orchestrator` | `cognitive-companion` (`IdentityRevisionSubscriber`) |
 | `tracking.signals` | `signal` | `continuoustracking.v1.DementiaSignal` | `tracking-orchestrator` | `cognitive-companion` (`SignalSubscriber`) |
 | `scene.samples` | `sample` | `continuoustracking.v1.SceneSample` | `tracking-orchestrator` | `cognitive-companion` (`SceneSampleSubscriber`) |
+| `wearable.fixes` | `fix` | `continuoustracking.v1.TagFix` | `rf-ingress` (72 h `MINID` trim) | `tracking-orchestrator` (`WearableFixSubscriber`) |
+| `wearable.capabilities` | `capability` | `continuoustracking.v1.AdapterCapability` | `rf-ingress` | `tracking-orchestrator` |
+| `position.tracks` | `track` | `continuoustracking.v1.AnonymousPositionTrack` | `rf-ingress` (1 h `MINID` trim) | `tracking-orchestrator` (`PositionTrackSubscriber`, gated by `position_sensor.mode`) |
 | `cc.identity_assertions` | `assertion` | `continuoustracking.v1.CCIdentityAssertion` | `cognitive-companion` (`CCIdentityAssertionPublisher`) | `tracking-orchestrator` (`CCIdentityAssertionSubscriber` -> `WorldTrackingStage`) |
+| `cc.household_presence` | `presence` | `continuoustracking.v1.HouseholdPresence` | `cognitive-companion` (`HouseholdPresencePublisher`) | `tracking-orchestrator` (`HouseholdPresenceSubscriber`) |
 | ~~`tracking.presence`~~ | `presence` | `continuoustracking.v1.PresenceEvent` | (retired in M37; `deprecated = true` in `tracking.proto`, no producer) | `cognitive-companion` (`PresenceEventSubscriber`, idle) |
 | ~~`tracking.dwell`~~ | `dwell` | `continuoustracking.v1.DwellEvent` | (retired in M37; `deprecated = true` in `tracking.proto`, no producer) | `cognitive-companion` (`DwellEventSubscriber`, idle) |
 | ~~`tracking.responses`~~ | `response` | `continuoustracking.v1.FrameResponse` | (retired 2026-06, TD-006; no producer) | `cognitive-companion` drain (idle) |

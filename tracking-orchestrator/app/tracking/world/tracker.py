@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
+from cts_contracts import is_device_free_source
 from structlog import get_logger
 
 if TYPE_CHECKING:
@@ -47,7 +48,7 @@ from app.domain import (
     tuple_to_cov2x2,
 )
 from app.observability import metrics as _metrics
-from app.observability.metrics import WearableSpatialFusionOutcome
+from app.observability.metrics import DeviceFreeObservationOutcome, WearableSpatialFusionOutcome
 from app.storage.base import (
     VOTING_STATES,
     CameraTopologyRepository,
@@ -63,6 +64,7 @@ from app.tracking.world.appearance_policy import AppearanceDecision, evaluate_ap
 from app.tracking.world.association import associate
 from app.tracking.world.config import WorldTrackerConfig
 from app.tracking.world.dedup import DedupMergeStats, _finalize_singleton, dedup_observations
+from app.tracking.world.device_free import camera_free_room_at, has_visual_history
 from app.tracking.world.helpers import (
     is_in_any_room_polygon,
     position_sigma_m,
@@ -72,6 +74,7 @@ from app.tracking.world.helpers import (
 )
 from app.tracking.world.kalman import (
     KalmanState,
+    apply_position_floor,
     initialize,
     isotropic_cov,
     mahalanobis2_position,
@@ -689,6 +692,12 @@ class WorldTracker:
                         observation_y_m=fy_src,
                         observation_cov_m2=src_r,
                     )
+                    if finalized_src.device_free:
+                        floor_m2 = (
+                            cfg.k_cal * max(finalized_src.floor_residual_m or 0.0, 0.0)
+                        ) ** 2
+                        if floor_m2 > 0.0:
+                            cur_state = apply_position_floor(pred_at_obs, cur_state, floor_m2)
                     if finalized_src.captured_at > cur_last_seen_at:
                         cur_last_seen_at = finalized_src.captured_at
                 new_state = cur_state
@@ -727,43 +736,53 @@ class WorldTracker:
                     observation_y_m=fy_obs,
                     observation_cov_m2=obs_r,
                 )
+                if obs.device_free:
+                    floor_m2 = (cfg.k_cal * max(obs.floor_residual_m or 0.0, 0.0)) ** 2
+                    if floor_m2 > 0.0:
+                        new_state = apply_position_floor(pred_at_obs, new_state, floor_m2)
                 if obs.captured_at > cur_last_seen_at:
                     cur_last_seen_at = obs.captured_at
-            # contamination guard: a geometrically valid match may still be
-            # an appearance outlier. When it is, the Kalman state and
-            # observation_count still advance (the person was there) but
-            # gallery_mean / view prototypes / mean_quality are left untouched,
-            # and the embedding is never labelled with the PH identity.
-            appearance_decision = evaluate_appearance_update(
-                embedding=obs.embedding,
-                orientation=obs.orientation,
-                orientation_confidence=obs.orientation_confidence,
-                quality=obs.quality,
-                existing_prototypes=ph.view_prototypes,
-                cfg=cfg,
-            )
-            if appearance_decision.accept:
-                new_gallery_mean = update_gallery_mean(
-                    ph.gallery_mean, obs.embedding, ph.observation_count
-                )
-                new_prototypes = update_view_prototypes(
-                    ph.view_prototypes,
-                    obs.orientation,
-                    obs.embedding,
-                    obs.orientation_confidence,
-                )
-                new_mean_quality = 0.1 * obs.quality + 0.9 * ph.mean_quality
-            else:
+            # contamination guard & appearance/height updates apply to visual observations only.
+            if obs.device_free:
                 new_gallery_mean = ph.gallery_mean
                 new_prototypes = ph.view_prototypes
                 new_mean_quality = ph.mean_quality
-                _record_appearance_rejection(m, ph.ph_id, obs, appearance_decision)
-            new_height, new_height_sigma, _height_accepted = update_ph_height_estimate(
-                ph.height_estimate_m,
-                ph.height_sigma_m,
-                obs.height_estimate_m,
-                obs.height_sigma_m,
-            )
+                new_height = ph.height_estimate_m
+                new_height_sigma = ph.height_sigma_m
+                m.cts_device_free_observations_total.labels(
+                    outcome=DeviceFreeObservationOutcome.UPDATED
+                ).inc()
+            else:
+                appearance_decision = evaluate_appearance_update(
+                    embedding=obs.embedding,
+                    orientation=obs.orientation,
+                    orientation_confidence=obs.orientation_confidence,
+                    quality=obs.quality,
+                    existing_prototypes=ph.view_prototypes,
+                    cfg=cfg,
+                )
+                if appearance_decision.accept:
+                    new_gallery_mean = update_gallery_mean(
+                        ph.gallery_mean, obs.embedding, ph.observation_count
+                    )
+                    new_prototypes = update_view_prototypes(
+                        ph.view_prototypes,
+                        obs.orientation,
+                        obs.embedding,
+                        obs.orientation_confidence,
+                    )
+                    new_mean_quality = 0.1 * obs.quality + 0.9 * ph.mean_quality
+                else:
+                    new_gallery_mean = ph.gallery_mean
+                    new_prototypes = ph.view_prototypes
+                    new_mean_quality = ph.mean_quality
+                    _record_appearance_rejection(m, ph.ph_id, obs, appearance_decision)
+                new_height, new_height_sigma, _height_accepted = update_ph_height_estimate(
+                    ph.height_estimate_m,
+                    ph.height_sigma_m,
+                    obs.height_estimate_m,
+                    obs.height_sigma_m,
+                )
             room_id, room_name = resolve_room(
                 obs.floor_point.x_mm / 1000.0,
                 obs.floor_point.y_mm / 1000.0,
@@ -777,7 +796,18 @@ class WorldTracker:
             cluster_cameras = frozenset(
                 obs_by_det_id[did].camera_id for did in src_ids if did in obs_by_det_id
             )
-            self._update_primary_camera(ph.ph_id, _best_primary_camera(src_ids, obs_by_det_id, obs))
+            best_cam = _best_primary_camera(src_ids, obs_by_det_id, obs)
+            in_cf_room = (
+                is_device_free_source(best_cam)
+                and camera_free_room_at(
+                    obs.floor_point.x_mm / 1000.0,
+                    obs.floor_point.y_mm / 1000.0,
+                    room_polygons,
+                    camera_room_ids,
+                )
+                is not None
+            )
+            self._update_primary_camera(ph.ph_id, best_cam, in_camera_free_room=in_cf_room)
 
             updated = replace(
                 ph,
@@ -814,7 +844,7 @@ class WorldTracker:
                 obs.detection_confidence,
             )
             ph_obs_appearance[ph.ph_id] = (obs.orientation, obs.embedding, obs.quality)
-            ph_floor_calibrated[ph.ph_id] = obs.floor_point.calibrated
+            ph_floor_calibrated[ph.ph_id] = obs.device_free or obs.floor_point.calibrated
             ph_confidence_meta[ph.ph_id] = (len(src_ids), obs.footpoint_reliable)
             # Map all source detection IDs (not just the representative) to this PH.
             for src_det_id in src_ids:
@@ -848,6 +878,16 @@ class WorldTracker:
             obs = observations[obs_idx]
             fx = obs.floor_point.x_mm / 1000.0
             fy = obs.floor_point.y_mm / 1000.0
+
+            in_cf_room = False
+            if obs.device_free:
+                cf_room = camera_free_room_at(fx, fy, room_polygons, camera_room_ids)
+                if cf_room is None:
+                    m.cts_device_free_observations_total.labels(
+                        outcome=DeviceFreeObservationOutcome.SPAWN_SUPPRESSED
+                    ).inc()
+                    continue
+                in_cf_room = True
 
             out_of_room = bool(room_polygons) and not is_in_any_room_polygon(fx, fy, room_polygons)
             if obs.floor_point.calibrated and out_of_room:
@@ -917,41 +957,57 @@ class WorldTracker:
                 room_names,
             )
 
+            init_pos_sigma = (
+                max(
+                    cfg.initial_position_sigma_m,
+                    cfg.k_cal * max(obs.floor_residual_m or 0.0, 0.0),
+                )
+                if obs.device_free
+                else cfg.initial_position_sigma_m
+            )
+
             if revival_candidate is not None:
                 # Revive: reuse closed PH's ph_id, identity, and gallery state.
                 closed = revival_candidate
                 ks = initialize(
                     fx,
                     fy,
-                    cfg.initial_position_sigma_m,
+                    init_pos_sigma,
                     cfg.initial_velocity_sigma_m_s,
                     obs.captured_at,
                 )
-                # Reviving an existing PH's appearance is an association too; the
-                # same contamination guard applies. A rejected embedding reopens
-                # the PH and advances its count without touching appearance.
-                revival_decision = evaluate_appearance_update(
-                    embedding=obs.embedding,
-                    orientation=obs.orientation,
-                    orientation_confidence=obs.orientation_confidence,
-                    quality=obs.quality,
-                    existing_prototypes=closed.view_prototypes,
-                    cfg=cfg,
-                )
-                if revival_decision.accept:
-                    new_gallery_mean = update_gallery_mean(
-                        closed.gallery_mean, obs.embedding, closed.observation_count
-                    )
-                    new_prototypes_rev = update_view_prototypes(
-                        closed.view_prototypes,
-                        obs.orientation,
-                        obs.embedding,
-                        obs.orientation_confidence,
-                    )
-                else:
+                if obs.device_free:
                     new_gallery_mean = closed.gallery_mean
                     new_prototypes_rev = closed.view_prototypes
-                    _record_appearance_rejection(m, closed.ph_id, obs, revival_decision)
+                    m.cts_device_free_observations_total.labels(
+                        outcome=DeviceFreeObservationOutcome.REVIVED
+                    ).inc()
+                else:
+                    # Reviving an existing PH's appearance is an association too; the
+                    # same contamination guard applies. A rejected embedding reopens
+                    # the PH and advances its count without touching appearance.
+                    revival_decision = evaluate_appearance_update(
+                        embedding=obs.embedding,
+                        orientation=obs.orientation,
+                        orientation_confidence=obs.orientation_confidence,
+                        quality=obs.quality,
+                        existing_prototypes=closed.view_prototypes,
+                        cfg=cfg,
+                    )
+                    if revival_decision.accept:
+                        new_gallery_mean = update_gallery_mean(
+                            closed.gallery_mean, obs.embedding, closed.observation_count
+                        )
+                        new_prototypes_rev = update_view_prototypes(
+                            closed.view_prototypes,
+                            obs.orientation,
+                            obs.embedding,
+                            obs.orientation_confidence,
+                        )
+                    else:
+                        new_gallery_mean = closed.gallery_mean
+                        new_prototypes_rev = closed.view_prototypes
+                        _record_appearance_rejection(m, closed.ph_id, obs, revival_decision)
                 new_ph = replace(
                     closed,
                     state_mean=(
@@ -1010,17 +1066,23 @@ class WorldTracker:
                 ks = initialize(
                     fx,
                     fy,
-                    cfg.initial_position_sigma_m,
+                    init_pos_sigma,
                     cfg.initial_velocity_sigma_m_s,
                     obs.captured_at,
                 )
-                # seed first view prototype from spawn observation.
-                spawn_prototypes = update_view_prototypes(
-                    (),
-                    obs.orientation,
-                    obs.embedding,
-                    obs.orientation_confidence,
-                )
+                if obs.device_free:
+                    spawn_prototypes: tuple[ViewPrototype, ...] = ()
+                    m.cts_device_free_observations_total.labels(
+                        outcome=DeviceFreeObservationOutcome.SPAWNED
+                    ).inc()
+                else:
+                    # seed first view prototype from spawn observation.
+                    spawn_prototypes = update_view_prototypes(
+                        (),
+                        obs.orientation,
+                        obs.embedding,
+                        obs.orientation_confidence,
+                    )
                 new_ph = PersonHypothesis(
                     ph_id=str(uuid.uuid4()),
                     state_mean=(
@@ -1044,19 +1106,21 @@ class WorldTracker:
                     active_cameras=spawn_cameras,
                     last_floor_speed_m_s=0.0,
                     metadata=_metadata_with_room({}, room_id, room_name),
-                    mean_quality=obs.quality,
+                    mean_quality=0.0 if obs.device_free else obs.quality,
                     view_prototypes=spawn_prototypes,
                 )
 
             updated_phs.append(new_ph)
-            self._update_primary_camera(new_ph.ph_id, best_spawn_camera)
+            self._update_primary_camera(
+                new_ph.ph_id, best_spawn_camera, in_camera_free_room=in_cf_room
+            )
             ph_obs_meta[new_ph.ph_id] = (
                 obs.frame_index,
                 obs.bbox,
                 obs.detection_confidence,
             )
             ph_obs_appearance[new_ph.ph_id] = (obs.orientation, obs.embedding, obs.quality)
-            ph_floor_calibrated[new_ph.ph_id] = obs.floor_point.calibrated
+            ph_floor_calibrated[new_ph.ph_id] = obs.device_free or obs.floor_point.calibrated
             if fusion_applies and obs.floor_point.calibrated:
                 camera_measurements[new_ph.ph_id] = [
                     (obs.captured_at, fx, fy, _camera_measurement_cov(obs, cfg))
@@ -1611,7 +1675,13 @@ class WorldTracker:
             image_only_evaluations=tuple(image_only),
         )
 
-    def _update_primary_camera(self, ph_id: str, best_camera: str) -> None:
+    def _update_primary_camera(
+        self,
+        ph_id: str,
+        best_camera: str,
+        *,
+        in_camera_free_room: bool = False,
+    ) -> None:
         if not best_camera:
             return
 
@@ -1623,6 +1693,20 @@ class WorldTracker:
 
         if best_camera == current:
             self._primary_challenger.pop(ph_id, None)
+            return
+
+        current_df = is_device_free_source(current)
+        best_df = is_device_free_source(best_camera)
+        if current_df and not best_df:
+            # Optical recovery: camera immediately reclaims primary status.
+            self._primary_camera[ph_id] = best_camera
+            self._primary_challenger.pop(ph_id, None)
+            return
+        if not current_df and best_df:
+            if in_camera_free_room:
+                # Stepping into a camera-free room hands display ownership to its position sensor.
+                self._primary_camera[ph_id] = best_camera
+                self._primary_challenger.pop(ph_id, None)
             return
 
         challenger_camera, streak = self._primary_challenger.get(ph_id, ("", 0))
@@ -2015,7 +2099,9 @@ async def _resolve_identities(
                 for ph in resolvable_phs
                 if ph.height_sigma_m is not None
             },
-            ph_qualities={ph.ph_id: ph.mean_quality for ph in resolvable_phs},
+            ph_qualities={
+                ph.ph_id: ph.mean_quality for ph in resolvable_phs if has_visual_history(ph)
+            },
             face_evidence=face_evidence,
             open_ph_identities=open_ph_identities or {},
             wearable_evidence=wearable_evidence,

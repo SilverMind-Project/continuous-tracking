@@ -257,3 +257,26 @@ def mahalanobis2_position(
     if not math.isfinite(d2) or d2 < 0.0:
         return math.inf
     return d2
+
+
+def apply_position_floor(
+    prior: KalmanState, posterior: KalmanState, floor_m2: float
+) -> KalmanState:
+    """Lift the posterior's smallest position eigenvalue to ``min(floor, prior's)``.
+
+    The floor is a measurement source's systematic error (a wearable's bias floor, a
+    position sensor's calibration residual): repeated updates from one source shrink only
+    its random noise, so they must never make the PH more certain than that floor. A prior
+    already tighter than the floor is never loosened.
+
+    Adding a multiple of the position-block identity keeps the covariance symmetric
+    positive semi-definite and leaves the velocity block and cross terms unchanged.
+    """
+    prior_cov = np.asarray(prior.covariance, dtype=np.float64)
+    post_cov = np.array(posterior.covariance, dtype=np.float64)
+    target = min(floor_m2, float(np.linalg.eigvalsh(prior_cov[0:2, 0:2])[0]))
+    current = float(np.linalg.eigvalsh(post_cov[0:2, 0:2])[0])
+    if current >= target:
+        return posterior
+    post_cov[0:2, 0:2] += (target - current) * np.eye(2, dtype=np.float64)
+    return KalmanState(mean=posterior.mean, covariance=post_cov, updated_at=posterior.updated_at)

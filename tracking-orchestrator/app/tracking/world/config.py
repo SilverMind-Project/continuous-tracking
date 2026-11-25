@@ -188,6 +188,9 @@ class WorldTrackerConfig:
     # cross-camera observations captured at slightly different instants in one
     # batch. Bounded by dedup_max_distance_ceiling_m. 0.0 disables the term.
     dedup_time_skew_speed_m_s: float = 0.0
+    # 2-DoF chi-square gate for merging two position sensors' tracks (Mahalanobis on the sum
+    # of their total covariances). Position-sensor and camera observations never merge.
+    dedup_device_free_chi2: float = 9.21
 
     # ---- Low-confidence detection recovery (BYTE-style second association) ----
     # When enabled, YOLO detections in [low_confidence_floor, detector_confidence) are

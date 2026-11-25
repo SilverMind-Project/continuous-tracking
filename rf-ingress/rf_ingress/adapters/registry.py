@@ -10,13 +10,17 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from rf_ingress.adapters.anchor_ranging_mqtt import build_anchor_ranging_mqtt_adapter
-from rf_ingress.adapters.base import AdapterDeps, AnyAdapter
+from rf_ingress.adapters.base import AdapterDeps, ConfiguredAdapter
 from rf_ingress.adapters.ble_scanner_mqtt import build_ble_scanner_mqtt_adapter
 from rf_ingress.adapters.device_ranging_mqtt import build_device_ranging_mqtt_adapter
-from rf_ingress.adapters.simulator import build_simulator_adapter
+from rf_ingress.adapters.position_track_mqtt import build_position_track_mqtt_adapter
+from rf_ingress.adapters.simulator import (
+    build_position_track_simulator_adapter,
+    build_simulator_adapter,
+)
 from rf_ingress.config import AdapterConfig
 
-AdapterFactory = Callable[[AdapterConfig, AdapterDeps], AnyAdapter]
+AdapterFactory = Callable[[AdapterConfig, AdapterDeps], ConfiguredAdapter]
 
 
 class AdapterRegistry:
@@ -37,7 +41,7 @@ class AdapterRegistry:
         """Return all registered adapter kinds in sorted order."""
         return tuple(sorted(self._factories.keys()))
 
-    def build(self, config: AdapterConfig, deps: AdapterDeps) -> AnyAdapter:
+    def build(self, config: AdapterConfig, deps: AdapterDeps) -> ConfiguredAdapter:
         """Instantiate one adapter from *config* or raise :class:`ValueError`."""
         factory = self._factories.get(config.kind)
         if factory is None:
@@ -52,7 +56,7 @@ class AdapterRegistry:
         self,
         configs: Iterable[AdapterConfig],
         deps: AdapterDeps,
-    ) -> list[AnyAdapter]:
+    ) -> list[ConfiguredAdapter]:
         """Instantiate all configured adapters, failing fast on any invalid config."""
         return [self.build(cfg, deps) for cfg in configs]
 
@@ -64,4 +68,6 @@ def build_default_registry() -> AdapterRegistry:
     registry.register("device_ranging_mqtt", build_device_ranging_mqtt_adapter)
     registry.register("ble_scanner_mqtt", build_ble_scanner_mqtt_adapter)
     registry.register("anchor_ranging_mqtt", build_anchor_ranging_mqtt_adapter)
+    registry.register("position_track_mqtt", build_position_track_mqtt_adapter)
+    registry.register("position_track_simulator", build_position_track_simulator_adapter)
     return registry

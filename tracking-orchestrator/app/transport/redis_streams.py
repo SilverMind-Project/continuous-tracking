@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -28,7 +28,7 @@ from typing import Any
 import redis.asyncio as redis
 from structlog import get_logger
 
-from app.domain import Detection
+from app.domain import Detection, FloorPoint
 from app.inference.schemas import PoseResult
 from app.observability import metrics
 from app.proto.continuoustracking.v1 import frame_pb2, tracking_pb2
@@ -41,6 +41,16 @@ logger = get_logger(__name__)
 # field name doubles as a content hint for ``XRANGE`` debugging.
 FIELD_FRAME = "frame"
 FIELD_EVENT = "event"
+
+
+@dataclass(frozen=True)
+class PositionOnlyDetection:
+    """Geometry-only detection emitted by device-free position sensors."""
+
+    detection_id: str
+    confidence: float
+    ph_id: str
+    floor_point: FloorPoint
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +76,7 @@ class TransportConfig:
     signals_stream: str = "tracking.signals"
     scene_samples_stream: str = "scene.samples"
     wearable_fixes_stream: str = "wearable.fixes"
+    position_tracks_stream: str = "position.tracks"
     wearable_capabilities_stream: str = "wearable.capabilities"
     household_presence_stream: str = "cc.household_presence"
 
@@ -281,6 +292,7 @@ class RedisStreamsTransport:
         evidence_by_ph: dict[str, tuple[float, float, bool]] | None = None,
         det_posture: dict[str, str] | None = None,
         identity_snapshots: list[dict[str, object]] | None = None,
+        position_only_detections: Sequence[PositionOnlyDetection] | None = None,
     ) -> str:
         """Publish a ``TrackingEvent`` proto to ``tracking.events``.
 
@@ -320,6 +332,7 @@ class RedisStreamsTransport:
             evidence_by_ph=evidence_by_ph,
             det_posture=det_posture,
             identity_snapshots=identity_snapshots or [],
+            position_only_detections=position_only_detections,
         )
 
         message_id_bytes = await self._redis.xadd(
@@ -382,6 +395,7 @@ def _build_tracking_event_pb(
     evidence_by_ph: dict[str, tuple[float, float, bool]] | None = None,
     det_posture: dict[str, str] | None = None,
     identity_snapshots: list[dict[str, object]] | None = None,
+    position_only_detections: Sequence[PositionOnlyDetection] | None = None,
 ) -> tracking_pb2.TrackingEvent:
     """Build a TrackingEvent proto from domain types.
 
@@ -446,6 +460,24 @@ def _build_tracking_event_pb(
         # Posterior evidence from identity resolver.
         if evidence_by_ph and det.ph_id and det.ph_id in evidence_by_ph:
             top_prob, top2_prob, face_anchor_used = evidence_by_ph[det.ph_id]
+            d.evidence.top_prob = top_prob
+            d.evidence.top2_prob = top2_prob
+            d.evidence.face_anchor_used = face_anchor_used
+
+    for pdet in position_only_detections or ():
+        d = event.detections.add(
+            detection_id=pdet.detection_id,
+            confidence=pdet.confidence,
+            ph_id=pdet.ph_id or "",
+        )
+        d.floor_point.x_mm = pdet.floor_point.x_mm
+        d.floor_point.y_mm = pdet.floor_point.y_mm
+        d.floor_point.calibrated = pdet.floor_point.calibrated
+        if pdet.floor_point.calibrated:
+            d.floor_x = pdet.floor_point.x_mm / 1000.0
+            d.floor_y = pdet.floor_point.y_mm / 1000.0
+        if evidence_by_ph and pdet.ph_id and pdet.ph_id in evidence_by_ph:
+            top_prob, top2_prob, face_anchor_used = evidence_by_ph[pdet.ph_id]
             d.evidence.top_prob = top_prob
             d.evidence.top2_prob = top2_prob
             d.evidence.face_anchor_used = face_anchor_used

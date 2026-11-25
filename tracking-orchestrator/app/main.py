@@ -30,6 +30,7 @@ from app.domain import (
     FaceEvidencePolicy,
     HouseholdClassifierMode,
     OverlapGroup,
+    PositionSensorMode,
     WearableMode,
 )
 from app.observability.logging_config import configure_logging
@@ -101,6 +102,8 @@ from app.services.identity_rewriter import InMemoryIdentityRewriter, PostgresIde
 from app.services.image_only_evaluator import ImageOnlyEvaluationService
 from app.services.overlap_group_sync import fetch_overlap_groups
 from app.services.ph_maintenance import PHMaintenanceService, PHUnknownPurgeConfig
+from app.services.position_track_buffer import PositionTrackBuffer
+from app.services.position_track_subscriber import PositionTrackSubscriber
 from app.services.wearable_fix_buffer import WearableFixBuffer
 from app.services.wearable_fix_subscriber import WearableFixSubscriber
 from app.services.wearable_revocation import WearableTeachingRevocationService
@@ -156,6 +159,7 @@ from app.tracking.identity.household_classifier import (
 )
 from app.tracking.identity_resolver import FaceQualityMode, HeightMode, ResolverConfig
 from app.tracking.world.config import WorldTrackerConfig
+from app.tracking.world.position_sensor_config import PositionSensorConfig
 from app.tracking.world.wearable_config import (
     FaceAttestationMode,
     SpatialFusionMode,
@@ -310,6 +314,7 @@ def _build_transport_config(s: Settings) -> TransportConfig:
         signals_stream=s.as_str("redis.signals_stream"),
         scene_samples_stream=s.as_str("redis.scene_samples_stream"),
         wearable_fixes_stream=s.as_str("redis.wearable_fixes_stream"),
+        position_tracks_stream=s.as_str("redis.position_tracks_stream"),
         wearable_capabilities_stream=s.as_str("redis.wearable_capabilities_stream"),
         household_presence_stream=s.as_str("redis.household_presence_stream"),
     )
@@ -459,6 +464,7 @@ def _build_world_tracker_config(s: Settings) -> WorldTrackerConfig:
         dedup_max_distance_ceiling_m=wt.as_float("dedup_max_distance_ceiling_m"),
         dedup_require_no_face_conflict=wt.as_bool("dedup_require_no_face_conflict"),
         dedup_time_skew_speed_m_s=wt.as_float("dedup_time_skew_speed_m_s"),
+        dedup_device_free_chi2=wt.as_float("dedup_device_free_chi2"),
         enable_ph_revival=wt.as_bool("enable_ph_revival"),
         revive_max_age_s=wt.as_float("revive_max_age_s"),
         revive_max_distance_m=wt.as_float("revive_max_distance_m"),
@@ -769,6 +775,21 @@ def _build_household_classifier_config(s: Settings) -> HouseholdClassifierConfig
     )
 
 
+def _build_position_sensor_config(s: Settings) -> PositionSensorConfig:
+    """Build PositionSensorConfig from required settings.yaml keys."""
+    p = s.section("position_sensor")
+    return PositionSensorConfig(
+        mode=cast(PositionSensorMode, p.as_str("mode")),
+        max_track_age_s=p.as_float("max_track_age_s"),
+        buffer_max_age_s=p.as_float("buffer_max_age_s"),
+        round_interval_s=p.as_float("round_interval_s"),
+        round_max_track_age_s=p.as_float("round_max_track_age_s"),
+        min_track_age_s=p.as_float("min_track_age_s"),
+        track_gap_s=p.as_float("track_gap_s"),
+        max_tracks=p.as_int("max_tracks"),
+    )
+
+
 def _build_wearable_config(s: Settings) -> WearableConfig:
     """Build WearableConfig from required settings.yaml keys."""
     w = s.section("wearable")
@@ -884,6 +905,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     resolver_config = _build_resolver_config(settings)
     world_tracker_config = _build_world_tracker_config(settings)
     wearable_config = _build_wearable_config(settings)
+    position_sensor_config = _build_position_sensor_config(settings)
     closed_world_config = _build_closed_world_config(settings)
     household_classifier_config = _build_household_classifier_config(settings)
     sampler_config = _build_sampler_config(settings)
@@ -893,6 +915,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resolver=resolver_config,
         world_tracker=world_tracker_config,
         wearable=wearable_config,
+        position_sensor=position_sensor_config,
         closed_world=closed_world_config,
         household_classifier=household_classifier_config,
         reid_candidates=_build_candidate_policy(settings, wearable_config),
@@ -1284,6 +1307,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.exception("wearable_fix_subscriber_init_failed")
                 wearable_fix_subscriber = None
 
+    position_track_buffer: PositionTrackBuffer | None = None
+    position_track_subscriber: PositionTrackSubscriber | None = None
+    _position_track_redis = None
+    if position_sensor_config.mode != "off":
+        position_track_buffer = PositionTrackBuffer(
+            max_age_s=position_sensor_config.buffer_max_age_s,
+            track_gap_s=position_sensor_config.track_gap_s,
+            max_tracks=position_sensor_config.max_tracks,
+        )
+        if redis_url:
+            try:
+                _position_track_redis = aioredis.from_url(redis_url, decode_responses=False)
+                position_track_subscriber = PositionTrackSubscriber(
+                    redis_client=_position_track_redis,
+                    buffer=position_track_buffer,
+                    site_config_map=wearable_site_config_map,
+                    stream=transport_config.position_tracks_stream,
+                    group=transport_config.consumer_group,
+                    consumer=transport_config.consumer_name,
+                    max_track_age_s=position_sensor_config.max_track_age_s,
+                )
+            except Exception:
+                logger.exception("position_track_subscriber_init_failed")
+                position_track_subscriber = None
+
     household_presence_cache: HouseholdPresenceCache | None = None
     household_presence_subscriber: HouseholdPresenceSubscriber | None = None
     if closed_world_config.mode != "off":
@@ -1340,6 +1388,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         identity_correction_service=correction_service,
         external_evidence=cc_assertion_cache,
         wearable_fix_source=wearable_fix_buffer,
+        position_track_source=position_track_buffer,
         wearable_association_repo=wearable_association_repo,
         wearable_teaching_hold_repo=wearable_teaching_hold_repo,
         wearable_revocation_service=wearable_revocation_service,
@@ -1453,6 +1502,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("wearable_fix_subscriber_start_failed")
             wearable_fix_subscriber = None
+
+    if position_track_subscriber is not None:
+        try:
+            await position_track_subscriber.start()
+        except Exception:
+            logger.exception("position_track_subscriber_start_failed")
+            position_track_subscriber = None
 
     # Start household presence subscriber only when closed_world.mode is shadow or enabled.
     if household_presence_subscriber is not None:
@@ -1630,6 +1686,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Stop wearable fix subscriber.
     if wearable_fix_subscriber is not None:
         await wearable_fix_subscriber.stop()
+
+    # Stop position track subscriber.
+    if position_track_subscriber is not None:
+        await position_track_subscriber.stop()
+    if _position_track_redis is not None:
+        await _position_track_redis.aclose()
 
     # Stop household presence subscriber.
     if household_presence_subscriber is not None:

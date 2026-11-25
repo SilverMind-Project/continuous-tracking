@@ -37,8 +37,10 @@ from rf_ingress.adapters.base import AdapterDeps, AdapterHealth
 from rf_ingress.config import AdapterConfig
 from rf_ingress.domain import (
     AdapterCapabilityDescriptor,
+    AnonymousPositionTrackReport,
     AzimuthReferenceFrame,
     PositionReport,
+    PositionTrackFrame,
     RangeMeasurement,
     RfNodeGeometry,
     RoomReport,
@@ -49,8 +51,10 @@ from rf_ingress.domain import (
 )
 from rf_ingress.observability import (
     FIXES_DROPPED_TOTAL,
+    POSITION_TRACKS_DROPPED_TOTAL,
     UNREGISTERED_TAG_TOTAL,
     DropReason,
+    PositionTrackDropReason,
 )
 
 logger = structlog.get_logger(__name__)
@@ -1098,4 +1102,147 @@ def build_simulator_adapter(config: AdapterConfig, deps: AdapterDeps) -> Simulat
         latency_s=config.latency_s,
         reports_wear_state_override=parsed.reports_wear_state,
         reports_motion_state_override=parsed.reports_motion_state,
+    )
+
+
+class PositionTrackSimulatorConfig(BaseModel):
+    """Adapter configuration validated when ``kind == "position_track_simulator"``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    payload_profile: str = "position_track_sim_v1"
+    seed: int = 42
+    steps: int = Field(default=6, ge=1)
+    step_s: float = Field(default=0.5, gt=0.0)
+    frame: PositionTrackFrame = "floor_plan"
+    realtime: bool = False
+    inject_unregistered: bool = False
+    inject_malformed: bool = False
+
+    @model_validator(mode="after")
+    def _validate_profile(self) -> PositionTrackSimulatorConfig:
+        if self.payload_profile != "position_track_sim_v1":
+            raise ValueError(
+                f"Unknown position_track_simulator payload_profile {self.payload_profile!r}; "
+                "expected 'position_track_sim_v1'"
+            )
+        return self
+
+
+class PositionTrackSimulatorAdapter:
+    """Seeded deterministic :class:`PositionTrackAdapter` for conformance and integration tests."""
+
+    def __init__(
+        self,
+        *,
+        adapter_id: str,
+        deps: AdapterDeps,
+        seed: int = 42,
+        steps: int = 6,
+        step_s: float = 0.5,
+        frame: PositionTrackFrame = "floor_plan",
+        realtime: bool = False,
+        inject_unregistered: bool = False,
+        inject_malformed: bool = False,
+    ) -> None:
+        self.adapter_id: str = adapter_id
+        self._deps: AdapterDeps = deps
+        self._seed: int = seed
+        self._steps: int = steps
+        self._step_s: float = step_s
+        self._frame: PositionTrackFrame = frame
+        self._realtime: bool = realtime
+        self._inject_unregistered: bool = inject_unregistered
+        self._inject_malformed: bool = inject_malformed
+        self._closed: bool = False
+        self._last_report_at: datetime | None = None
+        self._malformed_reports: int = 0
+        self._unregistered_reports: int = 0
+
+    def health(self) -> AdapterHealth:
+        return AdapterHealth(
+            adapter_id=self.adapter_id,
+            connected=not self._closed,
+            last_report_at=self._last_report_at,
+            malformed_reports=self._malformed_reports,
+            unregistered_reports=self._unregistered_reports,
+        )
+
+    async def close(self) -> None:
+        self._closed = True
+
+    async def position_tracks(self) -> AsyncIterator[AnonymousPositionTrackReport]:
+        if self._closed:
+            return
+        snapshot = self._deps.site_config.snapshot()
+        if snapshot is None or not snapshot.position_sensors:
+            return
+
+        if self._inject_malformed:
+            self._malformed_reports += 1
+            POSITION_TRACKS_DROPPED_TOTAL.labels(
+                reason=PositionTrackDropReason.MALFORMED_INPUT
+            ).inc()
+        if self._inject_unregistered:
+            self._unregistered_reports += 1
+            POSITION_TRACKS_DROPPED_TOTAL.labels(
+                reason=PositionTrackDropReason.UNREGISTERED_SENSOR
+            ).inc()
+
+        rng = np.random.default_rng(self._seed)
+        base_time = ensure_utc(self._deps.clock()) - timedelta(seconds=self._steps * self._step_s)
+        for step_idx in range(self._steps):
+            if self._closed:
+                break
+            if self._realtime and step_idx > 0:
+                await asyncio.sleep(self._step_s)
+            measured_at = base_time + timedelta(seconds=step_idx * self._step_s)
+            for sensor in snapshot.position_sensors:
+                if self._closed:
+                    break
+                dx = float(rng.normal(0.0, 0.05))
+                dy = float(rng.normal(0.0, 0.05))
+                if self._frame == "sensor_local" and sensor.yaw_deg is not None:
+                    rx = 1.0 + step_idx * 0.25 + dx
+                    ry = 0.2 + dy
+                else:
+                    rx = sensor.x_m + 0.5 + step_idx * 0.2 + dx
+                    ry = sensor.y_m + 0.3 + dy
+                self._last_report_at = self._deps.clock()
+                yield AnonymousPositionTrackReport(
+                    sensor_id=sensor.sensor_id,
+                    sensor_track_id="sim-t1",
+                    measured_at=measured_at,
+                    x_m=rx,
+                    y_m=ry,
+                    cov_xx_m2=0.04,
+                    cov_xy_m2=0.0,
+                    cov_yy_m2=0.04,
+                    speed_m_s=0.4,
+                    frame="floor_plan" if sensor.yaw_deg is None else self._frame,
+                    floor_plan_id=snapshot.floor_plan_id or "",
+                    adapter_id=self.adapter_id,
+                    sent_at=measured_at,
+                )
+
+
+def build_position_track_simulator_adapter(
+    config: AdapterConfig,
+    deps: AdapterDeps,
+) -> PositionTrackSimulatorAdapter:
+    """Registry factory for ``kind: position_track_simulator``."""
+    raw = config.extra_fields()
+    if config.payload_profile is not None:
+        raw["payload_profile"] = config.payload_profile
+    parsed = PositionTrackSimulatorConfig.model_validate(raw)
+    return PositionTrackSimulatorAdapter(
+        adapter_id=config.id,
+        deps=deps,
+        seed=parsed.seed,
+        steps=parsed.steps,
+        step_s=parsed.step_s,
+        frame=parsed.frame,
+        realtime=parsed.realtime,
+        inject_unregistered=parsed.inject_unregistered,
+        inject_malformed=parsed.inject_malformed,
     )

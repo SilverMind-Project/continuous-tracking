@@ -5,7 +5,7 @@ description = "Continuous Tracking System - hardware-neutral RF localization ing
 requires-python = ">=3.12"
 dependencies = [
     "aiomqtt>=2.3.0",
-    "cts-contracts>=0.4.0",
+    "cts-contracts>=0.5.0",
     "fastapi>=0.115.0",
     "httpx>=0.27.0",
     "numpy>=2.0.0",
@@ -103,6 +103,7 @@ type = "forbidden"
 source_modules = ["rf_ingress.adapters"]
 forbidden_modules = [
     "rf_ingress.publish",
+    "rf_ingress.position_tracks",
     "rf_ingress.pipeline",
     "rf_ingress.health",
     "rf_ingress.main",
@@ -115,6 +116,7 @@ source_modules = ["rf_ingress.solver"]
 forbidden_modules = [
     "rf_ingress.adapters",
     "rf_ingress.publish",
+    "rf_ingress.position_tracks",
     "rf_ingress.site_config",
     "rf_ingress.pipeline",
     "rf_ingress.health",
@@ -133,6 +135,7 @@ forbidden_modules = [
     "rf_ingress.main",
     "rf_ingress.observability",
     "rf_ingress.pipeline",
+    "rf_ingress.position_tracks",
     "rf_ingress.publish",
     "rf_ingress.registration",
     "rf_ingress.replay",
@@ -145,6 +148,7 @@ name = "Core pipeline and solver never import concrete adapters directly"
 type = "forbidden"
 source_modules = [
     "rf_ingress.pipeline",
+    "rf_ingress.position_tracks",
     "rf_ingress.publish",
     "rf_ingress.registration",
     "rf_ingress.site_config",
@@ -155,6 +159,7 @@ forbidden_modules = [
     "rf_ingress.adapters.ble_motion",
     "rf_ingress.adapters.ble_scanner_mqtt",
     "rf_ingress.adapters.device_ranging_mqtt",
+    "rf_ingress.adapters.position_track_mqtt",
     "rf_ingress.adapters.simulator",
 ]
 

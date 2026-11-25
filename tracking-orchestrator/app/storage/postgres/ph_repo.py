@@ -21,6 +21,7 @@ from app.domain import (
     IdentityEvidence,
     IdentityRevision,
     Keyframe,
+    ObservationSource,
     OrientationBin,
     PersonHypothesis,
     ViewPrototype,
@@ -1062,6 +1063,8 @@ class PostgresWorldObservationRepository:
                 observation.floor_point.x_mm / 1000.0,
                 observation.floor_point.y_mm / 1000.0,
                 observation.detection_confidence,
+                # A device-free observation has no image box; the column is NOT NULL,
+                # so it stores an empty object, which reads back as no box.
                 json.dumps(
                     {
                         "x_min": observation.bbox.x_min,
@@ -1069,6 +1072,8 @@ class PostgresWorldObservationRepository:
                         "x_max": observation.bbox.x_max,
                         "y_max": observation.bbox.y_max,
                     }
+                    if observation.bbox is not None
+                    else {}
                 ),
                 observation.height_estimate_m,
                 observation.quality,
@@ -1077,6 +1082,7 @@ class PostgresWorldObservationRepository:
                         "floor_residual_m": observation.floor_residual_m,
                         "floor_cov_random": observation.floor_cov_random,
                         "footpoint_reliable": observation.footpoint_reliable,
+                        "source": observation.source.value,
                     }
                 ),
             )
@@ -1200,11 +1206,15 @@ def _row_to_world_observation(row: Any) -> WorldObservation:
             y_mm=int(float(row["floor_y_m"]) * 1000),
             calibrated=True,
         ),
-        bbox=BoundingBox(
-            x_min=bbox_raw["x_min"],
-            y_min=bbox_raw["y_min"],
-            x_max=bbox_raw["x_max"],
-            y_max=bbox_raw["y_max"],
+        bbox=(
+            BoundingBox(
+                x_min=bbox_raw["x_min"],
+                y_min=bbox_raw["y_min"],
+                x_max=bbox_raw["x_max"],
+                y_max=bbox_raw["y_max"],
+            )
+            if bbox_raw
+            else None
         ),
         embedding=[],
         detection_confidence=float(row["detection_confidence"]),
@@ -1214,6 +1224,8 @@ def _row_to_world_observation(row: Any) -> WorldObservation:
         floor_residual_m=metadata.get("floor_residual_m"),
         floor_cov_random=_cov2x2_tuple_from_metadata(metadata.get("floor_cov_random")),
         footpoint_reliable=bool(metadata.get("footpoint_reliable", True)),
+        # Rows written before the source was recorded are camera observations.
+        source=ObservationSource(metadata.get("source", ObservationSource.CAMERA.value)),
     )
 
 

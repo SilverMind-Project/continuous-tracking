@@ -792,6 +792,7 @@ class InMemoryWorldObservationRepository:
             floor_cov_random=observation.floor_cov_random,
             footpoint_reliable=observation.footpoint_reliable,
             primary_score=observation.primary_score,
+            source=observation.source,
         )
         self._observations.setdefault(ph_id, []).append(stored)
         return oid

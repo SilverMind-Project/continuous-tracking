@@ -219,9 +219,11 @@ async def _run_cli(argv: list[str]) -> int:
         deps = AdapterDeps(site_config=site_client)
         adapters = {a.adapter_id: a for a in registry.build_all(settings.adapters, deps)}
         target = adapters.get(args.adapter)
-        if target is None:
+        if not isinstance(target, (RangeAdapter, PositionAdapter, RoomAdapter)):
+            if target is not None:
+                await target.close()
             await site_client.close()
-            sys.stderr.write(f"Unknown adapter id: {args.adapter}\n")
+            sys.stderr.write(f"Unknown or non-wearable adapter id: {args.adapter}\n")
             return 2
         try:
             recorded = await record_adapter_to_jsonl(

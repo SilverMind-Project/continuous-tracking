@@ -20,17 +20,18 @@ Always verify by reading `frame_pipeline.py` after adding a stage.
 
 ## Execution paths
 
-A frame reaches the stages through one of three routes. The route is selected during `FrameProcessingPipeline.initialize()` from batching configuration and detector availability.
+Frames and device-free sensor tracks reach stages through one of four routes selected during `FrameProcessingPipeline.initialize()` from batching configuration, detector availability, and `position_sensor.mode`:
 
 | Path | Active when | Route |
 |---|---|---|
 | Direct | `batch_window_s == 0` | `_handle_frame` -> `_process_frame_direct` -> `_process_frame` -> full `_stage_runner` |
 | Per-camera batch | `batch_window_s > 0`, with cross-camera detector batching off or no detector present | `FrameBatcher` -> `_handle_batch` -> `_process_frame` once per frame -> full `_stage_runner` |
 | Cross-camera batch | `batch_window_s > 0` + `cross_camera_detector_batching` + detector present | `_handle_cross_camera_batch` -> shared fetch/detect -> `_process_cross_camera_post_detect_batch` round loop -> `_pre_world_runner` / `world_tracking_stage.run_many` / `_post_world_runner` |
+| Device-free sensor round | `position_sensor.mode == "enabled"` + `position_track_source` wired (`"shadow"` peeks and runs `evaluate_device_free_shadow` only) | `_device_free_round_loop` (every `round_interval_s`) -> `run_device_free_round_once` -> `_begin_tracker_round()` -> `world_tracking_stage.run_device_free_round` -> reduced per-sensor post-world runner (`ClosePHStage`, `TrajectoryStage`, `RevisionsStage`, `ProvenancePersistStage`, `WearableAssociationPersistStage`, optional `ImageOnlyEvaluationStage`, `DeviceFreePublishStage`) |
 
-The production defaults in `config/settings.yaml` are `batch_window_s: 0.5` and `cross_camera_detector_batching: true`, so production normally uses the cross-camera path. Testing only `_process_frame` tests a path production does not normally run.
+The production defaults in `config/settings.yaml` are `batch_window_s: 0.5`, `cross_camera_detector_batching: true`, and `position_sensor.mode: "off"`, so camera traffic normally uses the cross-camera path. Testing only `_process_frame` tests a path production does not normally run.
 
-**Execution-path rule.** Any per-frame or per-round side effect, including cache epochs, metrics, camera-row seeding, staleness checks, acknowledgements, and state pruning, must be wired into all three paths. A tracker round means one call to `WorldTrackingStage`: one context on the direct and per-camera paths, or the earliest remaining context from each camera on the cross-camera path.
+**Execution-path rule.** Any per-frame or per-round side effect, including cache epochs, metrics, camera-row seeding, staleness checks, acknowledgements, and state pruning, must be wired into all applicable routes (camera routes and, when non-visual, the device-free round path). A tracker round means one call to `WorldTrackingStage` (`run_many` or `run_device_free_round`), serialized by `_world_round_lock` / `WorldTrackingStage._round_lock` so camera and device-free rounds never interleave inside `WorldTracker.step`. On the device-free route: `_begin_tracker_round` runs once before `run_device_free_round`, `FrameContext` uses synthetic `sensor:<sensor_id>` frames (`minio_key=""`), `_ensure_camera_row` skips `is_device_free_source` IDs, there is no `frames.ready` ACK (round failures increment `cts_device_free_rounds_total{outcome="failed"}`), `TrajectoryStage` skips the camera gait segmenter for `sensor:` primary sources, and pixel stages (`FetchStage` through `FaceIdentityStage`, `DetectionBackfillStage`, `PostureStage`, `FallDetectionStage`, `KeyframeStage`, `TrailsStage`, `WearableFaceAttestationStage`, `AppearanceSampleRecorderStage`, `ReIDCandidateStage`) are omitted by construction.
 
 Current orchestration side effects are placed as follows:
 
@@ -89,6 +90,7 @@ The list is configuration-dependent. A conditional stage must name its enabling 
 | 21 | `AppearanceSampleRecorderStage` | `tracking-orchestrator/app/pipeline/stages/appearance_samples.py` | `household_classifier.capture_enabled` (default `false`) | Records high-trust body embeddings (direct-face authority, trajectory-attested wearables, verified open-set negatives) to `appearance_training_samples` with 10 s per-(PH, orientation) dedup |
 | 22 | `ReIDCandidateStage` | `reid_candidates.py` | `reid_candidates.enabled` (default `true`; fail-closed in practice behind `require_calibrated_face`) | The only pipeline write path into `reid_gallery`; creates candidates from committed, face-matched detections, or (with `reid_candidates.wearable_seeding_enabled`) from attested wearable evidence, via `evaluate_candidate` (`app/tracking/identity/candidate_eligibility.py`) |
 | 23 | `PublishStage` | `publish.py` | Always | Assembles and publishes `TrackingEvent` proto to `tracking.events` Redis stream |
+| 24 | `DeviceFreePublishStage` | `publish.py` | `position_sensor.mode == "enabled"` (device-free per-sensor runner) | Emits position-only `TrackingEvent` (no `bbox`, `camera_id = sensor:<id>`) to `tracking.events` for snapshots whose primary source is that sensor |
 
 ## FrameContext: shared state between stages
 

@@ -16,6 +16,8 @@ from typing import Literal, Protocol
 
 from cts_contracts import DeviceKind, FixKind, MotionState, RangingTechnology, RfNodeRole, WearState
 
+from app.domain.position_sensors import PositionSensor
+
 WearableMode = Literal["off", "shadow", "enabled"]
 WEARABLE_MODES: tuple[WearableMode, ...] = ("off", "shadow", "enabled")
 
@@ -106,7 +108,7 @@ class WearableBinding:
 
 @dataclass(frozen=True)
 class WearableSiteConfig:
-    """Immutable snapshot of household RF nodes, devices, and bindings from CC.
+    """Immutable snapshot of household RF nodes, devices, bindings, and position sensors from CC.
 
     ``version`` is the content hash produced by Cognitive Companion so consumers
     can detect configuration changes atomically and never mix two floor-plan
@@ -117,6 +119,7 @@ class WearableSiteConfig:
     nodes: tuple[RfNode, ...] = ()
     bindings: tuple[WearableBinding, ...] = ()
     devices: tuple[WearableDevice, ...] = ()
+    position_sensors: tuple[PositionSensor, ...] = ()
     version: str = ""
 
     def member_at(self, tag_id: str, at: datetime) -> str | None:
@@ -128,6 +131,13 @@ class WearableSiteConfig:
         for binding in self.bindings:
             if binding.tag_id == tag_id and binding.covers(at):
                 return binding.member_id
+        return None
+
+    def position_sensor(self, sensor_id: str) -> PositionSensor | None:
+        """Return the registered, active position sensor *sensor_id*, or ``None``."""
+        for sensor in self.position_sensors:
+            if sensor.sensor_id == sensor_id:
+                return sensor
         return None
 
     def physical_device_of(self, tag_id: str) -> str | None:

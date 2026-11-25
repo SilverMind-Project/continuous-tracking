@@ -26,6 +26,7 @@ from cts_contracts.wearables import (
 )
 
 AzimuthReferenceFrame = Literal["device_local", "floor_plan"]
+PositionTrackFrame = Literal["floor_plan", "sensor_local"]
 
 
 def ensure_utc(dt: datetime) -> datetime:
@@ -96,8 +97,20 @@ class SiteBinding:
 
 
 @dataclass(frozen=True)
+class PositionSensorConfig:
+    """One registered, active anonymous position sensor from CC site-config."""
+
+    sensor_id: str
+    room_id: str | None
+    x_m: float
+    y_m: float
+    yaw_deg: float | None
+    calibration_residual_m: float
+
+
+@dataclass(frozen=True)
 class SiteConfigSnapshot:
-    """Immutable snapshot of household RF nodes, devices, and bindings from CC.
+    """Immutable snapshot of household RF nodes, devices, bindings, and position sensors from CC.
 
     ``version`` is the content hash produced by Cognitive Companion. Whenever
     ``version`` changes, in-flight epochs are dropped so no fix mixes two
@@ -108,11 +121,19 @@ class SiteConfigSnapshot:
     nodes: tuple[RfNodeGeometry, ...] = ()
     bindings: tuple[SiteBinding, ...] = ()
     devices: tuple[SiteDevice, ...] = ()
+    position_sensors: tuple[PositionSensorConfig, ...] = ()
     version: str = ""
 
     def node_map(self) -> dict[str, RfNodeGeometry]:
         """Return active RF nodes indexed by ``anchor_id``."""
         return {node.anchor_id: node for node in self.nodes}
+
+    def position_sensor(self, sensor_id: str) -> PositionSensorConfig | None:
+        """Return the registered active position sensor for *sensor_id*, or ``None``."""
+        for sensor in self.position_sensors:
+            if sensor.sensor_id == sensor_id:
+                return sensor
+        return None
 
     def device_by_tag_id(self, tag_id: str) -> SiteDevice | None:
         """Return the registered device for *tag_id*, or ``None``."""
@@ -331,3 +352,46 @@ class EmittedFix:
     anchors_used: int = 0
     residual_rms_m: float | None = None
     battery_fraction: float | None = None
+
+
+@dataclass(frozen=True)
+class AnonymousPositionTrackReport:
+    """Hardware-neutral anonymous target track report from a position-sensor adapter."""
+
+    sensor_id: str
+    sensor_track_id: str
+    measured_at: datetime
+    x_m: float
+    y_m: float
+    cov_xx_m2: float
+    cov_xy_m2: float
+    cov_yy_m2: float
+    speed_m_s: float | None = None
+    frame: PositionTrackFrame = "floor_plan"
+    floor_plan_id: str = ""
+    adapter_id: str = ""
+    sent_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        ensure_utc(self.measured_at)
+        if self.sent_at is not None:
+            ensure_utc(self.sent_at)
+
+
+@dataclass(frozen=True)
+class EmittedPositionTrack:
+    """Validated floor-frame anonymous position track ready for ``position.tracks``."""
+
+    sensor_id: str
+    sensor_track_id: str
+    measured_at: datetime
+    x_mm: int
+    y_mm: int
+    cov_xx_m2: float
+    cov_xy_m2: float
+    cov_yy_m2: float
+    speed_m_s: float | None = None
+    floor_plan_id: str = ""
+
+    def __post_init__(self) -> None:
+        ensure_utc(self.measured_at)

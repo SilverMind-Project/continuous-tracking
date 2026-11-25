@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from cts_contracts import is_device_free_source
 from structlog import get_logger
 
 from app.domain import FloorPoint, PostureType
@@ -249,6 +250,7 @@ class TrajectoryStage(FrameStage):
                 and self._gait_bout_repo is not None
                 and snap.identity_id is not None
                 and snap.floor_speed_m_s is not None
+                and not is_device_free_source(snap.camera_id)
             ):
                 bout = self._gait_segmenter.ingest(
                     ph_id=snap.ph_id,

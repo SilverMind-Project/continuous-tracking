@@ -101,6 +101,40 @@ class WearableSpatialFusionOutcome(StrEnum):
     NO_FIX = "no_fix"
 
 
+class PositionTrackIngestResult(StrEnum):
+    """Bounded label set for ``cts_position_tracks_total{result}``."""
+
+    ACCEPTED = "accepted"
+    DROPPED_STALE = "dropped_stale"
+    DROPPED_UNREGISTERED = "dropped_unregistered"
+    DROPPED_FLOOR_PLAN = "dropped_floor_plan"
+    DROPPED_MALFORMED = "dropped_malformed"
+
+
+class DeviceFreeObservationOutcome(StrEnum):
+    """Bounded label set for ``cts_device_free_observations_total{outcome}``."""
+
+    UPDATED = "updated"
+    SPAWNED = "spawned"
+    REVIVED = "revived"
+    SPAWN_SUPPRESSED = "spawn_suppressed"
+
+
+class DeviceFreeRoundOutcome(StrEnum):
+    """Bounded label set for ``cts_device_free_rounds_total{outcome}``."""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class DeviceFreeShadowOutcome(StrEnum):
+    """Bounded label set for ``cts_device_free_shadow_total{outcome}``."""
+
+    WOULD_UPDATE = "would_update"
+    WOULD_SPAWN = "would_spawn"
+    WOULD_DROP = "would_drop"
+
+
 class WearableShadowOutcome(StrEnum):
     """Bounded label set for ``cts_wearable_shadow_outcomes_total{outcome}``."""
 
@@ -180,6 +214,7 @@ class DeadLetterStream(StrEnum):
     """Bounded label set for ``cts_messages_dead_lettered_total{stream}``."""
 
     WEARABLE_FIXES = "wearable_fixes"
+    POSITION_TRACKS = "position_tracks"
     HOUSEHOLD_PRESENCE = "household_presence"
 
 
@@ -478,6 +513,12 @@ class Metrics:
     cts_wearable_spatial_fusion_total: Counter  # labels: mode, outcome
     cts_wearable_spatial_fusion_shift_m: Histogram  # label: mode
     cts_messages_dead_lettered_total: Counter  # label: stream
+
+    # ---- device-free position sensors ----
+    cts_position_tracks_total: Counter  # label: result (PositionTrackIngestResult)
+    cts_device_free_observations_total: Counter  # label: outcome
+    cts_device_free_rounds_total: Counter  # label: outcome (DeviceFreeRoundOutcome)
+    cts_device_free_shadow_total: Counter  # label: outcome (DeviceFreeShadowOutcome)
 
     # ---- wearable supervision ----
     cts_wearable_seed_outcomes_total: Counter  # label: outcome (WearableSeedOutcome)
@@ -1226,6 +1267,28 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "mode (shadow measures, enabled applies) and outcome (applied to a camera-tracked "
             "PH, bridged a camera-occluded PH, gated, or no fresh tight fix).",
             ["mode", "outcome"],
+        ),
+        cts_position_tracks_total=_counter(
+            "cts_position_tracks_total",
+            "Anonymous position tracks read from position.tracks, by ingest result.",
+            ["result"],
+        ),
+        cts_device_free_observations_total=_counter(
+            "cts_device_free_observations_total",
+            "Position-sensor observations in device-free tracker rounds, by what they did: "
+            "updated a PH, spawned or revived one, or were kept from spawning outside a "
+            "camera-free room.",
+            ["outcome"],
+        ),
+        cts_device_free_rounds_total=_counter(
+            "cts_device_free_rounds_total",
+            "Device-free tracker rounds driven by position sensors, by outcome.",
+            ["outcome"],
+        ),
+        cts_device_free_shadow_total=_counter(
+            "cts_device_free_shadow_total",
+            "Shadow-mode position tracks by what a device-free round would do with them.",
+            ["outcome"],
         ),
         cts_wearable_spatial_fusion_shift_m=_hist(
             "cts_wearable_spatial_fusion_shift_m",

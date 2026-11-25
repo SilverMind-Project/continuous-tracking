@@ -12,6 +12,8 @@ import numpy as np
 import numpy.typing as npt
 from cts_contracts import CameraRole
 
+from app.domain.position_sensors import ObservationSource as ObservationSource
+
 # ---------------------------------------------------------------------------
 # Spatial calibration
 # ---------------------------------------------------------------------------
@@ -175,17 +177,21 @@ PH_COV_LEN = 16  # 4x4 covariance matrix, row-major, in metres^2 and (metres/sec
 
 @dataclass(frozen=True)
 class WorldObservation:
-    """One camera-detection projected to floor coordinates.
+    """One person measurement on the floor plane: a camera detection or a position-sensor track.
 
     ``observation_id`` is assigned at persistence time by the repository.
     It is empty before the first save.
+
+    ``source`` says what produced it. A ``DEVICE_FREE`` observation (radar, LiDAR) carries
+    the sensor's source id (``sensor:<sensor_id>``) in ``camera_id``, no ``bbox``, no
+    embedding, and no face; it is geometry only.
     """
 
     camera_id: str
     frame_index: int
     captured_at: datetime
     floor_point: FloorPoint
-    bbox: BoundingBox
+    bbox: BoundingBox | None
     embedding: list[float]
     detection_confidence: float
     observation_id: str = ""
@@ -206,6 +212,13 @@ class WorldObservation:
     """False when feet are occluded or bbox truncation makes the floor contact low-trust."""
     primary_score: float = 0.0
     """Best-view score for stabilized primary-camera selection."""
+    source: ObservationSource = ObservationSource.CAMERA
+    """What produced the observation; the tracker branches on this, never on ``camera_id``."""
+
+    @property
+    def device_free(self) -> bool:
+        """Whether a position sensor (not a camera) produced this observation."""
+        return self.source == ObservationSource.DEVICE_FREE
 
 
 @dataclass(frozen=True)
@@ -1638,6 +1651,18 @@ from .household_classifier import (  # noqa: E402
 )
 from .household_classifier import (  # noqa: E402
     HouseholdClassifierMode as HouseholdClassifierMode,
+)
+from .position_sensors import (  # noqa: E402
+    AnonymousPositionObservation as AnonymousPositionObservation,
+)
+from .position_sensors import (  # noqa: E402
+    PositionSensor as PositionSensor,
+)
+from .position_sensors import (  # noqa: E402
+    PositionSensorMode as PositionSensorMode,
+)
+from .position_sensors import (  # noqa: E402
+    PositionTrackSource as PositionTrackSource,
 )
 from .wearables import (  # noqa: E402
     WEARABLE_MODES as WEARABLE_MODES,

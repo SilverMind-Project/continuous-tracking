@@ -81,7 +81,7 @@ def select_revival_candidate(
 
             # 4. Appearance gate.
             sim = 0.0
-            if closed.gallery_mean is not None and obs.embedding is not None:
+            if closed.gallery_mean and obs.embedding:
                 sim = cosine_similarity(closed.gallery_mean, obs.embedding)
                 if sim < cfg.revive_appearance_min_sim:
                     continue
@@ -159,7 +159,7 @@ def _max_view_cosine(
     Falls back to ``gallery_mean`` when ``view_prototypes`` is empty or
     *obs_embedding* is None.
     """
-    if obs_embedding is None:
+    if not obs_embedding:
         return 0.0
 
     if ph.view_prototypes:
@@ -171,7 +171,7 @@ def _max_view_cosine(
         return best
 
     # Fall back to single gallery_mean.
-    if ph.gallery_mean is not None:
+    if ph.gallery_mean:
         return cosine_similarity(ph.gallery_mean, obs_embedding)
 
     return 0.0

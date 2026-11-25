@@ -23,7 +23,10 @@ from cts_contracts.wearables import FixKind
 from rf_ingress.adapters.base import (
     AdapterHealth,
     AnyAdapter,
+    BaseAdapter,
+    ConfiguredAdapter,
     PositionAdapter,
+    PositionTrackAdapter,
     RangeAdapter,
     RoomAdapter,
 )
@@ -33,7 +36,9 @@ from rf_ingress.clock import (
     resolve_report_timestamp,
 )
 from rf_ingress.domain import (
+    AnonymousPositionTrackReport,
     EmittedFix,
+    EmittedPositionTrack,
     PositionReport,
     RangeEpoch,
     RangeMeasurement,
@@ -44,10 +49,19 @@ from rf_ingress.domain import (
 from rf_ingress.observability import (
     ANCHOR_OUTLIERS_TOTAL,
     FIXES_DROPPED_TOTAL,
+    POSITION_TRACKS_DROPPED_TOTAL,
     REPORTS_TOTAL,
     SOLVE_SECONDS,
     DropReason,
+    PositionTrackDropReason,
     ReportKind,
+)
+from rf_ingress.position_tracks import (
+    InMemoryPositionTrackPublisher,
+    PositionTrackContractError,
+    PositionTrackDropError,
+    PositionTrackPublisher,
+    transform_position_track,
 )
 from rf_ingress.publish import TagFixContractError, TagFixPublisher
 from rf_ingress.registration import RegistrationGate
@@ -96,9 +110,10 @@ class RfIngressRuntime:
     def __init__(
         self,
         *,
-        adapters: Sequence[AnyAdapter],
+        adapters: Sequence[ConfiguredAdapter],
         site_config: SiteConfigProvider,
         publisher: TagFixPublisher,
+        position_track_publisher: PositionTrackPublisher | None = None,
         solver_config: MultilaterationConfig | None = None,
         epoch_window_s: float = 0.25,
         epoch_flush_interval_s: float | None = None,
@@ -112,10 +127,17 @@ class RfIngressRuntime:
         frame_transforms: Mapping[str, SimilarityTransform2D] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        self._adapters: tuple[AnyAdapter, ...] = tuple(adapters)
-        self._adapters_by_id: dict[str, AnyAdapter] = {a.adapter_id: a for a in self._adapters}
+        self._adapters: tuple[ConfiguredAdapter, ...] = tuple(adapters)
+        self._adapters_by_id: dict[str, ConfiguredAdapter] = {
+            a.adapter_id: a for a in self._adapters
+        }
         self._site_config: SiteConfigProvider = site_config
         self._publisher: TagFixPublisher = publisher
+        self._position_track_publisher: PositionTrackPublisher = (
+            position_track_publisher
+            if position_track_publisher is not None
+            else InMemoryPositionTrackPublisher(clock=clock)
+        )
         self._epoch_builder: EpochBuilder = EpochBuilder(
             epoch_window_s=epoch_window_s,
             on_late_measurement=_count_late_epoch_measurement,
@@ -493,16 +515,88 @@ class RfIngressRuntime:
         )
         return fix
 
+    async def handle_position_track(
+        self,
+        adapter: PositionTrackAdapter,
+        report: AnonymousPositionTrackReport,
+        *,
+        arrival_at: datetime | None = None,
+    ) -> EmittedPositionTrack | None:
+        """Validate, transform, and publish one anonymous position track."""
+        arrival_utc = ensure_utc(arrival_at if arrival_at is not None else self._clock())
+        REPORTS_TOTAL.labels(
+            adapter_id=adapter.adapter_id,
+            type=ReportKind.POSITION_TRACK.value,
+        ).inc()
+
+        snapshot = self._site_config.snapshot()
+        self._sync_epoch_builder_with_snapshot(snapshot)
+        if snapshot is None:
+            POSITION_TRACKS_DROPPED_TOTAL.labels(
+                reason=PositionTrackDropReason.NO_SITE_CONFIG
+            ).inc()
+            return None
+
+        sensor = snapshot.position_sensor(report.sensor_id)
+        if sensor is None:
+            POSITION_TRACKS_DROPPED_TOTAL.labels(
+                reason=PositionTrackDropReason.UNREGISTERED_SENSOR
+            ).inc()
+            return None
+
+        device_clock_sample = report.sent_at if report.sent_at is not None else report.measured_at
+        self._skew_estimator.observe(
+            adapter.adapter_id,
+            device_time=device_clock_sample,
+            arrival_time=arrival_utc,
+        )
+
+        try:
+            emitted = transform_position_track(
+                report,
+                sensor,
+                site_floor_plan_id=snapshot.floor_plan_id,
+            )
+        except PositionTrackDropError as exc:
+            POSITION_TRACKS_DROPPED_TOTAL.labels(reason=exc.reason).inc()
+            return None
+
+        try:
+            await self._position_track_publisher.publish(emitted, adapter_id=adapter.adapter_id)
+        except PositionTrackContractError as exc:
+            POSITION_TRACKS_DROPPED_TOTAL.labels(
+                reason=PositionTrackDropReason.INVALID_CONTRACT
+            ).inc()
+            logger.warning(
+                "rf_position_track_contract_rejected",
+                adapter_id=adapter.adapter_id,
+                error=str(exc),
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001
+            POSITION_TRACKS_DROPPED_TOTAL.labels(
+                reason=PositionTrackDropReason.PUBLISH_FAILED
+            ).inc()
+            logger.warning(
+                "rf_position_track_publish_failed",
+                adapter_id=adapter.adapter_id,
+                error_type=type(exc).__name__,
+            )
+            return None
+        return emitted
+
     async def publish_capabilities_once(self) -> int:
-        """Publish one capability heartbeat per configured adapter."""
+        """Publish one capability heartbeat per configured wearable adapter."""
         now = ensure_utc(self._clock())
         count = 0
         for adapter in self._adapters:
+            if not isinstance(adapter, BaseAdapter):
+                continue
             await self._publisher.publish_capability(adapter.capability, reported_at=now)
             count += 1
         return count
 
-    async def _drain_adapter(self, adapter: AnyAdapter) -> list[EmittedFix]:
+    async def _drain_adapter(self, adapter: ConfiguredAdapter) -> list[EmittedFix]:
         emitted: list[EmittedFix] = []
         if isinstance(adapter, RangeAdapter):
             async for meas in adapter.ranges():
@@ -523,6 +617,11 @@ class RfIngressRuntime:
                 fix = await self.handle_room_report(adapter, rm)
                 if fix is not None:
                     emitted.append(fix)
+        if isinstance(adapter, PositionTrackAdapter):
+            async for track in adapter.position_tracks():
+                if self._stop_event.is_set():
+                    break
+                await self.handle_position_track(adapter, track)
         return emitted
 
     async def run_once(self) -> list[EmittedFix]:
@@ -539,7 +638,7 @@ class RfIngressRuntime:
         snapshot = self._site_config.snapshot()
         for epoch in self._epoch_builder.flush_all():
             owner = adapters_by_id.get(epoch.adapter_id)
-            if owner is not None:
+            if isinstance(owner, (RangeAdapter, PositionAdapter, RoomAdapter)):
                 fix = await self._process_epoch(owner, epoch, snapshot)
                 if fix is not None:
                     published.append(fix)
@@ -559,7 +658,7 @@ class RfIngressRuntime:
         published: list[EmittedFix] = []
         for epoch in expired:
             owner = self._adapters_by_id.get(epoch.adapter_id)
-            if owner is None:
+            if not isinstance(owner, (RangeAdapter, PositionAdapter, RoomAdapter)):
                 continue
             try:
                 fix = await self._process_epoch(owner, epoch, snapshot)
@@ -601,7 +700,7 @@ class RfIngressRuntime:
             except TimeoutError:
                 continue
 
-    async def _adapter_loop(self, adapter: AnyAdapter) -> None:
+    async def _adapter_loop(self, adapter: ConfiguredAdapter) -> None:
         await self._drain_adapter(adapter)
 
     async def start(self) -> None:
@@ -634,6 +733,7 @@ class RfIngressRuntime:
             await adapter.close()
         await self._site_config.close()
         await self._publisher.close()
+        await self._position_track_publisher.close()
 
     def health_snapshot(self) -> RuntimeHealthSnapshot:
         """Build a point-in-time health snapshot for ``GET /health``."""
@@ -663,7 +763,9 @@ class RfIngressRuntime:
             node_count=len(snapshot.nodes) if snapshot is not None else 0,
             device_count=len(snapshot.devices) if snapshot is not None else 0,
             binding_count=len(snapshot.bindings) if snapshot is not None else 0,
-            publisher_healthy=self._publisher.is_healthy(),
+            publisher_healthy=(
+                self._publisher.is_healthy() and self._position_track_publisher.is_healthy()
+            ),
             node_last_seen_age_s=node_ages,
             tag_last_seen_age_s=tag_ages,
             tag_battery_fraction=tag_batteries,

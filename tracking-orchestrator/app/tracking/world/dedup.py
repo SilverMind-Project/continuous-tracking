@@ -126,18 +126,26 @@ def dedup_observations(
             obs_j = observations[j]
             if not obs_j.floor_point.calibrated:
                 continue
-            # Rule 1: different cameras only.
+            # Rule 1: different cameras/sensors only.
             if obs_i.camera_id == obs_j.camera_id:
                 continue
-            # Rule 2: within residual-aware geometric gate.
+            # Camera and device-free sensor observations never merge in dedup;
+            # they fuse independently in the Kalman filter.
+            if obs_i.device_free != obs_j.device_free:
+                continue
             xi = obs_i.floor_point.x_mm / 1000.0
             yi = obs_i.floor_point.y_mm / 1000.0
             xj = obs_j.floor_point.x_mm / 1000.0
             yj = obs_j.floor_point.y_mm / 1000.0
             dist = math.sqrt((xi - xj) ** 2 + (yi - yj) ** 2)
-            effective_gate = _effective_distance_gate_m(obs_i, obs_j, cfg)
-            if dist > effective_gate:
-                continue
+            # Rule 2: within modality-appropriate geometric gate.
+            if obs_i.device_free and obs_j.device_free:
+                if not _device_free_pair_within_chi2(obs_i, obs_j, xi, yi, xj, yj, cfg):
+                    continue
+            else:
+                effective_gate = _effective_distance_gate_m(obs_i, obs_j, cfg)
+                if dist > effective_gate:
+                    continue
             # Rule 3: no strong face conflict (see _faces_conflict).
             if cfg.dedup_require_no_face_conflict and _faces_conflict(
                 obs_i.face_anchor, obs_j.face_anchor, cfg
@@ -263,7 +271,7 @@ def _group_appearance_dedup_pass(
                 continue
 
             # Appearance gate.
-            if obs_i.embedding is not None and obs_j.embedding is not None:
+            if obs_i.embedding and obs_j.embedding:
                 sim = cosine_similarity(obs_i.embedding, obs_j.embedding)
                 if sim < cfg.dedup_group_appearance_min_sim:
                     continue
@@ -316,6 +324,51 @@ def _select_representative(cluster: list[WorldObservation]) -> WorldObservation:
         cluster,
         key=lambda obs: (-obs.quality, obs.camera_id, obs.detection_id),
     )
+
+
+def _is_pd_cov2x2(cov: tuple[float, float, float, float] | None) -> bool:
+    if cov is None:
+        return False
+    xx, xy, yx, yy = cov
+    if not (math.isfinite(xx) and math.isfinite(xy) and math.isfinite(yx) and math.isfinite(yy)):
+        return False
+    if abs(xy - yx) > 1e-6 or xx <= 0.0 or yy <= 0.0:
+        return False
+    return xx * yy - xy * xy > 1e-12
+
+
+def _device_free_pair_within_chi2(
+    obs_i: WorldObservation,
+    obs_j: WorldObservation,
+    xi: float,
+    yi: float,
+    xj: float,
+    yj: float,
+    cfg: WorldTrackerConfig,
+) -> bool:
+    """Return True when two device-free tracks agree under the 2-DoF chi-square gate."""
+    if not _is_pd_cov2x2(obs_i.floor_cov_random) or not _is_pd_cov2x2(obs_j.floor_cov_random):
+        return False
+    assert obs_i.floor_cov_random is not None and obs_j.floor_cov_random is not None
+    ri = total_observation_cov(
+        _tuple_to_cov2x2(obs_i.floor_cov_random), obs_i.floor_residual_m or 0.0, cfg.k_cal
+    )
+    rj = total_observation_cov(
+        _tuple_to_cov2x2(obs_j.floor_cov_random), obs_j.floor_residual_m or 0.0, cfg.k_cal
+    )
+    s = ri + rj
+    delta = np.array([xi - xj, yi - yj], dtype=np.float64)
+    if not (np.all(np.isfinite(delta)) and np.all(np.isfinite(s))):
+        return False
+    det = float(s[0, 0] * s[1, 1] - s[0, 1] * s[1, 0])
+    if s[0, 0] <= 0.0 or s[1, 1] <= 0.0 or det <= 1e-12:
+        return False
+    try:
+        sol = np.linalg.solve(s, delta)
+    except np.linalg.LinAlgError:
+        return False
+    d2 = float(delta @ sol)
+    return math.isfinite(d2) and 0.0 <= d2 <= cfg.dedup_device_free_chi2
 
 
 def _effective_distance_gate_m(
@@ -411,6 +464,7 @@ def _build_representative(
                 floor_point=fused_fp,
                 face_anchor=best_face,
                 floor_cov_random=fused_cov_rm,
+                floor_residual_m=worst_residual_m if best.device_free else best.floor_residual_m,
             )
         except (ValueError, np.linalg.LinAlgError):
             pass  # fall through to legacy path
@@ -436,9 +490,11 @@ def _build_representative(
     else:
         mean_fp = best.floor_point
 
+    worst_fallback_residual_m = max((obs.floor_residual_m or 0.0) for obs in cluster)
     return dataclasses.replace(
         best,
         captured_at=latest_captured_at,
         floor_point=mean_fp,
         face_anchor=best_face,
+        floor_residual_m=worst_fallback_residual_m if best.device_free else best.floor_residual_m,
     )

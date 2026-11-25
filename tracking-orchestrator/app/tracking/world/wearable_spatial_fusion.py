@@ -35,6 +35,7 @@ from cts_contracts import FixKind
 from app.domain import WearableFix, tuple_to_cov2x2
 from app.tracking.world.kalman import (
     KalmanState,
+    apply_position_floor,
     isotropic_cov,
     mahalanobis2_position,
     predict,
@@ -141,27 +142,9 @@ def fuse_position_fix(
         return FusionResult(gated=True, state=None, shift_m=0.0, mahalanobis2=d2)
 
     posterior = update(prior, z_x, z_y, r)
-    posterior = _apply_position_floor(prior, posterior, cfg.spatial_fusion_bias_floor_m**2)
+    posterior = apply_position_floor(prior, posterior, cfg.spatial_fusion_bias_floor_m**2)
     shift_m = math.hypot(
         float(posterior.mean[0] - prior.mean[0]),
         float(posterior.mean[1] - prior.mean[1]),
     )
     return FusionResult(gated=False, state=posterior, shift_m=shift_m, mahalanobis2=d2)
-
-
-def _apply_position_floor(
-    prior: KalmanState, posterior: KalmanState, floor_m2: float
-) -> KalmanState:
-    """Lift the posterior's smallest position eigenvalue to ``min(floor, prior's)``.
-
-    Adding a multiple of the position-block identity keeps the covariance symmetric
-    positive semi-definite and leaves the velocity block and cross terms unchanged.
-    """
-    prior_cov = np.asarray(prior.covariance, dtype=np.float64)
-    post_cov = np.array(posterior.covariance, dtype=np.float64)
-    target = min(floor_m2, float(np.linalg.eigvalsh(prior_cov[0:2, 0:2])[0]))
-    current = float(np.linalg.eigvalsh(post_cov[0:2, 0:2])[0])
-    if current >= target:
-        return posterior
-    post_cov[0:2, 0:2] += (target - current) * np.eye(2, dtype=np.float64)
-    return KalmanState(mean=posterior.mean, covariance=post_cov, updated_at=posterior.updated_at)

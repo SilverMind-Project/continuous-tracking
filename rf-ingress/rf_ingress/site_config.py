@@ -15,9 +15,10 @@ from typing import Protocol
 import httpx
 import structlog
 from cts_contracts.wearables import DeviceKind, RangingTechnology, RfNodeRole
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from rf_ingress.domain import (
+    PositionSensorConfig,
     RfNodeGeometry,
     SiteBinding,
     SiteConfigSnapshot,
@@ -64,6 +65,17 @@ class _SiteConfigDeviceSchema(BaseModel):
     is_active: bool
 
 
+class _SiteConfigPositionSensorSchema(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    sensor_id: str
+    room_id: str | None = None
+    x_m: float
+    y_m: float
+    yaw_deg: float | None = None
+    calibration_residual_m: float
+
+
 class _WearableSiteConfigSchema(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -71,6 +83,7 @@ class _WearableSiteConfigSchema(BaseModel):
     nodes: list[_SiteConfigNodeSchema]
     bindings: list[_SiteConfigBindingSchema]
     devices: list[_SiteConfigDeviceSchema]
+    position_sensors: list[_SiteConfigPositionSensorSchema] = Field(default_factory=list)
     version: str
 
 
@@ -112,11 +125,23 @@ def parse_site_config_payload(payload: object) -> SiteConfigSnapshot:
         )
         for d in parsed.devices
     )
+    position_sensors = tuple(
+        PositionSensorConfig(
+            sensor_id=s.sensor_id,
+            room_id=s.room_id,
+            x_m=float(s.x_m),
+            y_m=float(s.y_m),
+            yaw_deg=float(s.yaw_deg) if s.yaw_deg is not None else None,
+            calibration_residual_m=float(s.calibration_residual_m),
+        )
+        for s in parsed.position_sensors
+    )
     return SiteConfigSnapshot(
         floor_plan_id=parsed.floor_plan_id,
         nodes=nodes,
         bindings=bindings,
         devices=devices,
+        position_sensors=position_sensors,
         version=parsed.version,
     )
 

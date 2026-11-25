@@ -6,9 +6,11 @@ Wires TransitDetector and RoomTransitionPublisher.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import datetime
 
+from cts_contracts import is_device_free_source, source_id_for_sensor
 from structlog import get_logger
 
 from app.calibration.state import calibration_state
@@ -162,6 +164,7 @@ class WorldTrackingStage(FrameStage):
         self._cc_assertion_default_quality = cc_assertion_default_quality
         self._cc_assertion_default_yaw_deg = cc_assertion_default_yaw_deg
         self._missing_room_binding_warnings: set[str] = set()
+        self._round_lock = asyncio.Lock()
 
     async def run(self, ctx: FrameContext) -> None:
         await self.run_many([ctx])
@@ -200,13 +203,18 @@ class WorldTrackingStage(FrameStage):
         camera_ids = {ctx.frame.camera_id for ctx in contexts} | {
             obs.camera_id for obs in observations
         }
-        camera_room_map = await camera_room_names(self._live_config.camera_room_map, camera_ids)
-        room_ids_by_camera = await all_camera_room_ids(self._live_config.camera_room_map)
+        (
+            camera_room_map,
+            room_ids_by_camera,
+            room_polygons,
+            room_names,
+        ) = await self._resolved_room_maps(camera_ids)
         for camera_id in sorted(camera_ids - set(camera_room_map)):
+            if is_device_free_source(camera_id):
+                continue
             if camera_id not in self._missing_room_binding_warnings:
                 self._missing_room_binding_warnings.add(camera_id)
                 logger.warning("world_tracking_camera_room_binding_missing", camera_id=camera_id)
-        room_polygons, room_names = await room_polygon_snapshot(self._live_config.room_polygon_map)
 
         cc_face_anchors = await self._match_cc_assertions(
             observations=observations,
@@ -249,18 +257,19 @@ class WorldTrackingStage(FrameStage):
             else ()
         )
 
-        result = await self._tracker.step(
-            observations=observations_with_faces,
-            now=batch_time,
-            room_polygons=room_polygons,
-            camera_room_map=camera_room_map,
-            room_names=room_names,
-            face_anchors=all_face_anchors + shadow_face_anchors + template_anchors,
-            face_evidence=(face_evidence + template_evidence) or None,
-            low_band_observations=low_band_observations or None,
-            wearable_fixes=wearable_fixes or None,
-            camera_room_ids=room_ids_by_camera,
-        )
+        async with self._round_lock:
+            result = await self._tracker.step(
+                observations=observations_with_faces,
+                now=batch_time,
+                room_polygons=room_polygons,
+                camera_room_map=camera_room_map,
+                room_names=room_names,
+                face_anchors=all_face_anchors + shadow_face_anchors + template_anchors,
+                face_evidence=(face_evidence + template_evidence) or None,
+                low_band_observations=low_band_observations or None,
+                wearable_fixes=wearable_fixes or None,
+                camera_room_ids=room_ids_by_camera,
+            )
 
         # Every execution path reaches the tracker through this method, so feeding the template
         # buffer here is the per-round side effect for all of them.
@@ -313,6 +322,69 @@ class WorldTrackingStage(FrameStage):
                 snapshots=len(result.snapshots),
                 continuations=len(result.continuations),
             )
+
+    async def run_device_free_round(
+        self,
+        contexts: list[FrameContext],
+        observations: list[WorldObservation],
+        *,
+        now: datetime,
+    ) -> None:
+        """Advance the shared world tracker once using geometry-only position-sensor tracks."""
+        source_ids = {ctx.frame.camera_id for ctx in contexts} | {
+            obs.camera_id for obs in observations
+        }
+        (
+            camera_room_map,
+            room_ids_by_camera,
+            room_polygons,
+            room_names,
+        ) = await self._resolved_room_maps(source_ids)
+        wearable_fixes = (
+            self._wearable_fix_source.recent(
+                now=now,
+                max_age_s=self._wearable_fix_window_s,
+            )
+            if self._wearable_fix_source is not None
+            else ()
+        )
+        async with self._round_lock:
+            result = await self._tracker.step(
+                observations=observations,
+                now=now,
+                room_polygons=room_polygons,
+                camera_room_map=camera_room_map,
+                room_names=room_names,
+                wearable_fixes=wearable_fixes or None,
+                camera_room_ids=room_ids_by_camera,
+            )
+        await self._publish_transit_events(result, now)
+        if not contexts:
+            return
+        primary_context = contexts[0]
+        for ctx in contexts:
+            self._populate_context(ctx, result, include_revisions=ctx is primary_context)
+
+    async def _resolved_room_maps(
+        self, camera_ids: set[str]
+    ) -> tuple[
+        dict[str, str],
+        dict[str, str],
+        dict[str, list[tuple[float, float]]],
+        dict[str, str],
+    ]:
+        camera_room_map = await camera_room_names(self._live_config.camera_room_map, camera_ids)
+        room_ids_by_camera = await all_camera_room_ids(self._live_config.camera_room_map)
+        room_polygons, room_names = await room_polygon_snapshot(self._live_config.room_polygon_map)
+        site_cfg = self._live_config.wearable_site_config_map.get_sync()
+        for sensor in site_cfg.position_sensors:
+            if sensor.room_id is None:
+                continue
+            src_id = source_id_for_sensor(sensor.sensor_id)
+            room_ids_by_camera[src_id] = sensor.room_id
+            if sensor.room_id in room_names:
+                camera_room_map[src_id] = room_names[sensor.room_id]
+        return camera_room_map, room_ids_by_camera, room_polygons, room_names
 
     def _build_low_band_observations(self, ctx: FrameContext) -> list[WorldObservation]:
         """Build minimal WorldObservation objects for low-confidence-band detections.
@@ -638,6 +710,7 @@ class WorldTrackingStage(FrameStage):
                     floor_cov_random=obs.floor_cov_random,
                     footpoint_reliable=obs.footpoint_reliable,
                     primary_score=obs.primary_score,
+                    source=obs.source,
                 )
             )
         return observations_with_faces

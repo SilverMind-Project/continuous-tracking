@@ -17,7 +17,7 @@ from .posture_stage import PostureStage
 from .posture_trails import TrailsStage
 from .privacy import PrivacyStage
 from .provenance import ProvenancePersistStage
-from .publish import PublishStage
+from .publish import DeviceFreePublishStage, PublishStage
 from .reid_candidates import ReIDCandidateStage
 from .revisions import RevisionsStage
 from .spatial_projection import SpatialProjectionStage
@@ -31,6 +31,7 @@ __all__ = [
     "ClosePHStage",
     "DetectStage",
     "DetectionBackfillStage",
+    "DeviceFreePublishStage",
     "FaceIdentityStage",
     "FallDetectionConfig",
     "FallDetectionStage",

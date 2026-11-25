@@ -15,7 +15,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, get_args
 
-from cts_contracts import CameraRole, DeviceKind, RangingTechnology, RfNodeRole
+from cts_contracts import CameraRole, DeviceKind, RangingTechnology, RfNodeRole, is_valid_sensor_id
 from structlog import get_logger
 from tenacity import (
     AsyncRetrying,
@@ -30,6 +30,7 @@ from app.calibration.validator import validate_homography
 from app.domain import (
     CameraProfile,
     OverlapGroup,
+    PositionSensor,
     PrivacyPolicy,
     RfNode,
     TransitZone,
@@ -287,11 +288,60 @@ def parse_wearable_site_config(payload: Any) -> WearableSiteConfig:
             )
         )
 
+    # Optional: CC builds that predate position sensors omit the key.
+    raw_sensors = root.get("position_sensors")
+    sensors: list[PositionSensor] = []
+    seen_sensor_ids: set[str] = set()
+    for index, sensor_raw in enumerate(
+        _require_list(raw_sensors, context=f"{ctx}.position_sensors")
+        if raw_sensors is not None
+        else []
+    ):
+        sctx = f"{ctx}.position_sensors[{index}]"
+        sensor = _require_mapping(sensor_raw, context=sctx)
+        sensor_id = _require_non_empty_str(sensor, "sensor_id", context=sctx)
+        if not is_valid_sensor_id(sensor_id):
+            raise CCConfigSyncContractError(f"{sctx}.sensor_id {sensor_id!r} is not a sensor slug")
+        if sensor_id in seen_sensor_ids:
+            raise CCConfigSyncContractError(f"{sctx}.sensor_id {sensor_id!r} is duplicated")
+        seen_sensor_ids.add(sensor_id)
+        sensor_room_raw = sensor.get("room_id")
+        if sensor_room_raw is not None and (
+            not isinstance(sensor_room_raw, str) or not sensor_room_raw
+        ):
+            raise CCConfigSyncContractError(f"{sctx}.room_id must be a non-empty string or null")
+        sx_m = _require_finite_number(sensor.get("x_m"), context=f"{sctx}.x_m")
+        sy_m = _require_finite_number(sensor.get("y_m"), context=f"{sctx}.y_m")
+        yaw_raw = sensor.get("yaw_deg")
+        yaw_deg = (
+            _require_finite_number(yaw_raw, context=f"{sctx}.yaw_deg")
+            if yaw_raw is not None
+            else None
+        )
+        residual = _require_finite_number(
+            sensor.get("calibration_residual_m"), context=f"{sctx}.calibration_residual_m"
+        )
+        if not 0.0 < residual <= 1.0:
+            raise CCConfigSyncContractError(
+                f"{sctx}.calibration_residual_m must be in (0, 1] metres"
+            )
+        sensors.append(
+            PositionSensor(
+                sensor_id=sensor_id,
+                room_id=sensor_room_raw,
+                x_mm=round(sx_m * 1000.0),
+                y_mm=round(sy_m * 1000.0),
+                yaw_deg=yaw_deg,
+                calibration_residual_m=residual,
+            )
+        )
+
     return WearableSiteConfig(
         floor_plan_id=floor_plan_id,
         nodes=tuple(nodes),
         bindings=tuple(bindings),
         devices=tuple(devices),
+        position_sensors=tuple(sensors),
         version=version,
     )
 

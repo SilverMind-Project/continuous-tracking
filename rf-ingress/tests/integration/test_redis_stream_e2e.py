@@ -12,15 +12,23 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from rf_ingress.adapters.base import AdapterDeps
 from rf_ingress.adapters.simulator import (
+    PositionTrackSimulatorAdapter,
     SimulatorAdapter,
     build_site_config_from_scenario,
     load_scenario,
 )
+from rf_ingress.domain import PositionSensorConfig, SiteConfigSnapshot
 from rf_ingress.pipeline import RfIngressRuntime
-from rf_ingress.proto.continuoustracking.v1 import wearable_pb2
+from rf_ingress.position_tracks import (
+    FIELD_POSITION_TRACK,
+    RedisPositionTrackPublisher,
+    validate_position_track_proto,
+)
+from rf_ingress.proto.continuoustracking.v1 import position_sensor_pb2, wearable_pb2
 from rf_ingress.publish import (
     FIELD_WEARABLE_CAPABILITY,
     FIELD_WEARABLE_FIX,
+    InMemoryTagFixPublisher,
     RedisTagFixPublisher,
     validate_tag_fix_proto,
 )
@@ -148,3 +156,60 @@ async def test_simulator_burst_and_sole_occupant_scenarios_on_redis(redis_url: s
             assert expected_kinds.issubset(kinds_seen)
         finally:
             await runtime.stop()
+
+
+@pytest.mark.integration
+async def test_position_track_simulator_publishes_anonymous_tracks_to_redis(
+    redis_url: str,
+) -> None:
+    snap = SiteConfigSnapshot(
+        floor_plan_id="household:1",
+        position_sensors=(
+            PositionSensorConfig(
+                sensor_id="radar-bathroom-1",
+                room_id="bathroom",
+                x_m=2.0,
+                y_m=3.0,
+                yaw_deg=90.0,
+                calibration_residual_m=0.10,
+            ),
+        ),
+        version="sha256:pos1",
+    )
+    provider = InMemorySiteConfigProvider(snap)
+    adapter = PositionTrackSimulatorAdapter(
+        adapter_id="pos-sim-redis",
+        deps=AdapterDeps(site_config=provider),
+        steps=4,
+        frame="sensor_local",
+    )
+    stream_key = "test.position.tracks"
+    redis_client = Redis.from_url(redis_url, decode_responses=False)
+    pos_pub = RedisPositionTrackPublisher(
+        redis_client,
+        stream=stream_key,
+        retention_hours=1.0,
+        close_client=True,
+    )
+    tag_pub = InMemoryTagFixPublisher()
+    runtime = RfIngressRuntime(
+        adapters=[adapter],
+        site_config=provider,
+        publisher=tag_pub,
+        position_track_publisher=pos_pub,
+    )
+    try:
+        fixes = await runtime.run_once()
+        assert fixes == []
+        assert tag_pub.fixes == []
+        assert tag_pub.capabilities == []
+        entries = await redis_client.xrange(stream_key, "-", "+")
+        assert len(entries) == 4
+        for _entry_id, fields in entries:
+            pb = position_sensor_pb2.AnonymousPositionTrack()
+            pb.ParseFromString(fields[FIELD_POSITION_TRACK.encode("utf-8")])
+            validate_position_track_proto(pb)
+            assert pb.sensor_id == "radar-bathroom-1"
+            assert pb.floor_plan_id == "household:1"
+    finally:
+        await runtime.stop()

@@ -290,3 +290,121 @@ async def test_roster_sync_purge_identity_drops_in_memory_wearable_bindings() ->
     assert holder.get_sync().member_at("watch-uwb-1", t) is None
     # Unrelated member's binding stays intact.
     assert holder.get_sync().member_at("band-1", t) == "amma"
+
+
+@pytest.mark.asyncio
+async def test_parse_wearable_site_config_position_sensors_and_contract_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = CollectorRegistry()
+    test_metrics = metrics_module.build_metrics(registry)
+    monkeypatch.setattr(metrics_module, "metrics", test_metrics)
+
+    payload = _sample_site_config_payload()
+    # Omitted position_sensors key stays valid and produces an empty tuple.
+    cfg_without_sensors = parse_wearable_site_config(payload)
+    assert cfg_without_sensors.position_sensors == ()
+    assert cfg_without_sensors.position_sensor("radar-bath-1") is None
+
+    payload["position_sensors"] = [
+        {
+            "sensor_id": "radar-bath-1",
+            "room_id": "2",
+            "x_m": 1.25,
+            "y_m": 3.5,
+            "yaw_deg": 90.0,
+            "calibration_residual_m": 0.15,
+        }
+    ]
+    cfg = parse_wearable_site_config(payload)
+    assert len(cfg.position_sensors) == 1
+    sensor = cfg.position_sensor("radar-bath-1")
+    assert sensor is not None
+    assert sensor.room_id == "2"
+    assert sensor.x_mm == 1250
+    assert sensor.y_mm == 3500
+    assert sensor.yaw_deg == pytest.approx(90.0)
+    assert sensor.calibration_residual_m == pytest.approx(0.15)
+
+    for bad_sensors in (
+        [
+            {
+                "sensor_id": "bad:id",
+                "room_id": "2",
+                "x_m": 1.0,
+                "y_m": 1.0,
+                "calibration_residual_m": 0.1,
+            }
+        ],
+        [
+            {
+                "sensor_id": "radar-bath-1",
+                "room_id": "2",
+                "x_m": 1.0,
+                "y_m": 1.0,
+                "calibration_residual_m": 0.1,
+            },
+            {
+                "sensor_id": "radar-bath-1",
+                "room_id": "2",
+                "x_m": 2.0,
+                "y_m": 2.0,
+                "calibration_residual_m": 0.1,
+            },
+        ],
+        [
+            {
+                "sensor_id": "radar-bath-1",
+                "room_id": "2",
+                "x_m": 1.0,
+                "y_m": 1.0,
+                "calibration_residual_m": 0.0,
+            }
+        ],
+        [
+            {
+                "sensor_id": "radar-bath-1",
+                "room_id": "2",
+                "x_m": 1.0,
+                "y_m": 1.0,
+                "calibration_residual_m": 1.5,
+            }
+        ],
+    ):
+        bad_payload = _sample_site_config_payload()
+        bad_payload["position_sensors"] = bad_sensors
+        with pytest.raises(CCConfigSyncContractError):
+            parse_wearable_site_config(bad_payload)
+
+    # Corrupt position_sensors during live poll retains the last valid config.
+    responses: dict[str, Any] = {
+        "/api/v1/cts/cameras": [],
+        "/api/v1/cts/overlap_groups": [],
+        "/api/v1/household/floor-plan": {
+            "floor_plan_width": 1000,
+            "floor_plan_height": 800,
+            "floor_meters_per_pixel": 0.01,
+        },
+        "/api/v1/rooms": [],
+        "/api/v1/cts/transit-zones": [],
+        WEARABLES_SITE_CONFIG_PATH: payload,
+    }
+    holder = WearableSiteConfigMap()
+    svc = CCConfigSyncService(
+        client=_FakeCCClient(responses),
+        calibration_state=CalibrationState(),
+        camera_room_map=CameraRoomMap(),
+        room_polygon_map=RoomPolygonMap(),
+        transit_zone_map=TransitZoneMap(),
+        fetch_retry_attempts=1,
+        wearable_site_config_map=holder,
+    )
+    await svc._poll()
+    assert len(holder.get_sync().position_sensors) == 1
+
+    bad_poll_payload = _sample_site_config_payload()
+    bad_poll_payload["position_sensors"] = [{"sensor_id": "bad:id"}]
+    responses[WEARABLES_SITE_CONFIG_PATH] = bad_poll_payload
+    await svc._poll()
+    assert len(holder.get_sync().position_sensors) == 1
+    assert test_metrics.cc_sync_failures_total.labels(resource="wearables")._value.get() == 1.0

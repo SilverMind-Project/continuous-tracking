@@ -103,13 +103,13 @@ R*   = ( Σ (J Σ_px Jᵀ)ᵢ⁻¹ )⁻¹  +  R_bias_floor
   wearable against its own fused fixes. `enabled` may advance a camera-occluded attested PH
   and keep it open for up to `coasting_bridge_max_s` after its last camera observation.
   Detail and rollout: `../cts-identity-governance/reference/wearable-evidence.md`.
-- **Device-free anonymous position sensors (`AnonymousPositionTrack` on `position.tracks`).**
-  mmWave radars and 2D/3D LiDARs publish anonymous floor-plane tracks (`x_mm`, `y_mm`,
-  `cov_xx_m2`, `cov_xy_m2`, `cov_yy_m2`) in the shared floor frame without identity. When fused
-  with cameras in `WorldTracker`, only random covariance is inverse-summed while per-sensor
-  systematic bias (`R_sensor_bias`) is added as a non-shrinking floor. In camera-free privacy
-  zones (bathrooms, bedrooms), `AnonymousPositionTrack` observations sustain or spawn PHs that
-  `WearableAssociationTracker` and `IdentityResolver` bind to household members.
+- **Device-free anonymous position sensors (`AnonymousPositionTrack` on `position.tracks`, `position_sensor.mode`: `off`, `shadow`, `enabled`).**
+  mmWave radars and 2D/3D LiDARs registered in CC (`position_sensors` in site-config) publish anonymous floor-plane tracks (`x_mm`, `y_mm`, `cov_xx_m2`, `cov_xy_m2`, `cov_yy_m2`) in the shared floor frame without identity via `rf-ingress` (`position_track_mqtt` / `position_track_simulator`) into `PositionTrackSubscriber` and `PositionTrackBuffer` (`app/services/position_track_subscriber.py`, `app/services/position_track_buffer.py`).
+  - **Age & confirmation gating:** Buffered tracks wait `position_sensor.min_track_age_s` (`1.0 s`, reset across gaps >= `track_gap_s = 2.0 s`) to suppress transient radar ghosts, and are consumed once via watermark per `0.5 s` round (`round_max_track_age_s = 1.5 s`).
+  - **Device-free dedup (`app/tracking/world/dedup.py`):** Device-free observations never merge with camera observations (`ObservationSource.CAMERA` vs `DEVICE_FREE`) and never merge two tracks from the same sensor; cross-sensor device-free pairs merge by 2-DoF Mahalanobis gate (`world_tracker.dedup_device_free_chi2 = 9.21`) on summed total covariances and fuse random covariance plus the worst sensor systematic floor.
+  - **Non-shrinking Kalman floor (`apply_position_floor` in `app/tracking/world/kalman.py`):** Both device-free Kalman updates and wearable spatial fusion apply `apply_position_floor` with `b^2 = (k_cal * residual)^2` (or `bias_floor_m^2`) so repeated radar updates never shrink PH covariance below the sensor's calibration residual (`calibration_residual_m`), while random covariance still fuses inversely with cameras. Device-free updates mark `ph_floor_calibrated = True` (feeding `PHFloorHistory` independently of wearables) and skip appearance/height updates and camera rejection metrics.
+  - **Privacy-zone spawn gate & primary source (`app/tracking/world/device_free.py`):** Device-free tracks spawn or revive PHs only inside room polygons whose room has no bound camera (`camera_free_room_at` / `device_free_spawn_allowed`); in camera rooms they update existing PHs only (`cts_device_free_observations_total{outcome="spawn_suppressed"}` otherwise). `_update_primary_camera` preserves optical camera priority in camera rooms while switching immediately to a `sensor:` source once a PH leaves camera-covered rooms, and switches back immediately on optical re-entry.
+  - **Shadow firewall:** In `shadow`, the subscriber and buffer run and `evaluate_device_free_shadow` records `cts_device_free_shadow_total{outcome}` against `WorldTracker.last_open_phs` without mutating tracker state or firing rounds.
 
 ## Primary-camera selection
 
@@ -160,8 +160,9 @@ All height geometry lives in one pure module: `app/tracking/camera_pose.py`, cal
 | Single-view height stage and pose validation cache | `app/pipeline/stages/height_estimation.py` |
 | `ObservationGeometry` descriptor (frozen) | `app/domain/__init__.py` |
 | Footpoint→floor projection (+ covariance via the module) | `app/tracking/floor_projector.py` |
-| Information-form cross-camera fusion | `app/tracking/world/dedup.py` |
-| Matrix-R update, ZUPT | `app/tracking/world/kalman.py` |
+| Information-form cross-camera and device-free dedup | `app/tracking/world/dedup.py` |
+| Pure device-free track conversion, spawn gate, and shadow eval | `app/tracking/world/device_free.py` |
+| Matrix-R update, covariance floor (`apply_position_floor`), ZUPT | `app/tracking/world/kalman.py` |
 | Primary-camera selection | `app/tracking/world/tracker.py` |
 | Time model, coasting state, damped prediction, time-skew dedup | `reference/time-model.md` |
 | Floor frame definition, calibration tiers, CC sync authority | `reference/floor-frame.md` |
