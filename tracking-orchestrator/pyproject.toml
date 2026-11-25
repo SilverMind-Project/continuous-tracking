@@ -32,7 +32,7 @@ dev = [
     "ruff>=0.9.0",
     "mypy>=1.14.0",
     # import-linter >=2.12 rejects intentionally deleted modules in forbidden_modules.
-    "import-linter>=2.0.0,<2.12",
+    "import-linter>=2.0.0,<2.18",
     "pre-commit>=4.0.0",
     "importlib-metadata>=8.5.0",
 ]
@@ -42,7 +42,7 @@ triton = [
 # Offline household appearance classifier trainer only (scripts/train_household_classifier.py);
 # never imported by app/ (enforced by tests/architecture/test_no_sklearn_in_app.py).
 classifier-tools = [
-    "scikit-learn>=1.5,<1.7",
+    "scikit-learn>=1.5,<1.10",
 ]
 
 [project.scripts]
