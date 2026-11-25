@@ -52,7 +52,7 @@ from rf_ingress.observability import (
 from rf_ingress.publish import TagFixContractError, TagFixPublisher
 from rf_ingress.registration import RegistrationGate
 from rf_ingress.site_config import SiteConfigProvider
-from rf_ingress.solver.epoch import EpochBuilder, room_fallback_from_epoch
+from rf_ingress.solver.epoch import EpochBuilder, infer_epoch_room, room_fallback_from_epoch
 from rf_ingress.solver.frame_transform import SimilarityTransform2D
 from rf_ingress.solver.multilateration import MultilaterationConfig, MultilaterationSolver
 
@@ -86,6 +86,10 @@ class RuntimeHealthSnapshot:
     tag_battery_fraction: dict[str, float]
 
 
+def _count_late_epoch_measurement() -> None:
+    FIXES_DROPPED_TOTAL.labels(reason=DropReason.LATE_EPOCH_MEASUREMENT).inc()
+
+
 class RfIngressRuntime:
     """Orchestrates site-config polling, adapter ingestion, solving, and publishing."""
 
@@ -97,22 +101,38 @@ class RfIngressRuntime:
         publisher: TagFixPublisher,
         solver_config: MultilaterationConfig | None = None,
         epoch_window_s: float = 0.25,
+        epoch_flush_interval_s: float | None = None,
         site_config_poll_interval_s: float = 60.0,
         capability_heartbeat_interval_s: float = 60.0,
         skew_window_s: float = 60.0,
         skew_warn_threshold_s: float = 0.5,
         burst_window_size: int = 20,
+        burst_max_sample_age_s: float = 1800.0,
+        burst_step_reset_threshold_s: float = 2.0,
         frame_transforms: Mapping[str, SimilarityTransform2D] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._adapters: tuple[AnyAdapter, ...] = tuple(adapters)
+        self._adapters_by_id: dict[str, AnyAdapter] = {a.adapter_id: a for a in self._adapters}
         self._site_config: SiteConfigProvider = site_config
         self._publisher: TagFixPublisher = publisher
-        self._epoch_builder: EpochBuilder = EpochBuilder(epoch_window_s=epoch_window_s)
+        self._epoch_builder: EpochBuilder = EpochBuilder(
+            epoch_window_s=epoch_window_s,
+            on_late_measurement=_count_late_epoch_measurement,
+        )
+        self._epoch_flush_interval_s: float = (
+            epoch_flush_interval_s
+            if epoch_flush_interval_s is not None
+            else min(0.05, epoch_window_s / 4.0)
+        )
+        if not math.isfinite(self._epoch_flush_interval_s) or self._epoch_flush_interval_s <= 0.0:
+            raise ValueError("epoch_flush_interval_s must be finite and > 0")
         self._solver: MultilaterationSolver = MultilaterationSolver(solver_config)
         self._gate: RegistrationGate = RegistrationGate()
         self._burst_clock: BurstClockOffsetTracker = BurstClockOffsetTracker(
-            window_size=burst_window_size
+            window_size=burst_window_size,
+            max_sample_age_s=burst_max_sample_age_s,
+            step_reset_threshold_s=burst_step_reset_threshold_s,
         )
         self._skew_estimator: AdapterClockSkewEstimator = AdapterClockSkewEstimator(
             window_s=skew_window_s,
@@ -144,13 +164,12 @@ class RfIngressRuntime:
             return
         if snapshot.version == self._last_applied_version and self._last_applied_version != "":
             return
-        nodes_by_adapter: dict[str, set[str]] = {}
+        node_rooms_by_adapter: dict[str, dict[str, str | None]] = {}
         for node in snapshot.nodes:
-            nodes_by_adapter.setdefault(node.adapter_id, set()).add(node.anchor_id)
-        frozen_map = {aid: frozenset(ids) for aid, ids in nodes_by_adapter.items()}
+            node_rooms_by_adapter.setdefault(node.adapter_id, {})[node.anchor_id] = node.room_id
         dropped = self._epoch_builder.on_site_config_version(
             snapshot.version,
-            nodes_by_adapter=frozen_map,
+            node_rooms_by_adapter=node_rooms_by_adapter,
         )
         self._last_applied_version = snapshot.version
         if dropped > 0:
@@ -224,7 +243,7 @@ class RfIngressRuntime:
             adapter_id=adapter.adapter_id,
         )
 
-        completed_epochs = self._epoch_builder.add(aligned)
+        completed_epochs = self._epoch_builder.add(aligned, now=arrival_utc)
         published: list[EmittedFix] = []
         for epoch in completed_epochs:
             fix = await self._process_epoch(adapter, epoch, snapshot)
@@ -252,6 +271,9 @@ class RfIngressRuntime:
         if result is not None:
             if result.dropped_outlier_anchor_id is not None:
                 ANCHOR_OUTLIERS_TOTAL.labels(anchor_id=result.dropped_outlier_anchor_id).inc()
+            room = infer_epoch_room(
+                epoch, nodes, exclude_anchor_id=result.dropped_outlier_anchor_id
+            )
             fix = EmittedFix(
                 tag_id=epoch.tag_id,
                 measured_at=epoch.measured_at,
@@ -273,6 +295,8 @@ class RfIngressRuntime:
                 anchors_used=result.anchors_used,
                 residual_rms_m=result.residual_rms_m,
                 battery_fraction=epoch.battery_fraction,
+                room_id=room[0] if room is not None else "",
+                room_probability=room[1] if room is not None else None,
             )
             return await self._gate_and_publish(fix, snapshot)
 
@@ -521,6 +545,45 @@ class RfIngressRuntime:
                     published.append(fix)
         return published
 
+    async def flush_expired_epochs(self) -> list[EmittedFix]:
+        """Close epochs idle past ``epoch_window_s`` on the server clock and publish them.
+
+        A failure to solve or publish one epoch is logged and does not stop the
+        remaining epochs, so a transient publisher outage cannot strand the
+        final epoch of a burst.
+        """
+        expired = self._epoch_builder.flush_expired(ensure_utc(self._clock()))
+        if not expired:
+            return []
+        snapshot = self._site_config.snapshot()
+        published: list[EmittedFix] = []
+        for epoch in expired:
+            owner = self._adapters_by_id.get(epoch.adapter_id)
+            if owner is None:
+                continue
+            try:
+                fix = await self._process_epoch(owner, epoch, snapshot)
+            except Exception as exc:  # noqa: BLE001 - one epoch must not kill the flush loop
+                FIXES_DROPPED_TOTAL.labels(reason=DropReason.PUBLISH_FAILED).inc()
+                logger.warning(
+                    "rf_epoch_flush_failed",
+                    adapter_id=epoch.adapter_id,
+                    error_type=type(exc).__name__,
+                )
+                continue
+            if fix is not None:
+                published.append(fix)
+        return published
+
+    async def _epoch_flush_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(), timeout=self._epoch_flush_interval_s
+                )
+            except TimeoutError:
+                await self.flush_expired_epochs()
+
     async def _site_config_loop(self) -> None:
         while not self._stop_event.is_set():
             snapshot = await self._site_config.refresh()
@@ -549,6 +612,7 @@ class RfIngressRuntime:
         self._tasks = [
             asyncio.create_task(self._site_config_loop(), name="rf-site-config-poll"),
             asyncio.create_task(self._capability_loop(), name="rf-capability-heartbeat"),
+            asyncio.create_task(self._epoch_flush_loop(), name="rf-epoch-flush"),
             *[
                 asyncio.create_task(
                     self._adapter_loop(adapter), name=f"rf-adapter-{adapter.adapter_id}"

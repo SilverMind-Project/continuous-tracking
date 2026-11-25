@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from cts_contracts.wearables import (
     AdapterKind,
     DeviceKind,
@@ -173,3 +174,98 @@ def test_burst_tracker_window_and_adapter_skew_median() -> None:
     current = skew.current_skew_seconds("ad-1")
     assert current is not None
     assert abs(current - 0.4) < 1e-6
+
+
+def _batch(
+    tracker: BurstClockOffsetTracker,
+    *,
+    at_s: float,
+    delta_s: float,
+    tag_id: str = "t1",
+) -> float:
+    """Feed one batch arriving at ``_T0 + at_s`` whose ``arrival - sent_at`` is *delta_s*."""
+    arrival = _T0 + timedelta(seconds=at_s)
+    return tracker.observe_batch(
+        tag_id,
+        sent_at=arrival - timedelta(seconds=delta_s),
+        arrival_at=arrival,
+        record_metric=False,
+    )
+
+
+def test_burst_clock_offset_expires_samples_older_than_max_sample_age() -> None:
+    tracker = BurstClockOffsetTracker(max_sample_age_s=1800.0)
+    assert _batch(tracker, at_s=0.0, delta_s=0.05) == 0.05
+    # 1900 s later the old minimum has expired; a +1.5 s regime (below the
+    # step threshold, so only the TTL can recover it) takes over at once.
+    assert _batch(tracker, at_s=1900.0, delta_s=1.55) == 1.55
+    assert _batch(tracker, at_s=1903.0, delta_s=1.60) == 1.55
+
+
+def test_upward_clock_step_resets_after_two_consistent_batches() -> None:
+    tracker = BurstClockOffsetTracker()
+    for i in range(5):
+        _batch(tracker, at_s=3.0 * i, delta_s=0.05 + 0.01 * i)
+    assert tracker.offset_seconds("t1") == 0.05
+    # The watch clock stepped back by 3 s: every later batch is about 3 s higher.
+    assert _batch(tracker, at_s=60.0, delta_s=3.06) == 0.05
+    assert _batch(tracker, at_s=63.0, delta_s=3.04) == 3.04
+    assert _batch(tracker, at_s=66.0, delta_s=3.08) == 3.04
+
+
+def test_service_restart_jump_recovers_within_two_batches() -> None:
+    tracker = BurstClockOffsetTracker()
+    for i in range(20):
+        _batch(tracker, at_s=3.0 * i, delta_s=0.05)
+    assert _batch(tracker, at_s=600.0, delta_s=45.05) == 0.05
+    assert _batch(tracker, at_s=603.0, delta_s=45.07) == 45.05
+
+
+def test_single_late_batch_never_resets_the_window() -> None:
+    """One broker-delayed batch must keep its stale timestamps stale, not look fresh."""
+    tracker = BurstClockOffsetTracker()
+    for i in range(4):
+        _batch(tracker, at_s=3.0 * i, delta_s=0.05)
+    assert _batch(tracker, at_s=100.0, delta_s=40.0) == 0.05
+    assert _batch(tracker, at_s=103.0, delta_s=0.06) == 0.05
+    assert _batch(tracker, at_s=106.0, delta_s=38.0) == 0.05
+    assert tracker.correct_timestamp("t1", _T0) == _T0 + timedelta(seconds=0.05)
+
+
+def test_backlog_flush_with_spread_deltas_does_not_reset() -> None:
+    """Queued batches sent 3 s apart and delivered together disagree with each other."""
+    tracker = BurstClockOffsetTracker()
+    for i in range(4):
+        _batch(tracker, at_s=3.0 * i, delta_s=0.05)
+    for backlog_delta in (12.05, 9.05, 6.05, 3.05):
+        assert _batch(tracker, at_s=200.0 + 0.01 * backlog_delta, delta_s=backlog_delta) == 0.05
+
+
+def test_downward_clock_step_is_adopted_immediately() -> None:
+    tracker = BurstClockOffsetTracker()
+    for i in range(4):
+        _batch(tracker, at_s=3.0 * i, delta_s=0.05)
+    assert _batch(tracker, at_s=30.0, delta_s=-2.95) == -2.95
+
+
+def test_max_tracked_tags_evicts_least_recently_seen_tag() -> None:
+    tracker = BurstClockOffsetTracker(max_tracked_tags=2)
+    _batch(tracker, at_s=0.0, delta_s=0.1, tag_id="a")
+    _batch(tracker, at_s=1.0, delta_s=0.2, tag_id="b")
+    _batch(tracker, at_s=2.0, delta_s=0.15, tag_id="a")
+    _batch(tracker, at_s=3.0, delta_s=0.3, tag_id="c")
+    assert tracker.offset_seconds("a") == 0.1
+    assert tracker.offset_seconds("b") is None
+    assert tracker.offset_seconds("c") == 0.3
+
+
+def test_burst_tracker_rejects_invalid_parameters() -> None:
+    for kwargs in (
+        {"max_sample_age_s": 0.0},
+        {"step_reset_threshold_s": -1.0},
+        {"step_confirm_batches": 1},
+        {"step_consistency_s": 0.0},
+        {"max_tracked_tags": 0},
+    ):
+        with pytest.raises(ValueError):
+            BurstClockOffsetTracker(**kwargs)  # type: ignore[arg-type]

@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import numpy as np
+import pytest
 from cts_contracts.wearables import RangingTechnology
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from scipy.stats import chi2
 
 from rf_ingress.domain import RangeEpoch, RangeMeasurement, RfNodeGeometry
-from rf_ingress.solver.multilateration import MultilaterationConfig, MultilaterationSolver
+from rf_ingress.solver.multilateration import (
+    MultilaterationConfig,
+    MultilaterationSolver,
+    effective_variance_m2,
+)
 
 _T0 = datetime(2026, 11, 19, 12, 0, 0, tzinfo=UTC)
 
@@ -255,3 +261,84 @@ def test_property_noise_free_inside_hull_error_under_1mm(x_m: float, y_m: float)
     assert res is not None
     err_m = math.hypot(res.x_m - x_m, res.y_m - y_m)
     assert err_m < 0.001, f"noise-free error {err_m:.6f} m >= 1 mm at ({x_m}, {y_m})"
+
+
+def _with_los(epoch: RangeEpoch, los_by_anchor: dict[str, float]) -> RangeEpoch:
+    return replace(
+        epoch,
+        measurements=tuple(
+            replace(m, los_confidence=los_by_anchor.get(m.anchor_id)) for m in epoch.measurements
+        ),
+    )
+
+
+def test_3d_ill_conditioned_vertical_geometry_falls_back_to_2d_horizontal_solve() -> None:
+    # Three anchors high and one 0.52 m lower: enough spread to attempt 3D, but
+    # the vertical axis is weakly observed. At this geometry cond_2d < 2 and
+    # cond_3d is about 7.5, so max_condition=4 rejects 3D and must keep 2D.
+    anchors = {
+        "a1": RfNodeGeometry(anchor_id="a1", x_m=0.0, y_m=0.0, z_m=2.20),
+        "a2": RfNodeGeometry(anchor_id="a2", x_m=5.0, y_m=0.0, z_m=2.20),
+        "a3": RfNodeGeometry(anchor_id="a3", x_m=5.0, y_m=6.0, z_m=2.20),
+        "a4": RfNodeGeometry(anchor_id="a4", x_m=0.0, y_m=6.0, z_m=1.68),
+    }
+    epoch = _make_epoch(anchors, (2.0, 2.5, 1.0), sigma_m=0.1)
+
+    default_result = MultilaterationSolver().solve(epoch, anchors)
+    assert default_result is not None
+    assert default_result.mode_3d
+
+    strict = MultilaterationSolver(MultilaterationConfig(max_condition=4.0))
+    result = strict.solve(epoch, anchors)
+    assert result is not None
+    assert not result.mode_3d
+    assert result.z_m is None
+    assert math.hypot(result.x_m - 2.0, result.y_m - 2.5) < 0.15
+    det = result.cov_xx_m2 * result.cov_yy_m2 - result.cov_xy_m2**2
+    assert result.cov_xx_m2 > 0.0 and result.cov_yy_m2 > 0.0 and det > 0.0
+
+
+def test_los_confidence_downweights_nlos_anchor_in_wls() -> None:
+    # Same-height anchors keep the solve 2D, and a +0.50 m body-shadow bias stays
+    # below the leave-one-out chi-square trigger, so the uniform arm really is
+    # biased rather than rescued by outlier rejection.
+    anchors = {
+        "a1": RfNodeGeometry(anchor_id="a1", x_m=0.0, y_m=0.0, z_m=2.2),
+        "a2": RfNodeGeometry(anchor_id="a2", x_m=5.0, y_m=0.0, z_m=2.2),
+        "a3": RfNodeGeometry(anchor_id="a3", x_m=5.0, y_m=6.0, z_m=2.2),
+        "a4": RfNodeGeometry(anchor_id="a4", x_m=0.0, y_m=6.0, z_m=2.2),
+    }
+    truth = (2.0, 2.5, 1.0)
+    biased = _make_epoch(anchors, truth, sigma_m=0.1, bias_by_anchor={"a1": 0.50})
+    solver = MultilaterationSolver()
+
+    uniform = solver.solve(biased, anchors)
+    weighted = solver.solve(
+        _with_los(biased, {"a1": 0.20, "a2": 0.95, "a3": 0.95, "a4": 0.95}), anchors
+    )
+    assert uniform is not None and weighted is not None
+    assert uniform.dropped_outlier_anchor_id is None
+    err_uniform = math.hypot(uniform.x_m - truth[0], uniform.y_m - truth[1])
+    err_weighted = math.hypot(weighted.x_m - truth[0], weighted.y_m - truth[1])
+    assert err_uniform > 0.15
+    assert err_weighted < 0.4 * err_uniform
+
+
+def test_effective_variance_inflates_by_clamped_los_confidence() -> None:
+    base = RangeMeasurement(
+        tag_id="tag-1",
+        anchor_id="a1",
+        distance_m=2.0,
+        variance_m2=0.01,
+        technology=RangingTechnology.UWB,
+        measured_at=_T0,
+    )
+    assert effective_variance_m2(base, min_los_confidence=0.15) == 0.01
+    half = replace(base, los_confidence=0.5)
+    assert effective_variance_m2(half, min_los_confidence=0.15) == pytest.approx(0.04)
+    blocked = replace(base, los_confidence=0.0)
+    assert effective_variance_m2(blocked, min_los_confidence=0.15) == pytest.approx(0.01 / 0.0225)
+    full = replace(base, los_confidence=1.0)
+    assert effective_variance_m2(full, min_los_confidence=0.15) == pytest.approx(0.01)
+    with pytest.raises(ValueError, match="min_los_confidence"):
+        MultilaterationConfig(min_los_confidence=0.0)

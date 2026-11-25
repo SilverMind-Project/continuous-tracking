@@ -22,6 +22,9 @@ site_config:
 
 solver:
   epoch_window_s: 0.25
+  # Open epochs idle for epoch_window_s on the server clock are flushed on this
+  # tick so the last epoch of a duty-cycled burst never waits for the next burst.
+  epoch_flush_interval_s: 0.05
   assumed_tag_height_m: 1.0
   tag_height_sigma_m: 0.3
   min_vertical_spread_m: 0.5
@@ -31,11 +34,18 @@ solver:
   # decide fix utility from the published 2x2 covariance rather than dropping
   # imprecise solves at ingress.
   max_sigma_m: null
+  # Range variance is inflated by 1 / max(min_los_confidence, los_confidence)^2.
+  min_los_confidence: 0.15
 
 clock:
   skew_window_s: 60.0
   skew_warn_threshold_s: 0.5
   burst_window_size: 20
+  # Burst clock-offset samples expire after this long, and an upward clock step
+  # is accepted after 2 consecutive, mutually consistent batches above the
+  # window minimum by this threshold (one late batch never resets the window).
+  burst_max_sample_age_s: 1800.0
+  burst_step_reset_threshold_s: 2.0
 
 # Adapters are configured explicitly per deployment. Keep empty by default so a
 # deployment never emits simulated fixes into a live household without opt-in.

@@ -58,6 +58,7 @@ def build_runtime(
         max_condition=settings.solver.max_condition,
         quality_scale_m=settings.solver.quality_scale_m,
         max_sigma_m=settings.solver.max_sigma_m,
+        min_los_confidence=settings.solver.min_los_confidence,
     )
     return RfIngressRuntime(
         adapters=adapters,
@@ -65,11 +66,14 @@ def build_runtime(
         publisher=publisher,
         solver_config=solver_cfg,
         epoch_window_s=settings.solver.epoch_window_s,
+        epoch_flush_interval_s=settings.solver.epoch_flush_interval_s,
         site_config_poll_interval_s=settings.site_config.poll_interval_s,
         capability_heartbeat_interval_s=settings.service.capability_heartbeat_interval_s,
         skew_window_s=settings.clock.skew_window_s,
         skew_warn_threshold_s=settings.clock.skew_warn_threshold_s,
         burst_window_size=settings.clock.burst_window_size,
+        burst_max_sample_age_s=settings.clock.burst_max_sample_age_s,
+        burst_step_reset_threshold_s=settings.clock.burst_step_reset_threshold_s,
     )
 
 

@@ -1,7 +1,10 @@
 """Pure numpy/scipy multilateration solver with covariance and outlier rejection.
 
 The solver weights every range measurement strictly by its reported
-``variance_m2`` and never branches on adapter or radio technology names.
+``variance_m2`` (inflated by ``1 / max(min_los_confidence, los_confidence)^2``
+when the radio reports line-of-sight confidence) and never branches on adapter
+or radio technology names. A 3D solve that fails (non-convergence or an
+ill-conditioned vertical axis) falls back to the 2D fixed-height solve.
 Angular telemetry with ``azimuth_reference_frame != "floor_plan"`` (including
 ``"device_local"`` wrist azimuth) is completely ignored so distance-only solves
 remain rotationally invariant to wearer wrist orientation.
@@ -35,6 +38,38 @@ class MultilaterationConfig:
     max_sigma_m: float | None = None
     outlier_confidence: float = 0.99
     soft_l1_f_scale: float = 1.5
+    # Floor on reported line-of-sight confidence when inflating range variance
+    # as variance_m2 / los^2 (0.15 caps the inflation at about 44x).
+    min_los_confidence: float = 0.15
+
+    def __post_init__(self) -> None:
+        if not (0.0 < self.min_los_confidence <= 1.0):
+            raise ValueError(
+                f"min_los_confidence must be in (0, 1], got {self.min_los_confidence!r}"
+            )
+
+
+def effective_variance_m2(measurement: RangeMeasurement, *, min_los_confidence: float) -> float:
+    """Return the range variance inflated by reported line-of-sight confidence.
+
+    ``variance_m2 / clamp(los_confidence, min_los_confidence, 1)^2``. A body-shadowed
+    or non-line-of-sight range is down-weighted smoothly instead of branching on
+    radio technology. Measurements without ``los_confidence`` keep ``variance_m2``.
+    """
+    if measurement.los_confidence is None or not math.isfinite(measurement.los_confidence):
+        return measurement.variance_m2
+    clamped = max(min_los_confidence, min(1.0, float(measurement.los_confidence)))
+    return measurement.variance_m2 / (clamped * clamped)
+
+
+def _effective_variances_m2(
+    valid: list[tuple[RangeMeasurement, RfNodeGeometry]],
+    min_los_confidence: float,
+) -> NDArray[np.float64]:
+    return np.array(
+        [effective_variance_m2(m, min_los_confidence=min_los_confidence) for m, _ in valid],
+        dtype=np.float64,
+    )
 
 
 def _wrap_angle_rad(delta_rad: float) -> float:
@@ -151,7 +186,7 @@ class MultilaterationSolver:
         if _anchors_horizontally_collinear(anchors_xyz):
             return None
         distances_m = np.array([m.distance_m for m, _ in valid], dtype=np.float64)
-        variances_m2 = np.array([m.variance_m2 for m, _ in valid], dtype=np.float64)
+        variances_m2 = _effective_variances_m2(valid, self._cfg.min_los_confidence)
 
         if mode_3d:
             sigmas_m = np.sqrt(variances_m2)
@@ -328,7 +363,7 @@ class MultilaterationSolver:
 
         anchors_xyz = np.array([[n.x_m, n.y_m, n.z_m] for _, n in valid], dtype=np.float64)
         distances_m = np.array([m.distance_m for m, _ in valid], dtype=np.float64)
-        variances_m2 = np.array([m.variance_m2 for m, _ in valid], dtype=np.float64)
+        variances_m2 = _effective_variances_m2(valid, self._cfg.min_los_confidence)
         sigmas_m = _effective_2d_sigmas(
             anchors_xyz[:, 2],
             distances_m,

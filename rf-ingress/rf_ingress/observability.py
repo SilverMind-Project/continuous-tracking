@@ -35,6 +35,8 @@ class DropReason(StrEnum):
     SITE_CONFIG_RELOADED = "site_config_reloaded"
     INVALID_CONTRACT = "invalid_contract"
     RANGE_OUT_OF_BOUNDS = "range_out_of_bounds"
+    LATE_EPOCH_MEASUREMENT = "late_epoch_measurement"
+    PUBLISH_FAILED = "publish_failed"
 
 
 REPORTS_TOTAL = Counter(

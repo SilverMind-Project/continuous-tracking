@@ -87,12 +87,15 @@ class SolverSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     epoch_window_s: float = Field(default=0.25, gt=0.0)
+    # Background expiry tick; null means min(0.05, epoch_window_s / 4).
+    epoch_flush_interval_s: float | None = Field(default=None, gt=0.0, le=1.0)
     assumed_tag_height_m: float = Field(default=1.0, ge=0.0, le=3.5)
     tag_height_sigma_m: float = Field(default=0.3, ge=0.0, le=2.0)
     min_vertical_spread_m: float = Field(default=0.5, ge=0.0)
     max_condition: float = Field(default=1000.0, gt=1.0)
     quality_scale_m: float = Field(default=0.5, gt=0.0)
     max_sigma_m: float | None = Field(default=None, gt=0.0)
+    min_los_confidence: float = Field(default=0.15, gt=0.0, le=1.0)
 
 
 class ClockSettings(BaseModel):
@@ -103,6 +106,8 @@ class ClockSettings(BaseModel):
     skew_window_s: float = Field(default=60.0, gt=0.0)
     skew_warn_threshold_s: float = Field(default=0.5, gt=0.0)
     burst_window_size: int = Field(default=20, ge=1, le=500)
+    burst_max_sample_age_s: float = Field(default=1800.0, gt=0.0)
+    burst_step_reset_threshold_s: float = Field(default=2.0, gt=0.0)
 
 
 class AdapterConfig(BaseModel):
