@@ -6,6 +6,9 @@ position and covariance at each wearable fix's physical ``measured_at`` timestam
 Invariants:
 - Only rounds updated by a calibrated observation append a sample; uncalibrated
   virtual-cell coordinates and coasting predictions are never recorded.
+- A sample is the camera posterior, or, while wearable spatial fusion is enabled, the
+  raw camera measurement: a posterior that absorbed a fused wearable fix must never be scored
+  against that wearable. The tracker decides which; this class stores either.
 - History is retained across PH close-and-revive windows
   (``max_span_s = ph_close_grace_s + revive_max_age_s``) and cleared on PH split
   or merge.

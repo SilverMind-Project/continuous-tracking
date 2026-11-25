@@ -889,7 +889,14 @@ wearable:
   room_match_eps: 0.1
   # Stationary tags parked without room change for this duration yield zero evidence.
   parked_after_s: 600.0
+  # Two physical devices of one member disagreeing on room for this long yield zero evidence.
+  # Tags sharing a physical_device_id (a dual-mode watch) are one device and never disagree;
+  # a device counts only when its room holds at least min_room_share of its window mass.
   tag_disagreement_window_s: 10.0
+  tag_disagreement_min_room_share: 0.6
+  # A segment stays open, emitting no evidence, this long after its last accepted round, so
+  # the next burst of a duty-cycled watch (60 s cooldown) resumes it with its latched grade.
+  segment_hold_s: 75.0
   # Graded attestation thresholds for trajectory-class and room-class segments.
   trajectory_attest_min_duration_s: 10.0
   trajectory_attest_min_fixes: 8
@@ -929,6 +936,25 @@ wearable:
     # compensate inferred backfill ranges, and hold further teaching until an operator resumes)
     # when a segment is first marked swap_suspected.
     auto_on_swap: true
+  spatial_fusion:
+    # Fuse trajectory-attested position fixes into the PH Kalman state. "off" never touches
+    # PH state; "shadow" measures each gated update without applying it and changes nothing
+    # else; "enabled" applies it and switches PH floor history to raw camera measurements, so
+    # a fused fix can never confirm itself through the history. Needs wearable.mode shadow or
+    # enabled.
+    mode: "off"
+    # Only fixes with a major-axis sigma at or below this (metres) are fused.
+    max_sigma_m: 0.35
+    # Systematic error added to every fused fix and kept as a floor on the PH position
+    # covariance, so fused fixes never make a PH more certain than this (metres).
+    bias_floor_m: 0.12
+    # Largest gap between a fix and the PH state time that is fused (seconds); covers the
+    # watch's 3 s micro-batches.
+    max_dt_s: 3.0
+    gate_chi2: 9.21
+    # Fused fixes keep a camera-occluded, trajectory-attested PH open for at most this long
+    # after its last camera observation (seconds). 0 disables the bridge.
+    coasting_bridge_max_s: 10.0
 
 # Closed-world prior shaping (who is home, spatially verified joint elimination, guest slot).
 # Shapes Bayesian priors only; never commits an identity on its own or refreshes the evidence clock.

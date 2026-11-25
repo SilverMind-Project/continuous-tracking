@@ -192,6 +192,7 @@ class TestWearableReplayScenarios:
                 now=ts,
                 room_polygons=rooms,
                 camera_room_map={"cam-1": "1"},
+                camera_room_ids={"cam-1": "1"},
                 wearable_fixes=buf.recent(now=ts, max_age_s=15.0),
             )
             for tr in res.wearable_association_transitions:
@@ -279,6 +280,7 @@ class TestWearableReplayScenarios:
                 now=ts,
                 room_polygons=rooms,
                 camera_room_map={"cam-1": "1"},
+                camera_room_ids={"cam-1": "1"},
                 wearable_fixes=buf.recent(now=ts, max_age_s=15.0),
             )
             for d in res.identity_decisions:
@@ -344,6 +346,7 @@ class TestWearableReplayScenarios:
                 now=ts,
                 room_polygons=rooms,
                 camera_room_map={"cam-1": "1"},
+                camera_room_ids={"cam-1": "1"},
                 wearable_fixes=buf.recent(now=ts, max_age_s=15.0),
             )
             assert res.wearable_evidence_by_ph == {}
@@ -408,6 +411,7 @@ class TestWearableReplayScenarios:
                 now=ts,
                 room_polygons=rooms,
                 camera_room_map={"cam-1": "1"},
+                camera_room_ids={"cam-1": "1"},
                 face_anchors=anchors,
                 wearable_fixes=buf.recent(now=ts, max_age_s=15.0),
             )
@@ -491,6 +495,7 @@ class TestWearableReplayScenarios:
                 now=ts,
                 room_polygons=rooms,
                 camera_room_map={"cam-uncal": "1"},
+                camera_room_ids={"cam-uncal": "1"},
                 wearable_fixes=room_buf.recent(now=ts, max_age_s=15.0),
             )
             # Confirm uncalibrated virtual coordinates never entered PHFloorHistory!
@@ -540,6 +545,7 @@ class TestWearableReplayScenarios:
             now=ts2,
             room_polygons=rooms,
             camera_room_map={"cam-uncal": "1"},
+            camera_room_ids={"cam-uncal": "1"},
             wearable_fixes=room_buf.recent(now=ts2, max_age_s=15.0),
         )
         assert res_shared.wearable_evidence_by_ph == {}
@@ -667,6 +673,7 @@ class TestWearableReplayScenarios:
                 now=ts,
                 room_polygons=rooms,
                 camera_room_map={"cam-1": "1"},
+                camera_room_ids={"cam-1": "1"},
                 wearable_fixes=buf.recent(now=ts, max_age_s=15.0),
             )
             for tr in res.wearable_association_transitions:
@@ -735,6 +742,7 @@ class TestWearableReplayScenarios:
                 now=ts,
                 room_polygons=rooms,
                 camera_room_map={"cam-1": "1"},
+                camera_room_ids={"cam-1": "1"},
                 wearable_fixes=buf.recent(now=ts, max_age_s=15.0),
             )
             if caregiver_ph_id in res.wearable_evidence_by_ph:
@@ -787,13 +795,18 @@ class TestWearableReplayScenarios:
                 )
             ]
             r_off = await off_tracker.step(
-                observations=obs, now=ts, room_polygons=rooms, camera_room_map={"cam-1": "1"}
+                observations=obs,
+                now=ts,
+                room_polygons=rooms,
+                camera_room_map={"cam-1": "1"},
+                camera_room_ids={"cam-1": "1"},
             )
             r_sh = await shadow_tracker.step(
                 observations=obs,
                 now=ts,
                 room_polygons=rooms,
                 camera_room_map={"cam-1": "1"},
+                camera_room_ids={"cam-1": "1"},
                 wearable_fixes=buf.recent(now=ts, max_age_s=15.0),
             )
             for tr in r_sh.wearable_association_transitions:
@@ -880,6 +893,7 @@ class TestWearableReplayScenarios:
                     now=ts,
                     room_polygons=rooms,
                     camera_room_map={"cam-1": "1"},
+                    camera_room_ids={"cam-1": "1"},
                     wearable_fixes=buf.recent(now=ts, max_age_s=15.0),
                 )
                 if res.wearable_evidence_by_ph:

@@ -150,6 +150,34 @@ def test_parse_wearable_site_config_converts_metres_to_millimetres_and_resolves_
     assert cfg.member_at("watch-uwb-1", t) == "sriram"
 
 
+def test_parse_carries_physical_device_id_and_resolves_sibling_tags() -> None:
+    payload = _sample_site_config_payload()
+    payload["devices"][0]["physical_device_id"] = "watch-sriram"
+    payload["devices"][1]["physical_device_id"] = "watch-sriram"
+    payload["devices"][2]["physical_device_id"] = None
+    cfg = parse_wearable_site_config(payload)
+
+    assert cfg.physical_device_of("watch-ble-1") == "watch-sriram"
+    assert cfg.physical_device_of("band-1") is None
+    assert cfg.physical_device_of("unknown-tag") is None
+    assert cfg.sibling_tag_ids("watch-uwb-1") == ("watch-uwb-1", "watch-ble-1")
+    assert cfg.sibling_tag_ids("band-1") == ("band-1",)
+
+
+def test_parse_accepts_payload_without_physical_device_id() -> None:
+    # A CC build that predates the field omits it; every tag is then its own device.
+    cfg = parse_wearable_site_config(_sample_site_config_payload())
+    assert all(d.physical_device_id is None for d in cfg.devices)
+
+
+@pytest.mark.parametrize("bad", ["", 7, ["watch"]])
+def test_parse_rejects_malformed_physical_device_id(bad: object) -> None:
+    payload = _sample_site_config_payload()
+    payload["devices"][0]["physical_device_id"] = bad
+    with pytest.raises(CCConfigSyncContractError, match="physical_device_id"):
+        parse_wearable_site_config(payload)
+
+
 def test_member_at_respects_inclusive_start_and_exclusive_end() -> None:
     t_start = datetime(2026, 11, 19, 8, 0, tzinfo=UTC)
     t_end = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)

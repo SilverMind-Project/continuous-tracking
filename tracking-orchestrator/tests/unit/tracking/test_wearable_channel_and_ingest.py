@@ -6,7 +6,7 @@ import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from cts_contracts import FixKind
+from cts_contracts import DeviceKind, FixKind
 from prometheus_client import CollectorRegistry
 
 from app.domain import (
@@ -18,6 +18,7 @@ from app.domain import (
     WearableAssociationTransition,
     WearableAttestationGrade,
     WearableBinding,
+    WearableDevice,
     WearableEvidence,
     WearableEvidenceClass,
     WearableFix,
@@ -99,6 +100,55 @@ class TestWearableFixBufferAndSubscriber:
         assert removed == 2
         remaining = buf.recent(now=T0 + timedelta(seconds=4), max_age_s=10.0)
         assert [f.member_id for f in remaining] == ["bob"]
+
+    def test_decode_stamps_physical_device_from_site_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        reg = CollectorRegistry()
+        monkeypatch.setattr(metrics_mod, "metrics", build_metrics(reg))
+        bindings = tuple(
+            WearableBinding(tag_id=t, member_id="alice", valid_from=T0 - timedelta(hours=1))
+            for t in ("watch-ble", "band-1")
+        )
+        devices = (
+            WearableDevice(
+                tag_id="watch-ble",
+                adapter_id="ble-home",
+                hardware_key="hk-1",
+                device_kind=DeviceKind.WATCH,
+                is_active=True,
+                physical_device_id="watch-alice",
+            ),
+            WearableDevice(
+                tag_id="band-1",
+                adapter_id="ble-home",
+                hardware_key="hk-2",
+                device_kind=DeviceKind.BLE_BEACON,
+                is_active=True,
+            ),
+        )
+        site = WearableSiteConfig(bindings=bindings, devices=devices)
+
+        def decode(tag_id: str) -> WearableFix:
+            msg = wearable_pb2.TagFix(
+                tag_id=tag_id,
+                measured_at_unix_ns=_unix_ns(T0),
+                kind=wearable_pb2.FIX_KIND_ROOM,
+                room_id="1",
+            )
+            fix, _, result = decode_tag_fix(
+                msg.SerializeToString(), site_config=site, now=T0, max_fix_age_s=15.0
+            )
+            assert result == WearableFixIngestResult.ACCEPTED
+            assert fix is not None
+            return fix
+
+        watch_fix = decode("watch-ble")
+        band_fix = decode("band-1")
+        assert watch_fix.physical_device_id == "watch-alice"
+        assert watch_fix.device_key == "watch-alice"
+        assert band_fix.physical_device_id is None
+        assert band_fix.device_key == "tag:band-1"
 
     def test_decode_enforces_presence_flags_off_body_stale_unbound_and_dead_letters(
         self, monkeypatch: pytest.MonkeyPatch

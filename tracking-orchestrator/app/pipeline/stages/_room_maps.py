@@ -26,6 +26,17 @@ async def camera_room_names(
     return result
 
 
+async def all_camera_room_ids(camera_room_map: CameraRoomMap) -> dict[str, str]:
+    """Return ``camera_id -> room id`` for every bound camera.
+
+    Room ids are the namespace of room polygons and of wearable fix rooms; room names
+    (``camera_room_names``) are for display and the tracker's room metadata. Every bound
+    camera, not just a round's, because an open PH may have been last seen by a camera
+    with no frame in the round.
+    """
+    return {b.camera_id: b.room_id for b in await camera_room_map.snapshot() if b.room_id}
+
+
 async def room_polygon_snapshot(
     room_polygon_map: RoomPolygonMap,
 ) -> tuple[dict[str, list[tuple[float, float]]], dict[str, str]]:

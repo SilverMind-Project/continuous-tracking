@@ -38,13 +38,16 @@ from app.domain import (
     PHContinuationCandidate,
     ViewPrototype,
     WearableAssociationTransition,
+    WearableAttestationGrade,
     WearableEvidence,
+    WearableEvidenceClass,
     WearableFix,
     WorldFrameSnapshot,
     WorldObservation,
     tuple_to_cov2x2,
 )
 from app.observability import metrics as _metrics
+from app.observability.metrics import WearableSpatialFusionOutcome
 from app.storage.base import (
     VOTING_STATES,
     CameraTopologyRepository,
@@ -81,6 +84,11 @@ from app.tracking.world.revival import select_revival_candidate
 from app.tracking.world.topology import record_handoff
 from app.tracking.world.wearable_association import WearableAssociationTracker
 from app.tracking.world.wearable_config import WearableConfig
+from app.tracking.world.wearable_spatial_fusion import (
+    MotionModel,
+    fuse_position_fix,
+    select_fusion_fix,
+)
 
 logger = get_logger(__name__)
 
@@ -352,6 +360,10 @@ class WorldTracker:
         # without issuing an async DB query. Empty until the first step.
         self._last_open_phs: list[PersonHypothesis] = []
         self._still_counter: dict[str, int] = {}
+        # Spatial fusion of attested wearable fixes: the last camera observation of each PH
+        # (a fused fix may advance last_seen_at past it) and the newest fix already fused.
+        self._camera_seen_at: dict[str, datetime] = {}
+        self._fused_through: dict[str, datetime] = {}
         self._primary_camera: dict[str, str] = {}
         self._primary_challenger: dict[str, tuple[str, int]] = {}
 
@@ -386,6 +398,8 @@ class WorldTracker:
     ) -> list[WearableAssociationTransition]:
         """Clear calibrated floor history and close any open wearable segment on *ph_id*."""
         self._ph_floor_history.reset_ph(ph_id)
+        self._camera_seen_at.pop(ph_id, None)
+        self._fused_through.pop(ph_id, None)
         if self._wearable_tracker is None:
             return []
         return self._wearable_tracker.reset_ph(ph_id, now=now, reason=reason)
@@ -453,6 +467,7 @@ class WorldTracker:
         face_evidence: list[FaceEvidence] | None = None,
         low_band_observations: list[WorldObservation] | None = None,
         wearable_fixes: Sequence[WearableFix] | None = None,
+        camera_room_ids: dict[str, str] | None = None,
     ) -> WorldTrackerResult:
         """Run one frame of the world tracker.
 
@@ -463,6 +478,8 @@ class WorldTracker:
             room_polygons: room_id → list of (x_m, y_m) vertices.
             room_names: room_id → display name for polygon-derived rooms.
             camera_room_map: camera_id → room_name fallback.
+            camera_room_ids: camera_id → room id, the namespace of room polygons and
+                wearable fix rooms; wearable association resolves PH rooms with it.
             face_anchors: flat list of FaceAnchors for identity resolution only. It may contain
                 ``shadow_only`` anchors, which the resolver keeps out of every live decision;
                 nothing else in the tracker reads this list.
@@ -473,7 +490,16 @@ class WorldTracker:
         cfg = self._config
         room_polygons = room_polygons or {}
         camera_room_map = camera_room_map or {}
+        camera_room_ids = camera_room_ids or {}
         room_names = room_names or {}
+        wcfg = self._wearable_config
+        fusion_on = self._wearable_tracker is not None and wcfg.spatial_fusion_mode != "off"
+        # Only when fusion applies does PH floor history record the raw camera measurements
+        # of a round instead of the posterior: a posterior that absorbed a fused fix would let
+        # trajectory association score the wearable against its own earlier fixes. Shadow
+        # never moves PH state, so its history (and every association) stays as with off.
+        fusion_applies = fusion_on and wcfg.spatial_fusion_mode == "enabled"
+        camera_measurements: dict[str, list[tuple[datetime, float, float, np.ndarray]]] = {}
         continuations: list[PHContinuationCandidate] = []
         identity_decisions: list[IdentityDecision] = []
         det_to_ph: dict[str, str] = {}
@@ -650,6 +676,10 @@ class WorldTracker:
                     )
                     fx_src = finalized_src.floor_point.x_mm / 1000.0
                     fy_src = finalized_src.floor_point.y_mm / 1000.0
+                    if fusion_applies and finalized_src.floor_point.calibrated:
+                        camera_measurements.setdefault(ph.ph_id, []).append(
+                            (finalized_src.captured_at, fx_src, fy_src, src_r)
+                        )
                     upd_state = update(pred_at_obs, fx_src, fy_src, src_r)
                     cur_state = self._maybe_apply_zero_velocity_update(
                         ph_id=ph.ph_id,
@@ -684,6 +714,10 @@ class WorldTracker:
                 )
                 fx_obs = obs.floor_point.x_mm / 1000.0
                 fy_obs = obs.floor_point.y_mm / 1000.0
+                if fusion_applies and obs.floor_point.calibrated:
+                    camera_measurements.setdefault(ph.ph_id, []).append(
+                        (obs.captured_at, fx_obs, fy_obs, obs_r)
+                    )
                 new_state = update(pred_at_obs, fx_obs, fy_obs, obs_r)
                 new_state = self._maybe_apply_zero_velocity_update(
                     ph_id=ph.ph_id,
@@ -1023,6 +1057,10 @@ class WorldTracker:
             )
             ph_obs_appearance[new_ph.ph_id] = (obs.orientation, obs.embedding, obs.quality)
             ph_floor_calibrated[new_ph.ph_id] = obs.floor_point.calibrated
+            if fusion_applies and obs.floor_point.calibrated:
+                camera_measurements[new_ph.ph_id] = [
+                    (obs.captured_at, fx, fy, _camera_measurement_cov(obs, cfg))
+                ]
             ph_confidence_meta[new_ph.ph_id] = (len(spawn_src_ids), obs.footpoint_reliable)
             # Save the PH first so the FK constraint on world_observations is satisfied.
             await self._ph_repo.save(new_ph)
@@ -1203,13 +1241,23 @@ class WorldTracker:
         # PHs matched in the low-band second pass (5a) already have their state
         # advanced and last_seen_at refreshed; skip them here so they are not
         # double-counted or prematurely closed.
+        if fusion_on:
+            for ph in updated_phs:
+                self._camera_seen_at[ph.ph_id] = ph.last_seen_at
+        bridge_on = wcfg.spatial_fusion_mode == "enabled" and wcfg.coasting_bridge_max_s > 0.0
         coasting_ph_ids: set[str] = set()
         for ph_idx in assignment.unmatched_phs:
             if ph_idx in lb_matched_ph_indices:
                 continue
             ph = active_phs[ph_idx]
             advanced_ph = _advance_unmatched_ph(
-                ph, predicted_states[ph_idx], now, cfg.ph_close_grace_s
+                ph,
+                predicted_states[ph_idx],
+                now,
+                cfg.ph_close_grace_s,
+                camera_seen_at=self._camera_seen_at.get(ph.ph_id) if bridge_on else None,
+                bridge_max_s=wcfg.coasting_bridge_max_s,
+                bridge_fix_slack_s=wcfg.spatial_fusion_max_dt_s,
             )
             if advanced_ph.closed_at is None:
                 coasting_ph_ids.add(advanced_ph.ph_id)
@@ -1223,13 +1271,27 @@ class WorldTracker:
         #     observations; never virtual-cell points or unobserved predictions) and
         #     run wearable-to-PH association when wearable mode is shadow or enabled.
         for ph in updated_phs:
-            if ph.closed_at is None and ph_floor_calibrated.get(ph.ph_id, False):
+            if ph.closed_at is not None or not ph_floor_calibrated.get(ph.ph_id, False):
+                continue
+            if not fusion_applies:
                 self._ph_floor_history.record(
                     ph.ph_id,
                     captured_at=ph.last_seen_at,
                     x_m=ph.state_mean[0],
                     y_m=ph.state_mean[1],
                     cov_m2=(ph.state_cov[0], ph.state_cov[1], ph.state_cov[4], ph.state_cov[5]),
+                    speed_m_s=ph.last_floor_speed_m_s,
+                )
+                continue
+            # The speed still comes from the posterior: it only widens the timing term of
+            # the association innovation, so it cannot make a fix confirm itself.
+            for captured_at, x_m, y_m, cov in camera_measurements.get(ph.ph_id, ()):
+                self._ph_floor_history.record(
+                    ph.ph_id,
+                    captured_at=captured_at,
+                    x_m=x_m,
+                    y_m=y_m,
+                    cov_m2=(float(cov[0, 0]), float(cov[0, 1]), float(cov[1, 0]), float(cov[1, 1])),
                     speed_m_s=ph.last_floor_speed_m_s,
                 )
         self._ph_floor_history.prune(now)
@@ -1245,11 +1307,21 @@ class WorldTracker:
                 closed_ph_ids=closed_ph_ids_now,
                 ph_history=self._ph_floor_history,
                 room_polygons=room_polygons,
-                camera_room_map=camera_room_map,
+                camera_room_ids=camera_room_ids,
                 now=now,
             )
             wearable_evidence_by_ph = dict(wearable_round.evidence_by_ph)
             wearable_transitions.extend(wearable_round.transitions)
+            if fusion_on:
+                # Before identity resolution: the resolver writes identity through targeted
+                # repository operations, so a later full save would overwrite them.
+                updated_phs = await self._fuse_wearable_positions(
+                    updated_phs,
+                    evidence_by_ph=wearable_evidence_by_ph,
+                    fixes=wearable_fixes or (),
+                    coasting_ph_ids=coasting_ph_ids,
+                    now=now,
+                )
 
         # 9. Identity resolution: run the Bayesian resolver on PHs that
         #    received observations this frame.  Pass the full open-PH identity
@@ -1409,6 +1481,12 @@ class WorldTracker:
         self._still_counter = {
             pid: count for pid, count in self._still_counter.items() if pid in open_ph_ids
         }
+        self._camera_seen_at = {
+            pid: ts for pid, ts in self._camera_seen_at.items() if pid in open_ph_ids
+        }
+        self._fused_through = {
+            pid: ts for pid, ts in self._fused_through.items() if pid in open_ph_ids
+        }
         self._primary_camera = {
             pid: camera_id for pid, camera_id in self._primary_camera.items() if pid in open_ph_ids
         }
@@ -1561,6 +1639,105 @@ class WorldTracker:
 
         self._primary_challenger[ph_id] = (best_camera, streak)
 
+    async def _fuse_wearable_positions(
+        self,
+        phs: list[PersonHypothesis],
+        *,
+        evidence_by_ph: Mapping[str, WearableEvidence],
+        fixes: Sequence[WearableFix],
+        coasting_ph_ids: set[str],
+        now: datetime,
+    ) -> list[PersonHypothesis]:
+        """Fuse this round's trajectory-attested position fixes into PH Kalman states.
+
+        Only an open PH whose wearable evidence this round is trajectory class with a
+        trajectory grade is considered, with a fix from the tag that produced that
+        evidence. A camera-tracked PH takes fixes up to its state time; a camera-occluded PH
+        may be advanced by a newer fix while its last camera observation is within the
+        bridge window. "shadow" records what would happen; "enabled" applies it and
+        re-saves the PH. PH floor history is never touched here, so association keeps
+        scoring raw camera measurements only.
+        """
+        wcfg = self._wearable_config
+        mode = wcfg.spatial_fusion_mode
+        cfg = self._config
+        motion = MotionModel(
+            process_noise_accel_m_s2=cfg.process_noise_accel_m_s2,
+            velocity_decay_s=cfg.velocity_decay_s,
+            damped=cfg.damped_velocity_prediction,
+        )
+        m = _metrics.metrics
+        result = list(phs)
+        for idx, ph in enumerate(phs):
+            if ph.closed_at is not None:
+                continue
+            evidence = evidence_by_ph.get(ph.ph_id)
+            # The grade must be trajectory and so must this round's evidence: a latched grade
+            # carried by room-class evidence (a watch between bursts) does not show that the
+            # fused tag's fixes matched this PH in this round.
+            if (
+                evidence is None
+                or evidence.attestation_grade != WearableAttestationGrade.TRAJECTORY
+                or evidence.evidence_class != WearableEvidenceClass.TRAJECTORY
+            ):
+                continue
+            coasting = ph.ph_id in coasting_ph_ids
+            if coasting:
+                camera_seen_at = self._camera_seen_at.get(ph.ph_id, ph.last_seen_at)
+                if (
+                    wcfg.coasting_bridge_max_s <= 0.0
+                    or (now - camera_seen_at).total_seconds() > wcfg.coasting_bridge_max_s
+                ):
+                    continue
+            fix = select_fusion_fix(
+                fixes,
+                tag_id=evidence.tag_id,
+                state_time=ph.last_seen_at,
+                fused_through=self._fused_through.get(ph.ph_id),
+                allow_newer=coasting,
+                cfg=wcfg,
+            )
+            if fix is None:
+                m.cts_wearable_spatial_fusion_total.labels(
+                    mode=mode, outcome=WearableSpatialFusionOutcome.NO_FIX
+                ).inc()
+                continue
+            state = KalmanState(
+                mean=np.array(ph.state_mean, dtype=np.float64),
+                covariance=np.array(ph.state_cov, dtype=np.float64).reshape(4, 4),
+                updated_at=ph.last_seen_at,
+            )
+            fused = fuse_position_fix(state, fix, cfg=wcfg, motion=motion)
+            self._fused_through[ph.ph_id] = fix.measured_at
+            if fused.gated or fused.state is None:
+                m.cts_wearable_spatial_fusion_total.labels(
+                    mode=mode, outcome=WearableSpatialFusionOutcome.GATED
+                ).inc()
+                continue
+            advanced = fused.state.updated_at > ph.last_seen_at
+            m.cts_wearable_spatial_fusion_total.labels(
+                mode=mode,
+                outcome=(
+                    WearableSpatialFusionOutcome.BRIDGED
+                    if advanced
+                    else WearableSpatialFusionOutcome.APPLIED
+                ),
+            ).inc()
+            m.cts_wearable_spatial_fusion_shift_m.labels(mode=mode).observe(fused.shift_m)
+            if mode != "enabled":
+                continue
+            mean = tuple(float(v) for v in fused.state.mean)
+            fused_ph = replace(
+                ph,
+                state_mean=(mean[0], mean[1], mean[2], mean[3]),
+                state_cov=tuple(float(v) for v in fused.state.covariance.flatten()),
+                last_seen_at=max(ph.last_seen_at, fused.state.updated_at),
+                last_floor_speed_m_s=speed_m_s((mean[0], mean[1], mean[2], mean[3])),
+            )
+            await self._ph_repo.save(fused_ph)
+            result[idx] = fused_ph
+        return result
+
     def _maybe_apply_zero_velocity_update(
         self,
         *,
@@ -1682,20 +1859,47 @@ class WorldTracker:
 # ---------------------------------------------------------------------------
 
 
+def _camera_measurement_cov(obs: WorldObservation, cfg: WorldTrackerConfig) -> np.ndarray:
+    """The covariance a camera observation's Kalman update uses."""
+    if obs.floor_cov_random is not None and obs.floor_point.calibrated:
+        return tuple_to_cov2x2(obs.floor_cov_random)
+    return isotropic_cov(cfg.observation_noise_m)
+
+
 def _advance_unmatched_ph(
     ph: PersonHypothesis,
     predicted_ks: KalmanState,
     now: datetime,
     ph_close_grace_s: float,
+    *,
+    camera_seen_at: datetime | None = None,
+    bridge_max_s: float = 0.0,
+    bridge_fix_slack_s: float = 0.0,
 ) -> PersonHypothesis:
     """Close an unmatched PH past ph_close_grace_s or keep its stored state unchanged.
 
     Stored state_mean and state_cov always represent the posterior at last_seen_at;
     in-round predictions are transient and never written back to the PH.
+
+    A PH whose ``last_seen_at`` a fused wearable fix advanced past its last camera
+    observation (*camera_seen_at*) is bridged: it stays open while that fix is within
+    ``ph_close_grace_s + bridge_fix_slack_s`` (fixes arrive in delayed micro-batches) and
+    the camera observation within ``max(bridge_max_s, ph_close_grace_s)``, and closes once
+    either runs out, however fresh its fixes.
     """
     _ = predicted_ks
-    grace = (now - ph.last_seen_at).total_seconds()
-    if grace > ph_close_grace_s:
+    since_seen_s = (now - ph.last_seen_at).total_seconds()
+    bridged = camera_seen_at is not None and bridge_max_s > 0.0 and camera_seen_at < ph.last_seen_at
+    if bridged:
+        assert camera_seen_at is not None
+        since_camera_s = (now - camera_seen_at).total_seconds()
+        expired = (
+            since_camera_s > max(bridge_max_s, ph_close_grace_s)
+            or since_seen_s > ph_close_grace_s + bridge_fix_slack_s
+        )
+    else:
+        expired = since_seen_s > ph_close_grace_s
+    if expired:
         _metrics.metrics.world_tracker_ph_closed_total.inc()
         _metrics.metrics.ph_lifetime_seconds.observe((now - ph.born_at).total_seconds())
         _metrics.metrics.ph_observations_at_close.observe(ph.observation_count)

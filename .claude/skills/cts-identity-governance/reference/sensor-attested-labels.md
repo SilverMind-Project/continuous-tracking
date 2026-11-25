@@ -69,16 +69,20 @@ undoes everything a single association segment (`segment_id`) taught, idempotent
 4. Marks any `appearance_training_samples` rows with `seed_association_id = segment_id` as revoked
    (`revoked_at` stamped via `AppearanceSampleRepository.revoke_by_association`), excluding them
    from offline classifier training.
-5. Opens a teaching hold on `segment.tag_id` in `wearable_teaching_holds` (at most one open hold
-   per tag). While held, gallery seeding, face attestation, wearable backfill, and appearance
-   training sample capture skip that tag until an operator clears the hold via
-   `POST /internal/wearables/tags/{tag_id}/resume-teaching`.
+5. Opens a teaching hold on `segment.tag_id` and on every other tag sharing its
+   `physical_device_id` (a dual-mode watch's BLE and UWB tags) in `wearable_teaching_holds`
+   (at most one open hold per tag). While held, gallery seeding, face attestation, wearable
+   backfill, and appearance training sample capture skip those tags until an operator clears
+   the hold via `POST /internal/wearables/tags/{tag_id}/resume-teaching`, which clears every
+   tag of the device. Holding one tag alone would let the next segment, opened through the
+   sibling tag, keep teaching.
 6. Stamps `revoked_at`, `revoked_by`, and `revoke_reason` on the association segment.
 
 When `wearable.revocation.auto_on_swap` is true (default), `WearableAssociationPersistStage`
 invokes `revoke_for_swap(segment_id, window_s=wearable.swap_conflict_window_s)` whenever a
 segment transitions to `swap_suspected`, revoking the triggering segment plus any other unrevoked
-segments of the same tag overlapping the swap-conflict window and holding the tag.
+segments of the same physical device's tags overlapping the swap-conflict window and holding
+those tags.
 
 ## Image-only evaluation
 

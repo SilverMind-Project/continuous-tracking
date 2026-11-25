@@ -13,9 +13,11 @@ every artifact a wearable teaches:
 3. Live inferred backfill ranges with ``source_association_id = segment_id`` are compensated
    through ``IdentityCorrectionService.compensate_inferred_range`` using the same projection
    and ack path as operator compensation.
-4. A teaching hold is opened on ``segment.tag_id`` in ``wearable_teaching_holds``, pausing
-   further gallery seeding, face attestation, and wearable backfill for that tag until an
-   operator explicitly resumes teaching.
+4. A teaching hold is opened on ``segment.tag_id`` and on every other logical tag of the same
+   physical device (a dual-mode watch's BLE and UWB tags) in ``wearable_teaching_holds``,
+   pausing further gallery seeding, face attestation, and wearable backfill for that device
+   until an operator explicitly resumes teaching. Holding one tag alone would let the next
+   segment, opened through the sibling tag, keep teaching.
 5. The segment is stamped ``revoked_at``, ``revoked_by``, and ``revoke_reason``.
 
 Every step is idempotent per segment.
@@ -23,7 +25,7 @@ Every step is idempotent per segment.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
@@ -111,8 +113,12 @@ class WearableTeachingRevocationService:
         correction_service: IdentityCorrectionService | None = None,
         face_id_client: FaceRevocationClient | None = None,
         appearance_sample_repo: AppearanceSampleRepository | None = None,
+        device_tag_ids: Callable[[str], Sequence[str]] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        """*device_tag_ids* returns every logical tag of a tag's physical device, the tag
+        itself first; without it each tag is its own device."""
+        self._device_tag_ids = device_tag_ids or (lambda tag_id: (tag_id,))
         self._assoc = association_repo
         self._holds = teaching_holds
         self._gallery = gallery_repo
@@ -210,12 +216,16 @@ class WearableTeachingRevocationService:
                 revoked_at=now,
             )
 
-        # 4. Hold further teaching for this tag until an operator explicitly resumes it.
+        # 4. Hold further teaching on every tag of this physical device until an operator
+        #    explicitly resumes it.
         hold = await self._holds.create_hold(
             tag_id=segment.tag_id,
             reason=reason,
             held_at=now,
         )
+        sibling_tag_ids = self._sibling_tag_ids(segment.tag_id)
+        for sibling in sibling_tag_ids:
+            await self._holds.create_hold(tag_id=sibling, reason=reason, held_at=now)
 
         # 5. Stamp the segment itself (no-op if already stamped).
         await self._assoc.mark_revoked(
@@ -237,6 +247,7 @@ class WearableTeachingRevocationService:
             already_promoted_faces=len(already_promoted),
             inferred_ranges_compensated=compensated,
             appearance_samples_revoked=appearance_samples_revoked,
+            sibling_tags_held=len(sibling_tag_ids),
         )
         return RevocationSummary(
             segment_id=segment_id,
@@ -270,10 +281,13 @@ class WearableTeachingRevocationService:
             raise SegmentNotFoundError(segment_id)
         until = trigger.ended_at or trigger.started_at
         since = until - timedelta(seconds=window_s)
-        candidates = await self._assoc.list_unrevoked_overlapping(
-            trigger.tag_id, since=since, until=until
-        )
-        target_ids: list[str] = [seg.segment_id for seg in candidates]
+        target_ids: list[str] = []
+        for tag_id in self._device_tags(trigger.tag_id):
+            for seg in await self._assoc.list_unrevoked_overlapping(
+                tag_id, since=since, until=until
+            ):
+                if seg.segment_id not in target_ids:
+                    target_ids.append(seg.segment_id)
         if segment_id not in target_ids:
             target_ids.append(segment_id)
         summaries: list[RevocationSummary] = []
@@ -282,11 +296,33 @@ class WearableTeachingRevocationService:
         return summaries
 
     async def resume_teaching(self, tag_id: str, *, actor: str) -> WearableTeachingHold | None:
-        """Clear any open teaching hold for *tag_id* so it may teach again."""
-        cleared = await self._holds.clear_hold(tag_id, cleared_by=actor, cleared_at=self._clock())
-        if cleared is not None:
-            logger.info("wearable_teaching_resumed", tag_id=tag_id, actor=actor)
-        return cleared
+        """Clear open teaching holds on *tag_id*'s physical device so it may teach again.
+
+        Returns the hold cleared on *tag_id* itself, else one cleared on a sibling tag.
+        """
+        now = self._clock()
+        cleared_holds = [
+            cleared
+            for tid in self._device_tags(tag_id)
+            if (cleared := await self._holds.clear_hold(tid, cleared_by=actor, cleared_at=now))
+            is not None
+        ]
+        if cleared_holds:
+            logger.info(
+                "wearable_teaching_resumed",
+                tag_id=tag_id,
+                actor=actor,
+                cleared_holds=len(cleared_holds),
+            )
+        own = [h for h in cleared_holds if h.tag_id == tag_id]
+        return next(iter(own or cleared_holds), None)
+
+    def _device_tags(self, tag_id: str) -> tuple[str, ...]:
+        """*tag_id* followed by the other logical tags of its physical device."""
+        return (tag_id, *self._sibling_tag_ids(tag_id))
+
+    def _sibling_tag_ids(self, tag_id: str) -> tuple[str, ...]:
+        return tuple(t for t in self._device_tag_ids(tag_id) if t != tag_id)
 
     async def list_open_holds(self) -> list[WearableTeachingHold]:
         """Return every currently open teaching hold."""
@@ -326,7 +362,11 @@ class WearableTeachingRevocationService:
                 if r.superseded_by_range_id is None and r.compensated_by_revision_id is None
             )
 
-        held = await self._holds.is_held(segment.tag_id)
+        held = False
+        for tid in self._device_tags(segment.tag_id):
+            if await self._holds.is_held(tid):
+                held = True
+                break
         return SegmentTaughtSummary(
             segment_id=segment.segment_id,
             tag_id=segment.tag_id,

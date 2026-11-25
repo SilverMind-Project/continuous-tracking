@@ -16,7 +16,7 @@ import math
 import uuid
 from collections import deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -215,17 +215,21 @@ def _floor_area_m2(room_polygons: Mapping[str, list[tuple[float, float]]]) -> fl
 def _ph_room_id(
     ph: PersonHypothesis,
     room_polygons: Mapping[str, list[tuple[float, float]]],
-    camera_room_map: Mapping[str, str],
+    camera_room_ids: Mapping[str, str],
 ) -> str:
-    meta_room = ph.metadata.get("last_room_id")
-    if isinstance(meta_room, str) and meta_room:
-        return meta_room
+    """Return the PH's room in the room-id namespace wearable fixes use.
+
+    Room polygons and RF nodes are keyed by Cognitive Companion room id, so a fix's
+    ``room_id`` is a room id. The tracker's ``last_room_id`` metadata is not: for a PH
+    outside every polygon (any uncalibrated camera's virtual tile) it holds the
+    camera's room *name*. Resolve from the polygons, then from the camera's room id.
+    """
     rid, _ = resolve_room(
         ph.state_mean[0],
         ph.state_mean[1],
         ph.last_seen_camera,
         dict(room_polygons),
-        dict(camera_room_map),
+        dict(camera_room_ids),
     )
     return rid
 
@@ -546,15 +550,51 @@ class _TagMotionTracker:
 
 @dataclass
 class _ActiveSegmentState:
-    """In-memory state of an open wearable-to-PH association segment."""
+    """In-memory state of an open wearable-to-PH association segment.
+
+    A segment belongs to one physical device (``device_key``) and survives switches
+    between that device's logical tags; ``segment.tag_id`` stays the tag that opened
+    it. ``continuous_first_fix_at`` starts the unbroken acceptance used for room
+    attestation and restarts after a hold. The trajectory streak counts only
+    trajectory-class fixes and restarts after a gap longer than the association
+    window, so earlier room-class time or an earlier burst never counts toward it.
+    ``last_accepted_at`` is the last round that accepted the pair; between rounds that
+    do not, the segment is held open, emitting no evidence, for up to
+    ``wearable.segment_hold_s``.
+    """
 
     segment: WearableAssociationSegment
     evidence_class: WearableEvidenceClass
+    device_key: str
     continuous_first_fix_at: datetime
-    distinct_traj_fix_times: set[datetime]
+    last_accepted_at: datetime
+    traj_streak_started_at: datetime | None = None
+    traj_streak_fix_times: set[datetime] = field(default_factory=set)
     had_face_conflict: bool = False
     room_id: str = ""
     sole_occupant_throughout: bool = True
+    held: bool = False
+
+    def extend_trajectory_streak(
+        self, fix_times: Sequence[datetime], *, max_gap_s: float, keep_s: float
+    ) -> None:
+        """Add matched trajectory fix times, restarting the streak after a long gap."""
+        if not fix_times:
+            return
+        ordered = sorted(fix_times)
+        if self.traj_streak_fix_times:
+            latest = max(self.traj_streak_fix_times)
+            fresh = [t for t in ordered if t > latest]
+            if fresh and (fresh[0] - latest).total_seconds() > max_gap_s:
+                self.traj_streak_fix_times = set()
+                self.traj_streak_started_at = None
+        if self.traj_streak_started_at is None:
+            self.traj_streak_started_at = ordered[0]
+        self.traj_streak_fix_times.update(ordered)
+        # Bounded memory on a long continuous streak; the start time is kept separately,
+        # and a grade once reached is latched, so old fix times are no longer needed.
+        cutoff = max(self.traj_streak_fix_times) - timedelta(seconds=keep_s)
+        self.traj_streak_fix_times = {t for t in self.traj_streak_fix_times if t >= cutoff}
 
 
 class WearableAssociationTracker:
@@ -569,6 +609,9 @@ class WearableAssociationTracker:
         self._cfg = config
         self._tag_motion: dict[str, _TagMotionTracker] = {}
         self._tag_disagreement_since: dict[str, datetime] = {}
+        # Physical-device key of every tag seen in a fix: one radio's logical tags share
+        # a segment, a conflict count, and a room in the disagreement check.
+        self._device_key_by_tag: dict[str, str] = {}
         self._ph_room_entered_at: dict[tuple[str, str], datetime] = {}
         self._room_multi_occupant_at: dict[str, datetime] = {}
         self._active_by_ph: dict[str, _ActiveSegmentState] = {}
@@ -610,15 +653,24 @@ class WearableAssociationTracker:
         self._tag_disagreement_since.pop(identity_id, None)
         return removed
 
+    def device_key_of(self, tag_id: str) -> str:
+        """Return the physical-device key last seen for *tag_id* (the tag itself if unknown)."""
+        return self._device_key_by_tag.get(tag_id, f"tag:{tag_id}")
+
     def reset_ph(
         self, ph_id: str, *, now: datetime, reason: str = "ph_reset"
     ) -> list[WearableAssociationTransition]:
-        """Close any active segment on *ph_id* (for PH split, merge, or close)."""
+        """Close any active segment on *ph_id* (for PH split, merge, or close).
+
+        A held segment ends at its last accepted round, not at *now*: nothing
+        associated the tag with the PH while it was held.
+        """
         state = self._active_by_ph.pop(ph_id, None)
         self._last_evidence_by_ph.pop(ph_id, None)
         if state is None:
             return []
-        closed = replace(state.segment, ended_at=now, close_reason=reason)
+        ended_at = state.last_accepted_at if state.held else now
+        closed = replace(state.segment, ended_at=ended_at, close_reason=reason)
         return [WearableAssociationTransition(action="close", segment=closed)]
 
     def record_face_conflict(
@@ -634,7 +686,7 @@ class WearableAssociationTracker:
         ``swap_suspected=True`` when ``>= swap_conflict_count`` conflicts occur
         for *tag_id* within ``swap_conflict_window_s``.
         """
-        dq = self._tag_conflicts.setdefault(tag_id, deque())
+        dq = self._tag_conflicts.setdefault(self.device_key_of(tag_id), deque())
         dq.append(at)
         cutoff = at - timedelta(seconds=self._cfg.swap_conflict_window_s)
         while dq and dq[0] < cutoff:
@@ -674,10 +726,14 @@ class WearableAssociationTracker:
         closed_ph_ids: Sequence[str],
         ph_history: PHFloorHistory,
         room_polygons: Mapping[str, list[tuple[float, float]]],
-        camera_room_map: Mapping[str, str],
+        camera_room_ids: Mapping[str, str],
         now: datetime,
     ) -> AssociationRoundResult:
-        """Evaluate wearable associations for one tracker round."""
+        """Evaluate wearable associations for one tracker round.
+
+        *camera_room_ids* maps camera id to Cognitive Companion room id (the namespace of
+        room polygons and of wearable fix rooms), never to a room name.
+        """
         cfg = self._cfg
         transitions: list[WearableAssociationTransition] = []
 
@@ -689,7 +745,7 @@ class WearableAssociationTracker:
         ph_rooms: dict[str, str] = {}
         room_ph_counts: dict[str, int] = {}
         for ph in open_phs:
-            rid = _ph_room_id(ph, room_polygons, camera_room_map)
+            rid = _ph_room_id(ph, room_polygons, camera_room_ids)
             ph_rooms[ph.ph_id] = rid
             if rid:
                 room_ph_counts[rid] = room_ph_counts.get(rid, 0) + 1
@@ -716,6 +772,7 @@ class WearableAssociationTracker:
         # 3. Update parked-tag motion state for all observed fixes in chronological order.
         ordered_fixes = sorted(fixes, key=lambda f: (f.measured_at, f.tag_id, f.epoch_seq))
         for fix in ordered_fixes:
+            self._device_key_by_tag[fix.tag_id] = fix.device_key
             self._update_tag_motion(fix, room_polygons)
             if not self.is_tag_parked(fix.tag_id):
                 prev_at = self._last_non_parked_fix_at_by_member.get(fix.member_id)
@@ -796,77 +853,91 @@ class WearableAssociationTracker:
         # 8. Update segments, compute graded attestation, and build WearableEvidence.
         evidence_by_ph: dict[str, WearableEvidence] = {}
         accepted_ph_ids = set(accepted.keys())
+        accepted_members = {pair.member_id: ph_id for ph_id, (pair, _) in accepted.items()}
 
-        # Close active segments whose PH was not accepted (or switched identity/tag).
-        for ph_id in list(self._active_by_ph.keys()):
-            if ph_id not in accepted_ph_ids:
+        # A segment whose PH was not accepted this round is held, not closed, so the gap
+        # between two bursts of a duty-cycled tag (or a round with too few fixes) does not
+        # end it. It closes once the hold expires, or at once when its member was accepted
+        # on another PH.
+        for ph_id, state in list(self._active_by_ph.items()):
+            if ph_id in accepted_ph_ids:
+                continue
+            state.held = True
+            if state.segment.identity_id in accepted_members:
+                transitions.extend(self.reset_ph(ph_id, now=now, reason="member_moved"))
+            elif (now - state.last_accepted_at).total_seconds() > cfg.segment_hold_s:
                 transitions.extend(self.reset_ph(ph_id, now=now, reason="association_lost"))
 
         for ph_id, (pair, margin_llr) in accepted.items():
             rid = ph_rooms.get(ph_id, "")
+            device_key = self.device_key_of(pair.tag_id)
             existing = self._active_by_ph.get(ph_id)
             if existing is not None and (
-                existing.segment.identity_id != pair.member_id
-                or existing.segment.tag_id != pair.tag_id
+                existing.segment.identity_id != pair.member_id or existing.device_key != device_key
             ):
+                # Another member, or another physical device of the same member (a pendant
+                # left on a table never inherits the watch's attestation).
                 transitions.extend(self.reset_ph(ph_id, now=now, reason="reassigned"))
                 existing = None
 
             if existing is None:
                 seg_id = str(uuid.uuid4())
-                traj_times = (
-                    set(pair.fix_timestamps)
-                    if pair.evidence_class == WearableEvidenceClass.TRAJECTORY
-                    else set()
-                )
-                grade = self._evaluate_attestation_grade(
-                    pair=pair,
-                    margin_llr=margin_llr,
-                    continuous_first_fix_at=pair.earliest_fix_at,
-                    distinct_traj_fixes=len(traj_times),
-                    room_id=rid,
-                    ph_id=ph_id,
-                    sole_occupant_throughout=sole_occupant_rooms.get(rid, False),
-                    had_face_conflict=False,
-                )
-                seg = WearableAssociationSegment(
-                    segment_id=seg_id,
-                    ph_id=ph_id,
-                    tag_id=pair.tag_id,
-                    identity_id=pair.member_id,
-                    started_at=pair.earliest_fix_at,
-                    ended_at=None,
-                    attestation_grade=grade,
-                    window_llr=pair.window_llr,
-                    margin_llr=margin_llr,
-                    matched_fixes=pair.matched_fixes,
-                    mean_residual_m=pair.mean_residual_m,
-                    swap_suspected=self._is_swap_suspected(pair.tag_id, now),
-                )
-                self._active_by_ph[ph_id] = _ActiveSegmentState(
-                    segment=seg,
+                state = _ActiveSegmentState(
+                    segment=WearableAssociationSegment(
+                        segment_id=seg_id,
+                        ph_id=ph_id,
+                        tag_id=pair.tag_id,
+                        identity_id=pair.member_id,
+                        started_at=pair.earliest_fix_at,
+                        ended_at=None,
+                        attestation_grade=WearableAttestationGrade.NONE,
+                        window_llr=pair.window_llr,
+                        margin_llr=margin_llr,
+                        matched_fixes=pair.matched_fixes,
+                        mean_residual_m=pair.mean_residual_m,
+                        swap_suspected=self._is_swap_suspected(pair.tag_id, now),
+                    ),
                     evidence_class=pair.evidence_class,
+                    device_key=device_key,
                     continuous_first_fix_at=pair.earliest_fix_at,
-                    distinct_traj_fix_times=traj_times,
+                    last_accepted_at=now,
                     room_id=rid,
                     sole_occupant_throughout=sole_occupant_rooms.get(rid, False),
                 )
-                transitions.append(WearableAssociationTransition(action="open", segment=seg))
-            else:
                 if pair.evidence_class == WearableEvidenceClass.TRAJECTORY:
-                    existing.distinct_traj_fix_times.update(pair.fix_timestamps)
+                    state.extend_trajectory_streak(
+                        pair.fix_timestamps,
+                        max_gap_s=cfg.window_s,
+                        keep_s=self._streak_keep_s,
+                    )
+                grade = self._evaluate_state_grade(
+                    state=state, pair=pair, margin_llr=margin_llr, ph_id=ph_id
+                )
+                state.segment = replace(state.segment, attestation_grade=grade)
+                self._active_by_ph[ph_id] = state
+                transitions.append(
+                    WearableAssociationTransition(action="open", segment=state.segment)
+                )
+            else:
+                if existing.held:
+                    # Resumed after a hold: room attestation needs unbroken acceptance, so
+                    # its span restarts; a latched grade is kept.
+                    existing.held = False
+                    existing.continuous_first_fix_at = pair.earliest_fix_at
+                    existing.room_id = rid
+                    existing.sole_occupant_throughout = sole_occupant_rooms.get(rid, False)
+                existing.last_accepted_at = now
+                if pair.evidence_class == WearableEvidenceClass.TRAJECTORY:
+                    existing.extend_trajectory_streak(
+                        pair.fix_timestamps,
+                        max_gap_s=cfg.window_s,
+                        keep_s=self._streak_keep_s,
+                    )
                 if rid and rid != existing.room_id:
                     existing.room_id = rid
                     existing.sole_occupant_throughout = sole_occupant_rooms.get(rid, False)
-                grade = self._evaluate_attestation_grade(
-                    pair=pair,
-                    margin_llr=margin_llr,
-                    continuous_first_fix_at=existing.continuous_first_fix_at,
-                    distinct_traj_fixes=len(existing.distinct_traj_fix_times),
-                    room_id=existing.room_id,
-                    ph_id=ph_id,
-                    sole_occupant_throughout=existing.sole_occupant_throughout,
-                    had_face_conflict=existing.had_face_conflict,
+                grade = self._evaluate_state_grade(
+                    state=existing, pair=pair, margin_llr=margin_llr, ph_id=ph_id
                 )
                 # Never downgrade an unbroken attested segment's tier within the same association.
                 grade = _higher_grade(existing.segment.attestation_grade, grade)
@@ -924,13 +995,42 @@ class WearableAssociationTracker:
         )
 
     def _is_swap_suspected(self, tag_id: str, now: datetime) -> bool:
-        dq = self._tag_conflicts.get(tag_id)
+        dq = self._tag_conflicts.get(self.device_key_of(tag_id))
         if not dq:
             return False
         cutoff = now - timedelta(seconds=self._cfg.swap_conflict_window_s)
         while dq and dq[0] < cutoff:
             dq.popleft()
         return len(dq) >= self._cfg.swap_conflict_count
+
+    @property
+    def _streak_keep_s(self) -> float:
+        return max(60.0, 2.0 * self._cfg.trajectory_attest_min_duration_s)
+
+    def _evaluate_state_grade(
+        self,
+        *,
+        state: _ActiveSegmentState,
+        pair: PairScore,
+        margin_llr: float,
+        ph_id: str,
+    ) -> WearableAttestationGrade:
+        """Grade one accepted round of *state*: trajectory by its streak, room by its span."""
+        is_traj = pair.evidence_class == WearableEvidenceClass.TRAJECTORY
+        return self._evaluate_attestation_grade(
+            pair=pair,
+            margin_llr=margin_llr,
+            continuous_first_fix_at=(
+                state.traj_streak_started_at or pair.earliest_fix_at
+                if is_traj
+                else state.continuous_first_fix_at
+            ),
+            distinct_traj_fixes=len(state.traj_streak_fix_times) if is_traj else 0,
+            room_id=state.room_id,
+            ph_id=ph_id,
+            sole_occupant_throughout=state.sole_occupant_throughout,
+            had_face_conflict=state.had_face_conflict,
+        )
 
     def _evaluate_attestation_grade(
         self,
@@ -1070,13 +1170,27 @@ class WearableAssociationTracker:
         room_polygons: Mapping[str, list[tuple[float, float]]],
         now: datetime,
     ) -> bool:
-        if len(by_tag) < 2:
+        """Return True once a member's separate wearables have disagreed on room long enough.
+
+        Tags are grouped by physical device first: one radio cannot be in two rooms, so a
+        dual-mode watch's BLE nearest-receiver room and UWB nearest-anchor room never
+        disagree with each other. Each device's room comes from its tightest-covariance
+        tag, and a device counts only when that room holds at least
+        ``wearable.tag_disagreement_min_room_share`` of the tag's window mass, so a wide
+        fix straddling a doorway cannot trip the check alone.
+        """
+        by_device: dict[str, list[str]] = {}
+        for tag_id in by_tag:
+            by_device.setdefault(self.device_key_of(tag_id), []).append(tag_id)
+        if len(by_device) < 2:
             self._tag_disagreement_since.pop(member_id, None)
             return False
 
-        dominant_by_tag: dict[str, str] = {}
-        earliest_by_tag: dict[str, datetime] = {}
-        for tag_id, tag_fixes in by_tag.items():
+        room_by_device: dict[str, str] = {}
+        earliest_by_device: dict[str, datetime] = {}
+        for device_key, tag_ids in by_device.items():
+            tag_id = min(tag_ids, key=lambda t: (_tag_room_sigma_m(by_tag[t]), t))
+            tag_fixes = by_tag[tag_id]
             room_mass: dict[str, float] = {}
             for fix in tag_fixes:
                 dist = room_distribution_for_fix(
@@ -1084,17 +1198,22 @@ class WearableAssociationTracker:
                 )
                 for rid, m in dist.items():
                     room_mass[rid] = room_mass.get(rid, 0.0) + m
-            if room_mass:
-                dominant_by_tag[tag_id] = max(room_mass, key=lambda r: room_mass[r])
-                earliest_by_tag[tag_id] = min(f.measured_at for f in tag_fixes)
+            total = sum(room_mass.values())
+            if total <= 0.0:
+                continue
+            dominant = max(room_mass, key=lambda r: room_mass[r])
+            if room_mass[dominant] / total < self._cfg.tag_disagreement_min_room_share:
+                continue
+            room_by_device[device_key] = dominant
+            earliest_by_device[device_key] = min(f.measured_at for f in tag_fixes)
 
-        distinct_rooms = set(dominant_by_tag.values())
+        distinct_rooms = set(room_by_device.values())
         if len(distinct_rooms) < 2:
             self._tag_disagreement_since.pop(member_id, None)
             return False
 
         # Track sustained disagreement starting from the earliest overlapping fix time.
-        overlap_start = max(earliest_by_tag.values())
+        overlap_start = max(earliest_by_device.values())
         since = self._tag_disagreement_since.setdefault(member_id, overlap_start)
         if overlap_start < since:
             since = overlap_start
@@ -1103,11 +1222,18 @@ class WearableAssociationTracker:
         if (now - since).total_seconds() >= self._cfg.tag_disagreement_window_s:
             logger.warning(
                 "wearable_tag_disagreement",
-                tag_ids=sorted(dominant_by_tag.keys()),
+                tag_ids=sorted(by_tag.keys()),
+                device_count=len(room_by_device),
                 room_count=len(distinct_rooms),
             )
             return True
         return False
+
+
+def _tag_room_sigma_m(tag_fixes: Sequence[WearableFix]) -> float:
+    """Mean major-axis sigma of a tag's position fixes; room-only fixes rank last."""
+    sigmas = [covariance_major_sigma_m(f.cov_m2) for f in tag_fixes if f.cov_m2 is not None]
+    return sum(sigmas) / len(sigmas) if sigmas else math.inf
 
 
 def _higher_grade(

@@ -8,6 +8,8 @@ from typing import Literal
 from app.domain import WEARABLE_MODES, WearableMode
 
 FaceAttestationMode = Literal["off", "enabled"]
+SpatialFusionMode = Literal["off", "shadow", "enabled"]
+SPATIAL_FUSION_MODES: tuple[SpatialFusionMode, ...] = ("off", "shadow", "enabled")
 
 
 @dataclass(frozen=True)
@@ -43,9 +45,16 @@ class WearableConfig:
     room_polygon_min_mass: float = 0.05
     room_match_eps: float = 0.1
 
-    # Parked-tag and multi-tag disagreement guards.
+    # Parked-tag and multi-tag disagreement guards. A device's room counts toward a
+    # disagreement only when it holds at least this share of that tag's window room mass.
     parked_after_s: float = 600.0
     tag_disagreement_window_s: float = 10.0
+    tag_disagreement_min_room_share: float = 0.6
+
+    # How long a segment stays open, emitting no evidence, after its last accepted round.
+    # Longer than a duty-cycled watch's burst cooldown, so the next burst resumes the same
+    # segment and its latched grade instead of re-attesting.
+    segment_hold_s: float = 75.0
 
     # Graded attestation thresholds (trajectory and room).
     trajectory_attest_min_duration_s: float = 10.0
@@ -84,6 +93,24 @@ class WearableConfig:
     # swap_suspected. Acts only when a wearable channel is running.
     revocation_auto_on_swap: bool = True
 
+    # Spatial fusion of trajectory-attested position fixes into the PH Kalman state.
+    # "off" never touches PH state; "shadow" measures each gated update without applying it
+    # and changes nothing else; "enabled" applies it and switches PH floor history to raw
+    # camera measurements, so association never scores a wearable against its own fixes.
+    spatial_fusion_mode: SpatialFusionMode = "off"
+    # Only fixes this tight (major-axis sigma, metres) are fused.
+    spatial_fusion_max_sigma_m: float = 0.35
+    # Per-sensor systematic error added to every fused fix and kept as a floor: a fused
+    # fix never leaves the PH position more certain than this (metres).
+    spatial_fusion_bias_floor_m: float = 0.12
+    # Largest gap between the fix and the PH state time that is fused (seconds).
+    spatial_fusion_max_dt_s: float = 3.0
+    # Two-dof chi-square gate on the time-aligned innovation (99%).
+    spatial_fusion_gate_chi2: float = 9.21
+    # How long fused fixes may keep a camera-occluded PH open after its last camera
+    # observation (seconds). 0 disables the bridge.
+    coasting_bridge_max_s: float = 10.0
+
     def __post_init__(self) -> None:
         if self.mode not in WEARABLE_MODES:
             raise ValueError(f"wearable.mode must be one of {WEARABLE_MODES}, got {self.mode!r}")
@@ -115,3 +142,24 @@ class WearableConfig:
             raise ValueError("wearable.duplicate_guard_min_probability must be in (0, 1]")
         if self.swap_conflict_count < 1:
             raise ValueError("wearable.swap_conflict_count must be >= 1")
+        if not 0.5 <= self.tag_disagreement_min_room_share <= 1.0:
+            raise ValueError("wearable.tag_disagreement_min_room_share must be in [0.5, 1]")
+        if self.segment_hold_s < 0.0:
+            raise ValueError("wearable.segment_hold_s must be >= 0")
+        if self.spatial_fusion_mode not in SPATIAL_FUSION_MODES:
+            raise ValueError(
+                f"wearable.spatial_fusion.mode must be one of {SPATIAL_FUSION_MODES}, "
+                f"got {self.spatial_fusion_mode!r}"
+            )
+        if self.spatial_fusion_mode != "off" and self.mode == "off":
+            raise ValueError("wearable.spatial_fusion.mode needs wearable.mode shadow or enabled")
+        if self.spatial_fusion_max_sigma_m <= 0.0:
+            raise ValueError("wearable.spatial_fusion.max_sigma_m must be positive")
+        if self.spatial_fusion_bias_floor_m <= 0.0:
+            raise ValueError("wearable.spatial_fusion.bias_floor_m must be positive")
+        if self.spatial_fusion_max_dt_s <= 0.0:
+            raise ValueError("wearable.spatial_fusion.max_dt_s must be positive")
+        if self.spatial_fusion_gate_chi2 <= 0.0:
+            raise ValueError("wearable.spatial_fusion.gate_chi2 must be positive")
+        if self.coasting_bridge_max_s < 0.0:
+            raise ValueError("wearable.spatial_fusion.coasting_bridge_max_s must be >= 0")

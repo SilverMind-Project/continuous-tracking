@@ -200,6 +200,7 @@ async def _round(
         now=at,
         room_polygons=_ROOMS,
         camera_room_map={camera_id: "1"},
+        camera_room_ids={camera_id: "1"},
         wearable_fixes=stack.fixes.recent(now=at, max_age_s=15.0),
     )
     ctx = FrameContext(
@@ -538,6 +539,7 @@ async def test_wrong_band_swap_auto_revokes_taught_rows_and_holds_until_resume()
             now=at,
             room_polygons=_ROOMS,
             camera_room_map={"cam-cal": "1"},
+            camera_room_ids={"cam-cal": "1"},
             wearable_fixes=stack.fixes.recent(now=at, max_age_s=15.0),
         )
         ctx = FrameContext(
@@ -629,6 +631,7 @@ async def test_wrong_band_swap_auto_revokes_taught_rows_and_holds_until_resume()
                 now=at,
                 room_polygons=_ROOMS,
                 camera_room_map={"cam-cal": "1"},
+                camera_room_ids={"cam-cal": "1"},
                 face_anchors=[anchor] if anchor is not None else None,
                 wearable_fixes=stack.fixes.recent(now=at, max_age_s=15.0),
             )

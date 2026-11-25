@@ -27,7 +27,11 @@ from app.inference.evidence import FaceEvidence
 from app.observability import metrics as _metrics
 from app.pipeline.frame_context import FrameContext
 from app.pipeline.privacy import PrivacyZoneFilter
-from app.pipeline.stages._room_maps import camera_room_names, room_polygon_snapshot
+from app.pipeline.stages._room_maps import (
+    all_camera_room_ids,
+    camera_room_names,
+    room_polygon_snapshot,
+)
 from app.pipeline.stages.base import FrameStage
 from app.pipeline.types import LiveConfigHolder
 from app.services.face_templates import FaceTemplateService
@@ -197,6 +201,7 @@ class WorldTrackingStage(FrameStage):
             obs.camera_id for obs in observations
         }
         camera_room_map = await camera_room_names(self._live_config.camera_room_map, camera_ids)
+        room_ids_by_camera = await all_camera_room_ids(self._live_config.camera_room_map)
         for camera_id in sorted(camera_ids - set(camera_room_map)):
             if camera_id not in self._missing_room_binding_warnings:
                 self._missing_room_binding_warnings.add(camera_id)
@@ -254,6 +259,7 @@ class WorldTrackingStage(FrameStage):
             face_evidence=(face_evidence + template_evidence) or None,
             low_band_observations=low_band_observations or None,
             wearable_fixes=wearable_fixes or None,
+            camera_room_ids=room_ids_by_camera,
         )
 
         # Every execution path reaches the tracker through this method, so feeding the template

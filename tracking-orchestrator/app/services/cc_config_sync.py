@@ -270,6 +270,12 @@ def parse_wearable_site_config(payload: Any) -> WearableSiteConfig:
         if device_kind is None:
             raise CCConfigSyncContractError(f"{dctx}.device_kind {raw_kind!r} is unknown")
         is_active = _require_bool(device, "is_active", context=dctx)
+        # Optional: CC builds that predate the field omit it, and single-tag devices send null.
+        physical_raw = device.get("physical_device_id")
+        if physical_raw is not None and (not isinstance(physical_raw, str) or not physical_raw):
+            raise CCConfigSyncContractError(
+                f"{dctx}.physical_device_id must be a non-empty string or null"
+            )
         devices.append(
             WearableDevice(
                 tag_id=tag_id,
@@ -277,6 +283,7 @@ def parse_wearable_site_config(payload: Any) -> WearableSiteConfig:
                 hardware_key=hardware_key,
                 device_kind=device_kind,
                 is_active=is_active,
+                physical_device_id=physical_raw,
             )
         )
 

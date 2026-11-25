@@ -363,6 +363,53 @@ async def test_revoke_for_swap_sweeps_prior_unrevoked_segments_in_conflict_windo
 
 
 @pytest.mark.asyncio
+async def test_revocation_holds_resumes_and_sweeps_every_tag_of_the_physical_device() -> None:
+    assoc_repo = InMemoryWearableAssociationRepository()
+    holds_repo = InMemoryWearableTeachingHoldRepository()
+    gallery_repo = InMemoryGalleryRepository()
+    await gallery_repo.upsert_identity(
+        Identity(identity_id="alice", display_name="Alice", enrolled_at=_T0)
+    )
+    # The watch taught through its UWB tag first, then a later segment opened on its BLE tag.
+    seg_uwb = _segment(
+        "seg-uwb", tag_id="watch-uwb", started_at=_T0, ended_at=_T0 + timedelta(minutes=2)
+    )
+    seg_ble = _segment(
+        "seg-ble",
+        tag_id="watch-ble",
+        started_at=_T0 + timedelta(minutes=3),
+        ended_at=_T0 + timedelta(minutes=4),
+        swap_suspected=True,
+    )
+    seg_pendant = _segment(
+        "seg-pendant", tag_id="pendant", started_at=_T0, ended_at=_T0 + timedelta(minutes=4)
+    )
+    for seg in (seg_uwb, seg_ble, seg_pendant):
+        await assoc_repo.save_segment(seg)
+    devices = {"watch-ble": ("watch-ble", "watch-uwb"), "watch-uwb": ("watch-uwb", "watch-ble")}
+
+    svc = WearableTeachingRevocationService(
+        association_repo=assoc_repo,
+        teaching_holds=holds_repo,
+        gallery_repo=gallery_repo,
+        device_tag_ids=lambda tag_id: devices.get(tag_id, (tag_id,)),
+        clock=lambda: _T0 + timedelta(minutes=5),
+    )
+    summaries = await svc.revoke_for_swap("seg-ble", window_s=600.0)
+    # The sweep covers the sibling tag's segment, never another device's.
+    assert {s.segment_id for s in summaries} == {"seg-ble", "seg-uwb"}
+    assert await holds_repo.is_held("watch-ble") is True
+    assert await holds_repo.is_held("watch-uwb") is True
+    assert await holds_repo.is_held("pendant") is False
+    assert (await svc.get_taught_summary("seg-uwb")).tag_teaching_held is True
+
+    cleared = await svc.resume_teaching("watch-uwb", actor="admin:alice")
+    assert cleared is not None and cleared.tag_id == "watch-uwb"
+    assert await holds_repo.is_held("watch-ble") is False
+    assert await holds_repo.is_held("watch-uwb") is False
+
+
+@pytest.mark.asyncio
 async def test_open_teaching_hold_blocks_seeding_attestation_and_backfill() -> None:
     holds = InMemoryWearableTeachingHoldRepository()
     await holds.create_hold(tag_id="tag-1", reason="swap_suspected", held_at=_T0)

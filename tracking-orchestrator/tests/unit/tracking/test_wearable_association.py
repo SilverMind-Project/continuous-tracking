@@ -441,7 +441,7 @@ class TestParkedMultiTagAndGradedAttestation:
             closed_ph_ids=[],
             ph_history=hist,
             room_polygons=TWO_ROOMS,
-            camera_room_map={"cam-1": "room-1"},
+            camera_room_ids={"cam-1": "room-1"},
             now=T0 + timedelta(seconds=660),
         )
         assert tracker.is_tag_parked("tag-bed")
@@ -471,7 +471,7 @@ class TestParkedMultiTagAndGradedAttestation:
             closed_ph_ids=[],
             ph_history=hist,
             room_polygons=TWO_ROOMS,
-            camera_room_map={"cam-1": "room-1"},
+            camera_room_ids={"cam-1": "room-1"},
             now=T0 + timedelta(seconds=670),
         )
         assert res.evidence_by_ph == {}
@@ -495,7 +495,7 @@ class TestParkedMultiTagAndGradedAttestation:
             closed_ph_ids=[],
             ph_history=hist,
             room_polygons=TWO_ROOMS,
-            camera_room_map={"cam-1": "room-1"},
+            camera_room_ids={"cam-1": "room-1"},
             now=T0 + timedelta(seconds=678),
         )
         assert not tracker.is_tag_parked("tag-bed")
@@ -525,7 +525,7 @@ class TestParkedMultiTagAndGradedAttestation:
             closed_ph_ids=[],
             ph_history=hist,
             room_polygons=TWO_ROOMS,
-            camera_room_map={"cam-1": "room-1"},
+            camera_room_ids={"cam-1": "room-1"},
             now=T0 + timedelta(seconds=60),
         )
         assert not tracker.is_tag_parked("tag-desk")
@@ -554,7 +554,7 @@ class TestParkedMultiTagAndGradedAttestation:
             closed_ph_ids=[],
             ph_history=hist,
             room_polygons=TWO_ROOMS,
-            camera_room_map={"cam-1": "room-1"},
+            camera_room_ids={"cam-1": "room-1"},
             now=T0 + timedelta(seconds=68),
         )
         assert res.evidence_by_ph == {}
@@ -587,7 +587,7 @@ class TestParkedMultiTagAndGradedAttestation:
             closed_ph_ids=[],
             ph_history=hist,
             room_polygons=TWO_ROOMS,
-            camera_room_map={"cam-1": "room-1"},
+            camera_room_ids={"cam-1": "room-1"},
             now=T0 + timedelta(seconds=9),
         )
         res_both = tracker.step(
@@ -596,7 +596,7 @@ class TestParkedMultiTagAndGradedAttestation:
             closed_ph_ids=[],
             ph_history=hist,
             room_polygons=TWO_ROOMS,
-            camera_room_map={"cam-1": "room-1"},
+            camera_room_ids={"cam-1": "room-1"},
             now=T0 + timedelta(seconds=9),
         )
         # Never sum across two tags: window_llr matches best single tag exactly.
@@ -623,7 +623,7 @@ class TestParkedMultiTagAndGradedAttestation:
                 closed_ph_ids=[],
                 ph_history=hist,
                 room_polygons=TWO_ROOMS,
-                camera_room_map={"cam-1": "room-1"},
+                camera_room_ids={"cam-1": "room-1"},
                 now=step_t,
             )
         assert res_dis.evidence_by_ph == {}
@@ -650,7 +650,7 @@ class TestParkedMultiTagAndGradedAttestation:
                 closed_ph_ids=[],
                 ph_history=hist,
                 room_polygons=TWO_ROOMS,
-                camera_room_map={"cam-1": "room-1"},
+                camera_room_ids={"cam-1": "room-1"},
                 now=ts,
             )
         assert last_res is not None
@@ -699,7 +699,7 @@ class TestParkedMultiTagAndGradedAttestation:
                     closed_ph_ids=[],
                     ph_history=hist,
                     room_polygons=TWO_ROOMS,
-                    camera_room_map={"cam-1": "room-1"},
+                    camera_room_ids={"cam-1": "room-1"},
                     now=ts_c,
                 )
             closed = tracker.record_face_conflict(ph_id="ph-1", tag_id="tag-uwb", at=ts_c)
@@ -728,7 +728,7 @@ class TestParkedMultiTagAndGradedAttestation:
                 closed_ph_ids=[],
                 ph_history=empty_hist,
                 room_polygons=TWO_ROOMS,
-                camera_room_map={"cam-1": "room-1"},
+                camera_room_ids={"cam-1": "room-1"},
                 now=ts,
             )
             if s < 60 and "ph-room" in res_room.evidence_by_ph:

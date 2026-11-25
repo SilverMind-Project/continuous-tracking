@@ -173,6 +173,7 @@ def decode_tag_fix(
         residual_rms_m=residual_rms_m,
         adapter_id=msg.adapter_id,
         epoch_seq=int(msg.epoch_seq),
+        physical_device_id=site_config.physical_device_of(msg.tag_id),
         received_at=now,
     )
     return fix, kind_label, WearableFixIngestResult.ACCEPTED

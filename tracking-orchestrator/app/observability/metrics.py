@@ -92,6 +92,15 @@ class WearableAssociationOutcome(StrEnum):
     INSUFFICIENT_FIXES = "insufficient_fixes"
 
 
+class WearableSpatialFusionOutcome(StrEnum):
+    """Bounded label set for ``cts_wearable_spatial_fusion_total{outcome}``."""
+
+    APPLIED = "applied"
+    BRIDGED = "bridged"
+    GATED = "gated"
+    NO_FIX = "no_fix"
+
+
 class WearableShadowOutcome(StrEnum):
     """Bounded label set for ``cts_wearable_shadow_outcomes_total{outcome}``."""
 
@@ -466,6 +475,8 @@ class Metrics:
     cts_wearable_assoc_residual_m: Histogram  # label: room_id
     cts_wearable_face_conflict_total: Counter
     cts_wearable_shadow_outcomes_total: Counter  # label: outcome
+    cts_wearable_spatial_fusion_total: Counter  # labels: mode, outcome
+    cts_wearable_spatial_fusion_shift_m: Histogram  # label: mode
     cts_messages_dead_lettered_total: Counter  # label: stream
 
     # ---- wearable supervision ----
@@ -1208,6 +1219,20 @@ def build_metrics(registry: CollectorRegistry = REGISTRY) -> Metrics:
             "cts_wearable_shadow_outcomes_total",
             "Shadow-mode wearable counterfactual outcomes against the live resolver decision.",
             ["outcome"],
+        ),
+        cts_wearable_spatial_fusion_total=_counter(
+            "cts_wearable_spatial_fusion_total",
+            "Trajectory-attested position fixes considered for PH spatial fusion, by fusion "
+            "mode (shadow measures, enabled applies) and outcome (applied to a camera-tracked "
+            "PH, bridged a camera-occluded PH, gated, or no fresh tight fix).",
+            ["mode", "outcome"],
+        ),
+        cts_wearable_spatial_fusion_shift_m=_hist(
+            "cts_wearable_spatial_fusion_shift_m",
+            "Distance in metres a gated fused fix moved (enabled) or would move (shadow) the PH "
+            "position estimate.",
+            (0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0, 1.5),
+            ["mode"],
         ),
         cts_messages_dead_lettered_total=_counter(
             "cts_messages_dead_lettered_total",

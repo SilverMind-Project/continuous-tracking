@@ -156,7 +156,11 @@ from app.tracking.identity.household_classifier import (
 )
 from app.tracking.identity_resolver import FaceQualityMode, HeightMode, ResolverConfig
 from app.tracking.world.config import WorldTrackerConfig
-from app.tracking.world.wearable_config import FaceAttestationMode, WearableConfig
+from app.tracking.world.wearable_config import (
+    FaceAttestationMode,
+    SpatialFusionMode,
+    WearableConfig,
+)
 from app.trajectory.appearance_profile import AppearanceSettings
 from app.trajectory.dementia_signals import SignalConfig
 from app.trajectory.depth_posture_strategy import DepthPostureStrategy
@@ -788,6 +792,8 @@ def _build_wearable_config(s: Settings) -> WearableConfig:
         room_match_eps=w.as_float("room_match_eps"),
         parked_after_s=w.as_float("parked_after_s"),
         tag_disagreement_window_s=w.as_float("tag_disagreement_window_s"),
+        tag_disagreement_min_room_share=w.as_float("tag_disagreement_min_room_share"),
+        segment_hold_s=w.as_float("segment_hold_s"),
         trajectory_attest_min_duration_s=w.as_float("trajectory_attest_min_duration_s"),
         trajectory_attest_min_fixes=w.as_int("trajectory_attest_min_fixes"),
         room_attest_min_duration_s=w.as_float("room_attest_min_duration_s"),
@@ -808,6 +814,12 @@ def _build_wearable_config(s: Settings) -> WearableConfig:
             FaceAttestationMode, s.as_str("wearable.supervision.face_attestation")
         ),
         revocation_auto_on_swap=s.as_bool("wearable.revocation.auto_on_swap"),
+        spatial_fusion_mode=cast(SpatialFusionMode, s.as_str("wearable.spatial_fusion.mode")),
+        spatial_fusion_max_sigma_m=s.as_float("wearable.spatial_fusion.max_sigma_m"),
+        spatial_fusion_bias_floor_m=s.as_float("wearable.spatial_fusion.bias_floor_m"),
+        spatial_fusion_max_dt_s=s.as_float("wearable.spatial_fusion.max_dt_s"),
+        spatial_fusion_gate_chi2=s.as_float("wearable.spatial_fusion.gate_chi2"),
+        coasting_bridge_max_s=s.as_float("wearable.spatial_fusion.coasting_bridge_max_s"),
     )
 
 
@@ -1228,6 +1240,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             correction_service=correction_service,
             face_id_client=None,
             appearance_sample_repo=appearance_sample_repo,
+            device_tag_ids=lambda tag_id: wearable_site_config_map.get_sync().sibling_tag_ids(
+                tag_id
+            ),
         )
     app.state.wearable_revocation_service = wearable_revocation_service
 

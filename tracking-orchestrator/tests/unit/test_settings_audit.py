@@ -95,6 +95,26 @@ def test_settings_loads_full_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resolver.height_mode == "shadow"
 
 
+def test_wearable_continuity_and_spatial_fusion_keys_reach_wearable_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    w = _yaml()["wearable"]
+    sf = w["spatial_fusion"]
+    wearable = _build_wearable_config(settings)
+
+    assert wearable.tag_disagreement_min_room_share == pytest.approx(
+        w["tag_disagreement_min_room_share"]
+    )
+    assert wearable.segment_hold_s == pytest.approx(w["segment_hold_s"])
+    assert wearable.spatial_fusion_mode == sf["mode"] == "off"
+    assert wearable.spatial_fusion_max_sigma_m == pytest.approx(sf["max_sigma_m"])
+    assert wearable.spatial_fusion_bias_floor_m == pytest.approx(sf["bias_floor_m"])
+    assert wearable.spatial_fusion_max_dt_s == pytest.approx(sf["max_dt_s"])
+    assert wearable.spatial_fusion_gate_chi2 == pytest.approx(sf["gate_chi2"])
+    assert wearable.coasting_bridge_max_s == pytest.approx(sf["coasting_bridge_max_s"])
+
+
 def test_settings_values_match_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(monkeypatch)
     data = _yaml()

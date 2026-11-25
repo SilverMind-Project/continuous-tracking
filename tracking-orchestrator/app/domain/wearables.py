@@ -66,13 +66,18 @@ class RfNode:
 
 @dataclass(frozen=True)
 class WearableDevice:
-    """One registered wearable device known to Cognitive Companion."""
+    """One registered wearable device known to Cognitive Companion.
+
+    ``physical_device_id`` groups the logical tags of one radio (a dual-mode watch's
+    BLE and UWB tags); ``None`` means the tag is its own physical device.
+    """
 
     tag_id: str
     adapter_id: str
     hardware_key: str
     device_kind: DeviceKind
     is_active: bool
+    physical_device_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +130,28 @@ class WearableSiteConfig:
                 return binding.member_id
         return None
 
+    def physical_device_of(self, tag_id: str) -> str | None:
+        """Return the ``physical_device_id`` shared by *tag_id*'s radio, or ``None``."""
+        for device in self.devices:
+            if device.tag_id == tag_id:
+                return device.physical_device_id
+        return None
+
+    def sibling_tag_ids(self, tag_id: str) -> tuple[str, ...]:
+        """Return every logical tag of *tag_id*'s physical device, *tag_id* first.
+
+        A tag without a ``physical_device_id`` (or unknown to the config) is its own device.
+        """
+        physical = self.physical_device_of(tag_id)
+        if physical is None:
+            return (tag_id,)
+        others = sorted(
+            d.tag_id
+            for d in self.devices
+            if d.physical_device_id == physical and d.tag_id != tag_id
+        )
+        return (tag_id, *others)
+
 
 @dataclass(frozen=True)
 class WearableFix:
@@ -155,6 +182,13 @@ class WearableFix:
     adapter_id: str = ""
     epoch_seq: int = 0
     received_at: datetime | None = None
+    # Shared by the logical tags of one radio; stamped at decode from the site config.
+    physical_device_id: str | None = None
+
+    @property
+    def device_key(self) -> str:
+        """Identity of the physical radio: its ``physical_device_id``, else the tag itself."""
+        return self.physical_device_id or f"tag:{self.tag_id}"
 
 
 @dataclass(frozen=True)

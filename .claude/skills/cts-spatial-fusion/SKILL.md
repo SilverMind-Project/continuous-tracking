@@ -83,7 +83,7 @@ R*   = ( Σ (J Σ_px Jᵀ)ᵢ⁻¹ )⁻¹  +  R_bias_floor
   `now` (`max(ctx.capture_time)`) are transient for association and `coasting=True` snapshots,
   and matched updates predict from `last_seen_at` to `obs.captured_at` (see
   `reference/time-model.md`).
-- **Wearable-to-PH association innovation covariance and loosely-coupled UWB spatial fusion.**
+- **Wearable-to-PH association innovation covariance.**
   Trajectory-class wearable fixes (`sqrt(lambda_max(Sigma_f)) <= wearable.trajectory_max_sigma_m`,
   default `0.75 m`) score against calibrated PH floor history
   (`tracking-orchestrator/app/tracking/world/ph_floor_history.py`, appended only on calibrated
@@ -91,12 +91,18 @@ R*   = ( Σ (J Σ_px Jᵀ)ᵢ⁻¹ )⁻¹  +  R_bias_floor
   with innovation covariance
   `S = Sigma_f + Sigma_j + (v_j * sigma_t)^2 * I + sigma_bias^2 * I` (`sigma_t = 0.5 s`,
   `sigma_bias = 0.15 m`, chi-square gate `9.21`). Wide-covariance fixes reduce their 2D
-  Gaussian over room polygons and use sole-occupant room rules. Once a segment achieves
-  `attestation_grade == TRAJECTORY` with zero face conflicts (and `wearable.spatial_fusion_mode`
-  is `"enabled"`), fresh `FIX_KIND_POSITION` fixes (`sigma <= wearable.spatial_fusion_max_sigma_m`)
-  may apply a loosely-coupled, chi-square-gated 2x2 Kalman position update (adding a non-shrinking
-  `R_uwb_bias` floor) to refine oblique camera viewing-ray uncertainty and extend short camera
-  occlusions, while never altering raw `PHFloorHistory` camera samples.
+  Gaussian over room polygons and use sole-occupant room rules.
+- **Wearable spatial fusion (`wearable.spatial_fusion.mode`: `off`, `shadow`, `enabled`).**
+  A PH whose wearable evidence carries the `trajectory` grade takes a gated 2x2 position
+  update from a fresh tight `FIX_KIND_POSITION` fix (`tracking-orchestrator/app/tracking/world/wearable_spatial_fusion.py`):
+  `R = Sigma_fix + b^2 I`, an older fix moved to the state time along the PH velocity with
+  `dt^2 * P_vv` added (stored state stays the posterior at `last_seen_at`), and the
+  posterior's smallest position eigenvalue lifted back to `min(b^2, prior)` so wearable fixes
+  never shrink a PH below their systematic floor. In `enabled`, `PHFloorHistory`
+  records raw camera measurements, never the posterior, so association cannot score a
+  wearable against its own fused fixes. `enabled` may advance a camera-occluded attested PH
+  and keep it open for up to `coasting_bridge_max_s` after its last camera observation.
+  Detail and rollout: `../cts-identity-governance/reference/wearable-evidence.md`.
 - **Device-free anonymous position sensors (`AnonymousPositionTrack` on `position.tracks`).**
   mmWave radars and 2D/3D LiDARs publish anonymous floor-plane tracks (`x_mm`, `y_mm`,
   `cov_xx_m2`, `cov_xy_m2`, `cov_yy_m2`) in the shared floor frame without identity. When fused
