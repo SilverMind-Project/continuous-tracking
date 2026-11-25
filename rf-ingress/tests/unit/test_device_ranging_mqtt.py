@@ -152,7 +152,7 @@ async def test_device_ranging_v1_parses_uwb_and_channel_sounding_and_sets_device
     assert uwb_item.tag_id == "watch-pw5"
     assert uwb_item.anchor_id == "living-room-uwb-1"
     assert uwb_item.technology == RangingTechnology.UWB
-    assert math.isclose(uwb_item.variance_m2, 0.12**2, rel_tol=1e-9)
+    assert math.isclose(uwb_item.variance_m2, 0.25**2, rel_tol=1e-9)
     assert uwb_item.azimuth_deg == -14.2
     assert uwb_item.elevation_deg == 8.5
     assert uwb_item.azimuth_reference_frame == "device_local"

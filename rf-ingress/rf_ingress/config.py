@@ -107,7 +107,7 @@ class ClockSettings(BaseModel):
     skew_warn_threshold_s: float = Field(default=0.5, gt=0.0)
     burst_window_size: int = Field(default=20, ge=1, le=500)
     burst_max_sample_age_s: float = Field(default=1800.0, gt=0.0)
-    burst_step_reset_threshold_s: float = Field(default=2.0, gt=0.0)
+    burst_step_reset_threshold_s: float = Field(default=0.75, gt=0.0)
 
 
 class AdapterConfig(BaseModel):

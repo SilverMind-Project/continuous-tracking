@@ -255,6 +255,18 @@ def test_stage_p3_solves_12_points_via_multilateration_and_decouples_wrist_azimu
 
     report = analyze_p3(records, anchors, ground_truth, expected_epochs=12 * 4 * 4)
     assert report.gate_passed is True
+    # Simulated range error is 0.06 m noise plus a 0.08 m bias on one facing, so the
+    # measured RMS is well under the 0.25 m configured sigma and coverage is near 100%.
+    assert report.measured_range_rms_m is not None
+    assert 0.05 < report.measured_range_rms_m < 0.10
+    assert report.covariance_coverage_95 is not None and report.covariance_coverage_95 >= 0.95
+    assert report.mean_nees is not None and report.mean_nees < 2.0
+    overconfident = analyze_p3(
+        records, anchors, ground_truth, expected_epochs=12 * 4 * 4, uwb_sigma_m=0.02
+    )
+    assert overconfident.covariance_coverage_95 is not None
+    assert overconfident.covariance_coverage_95 < report.covariance_coverage_95
+    assert overconfident.mean_nees is not None and overconfident.mean_nees > report.mean_nees
     assert report.median_horizontal_error_m is not None
     assert report.median_horizontal_error_m <= 0.30
     assert report.p95_horizontal_error_m is not None

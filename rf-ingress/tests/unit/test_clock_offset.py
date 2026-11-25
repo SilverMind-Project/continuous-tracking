@@ -193,13 +193,30 @@ def _batch(
     )
 
 
-def test_burst_clock_offset_expires_samples_older_than_max_sample_age() -> None:
+def test_expired_reference_is_kept_until_two_fresh_batches_exist() -> None:
+    """A burst after a long idle must not let its first (Wi-Fi wake) batch set the offset."""
     tracker = BurstClockOffsetTracker(max_sample_age_s=1800.0)
     assert _batch(tracker, at_s=0.0, delta_s=0.05) == 0.05
-    # 1900 s later the old minimum has expired; a +1.5 s regime (below the
-    # step threshold, so only the TTL can recover it) takes over at once.
-    assert _batch(tracker, at_s=1900.0, delta_s=1.55) == 1.55
-    assert _batch(tracker, at_s=1903.0, delta_s=1.60) == 1.55
+    # 1900 s later the old minimum has expired, but it stays the reference
+    # until two fresh batches exist; a slow first batch changes nothing.
+    assert _batch(tracker, at_s=1900.0, delta_s=0.55) == 0.05
+    assert _batch(tracker, at_s=1903.0, delta_s=0.56) == 0.05
+    # Two fresh batches now exist, so the expired reference is dropped and a
+    # small real drift (below the step threshold) is adopted.
+    assert _batch(tracker, at_s=1906.0, delta_s=0.57) == 0.55
+
+
+def test_fresh_lower_delta_after_expiry_is_adopted_at_once() -> None:
+    tracker = BurstClockOffsetTracker(max_sample_age_s=1800.0)
+    _batch(tracker, at_s=0.0, delta_s=0.30)
+    assert _batch(tracker, at_s=1900.0, delta_s=0.04) == 0.04
+
+
+def test_step_after_expiry_is_confirmed_against_the_kept_reference() -> None:
+    tracker = BurstClockOffsetTracker(max_sample_age_s=1800.0)
+    _batch(tracker, at_s=0.0, delta_s=0.05)
+    assert _batch(tracker, at_s=4000.0, delta_s=1.05) == 0.05
+    assert _batch(tracker, at_s=4003.0, delta_s=1.10) == 1.05
 
 
 def test_upward_clock_step_resets_after_two_consistent_batches() -> None:

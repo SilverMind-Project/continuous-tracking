@@ -41,11 +41,12 @@ clock:
   skew_window_s: 60.0
   skew_warn_threshold_s: 0.5
   burst_window_size: 20
-  # Burst clock-offset samples expire after this long, and an upward clock step
-  # is accepted after 2 consecutive, mutually consistent batches above the
+  # Burst clock-offset samples expire after this long (the best expired sample
+  # stays as the reference until 2 fresh batches exist), and an upward clock
+  # step is accepted after 2 consecutive, mutually consistent batches above the
   # window minimum by this threshold (one late batch never resets the window).
   burst_max_sample_age_s: 1800.0
-  burst_step_reset_threshold_s: 2.0
+  burst_step_reset_threshold_s: 0.75
 
 # Adapters are configured explicitly per deployment. Keep empty by default so a
 # deployment never emits simulated fixes into a live household without opt-in.

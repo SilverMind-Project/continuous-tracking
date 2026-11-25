@@ -38,6 +38,9 @@ P3_MAX_MEDIAN_ERROR_M = 0.30
 P3_MAX_P95_ERROR_M = 1.00
 P3_MIN_AVAILABILITY = 0.80
 P3_DEFAULT_UWB_SIGMA_M = 0.25
+# 95% quantile of chi-square with 2 dof: a calibrated 2x2 covariance contains the
+# true position inside this Mahalanobis radius 95% of the time.
+P3_CHI2_95_2DOF = 5.991
 
 P4_MIN_PROJECTED_HOURS = 30.0
 P4_WEARABLE_36H_HOURS = 36.0
@@ -157,6 +160,14 @@ class P3Report:
     passed_p95: bool
     passed_availability: bool
     gate_passed: bool
+    # Fraction of solved epochs whose true position falls inside the published
+    # 95% covariance ellipse (about 0.95 when the configured sigma is honest).
+    covariance_coverage_95: float | None = None
+    # Mean normalized estimation error squared (about 2.0 when calibrated).
+    mean_nees: float | None = None
+    # RMS of (measured - true) range over every anchor sample, bias included:
+    # the bench-measured value for the adapter's ``uwb_default_sigma_m``.
+    measured_range_rms_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -498,6 +509,7 @@ def analyze_p3(
                 world_azimuth_by_peer[(point_id, peer_hex)].append(math.degrees(math.atan2(wy, wx)))
 
     horiz_errors_m: list[float] = []
+    nees_values: list[float] = []
     epoch_seq = 0
     for (point_id, _facing, _bucket), bucket_records in sorted(grouped_buckets.items()):
         gt = ground_truth.get(point_id)
@@ -548,6 +560,18 @@ def analyze_p3(
         if solved is None:
             continue
         horiz_errors_m.append(math.hypot(solved.x_m - gt.x_m, solved.y_m - gt.y_m))
+        dx = solved.x_m - gt.x_m
+        dy = solved.y_m - gt.y_m
+        det = solved.cov_xx_m2 * solved.cov_yy_m2 - solved.cov_xy_m2 * solved.cov_xy_m2
+        if det > 0.0:
+            nees_values.append(
+                (
+                    solved.cov_yy_m2 * dx * dx
+                    - 2.0 * solved.cov_xy_m2 * dx * dy
+                    + solved.cov_xx_m2 * dy * dy
+                )
+                / det
+            )
 
     total_expected = (
         expected_epochs if expected_epochs is not None else max(1, len(grouped_buckets))
@@ -584,6 +608,15 @@ def analyze_p3(
         if errs
     )
 
+    coverage_95 = (
+        float(np.mean([v <= P3_CHI2_95_2DOF for v in nees_values])) if nees_values else None
+    )
+    mean_nees = float(np.mean(nees_values)) if nees_values else None
+    all_range_errors = [e for errs in facing_errors.values() for e in errs]
+    measured_range_rms_m = (
+        float(np.sqrt(np.mean(np.square(all_range_errors)))) if all_range_errors else None
+    )
+
     passed_med = median_err is not None and median_err <= P3_MAX_MEDIAN_ERROR_M
     passed_p95 = p95_err is not None and p95_err <= P3_MAX_P95_ERROR_M
     passed_avail = availability >= P3_MIN_AVAILABILITY
@@ -604,6 +637,9 @@ def analyze_p3(
         passed_p95=passed_p95,
         passed_availability=passed_avail,
         gate_passed=passed_med and passed_p95 and passed_avail,
+        covariance_coverage_95=coverage_95,
+        mean_nees=mean_nees,
+        measured_range_rms_m=measured_range_rms_m,
     )
 
 
@@ -806,6 +842,17 @@ def format_markdown(stage: str, report: P1Report | P2Report | P3Report | P4Repor
         lines.append(
             "| Quaternion-compensated world azimuth std (deg) | "
             f"{_fmt_opt(report.compensated_world_azimuth_std_deg, 1)} | observability |"
+        )
+        coverage = (
+            f"{report.covariance_coverage_95 * 100:.1f}%"
+            if report.covariance_coverage_95 is not None
+            else "n/a"
+        )
+        lines.append(f"| 95% covariance coverage | {coverage} | calibration (target ~95%) |")
+        lines.append(f"| Mean NEES | {_fmt_opt(report.mean_nees, 2)} | calibration (target ~2.0) |")
+        lines.append(
+            f"| Measured range RMS (m) | {_fmt_opt(report.measured_range_rms_m, 3)} | "
+            "set as uwb_default_sigma_m |"
         )
     elif isinstance(report, P4Report):
         lines.append(

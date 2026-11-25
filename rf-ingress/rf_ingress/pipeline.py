@@ -108,7 +108,7 @@ class RfIngressRuntime:
         skew_warn_threshold_s: float = 0.5,
         burst_window_size: int = 20,
         burst_max_sample_age_s: float = 1800.0,
-        burst_step_reset_threshold_s: float = 2.0,
+        burst_step_reset_threshold_s: float = 0.75,
         frame_transforms: Mapping[str, SimilarityTransform2D] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:

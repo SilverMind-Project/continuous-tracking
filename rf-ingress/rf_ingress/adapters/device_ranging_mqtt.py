@@ -88,7 +88,11 @@ class DeviceRangingMqttConfig(BaseModel):
     username: str | None = None
     password: str | None = None
     nominal_rate_hz: float = Field(default=1.0, gt=0.0)
-    uwb_default_sigma_m: float = Field(default=0.12, gt=0.0)
+    # Pre-bench default for wrist-worn UWB: the watch reports no line-of-sight
+    # confidence, and wrist body-shadowing biases single ranges by 0.2 to 0.5 m,
+    # so a tighter value makes published covariance overconfident. Replace with
+    # the bench-measured range sigma once Stage P3 data exists.
+    uwb_default_sigma_m: float = Field(default=0.25, gt=0.0)
     ble_channel_sounding_default_sigma_m: float = Field(default=0.50, gt=0.0)
     ble_rssi_default_sigma_m: float = Field(default=2.0, gt=0.0)
 
@@ -175,7 +179,7 @@ class DeviceRangingMqttAdapter:
         self._deps: AdapterDeps = deps
         self._stream: MqttMessageStream = stream
         self._default_sigma_by_tech: dict[RangingTechnology, float] = default_sigma_by_tech or {
-            RangingTechnology.UWB: 0.12,
+            RangingTechnology.UWB: 0.25,
             RangingTechnology.BLE_CHANNEL_SOUNDING: 0.50,
             RangingTechnology.BLE_RSSI: 2.0,
         }

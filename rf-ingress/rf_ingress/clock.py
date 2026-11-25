@@ -57,7 +57,13 @@ class BurstClockOffsetTracker:
     Duty-cycled senders publish only a few bursts per hour, so the window is
     bounded in time as well as in count:
 
-    - Samples older than ``max_sample_age_s`` (server arrival time) expire.
+    - Samples older than ``max_sample_age_s`` (server arrival time) expire,
+      but the best expired sample stays as the reference until
+      ``step_confirm_batches`` fresh batches exist. A duty-cycled watch often
+      idles longer than the TTL, and letting the first batch of a burst define
+      the offset alone would stamp it with that batch's network delay (Wi-Fi
+      wake-up can add seconds). If the clock really drifted, the reference
+      errs toward older timestamps, the safe direction, for two batches.
     - A downward step (device clock jumped ahead) needs no detection: the new,
       smaller delta becomes the minimum immediately.
     - An upward step (device clock stepped back, or its boot anchor moved) is
@@ -78,7 +84,7 @@ class BurstClockOffsetTracker:
         *,
         window_size: int = 20,
         max_sample_age_s: float = 1800.0,
-        step_reset_threshold_s: float = 2.0,
+        step_reset_threshold_s: float = 0.75,
         step_confirm_batches: int = 2,
         step_consistency_s: float = 0.5,
         max_tracked_tags: int = 256,
@@ -141,8 +147,13 @@ class BurstClockOffsetTracker:
         )
 
         cutoff = arrival_utc - self._max_sample_age
-        while state.samples and state.samples[0].arrival_utc < cutoff:
-            state.samples.popleft()
+        fresh = [s for s in state.samples if s.arrival_utc >= cutoff]
+        expired = [s for s in state.samples if s.arrival_utc < cutoff]
+        if expired:
+            if len(fresh) < self._step_confirm_batches:
+                fresh.insert(0, min(expired, key=lambda s: s.delta_s))
+            state.samples.clear()
+            state.samples.extend(fresh)
         state.pending_step = [s for s in state.pending_step if s.arrival_utc >= cutoff]
 
         if state.samples:
