@@ -30,6 +30,7 @@ class ManifestPermissionsTest {
                 "android.permission.CHANGE_WIFI_STATE",
                 "android.permission.UWB_RANGING",
                 "android.permission.WAKE_LOCK",
+                "android.permission.ACTIVITY_RECOGNITION",
             )
         for (perm in forbidden) {
             assertFalse(manifest.contains(perm), "Base bleOnly manifest must not declare $perm")
@@ -61,10 +62,26 @@ class ManifestPermissionsTest {
                 "android.permission.INTERNET",
                 "android.permission.ACCESS_NETWORK_STATE",
                 "android.permission.CHANGE_WIFI_STATE",
+                "android.permission.ACTIVITY_RECOGNITION",
                 """android:required="false"""",
             )
         for (item in expected) {
             assertTrue(manifest.contains(item), "dualMode manifest must declare $item")
         }
+    }
+
+    @Test
+    fun `tier 2 provisioning receiver exists only in dualMode and only the adb shell can reach it`() {
+        val base = resolveAppManifest("main")
+        assertFalse(base.contains("Tier2ProvisioningReceiver"), "bleOnly must not expose Tier 2 provisioning")
+
+        val dual = resolveAppManifest("dualMode")
+        val receiver =
+            Regex("<receiver[^>]*Tier2ProvisioningReceiver[^>]*>", RegexOption.DOT_MATCHES_ALL).find(dual)?.value
+                ?: error("dualMode manifest must declare Tier2ProvisioningReceiver")
+        assertTrue(
+            receiver.contains("""android:permission="android.permission.DUMP""""),
+            "the exported provisioning receiver must require android.permission.DUMP",
+        )
     }
 }

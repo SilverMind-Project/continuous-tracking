@@ -1,5 +1,5 @@
 [versions]
-agp = "8.7.3"
+agp = "8.9.1"
 kotlin = "2.1.10"
 coroutines = "1.10.1"
 serialization = "1.8.0"
@@ -13,6 +13,8 @@ activityKtx = "1.9.3"
 playServicesNearby = "19.3.0"
 androidxUwb = "1.0.0"
 pahoMqtt = "1.2.5"
+guava = "33.3.1-android"
+fragment = "1.8.5"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -27,6 +29,8 @@ androidx-wear-protolayout = { module = "androidx.wear.protolayout:protolayout", 
 androidx-wear-protolayout-material = { module = "androidx.wear.protolayout:protolayout-material", version.ref = "protolayout" }
 androidx-uwb = { module = "androidx.core.uwb:uwb", version.ref = "androidxUwb" }
 play-services-nearby = { module = "com.google.android.gms:play-services-nearby", version.ref = "playServicesNearby" }
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
+guava-android = { module = "com.google.guava:guava", version.ref = "guava" }
 eclipse-paho-mqtt = { module = "org.eclipse.paho:org.eclipse.paho.client.mqttv3", version.ref = "pahoMqtt" }
 
 [plugins]

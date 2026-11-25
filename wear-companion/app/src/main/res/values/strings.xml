@@ -10,4 +10,6 @@
     <string name="status_idle_not_worn">Idle (not worn)</string>
     <string name="status_bluetooth_off">Bluetooth off</string>
     <string name="reset_identifier">Reset ID</string>
+    <string name="permissions_granted">Permissions granted</string>
+    <string name="permissions_missing">Missing permissions: %1$s</string>
 </resources>

@@ -34,7 +34,8 @@ class MqttBatchTransport(
         runCatching {
             client?.let {
                 if (it.isConnected) {
-                    it.disconnect()
+                    // Bounded: a plain disconnect can wait out a 30 s quiesce on a dead network.
+                    it.disconnectForcibly(0L, DISCONNECT_TIMEOUT_MS)
                 }
                 it.close()
             }
@@ -48,20 +49,36 @@ class MqttBatchTransport(
             return existing
         }
         val fresh = MqttClient(brokerUrl, clientId, MemoryPersistence())
+        // Read the constructor values outside apply: inside it, `password` would
+        // resolve to MqttConnectOptions.password (a CharArray), not ours.
+        val user = username
+        val secret = password
         val opts =
             MqttConnectOptions().apply {
                 isCleanSession = true
                 connectionTimeout = 3
                 keepAliveInterval = 30
-                if (!username.isNullOrBlank()) {
-                    userName = username
+                if (!user.isNullOrBlank()) {
+                    userName = user
                 }
-                if (!password.isNullOrBlank()) {
-                    this.password = password.toCharArray()
+                if (!secret.isNullOrBlank()) {
+                    setPassword(secret.toCharArray())
                 }
             }
-        fresh.connect(opts)
+        try {
+            fresh.connect(opts)
+        } catch (
+            @Suppress("TooGenericExceptionCaught") err: Exception,
+        ) {
+            // A broker outage retries with backoff; never keep one dead client per attempt.
+            runCatching { fresh.close() }
+            throw err
+        }
         client = fresh
         return fresh
+    }
+
+    private companion object {
+        const val DISCONNECT_TIMEOUT_MS: Long = 1_000L
     }
 }

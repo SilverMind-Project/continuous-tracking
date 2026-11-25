@@ -70,6 +70,11 @@ data class DeviceRangingV1Batch(
  * monotonic `elapsedRealtimeNanos` into strictly monotonic `measured_at_unix_ns`
  * using a fixed `bootUnixNs` anchor, and stamps top-level `sent_at_unix_ns` on
  * flush so rf-ingress decouples micro-batching delay from clock skew.
+ *
+ * [shouldFlush] paces periodic flushes: every [flushIntervalS] after a burst
+ * starts or a flush succeeds, and with a doubling backoff capped at
+ * [maxRetryBackoffS] after failures, so an unreachable broker is not retried
+ * (a blocking connect) on every epoch. An explicit [flush] always attempts.
  */
 class EpochBatchPublisher(
     private val tagId: String,
@@ -77,21 +82,27 @@ class EpochBatchPublisher(
     private val sender: BatchMqttSender,
     private val maxBufferedEpochs: Int = DEFAULT_MAX_BUFFERED_EPOCHS,
     private val flushIntervalS: Double = DEFAULT_FLUSH_INTERVAL_S,
+    private val maxRetryBackoffS: Double = DEFAULT_MAX_RETRY_BACKOFF_S,
 ) {
     init {
         require(tagId.isNotBlank()) { "tagId must be non-blank" }
         require(bootUnixNs > 0L) { "bootUnixNs must be positive" }
         require(maxBufferedEpochs >= 1) { "maxBufferedEpochs must be >= 1" }
         require(flushIntervalS > 0.0) { "flushIntervalS must be > 0" }
+        require(maxRetryBackoffS >= flushIntervalS) { "maxRetryBackoffS must be >= flushIntervalS" }
     }
 
     val topic: String = "rf/devices/$tagId/ranges"
 
     private val ringBuffer: ArrayDeque<WireEpochEntry> = ArrayDeque()
     private var lastMeasuredUnixNs: Long = 0L
-    private var lastFlushElapsedNanos: Long? = null
+    private var nextFlushDueNanos: Long? = null
 
     var droppedOldestCount: Int = 0
+        private set
+
+    /** Failed publish attempts since the last successful flush. */
+    var consecutiveFailures: Int = 0
         private set
 
     fun bufferedCount(): Int = ringBuffer.size
@@ -129,13 +140,15 @@ class EpochBatchPublisher(
         if (ringBuffer.isEmpty()) {
             return false
         }
-        val prev = lastFlushElapsedNanos ?: return false
-        val elapsedS = (nowElapsedNanos - prev).toDouble() / NANOS_PER_SECOND
-        return elapsedS >= flushIntervalS
+        val due = nextFlushDueNanos ?: return false
+        return nowElapsedNanos >= due
     }
 
+    /** Schedule the first periodic flush one interval after a burst starts, unless a retry backoff is later. */
     fun markBurstStarted(nowElapsedNanos: Long) {
-        lastFlushElapsedNanos = nowElapsedNanos
+        val firstDue = nowElapsedNanos + secondsToNanos(flushIntervalS)
+        val pending = nextFlushDueNanos
+        nextFlushDueNanos = if (pending != null && consecutiveFailures > 0) maxOf(pending, firstDue) else firstDue
     }
 
     /**
@@ -166,17 +179,30 @@ class EpochBatchPublisher(
         val jsonPayload = jsonFormat.encodeToString(batch)
         val ok = sender.publish(topic, jsonPayload)
         if (!ok) {
+            consecutiveFailures += 1
+            nextFlushDueNanos = nowElapsedNanos + secondsToNanos(retryBackoffS())
             return null
         }
         ringBuffer.clear()
-        lastFlushElapsedNanos = nowElapsedNanos
+        consecutiveFailures = 0
+        nextFlushDueNanos = nowElapsedNanos + secondsToNanos(flushIntervalS)
         return jsonPayload
+    }
+
+    private fun retryBackoffS(): Double {
+        val exponent = (consecutiveFailures - 1).coerceIn(0, MAX_BACKOFF_EXPONENT)
+        return (flushIntervalS * (1 shl exponent)).coerceAtMost(maxRetryBackoffS)
     }
 
     companion object {
         const val DEFAULT_MAX_BUFFERED_EPOCHS: Int = 60
         const val DEFAULT_FLUSH_INTERVAL_S: Double = 3.0
+        const val DEFAULT_MAX_RETRY_BACKOFF_S: Double = 30.0
+        private const val MAX_BACKOFF_EXPONENT: Int = 16
         private const val NANOS_PER_SECOND: Double = 1_000_000_000.0
+
+        private fun secondsToNanos(seconds: Double): Long = (seconds * NANOS_PER_SECOND).toLong()
+
         private val jsonFormat =
             Json {
                 encodeDefaults = true

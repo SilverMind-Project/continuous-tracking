@@ -89,6 +89,7 @@ ALLOWED_MISSING: dict[str, str] = {
     "chart.js": "a charting library the data-visualization skill forbids, not a file",
     "contracts.js": "the deleted frontend contract checker; the skill says never reintroduce it",
     "r4_bypass_guard.spec.js": "a deleted spec, converted to ESLint rules",
+    "tier2_config.json": "the watch's app-private Tier 2 config file, written on the device by ADB provisioning",
 }
 
 # A reference written relative to a sibling package rather than this repository.

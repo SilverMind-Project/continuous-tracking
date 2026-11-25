@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "io.silvermind.wearcompanion.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "io.silvermind.wearcompanion"
@@ -55,6 +55,11 @@ dependencies {
     implementation(libs.androidx.wear.protolayout)
     implementation(libs.androidx.wear.protolayout.material)
     implementation(libs.kotlinx.coroutines.core)
+    // The Tile service returns ListenableFuture values built with Guava's Futures.
+    implementation(libs.guava.android)
+    // Play services brings a pre-1.3 Fragment, which mishandles the ActivityResult
+    // permission request in PairingActivity; pin a current one.
+    implementation(libs.androidx.fragment)
 
     "dualModeImplementation"(libs.androidx.uwb)
     "dualModeImplementation"(libs.play.services.nearby)

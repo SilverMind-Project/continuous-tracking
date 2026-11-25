@@ -1,8 +1,12 @@
 package io.silvermind.wearcompanion.core
 
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
 
 /** Single anchor measurement emitted inside one UWB ranging epoch. */
 data class AnchorRangeReading(
@@ -66,10 +70,19 @@ interface UwbRangingEngine {
     suspend fun stopRanging()
 }
 
-/** Deterministic [UwbRangingEngine] peer for unit tests. */
+/**
+ * Deterministic [UwbRangingEngine] peer for unit tests.
+ *
+ * Like the real engines, [startRanging] returns a cold flow: ranging counts as
+ * active only while a collector is subscribed, so a caller that drops the
+ * returned flow without collecting it is visible in [isRangingActive].
+ */
 class FakeUwbRangingEngine(
     private val available: Boolean = true,
     private val localAddress: Int = 0x1001,
+    private val prepareFailure: Exception? = null,
+    /** Simulates a HAL call that ignores cancellation for this long while preparing. */
+    private val nonCancellablePrepareMs: Long = 0L,
 ) : UwbRangingEngine {
     override val backendName: String = "fake_uwb"
 
@@ -80,13 +93,22 @@ class FakeUwbRangingEngine(
         private set
     var stoppedCount: Int = 0
         private set
-    var isRangingActive: Boolean = false
+    var activeCollectors: Int = 0
         private set
+    var lastRequest: UwbBurstRequest? = null
+        private set
+
+    val isRangingActive: Boolean
+        get() = activeCollectors > 0
 
     override suspend fun isAvailable(): Boolean = available
 
     override suspend fun prepareBurst(request: UwbBurstRequest): PreparedUwbSession {
         preparedCount += 1
+        if (nonCancellablePrepareMs > 0L) {
+            withContext(NonCancellable) { delay(nonCancellablePrepareMs) }
+        }
+        prepareFailure?.let { throw it }
         return PreparedUwbSession(
             sessionId = request.sessionId,
             localControllerAddress = localAddress,
@@ -97,16 +119,23 @@ class FakeUwbRangingEngine(
 
     override fun startRanging(request: UwbBurstRequest): Flow<RangingEpochSample> {
         startedCount += 1
-        isRangingActive = true
-        return stream.asSharedFlow()
+        lastRequest = request
+        return flow {
+            activeCollectors += 1
+            try {
+                emitAll(stream)
+            } finally {
+                activeCollectors -= 1
+            }
+        }
     }
 
+    /** Deliver [sample] to every active collector; dropped when nobody collects. */
     suspend fun emitEpoch(sample: RangingEpochSample) {
         stream.emit(sample)
     }
 
     override suspend fun stopRanging() {
-        isRangingActive = false
         stoppedCount += 1
     }
 }

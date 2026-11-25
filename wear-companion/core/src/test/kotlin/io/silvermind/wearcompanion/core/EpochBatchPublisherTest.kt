@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -139,5 +140,47 @@ class EpochBatchPublisherTest {
         assertEquals(60, epochs.size)
         assertEquals(16L, epochs.first().jsonObject["epoch_seq"]!!.jsonPrimitive.long)
         assertEquals(75L, epochs.last().jsonObject["epoch_seq"]!!.jsonPrimitive.long)
+    }
+
+    @Test
+    fun `failed flushes back off periodic retries instead of retrying every epoch`() {
+        var brokerUp = false
+        var attempts = 0
+        val publisher =
+            EpochBatchPublisher(
+                tagId = "watch-pw5",
+                bootUnixNs = bootUnixNs,
+                sender = { _, _ ->
+                    attempts += 1
+                    brokerUp
+                },
+            )
+        publisher.markBurstStarted(0L)
+        publisher.enqueue(sample(1, 1))
+        assertFalse(publisher.shouldFlush(2_999_999_999L))
+        assertTrue(publisher.shouldFlush(3_000_000_000L))
+
+        fun tryAt(sec: Long) {
+            if (publisher.shouldFlush(sec * 1_000_000_000L)) {
+                publisher.flush(sec * 1_000_000_000L, WearStateWire.ON_BODY, MotionStateWire.MOVING)
+            }
+        }
+
+        for (sec in 3L..60L) {
+            tryAt(sec)
+        }
+        // Attempts at 3 s, then backoff 3, 6, 12, 24, 30 s: 6, 12, 24, 48.
+        assertEquals(5, attempts)
+        assertEquals(5, publisher.consecutiveFailures)
+
+        // A new burst never pulls the next attempt earlier than the pending backoff.
+        publisher.markBurstStarted(49_000_000_000L)
+        assertFalse(publisher.shouldFlush(75_000_000_000L))
+        assertTrue(publisher.shouldFlush(78_000_000_000L))
+
+        brokerUp = true
+        tryAt(78L)
+        assertEquals(0, publisher.consecutiveFailures)
+        assertEquals(0, publisher.bufferedCount())
     }
 }

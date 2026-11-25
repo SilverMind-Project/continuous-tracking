@@ -63,13 +63,17 @@ data class UwbWakeFrame(
 /**
  * Zero-GATT Pre-Shared Static STS broadcast-wake encoder and anchor directory.
  *
- * Encodes an exact 10-byte big-endian manufacturer-specific BLE wake frame:
- * - byte 0: protocol version (`0x01`)
- * - bytes 1..4: uint32 sessionId
- * - bytes 5..6: uint16 controllerAddress
- * - byte 7: uint8 channel (`5` or `9`)
- * - byte 8: uint8 preambleIndex (`9..32`)
- * - byte 9: uint8 burstDurationS (`1..60`)
+ * Encodes an exact 12-byte big-endian manufacturer-specific BLE wake frame,
+ * advertised under [WAKE_MANUFACTURER_ID] so it never collides with the
+ * Tier 1 iBeacon frame (Apple `0x004C`):
+ * - bytes 0..1: magic `0x53 0x4D` ("SM"), because `0xFFFF` is the shared
+ *   Bluetooth SIG test ID that other development devices also advertise
+ * - byte 2: protocol version (`0x01`)
+ * - bytes 3..6: uint32 sessionId
+ * - bytes 7..8: uint16 controllerAddress
+ * - byte 9: uint8 channel (`5` or `9`)
+ * - byte 10: uint8 preambleIndex (`9..32`)
+ * - byte 11: uint8 burstDurationS (`1..60`)
  */
 class PreSharedStsNegotiator(
     val staticStsVendorId: ByteArray,
@@ -89,13 +93,20 @@ class PreSharedStsNegotiator(
 
     companion object {
         const val WAKE_PROTOCOL_VERSION: Int = 1
-        const val WAKE_PAYLOAD_BYTES: Int = 10
+        const val WAKE_PAYLOAD_BYTES: Int = 12
+
+        /** Bluetooth SIG test company ID; never Apple's iBeacon `0x004C`. */
+        const val WAKE_MANUFACTURER_ID: Int = 0xFFFF
+        const val WAKE_MAGIC_0: Byte = 0x53
+        const val WAKE_MAGIC_1: Byte = 0x4D
         const val WAKE_BROADCAST_DURATION_MS: Long = 300L
         const val VENDOR_ID_BYTES: Int = 2
         const val STATIC_STS_IV_BYTES: Int = 6
 
         fun encodeWakePayload(frame: UwbWakeFrame): ByteArray {
             val buf = ByteBuffer.allocate(WAKE_PAYLOAD_BYTES).order(ByteOrder.BIG_ENDIAN)
+            buf.put(WAKE_MAGIC_0)
+            buf.put(WAKE_MAGIC_1)
             buf.put(frame.protocolVersion.toByte())
             buf.putInt(frame.sessionId)
             buf.putShort(frame.controllerAddress.toShort())
@@ -110,6 +121,9 @@ class PreSharedStsNegotiator(
                 "Wake payload must be $WAKE_PAYLOAD_BYTES bytes, got ${payload.size}"
             }
             val buf = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN)
+            require(buf.get() == WAKE_MAGIC_0 && buf.get() == WAKE_MAGIC_1) {
+                "Wake payload magic mismatch"
+            }
             val version = buf.get().toInt() and 0xFF
             require(version == WAKE_PROTOCOL_VERSION) {
                 "Unsupported wake protocol version: $version"
